@@ -1,0 +1,250 @@
+# Anker X1 SmartGrid — plan visualization card
+#
+# Requires TWO HACS frontend cards:
+#   1. apexcharts-card  → HACS → Frontend → "apexcharts-card"      → install
+#   2. config-template-card → HACS → Frontend → "config-template-card" → install
+#   (then refresh the browser / Ctrl-F5)
+#
+# Why config-template-card? apexcharts-card's `graph_span` is a static string and
+# cannot read entity data, so a fixed window (e.g. 36h) clips the chart when
+# Zonneplan returns more tariff hours and leaves blank space when it returns
+# fewer. config-template-card wraps the chart and recomputes `graph_span` from the
+# horizon's last timestamp, so the x-axis ends exactly where the data ends —
+# dynamic to however many hours Zonneplan currently provides.
+#
+# Entity: confirm the exact id in Developer Tools → States (search "smartgrid plan").
+# Replace `sensor.smartgrid_plan` below if your id differs.
+#
+# NOTE: header/legend value readouts are intentionally OFF. Every series reads
+# the same entity (whose unit is "h" = planned grid hours), and ApexCharts would
+# otherwise print each series' LAST horizon point — deep night, i.e. 0 — with a
+# bogus "h" suffix ("Solar forecast: 0 h"). The graph itself carries the values.
+type: custom:config-template-card
+# Listed entities trigger a re-render (and thus a graph_span recompute) on update.
+entities:
+  - sensor.smartgrid_plan
+variables:
+  H: states['sensor.smartgrid_plan'].attributes.horizon || []
+  PNL: states['sensor.smartgrid_plan'].attributes.arbitrage_pnl
+card:
+  type: custom:apexcharts-card
+  header:
+    show: true
+    title: "SmartGrid plan · next 24h"
+    show_states: false
+  # Dynamic window: span from 2h before the current hour (to show recent history)
+  # to one hour past the last horizon slot (so the final hourly column shows in
+  # full). The horizon already carries past slots (is_past_horizon), so the extra
+  # 2h render real data, not blank space. Falls back to 38h when the horizon is
+  # empty (e.g. before the first plan publishes).
+  # The "+ 3" = 1h tail past the last slot + 2h of history added to graph_span to
+  # match the span.start offset below (so the window END stays at last slot + 1h).
+  # Single line + double-quoted on purpose: config-template-card strips a template
+  # with value.substring(2, len-1) (drops "${" and the LAST char, expecting "}").
+  # A YAML ">" folded scalar would append a trailing "\n", so it would strip the
+  # newline and leave a dangling "}" → "Unexpected token '}'". Keep it one line.
+  graph_span: "${ H.length ? Math.max(1, Math.ceil((new Date(H[H.length - 1].start).getTime() - new Date().setMinutes(0, 0, 0)) / 3600000) + 3) + 'h' : '38h' }"
+  span:
+    start: hour
+    # Begin the window 2h before the current hour to surface recent history.
+    offset: -2h
+  now:
+    show: true
+    label: now
+  yaxis:
+    # All y-axis scales are hidden with show:false to keep the plot clean — each
+    # series still scales to its axis by id; only the visible scales/labels are
+    # removed. Values remain readable via the custom hover tooltip (apex_config).
+    - id: price
+      decimals: 2
+      show: false
+    - id: power
+      opposite: true
+      min: 0
+      show: false
+    - id: soc
+      opposite: true
+      min: 0
+      max: 100
+      show: false
+    - id: energy
+      opposite: true
+      # "Log scale" for the charge/export bars is done by transforming the DATA —
+      # each bar data_generator plots log10(watts) — NOT a native log axis (which
+      # breaks columns). This lifts small bars (a few hundred W) into a visible
+      # band instead of being squashed under the multi-kW bars. Floor: log10(1) = 0,
+      # so the baseline (min 0) is 1 W. The hover tooltip reverses it (10^v ÷ 1000)
+      # to show real kW.
+      min: 0
+      show: false
+  series:
+    - entity: sensor.smartgrid_plan
+      name: Price
+      type: line
+      yaxis_id: price
+      stroke_width: 2.5
+      color: "#8b5cf6"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.price]);
+    - entity: sensor.smartgrid_plan
+      name: Solar forecast
+      type: area
+      yaxis_id: power
+      opacity: 0.3
+      color: "#fbbf24"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.pv_w]);
+    - entity: sensor.smartgrid_plan
+      name: Predicted load
+      type: line
+      yaxis_id: power
+      stroke_width: 1
+      color: var(--secondary-text-color)
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.load_w]);
+    - entity: sensor.smartgrid_plan
+      name: Projected SoC
+      type: line
+      yaxis_id: soc
+      stroke_width: 2.5
+      color: "#3b82f6"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.soc]);
+    - entity: sensor.smartgrid_plan
+      name: Grid charge
+      type: column
+      yaxis_id: energy
+      color: "#ef4444"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_w > 0 ? Math.log10(Math.max(1, h.grid_charge_w)) : null]);
+    - entity: sensor.smartgrid_plan
+      name: Solar charge
+      type: column
+      yaxis_id: energy
+      color: "#f59e0b"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.solar_charge_w > 0 ? Math.log10(Math.max(1, h.solar_charge_w)) : null]);
+    # --- Export series (arbitrage leg) ---
+    # Grid export bars are POSITIVE kW on the same energy axis as the charge bars
+    # (charge and export never occur in the same hour, so they never overlap).
+    # Amber color distinguishes export from the red/green charge bars at a glance.
+    - entity: sensor.smartgrid_plan
+      name: Grid export
+      type: column
+      yaxis_id: energy
+      color: "#10b981"
+      show:
+        legend_value: false
+      data_generator: |
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_w > 0 ? Math.log10(Math.max(1, h.grid_export_w)) : null]);
+  apex_config:
+    chart:
+      height: 380
+    plotOptions:
+      bar:
+        columnWidth: "55%"
+        borderRadius: 3
+    fill:
+      type: [solid, gradient, solid, solid, solid, solid, solid]
+      gradient:
+        shadeIntensity: 0.3
+        opacityFrom: 0.5
+        opacityTo: 0.05
+        stops: [0, 100]
+    stroke:
+      dashArray: [0, 0, 0, 0, 0, 0, 0]
+    subtitle:
+      text: "${ PNL != null ? 'Export PnL  ' + (PNL >= 0 ? '+' : '') + Number(PNL).toFixed(2) + ' €' : '' }"
+      align: left
+      offsetY: 4
+      style:
+        fontSize: "13px"
+        fontWeight: 600
+        color: "${ PNL != null && PNL < 0 ? '#ef4444' : '#10b981' }"
+    legend:
+      show: true
+      position: bottom
+      horizontalAlign: center
+      fontSize: "12px"
+      markers:
+        width: 10
+        height: 10
+        radius: 12
+      itemMargin:
+        horizontal: 8
+        vertical: 2
+    grid:
+      borderColor: "rgba(127,127,127,0.15)"
+      strokeDashArray: 3
+      xaxis:
+        lines:
+          show: false
+      yaxis:
+        lines:
+          show: true
+    annotations:
+      xaxis:
+        - x: 0
+          x2: 0
+    # Hover tooltip: list EVERY series' value at the hovered hour. We render it
+    # ourselves (tooltip.custom) instead of relying on ApexCharts' built-in
+    # shared tooltip, which collapses to a single series here because all series
+    # are data_generator-based with non-aligned x-values (apexcharts-card #593).
+    # The custom fn takes the hovered timestamp and looks up each series' value
+    # AT THAT x via w.globals.seriesX, so misaligned/short series just drop out.
+    # Per-series units fix the bogus shared "h" unit the note above warns about.
+    # EVAL: makes apexcharts-card compile it; no ${...} inside, so
+    # config-template-card leaves it untouched.
+    tooltip:
+      shared: true
+      intersect: false
+      custom: |
+        EVAL:function ({ seriesIndex, dataPointIndex, w }) {
+          var g = w.globals;
+          var x = g.seriesX[seriesIndex][dataPointIndex];
+          var unit = function (name) {
+            return name === 'Price' ? '€/kWh'
+              : name === 'Projected SoC' ? '%'
+              : (name === 'Solar forecast' || name === 'Predicted load') ? 'W'
+              : 'kW';
+          };
+          var fmt = function (name, v) {
+            var u = unit(name);
+            // The kW (charge/export) bars are plotted as log10(W) on a linear
+            // axis — undo it and convert back to kW for display.
+            if (u === 'kW') v = Math.pow(10, v) / 1000;
+            var d = u === '€/kWh' ? 3 : u === 'kW' ? 2 : 0;
+            return Number(v).toFixed(d) + ' ' + u;
+          };
+          var rows = '';
+          for (var i = 0; i < g.series.length; i++) {
+            var xi = g.seriesX[i], j = -1;
+            for (var k = 0; k < xi.length; k++) { if (xi[k] === x) { j = k; break; } }
+            if (j === -1) continue;
+            var v = g.series[i][j];
+            if (v === null || v === undefined) continue;
+            rows += '<div style="display:flex;align-items:center;gap:6px;padding:1px 8px;">'
+              + '<span style="width:8px;height:8px;border-radius:50%;background:' + (g.colors[i] || '#888') + ';"></span>'
+              + '<span style="flex:1;margin-right:10px;">' + g.seriesNames[i] + '</span>'
+              + '<b>' + fmt(g.seriesNames[i], v) + '</b></div>';
+          }
+          var dt = new Date(x);
+          var p = function (n) { return (n < 10 ? '0' : '') + n; };
+          var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          var head = days[dt.getDay()] + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+          return '<div style="padding:4px 0;font-size:12px;line-height:1.6;">'
+            + '<div style="font-weight:600;padding:2px 8px;">' + head + '</div>'
+            + rows + '</div>';
+        }
