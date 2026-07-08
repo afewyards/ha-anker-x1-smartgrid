@@ -60,6 +60,9 @@ class _StubRecorder:
     def rollup_hours(self, now_iso):
         return 0
 
+    def wal_checkpoint(self):
+        pass
+
     def purge_hourly_older_than(self, cutoff_iso):
         return 0
 

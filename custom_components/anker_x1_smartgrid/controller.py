@@ -1169,6 +1169,7 @@ class Controller:
         self._committed_slot_minutes: int = 60
         self._last_purge_hour = -1
         self._last_rollup_hour = -1
+        self._last_wal_checkpoint_hour = -1
         self._last_weather_hour = -1
         self._weather_forecast: list[dict] = []
         self._first_tick_after_start = True
@@ -1536,6 +1537,12 @@ class Controller:
             await self._hass.async_add_executor_job(
                 self._rollup_hourly_sync, now.isoformat(), _hourly_cutoff
             )
+
+        # H3a: periodic WAL checkpoint so a read-only immutable reader (the addon,
+        # mounted config:ro) sees recent rows. Once per clock-hour, off-loop.
+        if self._recorder is not None and now.hour != self._last_wal_checkpoint_hour:
+            self._last_wal_checkpoint_hour = now.hour
+            await self._hass.async_add_executor_job(self._recorder.wal_checkpoint)
 
         # Remote forecast fetch: once per clock-hour when the add-on is enabled.
         # Uses the weather forecast already fetched above as the feature payload.

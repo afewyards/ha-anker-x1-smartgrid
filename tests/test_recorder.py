@@ -1375,3 +1375,16 @@ def test_purge_removes_null_ts_rows(tmp_path):
     removed = rec.purge_older_than("2026-07-08T00:00:00+00:00", 30)
     assert removed == 1
     rec.close()
+
+
+def test_wal_checkpoint_makes_rows_visible_to_immutable_reader(tmp_path):
+    path = str(tmp_path / "t.db")
+    rec = DataRecorder(path)
+    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 100.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 100.0})
+    rec.wal_checkpoint()
+    ro = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    n = ro.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+    ro.close()
+    rec.close()
+    assert n == 1

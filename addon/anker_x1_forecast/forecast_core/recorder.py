@@ -872,5 +872,16 @@ class DataRecorder:
                 )
             return [dict(r) for r in cur.fetchall()]
 
+    def wal_checkpoint(self) -> None:
+        """Truncate the WAL into the main DB file so a read-only immutable reader
+        (the addon, mounted config:ro) can see recent rows. Failure-isolated: a
+        busy checkpoint (SQLITE_BUSY) must never abort the tick — isolation is the
+        contract here (matches _energy_deltas)."""
+        try:
+            with self._lock:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:  # noqa: BLE001 — isolation is the contract; never raise into the tick
+            pass
+
     def close(self) -> None:
         self._conn.close()
