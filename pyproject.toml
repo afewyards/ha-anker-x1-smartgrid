@@ -97,7 +97,8 @@ TYPE_CHECKING = true
 major_on_zero = false
 version_toml = ["pyproject.toml:project.version"]
 version_variables = [
-    "custom_components/anker_x1_smartgrid/manifest.json:version"
+    "custom_components/anker_x1_smartgrid/manifest.json:version",
+    "addon/anker_x1_forecast/config.yaml:version",
 ]
 tag_format = "v{version}"
 commit_message = "chore(release): {version}"
