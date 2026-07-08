@@ -2254,6 +2254,14 @@ class Controller:
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
         solar_charge = required_kwh
         result = self._status(now, setpoint, deadline, "ok", solar_charge=solar_charge)
+        # E2: surface the live export setpoint for observability only.
+        # _status publishes 0.0/"passive" because export runs in the non-FORCING
+        # branch with setpoint=0.0 — state is intentionally left untouched.
+        # The recorder's smartcharge_state column (_record_sample, called above
+        # at line 2201) already always records the plan state ("passive" during
+        # export), so leaving last_status["state"] alone matches the recorded
+        # history instead of diverging from it. A dedicated sensor reads the key.
+        self.last_status["export_setpoint_w"] = _export_setpoint_w
         self.last_status["plan"] = {
             "horizon": horizon,
             "deadline": deadline.isoformat() if deadline else None,

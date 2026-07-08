@@ -44,6 +44,14 @@ class X1SetpointSensor(_Base):
         super().__init__(c, e, "setpoint_w", "SmartGrid setpoint")
 
 
+class X1ExportSetpointSensor(_Base):
+    _attr_native_unit_of_measurement = "W"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "export_setpoint_w", "SmartGrid export setpoint")
+
+
 class X1LoadMaeSensor(_Base):
     _attr_native_unit_of_measurement = "W"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -202,6 +210,7 @@ async def async_setup_entry(
             X1StateSensor(controller, entry.entry_id),
             X1SolarChargeSensor(controller, entry.entry_id),
             X1SetpointSensor(controller, entry.entry_id),
+            X1ExportSetpointSensor(controller, entry.entry_id),
             X1LoadMaeSensor(controller, entry.entry_id),
             X1HorizonEnergyMae24hSensor(controller, entry.entry_id),
             X1HorizonEnergyMae12hSensor(controller, entry.entry_id),

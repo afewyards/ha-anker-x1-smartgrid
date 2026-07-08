@@ -404,6 +404,26 @@ class TestExportEngagePositiveSetpoint:
         assert sp > 0, f"setpoint must be positive, got {sp}"
         assert sp <= 600.0, f"setpoint must be ≤ grid_export_limit_w (600), got {sp}"
 
+    @pytest.mark.asyncio
+    async def test_export_setpoint_surfaced_state_stays_passive(self, monkeypatch):
+        """Sensor-only observability (E2): export_setpoint_w surfaces in
+        last_status during an active export tick; state correctly stays
+        "passive" — consistent with the recorded smartcharge_state column
+        (_record_sample runs before this point and always records the plan
+        state, never an export state)."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        hass = _StubHass()
+        ctrl, act, store = _make_controller(hass)
+        _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(ctrl_mod, "compute_decision",
+                            _patched_compute_decision(export_request={cur_h: 3000.0}))
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+        result = await ctrl.tick()
+        assert any(c[0] == "engage_export" for c in act.calls)
+        assert result["state"] == "passive"
+        assert result["export_setpoint_w"] is not None and result["export_setpoint_w"] > 0
+
 
 # ---------------------------------------------------------------------------
 # C3-2: reserve breach OR hurdle fail → release_to_self
