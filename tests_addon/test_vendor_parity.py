@@ -26,16 +26,9 @@ _SOURCE_DIR = _REPO_ROOT / "custom_components" / "anker_x1_smartgrid"
 _VENDOR_DIR = _REPO_ROOT / "addon" / "anker_x1_forecast" / "forecast_core"
 _MANIFEST = _VENDOR_DIR / "SOURCE_SHA256"
 
-MODULES = [
-    "const",
-    "dataquality",
-    "rollup",
-    "loadmodel",
-    "featureset",
-    "recorder",
-    "hgbr",
-    "backtest",
-]
+# Derived from the vendored dir glob (not hardcoded): a 9th vendored module
+# can't silently escape this gate (T20).
+MODULES = sorted(p.stem for p in _VENDOR_DIR.glob("*.py") if p.stem != "__init__")
 
 
 # ---------------------------------------------------------------------------
@@ -140,3 +133,11 @@ def test_vendored_file_has_no_homeassistant_import(module: str) -> None:
 def test_vendored_module_imports(module: str) -> None:
     """Each vendored module must import cleanly."""
     importlib.import_module(f"forecast_core.{module}")
+
+
+# ---------------------------------------------------------------------------
+# 5. MODULES glob covers every vendored .py file
+# ---------------------------------------------------------------------------
+def test_modules_list_covers_every_vendored_py() -> None:
+    discovered = sorted(p.stem for p in _VENDOR_DIR.glob("*.py") if p.stem != "__init__")
+    assert set(MODULES) == set(discovered)

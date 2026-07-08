@@ -14,10 +14,9 @@ _SOURCE = _ROOT / "custom_components" / "anker_x1_smartgrid"
 _VENDOR = _ROOT / "addon" / "anker_x1_forecast" / "forecast_core"
 _MANIFEST = _VENDOR / "SOURCE_SHA256"
 
-MODULES = [
-    "backtest", "const", "dataquality", "featureset",
-    "hgbr", "loadmodel", "recorder", "rollup",
-]
+# Derived from the vendored dir glob (not hardcoded): a 9th vendored module
+# can't silently escape this gate (T20).
+MODULES = sorted(p.stem for p in _VENDOR.glob("*.py") if p.stem != "__init__")
 
 
 def _manifest_entries() -> dict[str, str]:
@@ -44,3 +43,8 @@ def test_manifest_hash_matches_source(module):
     assert entries[f"{module}.py"] == actual, (
         f"SOURCE_SHA256 stale for {module}.py — run ./addon/anker_x1_forecast/sync_core.sh"
     )
+
+
+def test_modules_list_covers_every_vendored_py():
+    discovered = sorted(p.stem for p in _VENDOR.glob("*.py") if p.stem != "__init__")
+    assert set(MODULES) == set(discovered)

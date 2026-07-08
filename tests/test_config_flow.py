@@ -454,6 +454,15 @@ def test_options_schema_grid_export_limit_w_roundtrip():
     assert result[const.CONF_GRID_EXPORT_LIMIT_W] == 4500.0
 
 
+def test_options_schema_grid_export_limit_w_rejects_negative():
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: -100.0})
+
+
 def test_options_schema_includes_cycle_cost_eur_per_kwh():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
     schema_obj = _options_schema({})

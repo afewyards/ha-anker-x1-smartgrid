@@ -299,7 +299,7 @@ def _options_fields(defaults: dict, services=None) -> dict:
             vol.Optional(
                 const.CONF_GRID_EXPORT_LIMIT_W,
                 default=defaults.get(const.CONF_GRID_EXPORT_LIMIT_W, const.DEFAULT_GRID_EXPORT_LIMIT_W),
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0)),
             vol.Optional(
                 const.CONF_EXPORT_FEE_EUR_PER_KWH,
                 default=defaults.get(const.CONF_EXPORT_FEE_EUR_PER_KWH, const.DEFAULT_EXPORT_FEE_EUR_PER_KWH),
