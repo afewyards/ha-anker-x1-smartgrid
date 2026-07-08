@@ -163,7 +163,11 @@ def _kwh_sum_pass(rows: list[dict], result: dict) -> None:
     """Populate the 6 ``*_kwh_sum`` keys in ``result`` (mutated in place).
 
     Tier 1 (accurate): if any row has a non-NULL ``*_kwh`` value, the column
-    is the sum of the non-NULL values — honest per-tick rectangle-rule
+    is the sum of the non-NULL values scaled by ``len(rows) / len(non_null)``
+    — NULL ticks WITHIN recorded rows are gaps (filled by the observed
+    per-tick average), not zero energy. Full coverage scales by ×1 (byte-
+    identical). Genuine downtime (fewer recorded rows) is NOT inflated —
+    only within-row NULL gaps are filled. Honest per-tick rectangle-rule
     integration with gap clamping (see recorder.py::_energy_deltas).
 
     Tier 2 (approximate, for pre-v9 rows where every tick is NULL): fall back
@@ -173,9 +177,16 @@ def _kwh_sum_pass(rows: list[dict], result: dict) -> None:
     feature, so it's computed inline here only (decision: not promoted to
     ``_ROLLUP_FEATURES`` — these raw power means aren't useful ML inputs).
     """
+    n_rows = len(rows)
     for col in _ENERGY_KWH_COLUMNS:
         values = [row[col] for row in rows if row.get(col) is not None]
-        result[f"{col}_sum"] = sum(values) if values else None
+        if not values:
+            result[f"{col}_sum"] = None
+        else:
+            # Scale by coverage: NULL ticks among recorded rows are gaps, not 0.
+            # Full coverage → ×1 (byte-identical). Genuine downtime (fewer rows) is
+            # not inflated — only within-row NULL gaps are filled.
+            result[f"{col}_sum"] = sum(values) * n_rows / len(values)
 
     if result["house_load_kwh_sum"] is None:
         mean = result.get("house_load_mean")

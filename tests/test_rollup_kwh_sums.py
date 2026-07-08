@@ -137,16 +137,24 @@ def test_aggregate_hour_kwh_sums_all_null_falls_back_to_mean():
     assert result["pv_kwh_sum"] == pytest.approx(400.0 / 1000.0)
 
 
-def test_aggregate_hour_kwh_sums_partial_null():
-    """Partial NULL: tier 1 still applies (sum of non-NULL ticks only) as
-    soon as ANY tick in the hour has a non-NULL *_kwh value."""
+def test_aggregate_hour_kwh_sums_partial_null_scales_by_coverage():
+    """NULL ticks within recorded rows are GAPS, not zero energy. 2 non-NULL
+    (0.02+0.03) of 3 rows → 0.05 * 3/2 = 0.075."""
     rows = [
         {"ts": "2026-07-06T10:00:00+00:00", "pv_kwh": 0.02},
         {"ts": "2026-07-06T10:01:00+00:00", "pv_kwh": None},
         {"ts": "2026-07-06T10:02:00+00:00", "pv_kwh": 0.03},
     ]
     result = aggregate_hour(rows)
-    assert result["pv_kwh_sum"] == pytest.approx(0.05)
+    assert result["pv_kwh_sum"] == pytest.approx(0.075)
+
+
+def test_aggregate_hour_kwh_sums_sparse_coverage_no_undercount():
+    """6 non-NULL ticks of 60 rows → scaled ×10, not ~90% undercount."""
+    rows = [{"ts": f"2026-07-06T10:{m:02d}:00+00:00",
+             "pv_kwh": (0.01 if m < 6 else None)} for m in range(60)]
+    result = aggregate_hour(rows)
+    assert result["pv_kwh_sum"] == pytest.approx(0.06 * 60 / 6)   # 0.6
 
 
 def test_aggregate_hour_kwh_sums_grid_batt_sign_split_fallback():
