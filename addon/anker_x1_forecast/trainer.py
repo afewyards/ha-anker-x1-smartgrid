@@ -166,9 +166,12 @@ def load_rows(db_path: str, *, since_iso: str | None = None) -> list[dict] | Non
 
     conn: sqlite3.Connection | None = None
     try:
-        # mode=ro: raises OperationalError if the file doesn't exist or is
-        # not a valid SQLite DB — never creates or writes to the file.
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # mode=ro&immutable=1: raises OperationalError if the file doesn't exist
+        # or is not a valid SQLite DB — never creates or writes to the file.
+        # immutable=1 reads a consistent snapshot as of the last integration
+        # wal_checkpoint(TRUNCATE) (accepts checkpoint lag; no -shm write on the
+        # config:ro mount).
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         try:
             if since_iso is not None:

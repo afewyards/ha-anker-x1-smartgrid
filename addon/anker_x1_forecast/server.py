@@ -5,6 +5,7 @@ import datetime as _dt
 import functools
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 import sklearn  # noqa: F401 — import at module level: install failure surfaces at container start
@@ -97,7 +98,8 @@ class PredictRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     """Return current training state. Non-blocking — reads in-memory STATE only."""
-    return build_health_payload(STATE, sklearn.__version__, sys.version)
+    db_ok = bool(_DB_PATH) and Path(_DB_PATH).exists()
+    return build_health_payload(STATE, sklearn.__version__, sys.version, db_readable=db_ok)
 
 
 @app.post("/predict")

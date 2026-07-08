@@ -55,16 +55,21 @@ def build_health_payload(
     state: "TrainState",
     sklearn_version: str,
     python_version: str,
+    db_readable: bool | None = None,
 ) -> dict:
     """Assemble the /health response body from a TrainState.
 
     Pure dict assembly — no I/O.  Accepts any object with the TrainState
     attribute set (duck-typed so tests can pass dataclasses or SimpleNamespace).
 
+    db_readable distinguishes "the recorder DB cannot be read" from "no data
+    yet" (state.ready=False on a fresh install looks identical to a broken
+    read-only mount otherwise). None when the caller has no DB path to probe.
+
     Returns
     -------
     dict with keys: ready, promoted, last_trained, n_rows, metrics,
-    sklearn_version, python_version.
+    sklearn_version, python_version, db_readable.
     """
     last_trained = state.last_trained
     return {
@@ -75,6 +80,7 @@ def build_health_payload(
         "metrics": state.metrics if state.metrics is not None else {},
         "sklearn_version": sklearn_version,
         "python_version": python_version,
+        "db_readable": db_readable,
     }
 
 

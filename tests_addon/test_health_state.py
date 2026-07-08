@@ -47,7 +47,7 @@ def test_build_health_payload_ready_all_keys_present():
     state = _ready_state()
     payload = build_health_payload(state, "1.4.0", "3.11.0 (default)")
     expected_keys = {"ready", "promoted", "last_trained", "n_rows", "metrics",
-                     "sklearn_version", "python_version"}
+                     "sklearn_version", "python_version", "db_readable"}
     assert set(payload.keys()) == expected_keys
 
 
@@ -94,6 +94,18 @@ def test_build_health_payload_dormant_ready_and_promoted_false():
     payload = build_health_payload(state, "1.4.0", "3.11.0")
     assert payload["ready"] is False
     assert payload["promoted"] is False
+
+
+# ---------------------------------------------------------------------------
+# build_health_payload — db_readable (H3b)
+# ---------------------------------------------------------------------------
+
+def test_health_payload_includes_db_readable():
+    from types import SimpleNamespace
+    state = SimpleNamespace(ready=False, promoted=False, last_trained=None,
+                            n_rows=0, metrics=None)
+    payload = build_health_payload(state, "1.5.2", "3.12", db_readable=False)
+    assert payload["db_readable"] is False
 
 
 # ---------------------------------------------------------------------------

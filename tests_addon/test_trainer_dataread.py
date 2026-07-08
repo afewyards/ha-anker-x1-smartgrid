@@ -126,3 +126,23 @@ def test_load_rows_matches_recorder_read_hourly_rows(tmp_path):
     assert got is not None
     # Same rows, same order, same keys, same values as the canonical reader.
     assert got == expected
+
+
+# ---------------------------------------------------------------------------
+# (g) H3b: load_rows must open the DB immutable so it sees rows checkpointed
+#     out of the WAL by the integration's periodic wal_checkpoint(TRUNCATE)
+#     (Task 9) — the read-only-mount contract for the addon.
+# ---------------------------------------------------------------------------
+
+def test_load_rows_reads_wal_db_via_immutable(tmp_path):
+    from forecast_core.recorder import DataRecorder
+    path = str(tmp_path / "t.db")
+    rec = DataRecorder(path)
+    for h in range(30):
+        rec.append({"ts": f"2026-06-{h % 28 + 1:02d}T10:00:00+00:00",
+                    "p1_w": 100.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 100.0})
+    rec.rollup_hours("2026-07-08T00:00:00+00:00")
+    rec.wal_checkpoint()
+    rec.close()
+    rows = load_rows(path)
+    assert rows is not None and len(rows) >= 24
