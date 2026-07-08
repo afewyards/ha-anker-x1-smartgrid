@@ -1,0 +1,59 @@
+"""Tests for server.py Pydantic models (HourIn, PredictRequest).
+
+Covers:
+- HourIn validates all optional fields including persons_home.
+- HourIn round-trips through model_dump().
+
+Note: These tests require FastAPI, which is only available in the Docker
+container. In dev environment, these tests are skipped; validation happens
+on-box during integration testing.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+# Skip all tests in this module if FastAPI is not available
+pytest.importorskip("fastapi")
+
+from server import HourIn, PredictRequest
+
+
+def test_houin_with_persons_home():
+    """HourIn accepts and validates persons_home field."""
+    ts = datetime(2024, 2, 1, 14, 0, 0, tzinfo=timezone.utc).isoformat()
+    hour = HourIn(ts=ts, persons_home=2.0)
+    assert hour.persons_home == 2.0
+    assert hour.ts == ts
+
+
+def test_houin_persons_home_round_trips():
+    """HourIn persons_home field round-trips through dict()."""
+    ts = datetime(2024, 2, 1, 14, 0, 0, tzinfo=timezone.utc).isoformat()
+    hour = HourIn(ts=ts, temp_forecast=10.0, persons_home=3.5)
+    dumped = hour.dict()
+    assert dumped["persons_home"] == 3.5
+    assert dumped["temp_forecast"] == 10.0
+
+
+def test_houin_persons_home_optional():
+    """HourIn persons_home defaults to None when not provided."""
+    ts = datetime(2024, 2, 1, 14, 0, 0, tzinfo=timezone.utc).isoformat()
+    hour = HourIn(ts=ts)
+    assert hour.persons_home is None
+    dumped = hour.dict()
+    assert dumped["persons_home"] is None
+
+
+def test_predict_request_with_persons_home():
+    """PredictRequest accepts HourIn with persons_home."""
+    ts1 = datetime(2024, 2, 1, 14, 0, 0, tzinfo=timezone.utc).isoformat()
+    ts2 = datetime(2024, 2, 1, 15, 0, 0, tzinfo=timezone.utc).isoformat()
+    request = PredictRequest(hours=[
+        HourIn(ts=ts1, persons_home=2.0),
+        HourIn(ts=ts2, persons_home=1.5),
+    ])
+    assert len(request.hours) == 2
+    assert request.hours[0].persons_home == 2.0
+    assert request.hours[1].persons_home == 1.5
