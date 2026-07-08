@@ -681,10 +681,15 @@ def hindsight_optimal_grid(
     total_kwh = sum(schedule_ac) + floor_import_kwh
     import_cost_eur = sum(schedule_ac[h] * day.price[h] for h in range(n))
 
-    # Export summary (F1): convert DC export to AC using eta_d.
+    # Export summary (F1): convert DC export to AC using eta_d (per-step when an
+    # eta_curve is supplied, mirroring the forward-pass routing above so the
+    # reported schedule matches the objective the DP actually optimised).
     if _do_export:
         export_schedule_ac: list[float] = [
-            e_dc * eta_d  # DC → AC: 1 DC kWh → eta_d AC kWh
+            e_dc * (
+                eta_d if eta_curve is None
+                else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+            )
             for e_dc in export_dc_sched
         ]
         total_export_kwh = sum(export_schedule_ac)

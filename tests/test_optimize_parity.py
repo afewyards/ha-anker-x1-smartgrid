@@ -984,3 +984,65 @@ class TestCurveOnMatchedPair:
         opt = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0,
                             window_len=24, export_price=export_price, eta_curve=curve)
         assert_export_parity(opt, hind, label="curve_on_export")
+
+
+# ---------------------------------------------------------------------------
+# P1: per-step discharge eta in the export leg — bin-crossing parity
+# ---------------------------------------------------------------------------
+
+
+def _two_bin_discharge_curve(cfg, *, lo_eta, hi_eta, split_w):
+    """EfficiencyCurve whose discharge eta is lo_eta below split_w, hi_eta at/above.
+    Charge eta stays flat at cfg.eta_charge. Bin edges = const.EFFICIENCY_DC_BIN_EDGES_W
+    = [400,800,1500,2500,4000] (6 bins)."""
+    from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, BinStat
+    from custom_components.anker_x1_smartgrid import const
+    edges = const.EFFICIENCY_DC_BIN_EDGES_W
+    los, his = [0.0] + edges, edges + [float("inf")]
+    disc = [BinStat(lo, hi, "discharge", (lo_eta if lo < split_w else hi_eta),
+                    None, 5, 1.0, True, "measured") for lo, hi in zip(los, his)]
+    chg = [BinStat(lo, hi, "charge", cfg.eta_charge, None, 5, 1.0, True, "measured")
+           for lo, hi in zip(los, his)]
+    return EfficiencyCurve(chg, disc, cfg.eta_charge,
+                           min(cfg.round_trip_eff / cfg.eta_charge, 1.0))
+
+
+class TestExportEtaCurveParity:
+    """P1: with a measured eta_curve, optimize_grid's export leg must route AND
+    report on per-step eta so it stays == the oracle when the optimal export lands
+    in a NON-top efficiency bin (different from max_export_w's bin)."""
+
+    def test_export_leg_eta_curve_bin_crossing_parity(self):
+        from custom_components.anker_x1_smartgrid.efficiency import bin_index
+        cfg = _make_export_cfg()          # cap 10, floor 20% (2 kWh), max_export_w=3000
+        curve = _two_bin_discharge_curve(cfg, lo_eta=0.98, hi_eta=0.80, split_w=1500.0)
+        pv    = [0.0] * 24
+        load  = [0.0] * 24
+        # NOTE ON PRICE (deviation from the plan's flat 0.20 — verified empirically):
+        # at 0.20, grid-arbitrage recharge is profitable in EITHER efficiency bin
+        # (0.55*0.98-0.04=0.499 and 0.55*0.80-0.04=0.40 both clear 0.20), so the DP
+        # always recharges up to the AC-cap-sized export — which, by construction,
+        # sits in max_export_w's OWN bin (bin 4) regardless of per-step awareness.
+        # opt and the oracle then converge on the SAME bin-4 number even pre-fix,
+        # so the parity assertion cannot distinguish the bug at that price.
+        # 0.45 sits BETWEEN the two per-kWh margins: recharging past the free
+        # ~1 kWh headroom is still worth it while the extra export stays in the
+        # low-eta bin (0.499 > 0.45) but stops being worth it once it crosses into
+        # the high-eta bin (0.40 < 0.45). The true optimum is then JUST BELOW the
+        # bin split (~1.45 kWh DC, bin 2) — genuinely different from max_export_w's
+        # bin 4 — so a flat-eta router (pre-fix) and a per-step router disagree on
+        # both how much to export AND how much to recharge for it.
+        price = [0.45] * 24
+        export_price = [0.0] * 24
+        export_price[18] = 0.55
+        # soc_start=30% (3 kWh) with a 2 kWh floor ⇒ ~1 kWh exportable ⇒ ~1000 W
+        # per hour ⇒ discharge bin 2; max_export_w=3000 ⇒ bin 4 ⇒ DIFFERENT bins.
+        assert bin_index(1000.0) != bin_index(cfg.max_export_w)
+        day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=30.0)
+        hind = hindsight_optimal_grid(day, cfg, export_price=export_price,
+                                      terminal_mode="water_value", water_value=0.0, eta_curve=curve)
+        opt = optimize_grid(pv, load, price, soc_start=30.0, cfg=cfg,
+                            window_start_h=0, window_len=24, export_price=export_price,
+                            terminal_mode="water_value", water_value=0.0, eta_curve=curve)
+        assert opt["export_schedule"][18] > 0.0      # export actually fires (non-vacuous)
+        assert_export_parity(opt, hind, label="export_eta_curve_bin_crossing")

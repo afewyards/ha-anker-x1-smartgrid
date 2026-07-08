@@ -799,7 +799,11 @@ def optimize_grid(
                         if new_soc < export_floor_h - 1e-9:
                             break  # monotonically discharging — safe to stop
                         new_b = to_bin(new_soc)
-                        e_ac = e_dc * eta_d
+                        eta_d_step = (
+                            eta_d if eta_curve is None
+                            else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+                        )
+                        e_ac = e_dc * eta_d_step
                         export_revenue = e_ac * ep_h
                         degradation = e_dc * cycle_cost
                         # Cost decreases by net export revenue; hour_credit is 0 when
@@ -927,7 +931,13 @@ def optimize_grid(
     import_eur = sum(schedule_ac[h] * price[h] for h in range(window_len))
 
     if _do_export:
-        export_schedule_ac = [e_dc * eta_d for e_dc in export_dc_sched]
+        export_schedule_ac = [
+            e_dc * (
+                eta_d if eta_curve is None
+                else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+            )
+            for e_dc in export_dc_sched
+        ]
         total_export_kwh = sum(export_schedule_ac)
         gross_export_rev = sum(export_schedule_ac[h] * export_price[h] for h in range(window_len))  # type: ignore[index]
         net_export_rev = gross_export_rev - sum(export_dc_sched) * cycle_cost
