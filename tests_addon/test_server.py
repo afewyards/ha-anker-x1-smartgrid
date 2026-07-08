@@ -57,3 +57,17 @@ def test_predict_request_with_persons_home():
     assert len(request.hours) == 2
     assert request.hours[0].persons_home == 2.0
     assert request.hours[1].persons_home == 1.5
+
+
+def test_health_and_predict_smoke():
+    """Exercise the real Pydantic request schema via TestClient (not importorskip'd
+    away): /health returns ready flag; /predict validates the hours schema."""
+    from fastapi.testclient import TestClient
+    from server import app
+    with TestClient(app) as client:
+        h = client.get("/health")
+        assert h.status_code == 200 and "ready" in h.json()
+        ok = client.post("/predict", json={"hours": [{"ts": "2026-07-08T10:00:00+00:00"}]})
+        assert ok.status_code == 200 and "predictions" in ok.json()
+        bad = client.post("/predict", json={"hours": "notalist"})
+        assert bad.status_code == 422
