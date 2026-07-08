@@ -24,3 +24,15 @@ def test_trough_none_preserves_scalar_window_min_behaviour():
     price = [0.20, 0.13, 0.30]
     mask = build_charge_mask(price, 0.40, price_band=0.005, window_min=0.13)
     assert mask == [False, True, False]
+
+
+def test_trough_mask_fails_closed_on_padded_hour():
+    """F2: a 0.0-padded phantom-price hour must fail closed even when it would
+    otherwise satisfy the trough band."""
+    price = [0.10, 0.00, 0.12]      # index 1 is a 0.0 pad
+    trough = [0.10, 0.10, 0.12]
+    ceiling = 0.30
+    m = build_charge_mask(price, ceiling, price_band=0.02, trough=trough, price_valid=[True, False, True])
+    assert m[1] is False
+    m2 = build_charge_mask(price, ceiling, price_band=0.02, trough=trough)   # default → all valid
+    assert m2[1] is True

@@ -241,10 +241,15 @@ def _dp_select_slots(
     ]
 
     # Chargeability mask: ceiling AND the per-hour look-back trough band.
+    # price_valid rejects 0.0-padded phantom-price hours (no real price data at
+    # that bucket) so they fail closed instead of silently satisfying the
+    # trough band via the injected 0.0 pad.
+    _price_valid = [(now_h + h * stride) in price_by_h for h in range(window_len)]
     chargeable = optimize_mod.build_charge_mask(
         window_price, ceiling,
         price_band=cfg.charge_window_price_band,
         trough=_trough_list,
+        price_valid=_price_valid,
     )
 
     # Per-hour export price for the co-optimized DP (optimize_grid)

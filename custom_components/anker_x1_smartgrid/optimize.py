@@ -266,6 +266,7 @@ def build_charge_mask(
     price_band: float | None = None,
     window_min: float | None = None,
     trough: Sequence[float | None] | None = None,
+    price_valid: Sequence[bool] | None = None,
 ) -> list[bool]:
     """Build a per-hour chargeability mask from a price ceiling and optional trough band.
 
@@ -320,6 +321,11 @@ def build_charge_mask(
         is the look-back charge band (mirror of the export ``windowed_peak_prices``
         gate).  ``None`` (default) preserves the scalar ``window_min`` behaviour
         exactly.
+    price_valid :
+        Optional per-hour validity mask (length == ``len(price)``). ``False`` at
+        an index fails that hour CLOSED in every path — used to reject 0.0-padded
+        phantom-price hours that would otherwise satisfy the trough band. ``None``
+        (default) treats every hour as valid (byte parity).
 
     Returns
     -------
@@ -339,20 +345,21 @@ def build_charge_mask(
         return [False] * len(price)
     if not price:
         return []
+    valid = price_valid if price_valid is not None else [True] * len(price)
     if trough is not None:
         # Per-hour windowed-trough gate (look-back band): each hour is judged
         # against its OWN trough[h] = min over [h - lookback, horizon_edge).  None
         # entries (no real price in range) fail closed.
         band = price_band if price_band is not None else 0.0
         return [
-            (t is not None and p <= ceiling and p <= t + band)
-            for p, t in zip(price, trough)
+            (v and t is not None and p <= ceiling and p <= t + band)
+            for p, t, v in zip(price, trough, valid)
         ]
     if price_band is not None:
         trough_v = window_min if window_min is not None else min(price)
         trough_threshold = trough_v + price_band
-        return [p <= ceiling and p <= trough_threshold for p in price]
-    return [p <= ceiling for p in price]
+        return [v and p <= ceiling and p <= trough_threshold for p, v in zip(price, valid)]
+    return [v and p <= ceiling for p, v in zip(price, valid)]
 
 
 def optimize_grid(
