@@ -1046,3 +1046,48 @@ class TestExportEtaCurveParity:
                             terminal_mode="water_value", water_value=0.0, eta_curve=curve)
         assert opt["export_schedule"][18] > 0.0      # export actually fires (non-vacuous)
         assert_export_parity(opt, hind, label="export_eta_curve_bin_crossing")
+
+
+# ---------------------------------------------------------------------------
+# T3: DP<->oracle parity sweep across live cfg permutations (Task 11)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("overrides,dt_h", [
+    ({"reserve_anchor": "ride_to_trough"}, 1.0),   # live default anchor (DP-invariant)
+    ({"export_peak_lookback_h": 4.0}, 1.0),         # windowed peak w/ day_index
+    ({"soc_hedge_fraction": 0.5}, 1.0),             # controller-level; DP-invariant
+    ({}, 0.25),                                      # 15-min slot resolution
+])
+def test_parity_holds_across_live_cfg_permutations(overrides, dt_h):
+    """T3: parity must hold across live cfg permutations that reach production
+    but were never swept together: the live-default reserve_anchor, a non-zero
+    export peak look-back, a non-zero SoC drift-hedge fraction, and 15-min slot
+    resolution.
+
+    reserve_anchor / soc_hedge_fraction are controller-level knobs that never
+    enter optimize_grid / hindsight_optimal_grid directly -- swept here to PIN
+    that DP-invariance (a future wiring of either into the DP must not
+    silently break parity). export_peak_lookback_h and dt_h=0.25 ARE
+    substantive: both DPs derive the windowed export-peak band from
+    cfg.export_peak_lookback_h / dt_h (optimize.py's export routing and
+    regret.py:413).
+
+    Base cfg is _make_export_cfg (has max_export_w / cycle_cost) so every
+    permutation is a non-vacuous export scenario -- a make_cfg-based scenario
+    would pass parity trivially on an empty export schedule.
+    """
+    cfg = _make_export_cfg(**overrides)
+    pv    = [0.0] * 24
+    load  = [0.0] * 24
+    price = [0.20] * 24
+    export_price = [0.0] * 24
+    export_price[18] = 0.55
+    day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=80.0)
+    hind = hindsight_optimal_grid(day, cfg, export_price=export_price,
+                                  terminal_mode="water_value", water_value=0.0, dt_h=dt_h)
+    opt = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg,
+                        window_start_h=0, window_len=24, export_price=export_price,
+                        terminal_mode="water_value", water_value=0.0, dt_h=dt_h)
+    assert sum(hind["export_schedule"]) > 0.0     # sweep is non-vacuous
+    assert_export_parity(opt, hind, label=f"parity[{overrides},dt={dt_h}]")
