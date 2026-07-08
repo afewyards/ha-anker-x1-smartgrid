@@ -2072,3 +2072,19 @@ async def test_status_exposes_efficiency_curve_table():
     assert len(status["efficiency_curve"]["discharge"]) == 6
     assert status["efficiency_curve"]["any_over_unity"] is False
     assert status["use_measured_eta"] is False
+
+
+@pytest.mark.asyncio
+async def test_learned_model_unavailable_warns_once(monkeypatch, caplog):
+    """A4: use_learned_model=True + addon disabled + sklearn unavailable in-process
+    is the silent bucketed-fallback case — warn ONCE, not every tick."""
+    from dataclasses import replace
+    hass = _StubHass()
+    ctrl, act = _make_controller(hass)
+    ctrl.cfg = replace(ctrl.cfg, use_learned_model=True, addon_enabled=False)
+    monkeypatch.setattr(controller.importlib.util, "find_spec", lambda name: None)
+    with caplog.at_level("WARNING"):
+        await ctrl.tick()
+        await ctrl.tick()
+    hits = [r for r in caplog.records if "learned model" in r.getMessage().lower()]
+    assert len(hits) == 1

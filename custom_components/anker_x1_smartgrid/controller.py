@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import math
@@ -1173,6 +1174,7 @@ class Controller:
         self._last_weather_hour = -1
         self._weather_forecast: list[dict] = []
         self._first_tick_after_start = True
+        self._learned_model_warned = False
         self._last_remote_forecast_hour = -1
         self._remote_forecast_map: dict | None = None
         self._last_profile_refresh: datetime | None = None
@@ -1543,6 +1545,23 @@ class Controller:
         if self._recorder is not None and now.hour != self._last_wal_checkpoint_hour:
             self._last_wal_checkpoint_hour = now.hour
             await self._hass.async_add_executor_job(self._recorder.wal_checkpoint)
+
+        # A4: DEFAULT_USE_LEARNED_MODEL is True, but sklearn is NOT an integration
+        # requirement (musl is why the addon exists) and the addon defaults off — a
+        # stock install then silently falls back to the bucketed model forever.
+        if (
+            not self._learned_model_warned
+            and self.cfg.use_learned_model
+            and not self.cfg.addon_enabled
+            and importlib.util.find_spec("sklearn") is None
+        ):
+            self._learned_model_warned = True
+            _LOGGER.warning(
+                "use_learned_model is on but scikit-learn is unavailable in the "
+                "integration and the forecast add-on is disabled — falling back to "
+                "the bucketed load model. Enable the Anker X1 Forecast add-on to "
+                "use the learned model."
+            )
 
         # Remote forecast fetch: once per clock-hour when the add-on is enabled.
         # Uses the weather forecast already fetched above as the feature payload.
