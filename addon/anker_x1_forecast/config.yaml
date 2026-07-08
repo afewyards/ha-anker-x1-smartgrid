@@ -1,0 +1,18 @@
+name: "Anker X1 Forecast (HGBR)"
+version: "0.1.0"
+slug: anker_x1_forecast
+description: "Local HGBR load-forecast service for Anker X1 SmartGrid: trains a P50/P80 house-load model on the recorder DB and serves per-hour predictions to the integration over the internal add-on network."
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: manual
+init: false        # we provide our own CMD/entrypoint (uvicorn), not HA's s6-overlay init
+map:
+  - config:ro      # forward-compat: P1+ reads /config/anker_x1_smartgrid.db; P0 reads nothing
+options:
+  db_path: "/config/anker_x1_smartgrid.db"
+  retrain_hour: 3
+schema:
+  db_path: "str"
+  retrain_hour: "int(0,23)"

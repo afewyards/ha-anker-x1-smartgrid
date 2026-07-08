@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import asyncio
+import datetime as _dt
+import functools
+import logging
+import sys
+from typing import Optional
+
+import sklearn  # noqa: F401 — import at module level: install failure surfaces at container start
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from health import build_health_payload, read_options, run_retrain_loop
+import predictor
+import trainer
+from trainer import TrainState, train_once
+
+_log = logging.getLogger(__name__)
+
+app = FastAPI()
+
+# Hard cap on /predict payload size: a runaway caller (e.g. an integration bug
+# requesting a huge horizon) must not be able to force an unbounded prediction
+# loop. 96 hours = 4 days, comfortably above the planner's real horizon.
+MAX_PREDICT_HOURS = 96
+
+# Module-level STATE: dormant default so /health works before first train.
+_scheduler_task: asyncio.Task | None = None
+_DB_PATH: str | None = None  # set at startup; enables serve-time lag refresh
+
+STATE: TrainState = TrainState(
+    ready=False,
+    promoted=False,
+    last_trained=None,
+    n_rows=0,
+    metrics=None,
+    model=None,
+)
+
+
+async def _scheduler(db_path: str, retrain_hour: int) -> None:
+    """Background task: train once at startup, then retrain daily at retrain_hour."""
+    loop = asyncio.get_running_loop()
+
+    async def _run_train() -> None:
+        global STATE
+        try:
+            fn = functools.partial(train_once, db_path)
+            result = await loop.run_in_executor(None, fn)
+            STATE = result
+            _log.info(
+                "train_once complete: ready=%s promoted=%s n_rows=%s",
+                result.ready,
+                result.promoted,
+                result.n_rows,
+            )
+        except Exception:
+            _log.exception("_scheduler: unexpected error during train_once")
+
+    # Immediate run at startup
+    await _run_train()
+
+    # Daily loop, crash-wrapped (see health.run_retrain_loop).
+    await run_retrain_loop(
+        retrain_hour, _run_train,
+        now_fn=lambda: _dt.datetime.now(_dt.timezone.utc),
+        sleep_fn=asyncio.sleep,
+    )
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    opts = read_options()
+    db_path: str = opts["db_path"]
+    retrain_hour: int = int(opts["retrain_hour"])
+    _log.info("startup: db_path=%r retrain_hour=%s", db_path, retrain_hour)
+    global _scheduler_task, _DB_PATH
+    _DB_PATH = db_path
+    _scheduler_task = asyncio.create_task(_scheduler(db_path, retrain_hour))
+
+
+class HourIn(BaseModel):
+    ts: str
+    temp_forecast: Optional[float] = None
+    cloud_cover: Optional[float] = None
+    humidity: Optional[float] = None
+    wind_speed: Optional[float] = None
+    irradiance: Optional[float] = None
+    persons_home: Optional[float] = None
+
+
+class PredictRequest(BaseModel):
+    hours: list[HourIn]
+
+
+@app.get("/health")
+def health() -> dict:
+    """Return current training state. Non-blocking — reads in-memory STATE only."""
+    return build_health_payload(STATE, sklearn.__version__, sys.version)
+
+
+@app.post("/predict")
+def predict(req: PredictRequest) -> dict:
+    """Return p50/p80 load forecasts for the requested hours.
+
+    Non-blocking — reads in-memory STATE only, never triggers training.
+    Returns an empty predictions list when the model is not ready.
+    Rejects payloads over MAX_PREDICT_HOURS entries with HTTP 400.
+    """
+    if len(req.hours) > MAX_PREDICT_HOURS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"hours: at most {MAX_PREDICT_HOURS} entries allowed, "
+                f"got {len(req.hours)}"
+            ),
+        )
+    if STATE.model is None or not STATE.ready:
+        return predictor.build_predict_payload(STATE, [])
+    # Intraday adaptation: re-anchor lag features on live history (never raises).
+    if _DB_PATH:
+        trainer.refresh_model_lookups(STATE.model, _DB_PATH)
+    preds = predictor.predict_hours(STATE.model, [h.model_dump() for h in req.hours])
+    return predictor.build_predict_payload(STATE, preds)

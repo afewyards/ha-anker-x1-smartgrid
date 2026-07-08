@@ -1,0 +1,8 @@
+# Pinned: scikit-learn 1.5.2 ships a cp312 aarch64 manylinux wheel (the box's container arch).
+# The whole P0 bet is that this installs from a wheel, NOT a source build.
+scikit-learn==1.5.2
+fastapi==0.115.6
+uvicorn==0.34.0
+# Pure-Python (arch-independent); featureset needs holidays for NL is_holiday calendar. Matches dev .venv.
+holidays==0.99
+# scipy and numpy arrive transitively via scikit-learn; do not pin explicitly.
