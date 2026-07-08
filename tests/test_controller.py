@@ -211,7 +211,7 @@ async def test_tick_failsafe_missing_soc():
 
 @pytest.mark.asyncio
 async def test_tick_disabled():
-    """When controller.enabled is False and not engaged, tick() returns disabled and does NOT call release_to_self."""
+    """When controller.enabled is False, not engaged AND not restart-into-engaged → does NOT call release_to_self."""
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     ctrl.enabled = False
@@ -221,6 +221,55 @@ async def test_tick_disabled():
     assert result["reason"] == "disabled"
     assert result["state"] == "passive"
     assert not any(c[0] == "release_to_self" for c in act.calls)
+
+
+@pytest.mark.asyncio
+async def test_tick_disabled_after_restart_while_engaged_releases_once():
+    """Restart into disabled while physically engaged (persisted export_state,
+    fresh actuator.engaged=False) → ONE release on the first disabled tick, then
+    hands-off within the same run (no clobber of a later manual mode)."""
+    from custom_components.anker_x1_smartgrid.models import ExportState
+    hass = _StubHass()
+    ctrl, act = _make_controller(hass)
+    ctrl.enabled = False
+    ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+    act.engaged = False
+
+    r1 = await ctrl.tick()
+    assert r1["reason"] == "disabled"
+    assert sum(1 for c in act.calls if c[0] == "release_to_self") == 1
+
+    act.calls.clear()
+    r2 = await ctrl.tick()
+    assert not any(c[0] == "release_to_self" for c in act.calls)
+
+
+@pytest.mark.asyncio
+async def test_tick_disabled_persists_disengaged_so_next_restart_no_release():
+    """The first-tick release must PERSIST disengaged/PASSIVE state, so a SECOND
+    restart-while-disabled does NOT re-fire release (no repeated manual clobber)."""
+    from custom_components.anker_x1_smartgrid.models import ExportState
+    hass = _StubHass()
+    store = ctrl_store = None
+    # Capture what the controller persisted.
+    saved = {}
+    class _CaptureStore:
+        async def async_save(self, data): saved.update(data)
+    ctrl, act = _make_controller(hass)
+    ctrl._store = _CaptureStore()
+    ctrl.enabled = False
+    ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+    act.engaged = False
+    await ctrl.tick()
+    assert saved.get("export_state", {}).get("engaged") is False   # persisted disengaged
+
+    # Simulate a SECOND restart: fresh controller, restore the persisted (disengaged) state.
+    ctrl2, act2 = _make_controller(_StubHass())
+    ctrl2.restore(saved)
+    ctrl2.enabled = False
+    act2.engaged = False
+    await ctrl2.tick()
+    assert not any(c[0] == "release_to_self" for c in act2.calls)
 
 
 @pytest.mark.asyncio

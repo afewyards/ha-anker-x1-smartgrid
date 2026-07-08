@@ -1169,6 +1169,7 @@ class Controller:
         self._committed_slot_minutes: int = 60
         self._last_purge_hour = -1
         self._last_rollup_hour = -1
+        self._first_tick_after_start = True
         self._last_remote_forecast_hour = -1
         self._remote_forecast_map: dict | None = None
         self._last_profile_refresh: datetime | None = None
@@ -1486,6 +1487,8 @@ class Controller:
 
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
+        _first_tick = self._first_tick_after_start
+        self._first_tick_after_start = False
         # Refresh the measured efficiency curve (cached; cheap no-op most ticks).
         # Built regardless of cfg.use_measured_eta so the curve is warm the
         # moment the flag is flipped on; _planner_curve() is what gates it.
@@ -1561,7 +1564,17 @@ class Controller:
             # Hand control back to the X1 ONCE if we were actively engaged, then stay
             # hands-off — re-asserting self-consumption every tick would clobber a
             # user-set manual/modbus mode while disabled.
-            if self._actuator.engaged:
+            # Derive "was engaged" from PERSISTED state on the first tick after a
+            # (re)start — actuator.engaged is in-memory only and resets to False on
+            # restart, so a crash while exporting/FORCING would otherwise leave the
+            # inverter executing its last VPP command forever. Fire ONE release; on
+            # every later disabled tick fall back to the live actuator flag so we do
+            # not clobber a user-set manual/modbus mode.
+            _was_engaged = self._actuator.engaged or (
+                _first_tick
+                and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
+            )
+            if _was_engaged:
                 try:
                     await self._actuator.release_to_self()
                 except Exception:
@@ -1573,6 +1586,13 @@ class Controller:
             # then reset to PASSIVE so no committed slots are carried forward.
             _prev_plan = self.plan
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
+            # Persist the disengaged/PASSIVE state: the disabled branch otherwise
+            # never writes the store, so a mid-disable restart would re-derive
+            # "was engaged" from stale persisted export_state and re-release,
+            # clobbering a user-set manual mode. Guarded on _first_tick so we do it
+            # once per (re)start, not every disabled tick.
+            if _first_tick:
+                await self._persist()
             inputs = coordinator.read_plant_inputs(self._hass, self._data)
 
             # Read all forecast/schedule data needed for shadow compute and display horizon.
