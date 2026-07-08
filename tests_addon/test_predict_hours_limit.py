@@ -20,11 +20,19 @@ import types
 import pytest
 
 
-def _install_fastapi_stub_if_missing() -> None:
+def _install_fastapi_stub_if_missing() -> types.ModuleType | None:
+    """Install the stub in sys.modules if real fastapi isn't importable.
+
+    Returns the stub module object if one was installed, or None if real
+    fastapi was already present (nothing installed, nothing to tear down).
+    The return value lets the module-scoped fixture below remove ONLY the
+    exact object this function created — never a real fastapi some other
+    import may have put there in the meantime.
+    """
     try:
         import fastapi  # noqa: F401
 
-        return
+        return None
     except ImportError:
         pass
 
@@ -54,11 +62,29 @@ def _install_fastapi_stub_if_missing() -> None:
     stub.FastAPI = _FastAPI
     stub.HTTPException = _HTTPException
     sys.modules["fastapi"] = stub
+    return stub
 
 
-_install_fastapi_stub_if_missing()
+_installed_fastapi_stub = _install_fastapi_stub_if_missing()
 
 import server  # noqa: E402 — must follow the stub install above
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _teardown_fastapi_stub():
+    """Keep the stub self-contained to this module: sys.modules is process-wide
+    and pytest collects all test modules up front, so a stub left behind here
+    would leak into every later-collected module's own `import fastapi` /
+    `importorskip("fastapi")` checks (it did — see test_server.py's guard,
+    which now checks "fastapi.testclient" specifically as a second line of
+    defense). Remove it once this module's tests are done, and only if it is
+    still the exact object we installed — never touch a real fastapi."""
+    yield
+    if (
+        _installed_fastapi_stub is not None
+        and sys.modules.get("fastapi") is _installed_fastapi_stub
+    ):
+        del sys.modules["fastapi"]
 
 
 def _make_request(n_hours: int) -> "server.PredictRequest":

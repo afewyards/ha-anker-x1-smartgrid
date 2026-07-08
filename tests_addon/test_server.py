@@ -14,8 +14,15 @@ from datetime import datetime, timezone
 
 import pytest
 
-# Skip all tests in this module if FastAPI is not available
-pytest.importorskip("fastapi")
+# Skip all tests in this module if FastAPI is not available. Guard on
+# "fastapi.testclient" specifically (not just "fastapi"): a sibling test module
+# (test_predict_hours_limit.py) installs a minimal `fastapi` stub into
+# sys.modules as a local-dev workaround when the real package is missing, and
+# that stub is not a real package. Checking the submodule makes this skip
+# correctly even if the bare "fastapi" name is already (falsely) satisfied by
+# that stub — real fastapi.testclient only resolves when fastapi is genuinely
+# installed (as it is in CI).
+pytest.importorskip("fastapi.testclient")
 
 from server import HourIn, PredictRequest
 
