@@ -257,8 +257,8 @@ def build_display_horizon(
     export_request_by_hour: dict[datetime, float] | None = None,
     reserve_by_hour: dict[datetime, float] | None = None,
     ceiling_by_hour: dict[datetime, float] | None = None,
-    today_watts: list[tuple[datetime, float]] | None = None,
-    tomorrow_watts: list[tuple[datetime, float]] | None = None,
+    today_watts: list[list[tuple[datetime, float]]] | None = None,
+    tomorrow_watts: list[list[tuple[datetime, float]]] | None = None,
     past_actuals_by_hour: dict[datetime, dict] | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     temp_by_hour: dict[datetime, float | None] | None = None,
@@ -275,10 +275,12 @@ def build_display_horizon(
             Used as a fallback when today_watts is not provided.
         tomorrow_arrays: Per-array [(kwh, peak_dt)] for tomorrow's PV, or None to skip.
             Used as a fallback when tomorrow_watts is not provided.
-        today_watts: Sub-hourly (datetime_utc, watts) samples for today, returned by
-            coordinator.read_pv_today_watts.  When provided, takes precedence over
-            today_arrays for curve building (produces correct bell-shaped curves).
-        tomorrow_watts: Sub-hourly (datetime_utc, watts) samples for tomorrow.
+        today_watts: Per-source lists of sub-hourly (datetime_utc, watts) samples for
+            today, returned by coordinator.read_pv_today_watts.  When provided, takes
+            precedence over today_arrays for curve building (each source is resampled
+            to the hourly grid independently, then summed).
+        tomorrow_watts: Per-source lists of sub-hourly (datetime_utc, watts) samples
+            for tomorrow.
         export_request_by_hour: Per-hour planned export-to-grid watts (NET-EXPORT).
             Export drains the SoC simulation so the projected-SoC line reflects
             export hours correctly.  Mirrors build_plan_horizon semantics.
