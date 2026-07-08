@@ -84,7 +84,7 @@ class _StubRecorder:
         return []
 
     def read_efficiency_samples(self, since_iso=None):
-        """Stub for the measured-efficiency-curve build — no samples in unit tests."""
+        self.efficiency_calls = getattr(self, "efficiency_calls", 0) + 1
         return []
 
     def upsert_daily_regret(self, **kwargs):
@@ -1916,57 +1916,63 @@ def test_resolve_slot_minutes_day_rollover_resets_latch(monkeypatch):
 # T16 — measured efficiency curve: build + cache + planner gate
 # ---------------------------------------------------------------------------
 
-def test_controller_builds_efficiency_curve_and_gates_off_by_default():
-    """_refresh_efficiency_curve always builds a curve; _planner_curve only
-    surfaces it to the DP/reserve when cfg.use_measured_eta is on (default OFF,
-    the byte-identical parity path)."""
+@pytest.mark.asyncio
+async def test_efficiency_read_skipped_when_measured_eta_off():
+    """use_measured_eta defaults False → the blocking efficiency read is skipped
+    entirely (not just wrapped)."""
+    hass = _StubHass()
+    ctrl, act = _make_controller(hass)
+    assert ctrl.cfg.use_measured_eta is False
+    await ctrl.tick()
+    assert getattr(ctrl._recorder, "efficiency_calls", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_efficiency_curve_built_only_when_measured_eta_on():
+    """Skip-when-off: OFF (default) does NOT build from the recorder; ON builds
+    and _planner_curve surfaces it."""
     from dataclasses import replace
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
-
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-
-    ctrl._refresh_efficiency_curve(BASE)
-    assert ctrl._eta_curve is not None
+    await ctrl._refresh_efficiency_curve(BASE)
+    assert ctrl._eta_curve_built_at is None          # skipped
+    assert ctrl._planner_curve() is None
+    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
+    await ctrl._refresh_efficiency_curve(BASE)
     assert isinstance(ctrl._eta_curve, EfficiencyCurve)
     assert ctrl._eta_curve_built_at == BASE
-    assert ctrl._planner_curve() is None  # flag OFF by default
-
-    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
     assert ctrl._planner_curve() is ctrl._eta_curve
 
 
-def test_refresh_efficiency_curve_is_cached_within_window():
-    """A second refresh within EFFICIENCY_CACHE_SECONDS is a no-op (same object,
-    ``_eta_curve_built_at`` unchanged) — avoids re-querying the recorder every tick."""
+@pytest.mark.asyncio
+async def test_refresh_efficiency_curve_is_cached_within_window():
+    from dataclasses import replace
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-
-    ctrl._refresh_efficiency_curve(BASE)
+    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
+    await ctrl._refresh_efficiency_curve(BASE)
     curve_after_first = ctrl._eta_curve
     built_at_first = ctrl._eta_curve_built_at
-
     soon = BASE + timedelta(seconds=const.EFFICIENCY_CACHE_SECONDS - 1)
-    ctrl._refresh_efficiency_curve(soon)
+    await ctrl._refresh_efficiency_curve(soon)
     assert ctrl._eta_curve is curve_after_first
     assert ctrl._eta_curve_built_at == built_at_first
-
     later = BASE + timedelta(seconds=const.EFFICIENCY_CACHE_SECONDS + 1)
-    ctrl._refresh_efficiency_curve(later)
+    await ctrl._refresh_efficiency_curve(later)
     assert ctrl._eta_curve_built_at == later
 
 
-def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error():
-    """A recorder read failure must never raise into the tick — falls back to
-    the static scalar curve instead."""
+@pytest.mark.asyncio
+async def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error():
+    from dataclasses import replace
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-
+    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
     def _boom(since_iso=None):
         raise RuntimeError("recorder unavailable")
-
     ctrl._recorder.read_efficiency_samples = _boom
-    ctrl._refresh_efficiency_curve(BASE)
+    await ctrl._refresh_efficiency_curve(BASE)
     assert ctrl._eta_curve is not None
     assert ctrl._eta_curve_built_at == BASE
 

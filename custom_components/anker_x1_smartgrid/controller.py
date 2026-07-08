@@ -1232,14 +1232,16 @@ class Controller:
         self._eta_curve: EfficiencyCurve = EfficiencyCurve.static(self.cfg)
         self._eta_curve_built_at: datetime | None = None
 
-    def _refresh_efficiency_curve(self, now: datetime) -> None:
+    async def _refresh_efficiency_curve(self, now: datetime) -> None:
         """Rebuild the measured efficiency curve from recent recorder samples.
 
-        Cached for ``EFFICIENCY_CACHE_SECONDS`` (default 1h) so every tick does
-        not re-query the recorder. On any failure (missing recorder method,
-        insufficient data, query error), falls back to the static scalar curve
-        and logs a warning — never raises into the tick.
+        Skipped entirely when ``use_measured_eta`` is off (the default): the
+        planner uses the static scalar curve via ``_planner_curve()`` returning
+        None, so no read is needed. When on, cached for
+        ``EFFICIENCY_CACHE_SECONDS`` and the SQLite read runs off-loop.
         """
+        if not self.cfg.use_measured_eta:
+            return
         if (
             self._eta_curve_built_at is not None
             and (now - self._eta_curve_built_at).total_seconds() < const.EFFICIENCY_CACHE_SECONDS
@@ -1247,7 +1249,9 @@ class Controller:
             return
         try:
             since = (now - timedelta(days=const.EFFICIENCY_WINDOW_DAYS)).isoformat()
-            rows = self._recorder.read_efficiency_samples(since_iso=since)
+            rows = await self._hass.async_add_executor_job(
+                self._recorder.read_efficiency_samples, since
+            )
             self._eta_curve = EfficiencyCurve.build(rows, self.cfg, now)
         except Exception:
             _LOGGER.warning("efficiency curve build failed; using static fallback", exc_info=True)
@@ -1489,10 +1493,11 @@ class Controller:
         now = dt_util.utcnow()
         _first_tick = self._first_tick_after_start
         self._first_tick_after_start = False
-        # Refresh the measured efficiency curve (cached; cheap no-op most ticks).
-        # Built regardless of cfg.use_measured_eta so the curve is warm the
-        # moment the flag is flipped on; _planner_curve() is what gates it.
-        self._refresh_efficiency_curve(now)
+        # Refresh the measured efficiency curve off-loop (cached; cheap no-op most
+        # ticks). Skipped entirely when use_measured_eta is off (default) — the
+        # planner uses the static scalar; the curve rebuilds on the first tick after
+        # the flag is flipped on.
+        await self._refresh_efficiency_curve(now)
         # Fetch hourly weather forecast once per tick for the weather columns.
         # read_hourly_weather_forecast returns [] on any error; get_forecast_for_hour
         # returns None for an empty list — both result in NULL for all 4 columns.
