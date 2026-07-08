@@ -2,8 +2,12 @@
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
-from custom_components.anker_x1_smartgrid.optimize import optimize_grid, effective_export_price
-from custom_components.anker_x1_smartgrid.regret import windowed_peak_prices
+from custom_components.anker_x1_smartgrid.optimize import (
+    build_charge_mask,
+    effective_export_price,
+    optimize_grid,
+)
+from custom_components.anker_x1_smartgrid.regret import windowed_peak_prices, windowed_trough_prices
 
 
 def _cfg(**kw):
@@ -145,3 +149,28 @@ def test_two_day_horizon_exports_both_daily_peaks():
     )
     assert res["export_schedule"][18] > 0.0   # day1 peak exports (per-day band)
     assert res["export_schedule"][42] > 0.0   # day2 peak exports
+
+
+def test_two_day_trough_band_allows_day1_charge_where_global_blocks():
+    """48h: a cheaper day-2 trough must NOT block day-1's own cheap charge hour.
+    Per-day trough band admits day-1 charging; a GLOBAL (day_index=None) band judges
+    day-1 vs day-2's lower trough and blocks it."""
+    cfg = _cfg(charge_window_price_band=0.02)
+    n = 48
+    pv = [0.0] * n
+    load = [1.0] * n
+    price = [0.30] * n
+    price[6] = 0.15
+    price[30] = 0.10
+    ceiling = max(price)
+    day = [h // 24 for h in range(n)]
+    trough_perday = windowed_trough_prices(price, 0, day_index=day)
+    trough_global = windowed_trough_prices(price, 0, day_index=None)
+    mask_perday = build_charge_mask(price, ceiling, price_band=cfg.charge_window_price_band, trough=trough_perday)
+    mask_global = build_charge_mask(price, ceiling, price_band=cfg.charge_window_price_band, trough=trough_global)
+    assert mask_perday[6] is True
+    assert mask_global[6] is False
+    res = optimize_grid(pv, load, price, soc_start=20.0, cfg=cfg,
+                        window_start_h=0, window_len=n, slots_per_day=24,
+                        day_index=day, chargeable=mask_perday)
+    assert sum(res["schedule"][:24]) > 0.0
