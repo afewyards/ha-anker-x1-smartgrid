@@ -9,7 +9,7 @@ UTC = timezone.utc
 def test_watts_curve_buckets_at_15min_step():
     base = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
     samples = [(base + timedelta(minutes=5*i), 1000.0 + 10*i) for i in range(12)]
-    curve = build_pv_curve_from_watts(samples, None, base, step_h=0.25)
+    curve = build_pv_curve_from_watts([samples], None, base, step_h=0.25)
     keys = [t for t, _ in curve]
     assert base + timedelta(minutes=15) in keys           # 4 quarter buckets
     assert base + timedelta(minutes=45) in keys
@@ -18,7 +18,7 @@ def test_watts_curve_buckets_at_15min_step():
 def test_watts_curve_60min_unchanged():
     base = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
     samples = [(base + timedelta(minutes=15*i), 1000.0) for i in range(8)]
-    curve = build_pv_curve_from_watts(samples, None, base)  # step_h default 1.0
+    curve = build_pv_curve_from_watts([samples], None, base)  # step_h default 1.0
     assert [t for t, _ in curve] == [base, base + timedelta(hours=1)]
 
 

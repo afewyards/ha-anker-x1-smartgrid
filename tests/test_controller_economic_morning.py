@@ -100,13 +100,15 @@ def _slots() -> list[PriceSlot]:
     return [PriceSlot(_NOW0 + timedelta(hours=i), r[1]) for i, r in enumerate(_TABLE)]
 
 
-def _today_watts() -> list[tuple[datetime, float]]:
-    """PV watts samples from the TABLE (one entry per hour, 05:00–21:00 UTC).
+def _today_watts() -> list[list[tuple[datetime, float]]]:
+    """PV watts samples from the TABLE (one entry per hour, 05:00–21:00 UTC),
+    wrapped as a single-source array (H2: ``today_watts`` is now a list of
+    per-source sample arrays — see ``build_pv_curve_from_watts``).
 
     Passed as ``today_watts`` to ``compute_decision`` so the PV curve uses the
     real TABLE values rather than the synth_pv_curve fallback.
     """
-    return [(_NOW0 + timedelta(hours=i), float(r[2])) for i, r in enumerate(_TABLE)]
+    return [[(_NOW0 + timedelta(hours=i), float(r[2])) for i, r in enumerate(_TABLE)]]
 
 
 class _TablePredictor:

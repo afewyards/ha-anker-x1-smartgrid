@@ -126,30 +126,37 @@ def build_pv_curve_from_arrays(
 
 
 def build_pv_curve_from_watts(
-    today_samples: list[tuple[datetime, float]] | None,
-    tomorrow_samples: list[tuple[datetime, float]] | None,
+    today_sources: list[list[tuple[datetime, float]]] | None,
+    tomorrow_sources: list[list[tuple[datetime, float]]] | None,
     now: datetime,
     *,
     step_h: float = 1.0,
 ) -> list[tuple[datetime, float]]:
-    """Build a PV power curve from raw sub-hourly watts samples.
+    """Build a PV power curve from raw sub-hourly watts samples, per source.
 
-    Merges today + tomorrow samples (each a list of (datetime, watts) tuples, already
-    converted to UTC by the coordinator reader).  Resamples to ``step_h``-wide UTC
-    buckets by taking the ARITHMETIC MEAN of all samples whose timestamp falls in
-    [bucket, bucket+step_h).  Drops buckets strictly before ``now``'s bucket floor.
-    Returns a sorted list of (datetime_utc, watts_mean) with one entry per bucket
-    that has ≥1 sample. Returns [] when all inputs are None/empty.
+    ``today_sources``/``tomorrow_sources`` are each a list of per-source sample
+    arrays (one array per PV entity, already converted to UTC by the coordinator
+    reader) or None/[] if unavailable.  Each source is resampled to ``step_h``-wide
+    UTC buckets by taking the ARITHMETIC MEAN of ITS OWN samples whose timestamp
+    falls in [bucket, bucket+step_h) — INDEPENDENTLY of other sources — and only
+    THEN are the per-bucket means SUMMED across sources (H2). This avoids diluting
+    a coarse-cadence (e.g. hourly) source when it is pooled with a finer-cadence
+    (e.g. 30-min) source before averaging. Drops buckets strictly before ``now``'s
+    bucket floor. Returns a sorted list of (datetime_utc, watts_summed) with one
+    entry per bucket between the first and last kept bucket (gaps filled with 0.0
+    so the timeline stays contiguous). Returns [] when all inputs are None/empty.
 
     ``step_h`` drives bucket width (1.0h default; 0.25h for 15-min).  At
-    ``step_h=1.0`` this reduces byte-identically to the legacy hourly bucketing.
+    ``step_h=1.0`` this reduces byte-identically to the legacy hourly bucketing
+    for a single hourly-cadence source.
     """
-    all_samples: list[tuple[datetime, float]] = []
-    for src in (today_samples, tomorrow_samples):
-        if src:
-            all_samples.extend(src)
-
-    if not all_samples:
+    sources: list[list[tuple[datetime, float]]] = []
+    for group in (today_sources, tomorrow_sources):
+        if group:
+            for src in group:
+                if src:
+                    sources.append(src)
+    if not sources:
         return []
 
     step_min = max(1, round(step_h * 60))
@@ -158,37 +165,38 @@ def build_pv_curve_from_watts(
         minute = (t.minute // step_min) * step_min
         return t.replace(minute=minute, second=0, microsecond=0)
 
-    # Top-of-current-bucket floor in UTC
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)  # treat naive as UTC, like samples below
-    now_utc = now.astimezone(timezone.utc)
-    now_h = _floor(now_utc.replace(tzinfo=timezone.utc))
+        now = now.replace(tzinfo=timezone.utc)
+    now_h = _floor(now.astimezone(timezone.utc).replace(tzinfo=timezone.utc))
 
-    # Bin each sample into its UTC bucket
-    buckets: dict[datetime, list[float]] = {}
-    for dt, w in all_samples:
-        # Normalise to UTC (handles tz-aware inputs in any offset, or naive treated as UTC)
-        if dt.tzinfo is not None:
-            dt_utc = dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
-        else:
-            dt_utc = dt.replace(tzinfo=timezone.utc)
-        bucket = _floor(dt_utc)
-        if bucket < now_h:
-            continue  # drop buckets that have already passed
-        buckets.setdefault(bucket, []).append(w)
+    # Resample EACH source to step_h buckets (mean within bucket) INDEPENDENTLY,
+    # then sum the per-bucket means across sources. A coarse (hourly) source keeps
+    # its full value; a fine (30-min) source averages within its hour — the two
+    # then add, instead of pooling raw samples and diluting the coarse source.
+    summed: dict[datetime, float] = {}
+    for src in sources:
+        buckets: dict[datetime, list[float]] = {}
+        for dt, w in src:
+            dt_utc = (dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+                      if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc))
+            bucket = _floor(dt_utc)
+            if bucket < now_h:
+                continue
+            buckets.setdefault(bucket, []).append(w)
+        for bucket, ws in buckets.items():
+            summed[bucket] = summed.get(bucket, 0.0) + sum(ws) / len(ws)
 
     # Fill every missing bucket between first and last kept bucket with 0.0.
     # This ensures the returned curve is CONTIGUOUS so downstream consumers that
     # iterate bucket-by-bucket (build_intervals gap math, ride-out reserve) see a
     # continuous timeline — no multi-bucket holes even for daylight-only source data.
-    if not buckets:
+    if not summed:
         return []
-    hour_keys = sorted(buckets)
+    hour_keys = sorted(summed)
     out: list[tuple[datetime, float]] = []
     h = hour_keys[0]
     while h <= hour_keys[-1]:
-        ws = buckets.get(h)
-        out.append((h, sum(ws) / len(ws) if ws else 0.0))
+        out.append((h, summed.get(h, 0.0)))
         h += timedelta(hours=step_h)
     return out
 

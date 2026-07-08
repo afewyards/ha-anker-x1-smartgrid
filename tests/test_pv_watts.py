@@ -69,7 +69,7 @@ def test_build_pv_curve_from_watts_bell_shape():
     samples = _bell_samples()
     now = _dt(6, 0)  # 06:00 UTC — well before peak
 
-    curve = build_pv_curve_from_watts(samples, None, now)
+    curve = build_pv_curve_from_watts([samples], None, now)
 
     assert curve, "Expected non-empty curve"
 
@@ -104,7 +104,7 @@ def test_build_pv_curve_from_watts_tz_bucketing():
     samples = [(sample_dt, 1130.0)]
     now = _dt(9, 0)  # current hour is 09:00 UTC
 
-    curve = build_pv_curve_from_watts(samples, None, now)
+    curve = build_pv_curve_from_watts([samples], None, now)
 
     assert len(curve) == 1, f"Expected 1 bucket, got {len(curve)}: {curve}"
     t, w = curve[0]
@@ -114,21 +114,20 @@ def test_build_pv_curve_from_watts_tz_bucketing():
 
 # ── 3: Multi-array: today+tomorrow samples merge into the combined output ──
 
-def test_build_pv_curve_from_watts_multi_array_averages_within_bucket():
-    """Samples from both today and tomorrow are merged; mean is taken per hourly bucket."""
-    # today: two 15-min samples in the 10:00 UTC bucket
-    today = [(_dt(10, 0), 500.0), (_dt(10, 30), 700.0)]
-    # tomorrow: one sample in same 10:00 UTC bucket
-    tomorrow = [(_dt(10, 15), 300.0)]
+def test_build_pv_curve_from_watts_multi_source_sums_hourly_means():
+    """Multiple SOURCES in today_sources each resample to their own hourly mean
+    FIRST, then SUM across sources (H2) — not pooled into one cross-source mean.
+    src_a mean=600 (500,700) + src_b mean=300 (300) = 900, NOT pooled mean 500."""
+    src_a = [(_dt(10, 0), 500.0), (_dt(10, 30), 700.0)]
+    src_b = [(_dt(10, 15), 300.0)]
     now = _dt(9, 0)
 
-    curve = build_pv_curve_from_watts(today, tomorrow, now)
+    curve = build_pv_curve_from_watts([src_a, src_b], None, now)
 
     pts = {t: w for t, w in curve}
     assert _dt(10, 0) in pts, "Expected 10:00Z bucket"
-    # mean of (500, 700, 300) = 500
-    assert abs(pts[_dt(10, 0)] - 500.0) < 1.0, (
-        f"Expected mean 500W at 10:00Z, got {pts[_dt(10, 0)]}"
+    assert abs(pts[_dt(10, 0)] - 900.0) < 1.0, (
+        f"Expected sum 900W at 10:00Z, got {pts[_dt(10, 0)]}"
     )
 
 
@@ -138,7 +137,7 @@ def test_build_pv_curve_from_watts_disjoint_today_and_tomorrow():
     tomorrow = [(_dt(22, 0), 50.0)]  # late tonight / tomorrow
     now = _dt(9, 0)
 
-    curve = build_pv_curve_from_watts(today, tomorrow, now)
+    curve = build_pv_curve_from_watts([today], [tomorrow], now)
 
     pts = {t: w for t, w in curve}
     assert _dt(10, 0) in pts
@@ -160,7 +159,7 @@ def test_build_pv_curve_from_watts_now_slicing():
     ]
     now = _dt(9, 45)  # now is 09:45, so now_h = 09:00
 
-    curve = build_pv_curve_from_watts(samples, None, now)
+    curve = build_pv_curve_from_watts([samples], None, now)
 
     pts = {t: w for t, w in curve}
     assert _dt(8, 0) not in pts, "08:00 bucket should be dropped (before now)"
@@ -196,9 +195,32 @@ def test_build_pv_curve_from_watts_sorted_output():
         (_dt(10, 0), 800.0),
         (_dt(11, 0), 900.0),
     ]
-    curve = build_pv_curve_from_watts(samples, None, _dt(9, 0))
+    curve = build_pv_curve_from_watts([samples], None, _dt(9, 0))
     timestamps = [t for t, _ in curve]
     assert timestamps == sorted(timestamps), "Output must be sorted by time"
+
+
+def test_build_pv_curve_mixed_cadence_sums_hourly_means_not_pooled():
+    """Two sources of different cadence each resample to hourly FIRST, then sum:
+    hourly A={:00→1000} + 30-min B={:00→500,:30→600} → 1000 + 550 = 1550 W,
+    NOT the pooled {1500,600}/2 = 1050."""
+    def dt(h, m=0):
+        return datetime(2026, 7, 8, h, m, tzinfo=timezone.utc)
+    src_a = [(dt(9), 1000.0)]
+    src_b = [(dt(9), 500.0), (dt(9, 30), 600.0)]
+    curve = build_pv_curve_from_watts([src_a, src_b], None, dt(9), step_h=1.0)
+    assert curve == [(dt(9), pytest.approx(1550.0))]
+
+
+async def test_read_pv_today_watts_returns_per_source_arrays(hass):
+    from custom_components.anker_x1_smartgrid import coordinator, const
+    hass.states.async_set("sensor.a", "1.0", {"watts": {"2026-07-08T09:00:00+00:00": 1000}})
+    hass.states.async_set("sensor.b", "1.0", {"watts": {
+        "2026-07-08T09:00:00+00:00": 500, "2026-07-08T09:30:00+00:00": 600}})
+    d = {const.CONF_ENT_PV_TODAY: ["sensor.a", "sensor.b"]}
+    result = coordinator.read_pv_today_watts(hass, d)
+    assert isinstance(result, list) and len(result) == 2
+    assert all(isinstance(src, list) for src in result)
 
 
 # ===========================================================================
@@ -239,16 +261,18 @@ async def test_read_pv_today_watts_resolves_remaining_to_sibling(hass):
     result = coordinator.read_pv_today_watts(hass, d)
 
     assert result is not None, "Expected samples, got None (sibling resolution failed)"
-    assert len(result) == 3, f"Expected 3 samples (one per watts key), got {len(result)}"
+    assert len(result) == 1, f"Expected 1 per-source array (one entity resolved), got {len(result)}"
+    samples = result[0]
+    assert len(samples) == 3, f"Expected 3 samples (one per watts key), got {len(samples)}"
 
     # All datetimes must be UTC-aware
-    for dt_val, w in result:
+    for dt_val, w in samples:
         offset = dt_val.tzinfo.utcoffset(dt_val).total_seconds()
         assert offset == 0, f"Expected UTC datetime, got offset={offset}s at {dt_val}"
         assert w >= 0.0
 
     # Key "2026-06-27T11:30:00+02:00" → 09:30 UTC must be present
-    times = {dt_val for dt_val, _ in result}
+    times = {dt_val for dt_val, _ in samples}
     assert datetime(2026, 6, 27, 9, 30, tzinfo=UTC) in times, (
         "Expected 09:30Z from key 2026-06-27T11:30:00+02:00"
     )
@@ -285,11 +309,14 @@ async def test_read_pv_today_watts_direct_entity_with_watts(hass):
     result = coordinator.read_pv_today_watts(hass, d)
 
     assert result is not None
-    assert len(result) == 3, f"Expected 3 samples from _WATTS_TODAY, got {len(result)}"
+    assert len(result) == 1, f"Expected 1 per-source array, got {len(result)}"
+    assert len(result[0]) == 3, f"Expected 3 samples from _WATTS_TODAY, got {len(result[0])}"
 
 
-async def test_read_pv_today_watts_multi_string_sums_per_timestamp(hass):
-    """Two PV string entities: watts at the same UTC timestamp are SUMMED."""
+async def test_read_pv_today_watts_multi_string_returns_separate_source_arrays(hass):
+    """Two PV string entities: each source's samples are kept SEPARATE (per-source
+    arrays) — cross-source summing now happens downstream in
+    build_pv_curve_from_watts (H2), not in the coordinator reader."""
     d = _data()
     ent1 = "sensor.pv_string_1"
     ent2 = "sensor.pv_string_2"
@@ -310,13 +337,27 @@ async def test_read_pv_today_watts_multi_string_sums_per_timestamp(hass):
     result = coordinator.read_pv_today_watts(hass, d)
 
     assert result is not None
-    pts = {dt_val: w for dt_val, w in result}
+    assert len(result) == 2, f"Expected 2 per-source arrays, got {len(result)}"
 
     t1100 = datetime(2026, 6, 27, 11, 0, tzinfo=UTC)
     t1130 = datetime(2026, 6, 27, 11, 30, tzinfo=UTC)
 
-    assert t1100 in pts, "Expected 11:00Z sample"
-    assert t1130 in pts, "Expected 11:30Z sample"
+    src1 = {dt_val: w for dt_val, w in result[0]}
+    src2 = {dt_val: w for dt_val, w in result[1]}
+    assert abs(src1[t1100] - 500.0) < 1.0
+    assert abs(src2[t1100] - 300.0) < 1.0
+    assert abs(src1[t1130] - 700.0) < 1.0
+    assert abs(src2[t1130] - 200.0) < 1.0
+
+    # Cross-source sum now happens in build_pv_curve_from_watts, not here.
+    # step_h=0.5 keeps the 11:00/11:30 samples in separate buckets (default
+    # step_h=1.0 would pool both half-hour samples of EACH source into one
+    # hourly mean before summing — a different, also-correct H2 behaviour,
+    # just not what this per-timestamp assertion is checking).
+    curve = build_pv_curve_from_watts(
+        result, None, datetime(2026, 6, 27, 9, 0, tzinfo=UTC), step_h=0.5
+    )
+    pts = {t: w for t, w in curve}
     assert abs(pts[t1100] - 800.0) < 1.0, (
         f"Expected 500+300=800W at 11:00Z (sum), got {pts[t1100]}"
     )
@@ -336,10 +377,11 @@ async def test_read_pv_tomorrow_watts_returns_samples(hass):
     result = coordinator.read_pv_tomorrow_watts(hass, d)
 
     assert result is not None
-    assert len(result) == 2
+    assert len(result) == 1, f"Expected 1 per-source array, got {len(result)}"
+    assert len(result[0]) == 2
 
     # Timestamps must be UTC
-    for dt_val, w in result:
+    for dt_val, w in result[0]:
         offset = dt_val.tzinfo.utcoffset(dt_val).total_seconds()
         assert offset == 0, f"Expected UTC, got offset={offset}s"
 
@@ -397,7 +439,7 @@ def test_build_pv_curve_from_watts_contiguous_hourly_no_overnight_gap():
     ]
     now = _dt(5, 0)  # 05:00 UTC — before today's first sample
 
-    curve = build_pv_curve_from_watts(today, tomorrow, now)
+    curve = build_pv_curve_from_watts([today], [tomorrow], now)
 
     pts = {t: w for t, w in curve}
     timestamps = sorted(pts.keys())
@@ -430,7 +472,7 @@ def test_build_pv_curve_from_watts_single_day_no_gap_fill_needed():
     today = [(_dt(6, 0), 100.0), (_dt(7, 0), 200.0), (_dt(8, 0), 100.0)]
     now = _dt(5, 0)
 
-    curve = build_pv_curve_from_watts(today, None, now)
+    curve = build_pv_curve_from_watts([today], None, now)
 
     pts = {t: w for t, w in curve}
     # 06, 07, 08 must all be present — no gaps in a 3-hour contiguous daylight block
@@ -460,7 +502,8 @@ async def test_read_pv_today_watts_naive_key_treated_as_utc(hass):
     result = coordinator.read_pv_today_watts(hass, d)
 
     assert result is not None, "Expected samples, got None"
-    pts = {dt_val: w for dt_val, w in result}
+    assert len(result) == 1, f"Expected 1 per-source array, got {len(result)}"
+    pts = {dt_val: w for dt_val, w in result[0]}
     expected_utc = datetime(2026, 6, 27, 11, 0, tzinfo=UTC)
     assert expected_utc in pts, (
         f"Naive key '2026-06-27T11:00:00' must map to 11:00Z (UTC), "

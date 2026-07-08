@@ -156,12 +156,13 @@ def read_sun_times(
 
 def read_pv_today_watts(
     hass: HomeAssistant, data: dict
-) -> list[tuple[datetime, float]] | None:
-    """Return sub-hourly (datetime_utc, watts) samples for today's PV forecast.
+) -> list[list[tuple[datetime, float]]] | None:
+    """Return per-source sub-hourly (datetime_utc, watts) sample arrays for
+    today's PV forecast.
 
     Resolves the watts dict from each configured entity (or its ``_remaining``-stripped
-    sibling).  Sums watts across all arrays at coincident UTC timestamps so callers
-    receive a single merged timeline ready for ``build_pv_curve_from_watts``.
+    sibling).  Each source's samples are returned as a SEPARATE array (no
+    cross-source pooling); resample+sum happens in ``build_pv_curve_from_watts``.
 
     Returns None iff the entity list is non-empty and no array yielded any watts.
     Returns [] for an empty entity list.
@@ -171,8 +172,9 @@ def read_pv_today_watts(
 
 def read_pv_tomorrow_watts(
     hass: HomeAssistant, data: dict
-) -> list[tuple[datetime, float]] | None:
-    """Return sub-hourly (datetime_utc, watts) samples for tomorrow's PV forecast.
+) -> list[list[tuple[datetime, float]]] | None:
+    """Return per-source sub-hourly (datetime_utc, watts) sample arrays for
+    tomorrow's PV forecast.
 
     Same semantics as ``read_pv_today_watts``.
     """
@@ -183,7 +185,7 @@ def _read_pv_watts(
     hass: HomeAssistant,
     data: dict,
     kwh_key: str,
-) -> list[tuple[datetime, float]] | None:
+) -> list[list[tuple[datetime, float]]] | None:
     """Shared helper for read_pv_today_watts / read_pv_tomorrow_watts.
 
     For each entity id in the configured list:
@@ -193,13 +195,14 @@ def _read_pv_watts(
     - Otherwise, skip (no watts for this array).
 
     Timestamps are parsed via ``datetime.fromisoformat`` and converted to UTC.
-    Watts across multiple arrays are SUMMED at coincident UTC timestamps.
+    Each source's samples are returned as a SEPARATE array (no cross-source
+    pooling); resample+sum happens in build_pv_curve_from_watts.
     """
     kwh_list: list[str] = data.get(kwh_key, const.DEFAULT_ENTITIES.get(kwh_key, []))
     if not kwh_list:
         return []
 
-    merged: dict[datetime, float] = {}
+    per_source: list[list[tuple[datetime, float]]] = []
     any_array_yielded = False
 
     for entity_id in kwh_list:
@@ -223,9 +226,11 @@ def _read_pv_watts(
         if watts_dict is None:
             continue  # no watts found for this array
 
-        # Parse timestamps and accumulate (sum across arrays at coincident UTC times).
+        # Parse timestamps into this source's own array (kept separate — see
+        # build_pv_curve_from_watts for the resample-then-sum logic).
         # Use _parse_dt which treats naive keys (no tz suffix) as UTC, not system-local.
         any_array_yielded = True
+        samples: list[tuple[datetime, float]] = []
         for k, v in watts_dict.items():
             dt_utc = _parse_dt(str(k))
             if dt_utc is None:
@@ -234,13 +239,14 @@ def _read_pv_watts(
                 w = float(v)
             except (ValueError, TypeError):
                 continue
-            merged[dt_utc] = merged.get(dt_utc, 0.0) + w
+            samples.append((dt_utc, w))
+        per_source.append(sorted(samples))
 
     if not any_array_yielded:
         # Non-empty list but no array had watts — caller should treat as unavailable
         return None
 
-    return sorted(merged.items())
+    return per_source
 
 
 def read_pv_today_arrays(
