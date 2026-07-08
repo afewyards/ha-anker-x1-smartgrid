@@ -1,0 +1,112 @@
+[build-system]
+requires = ["setuptools>=40.8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anker_x1_smartgrid"
+version = "0.2.0"
+description = "Anker X1 SmartGrid Home Assistant integration"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+asyncio_mode = "auto"
+addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "N", "RUF"]
+ignore = [
+    "RUF001",   # ambiguous-unicode-character-string (units: °, µ)
+    "RUF002",   # ambiguous-unicode-character-docstring
+    "RUF003",   # ambiguous-unicode-character-comment
+    "SIM105",   # suppressible-exception (contextlib.suppress less readable)
+    "I001",     # unsorted-imports (try/except HA compat blocks break on reorder)
+    "F401",     # unused-import (re-exports + try/except HA compat patterns)
+    "F811",     # redefined-while-unused (try/except fallback patterns)
+    "E402",     # module-import-not-at-top (conftest mock setup requires this)
+    "N806",     # non-lowercase-variable-in-function (constants in functions)
+    "SIM102",   # collapsible-if (nested ifs often clearer)
+    "SIM108",   # if-else-block-instead-of-if-exp (readability preference)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011"]
+"tests_addon/**" = ["N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011"]
+"tests/conftest.py" = ["E402", "F811"]
+
+[tool.pyright]
+include = ["custom_components"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+exclude = ["tests", "tests_addon"]
+# Missing HA type stubs
+reportMissingTypeStubs = false
+reportMissingImports = false
+# Unknown types from HA framework
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportMissingParameterType = false
+# Internal private-member access across tightly-coupled classes
+reportPrivateUsage = false
+# HA patterns: optional state access, dynamic attributes
+reportOptionalMemberAccess = false
+reportAttributeAccessIssue = false
+reportOptionalOperand = false
+reportOptionalCall = false
+# HA callback decorator is untyped
+reportUntypedFunctionDecorator = false
+reportUntypedBaseClass = false
+# Try/except fallback patterns redefine constants
+reportConstantRedefinition = false
+# HA dynamic type patterns
+reportInvalidTypeForm = false
+reportGeneralTypeIssues = false
+reportUnknownLambdaType = false
+# Unused imports handled by ruff
+reportUnusedImport = false
+# Generic type args (dict vs dict[str, Any]) - cosmetic
+reportMissingTypeArgument = false
+# Possibly unbound in try/except fallback patterns
+reportPossiblyUnboundVariable = false
+# Type narrowing with HA's dynamic types
+reportArgumentType = false
+reportOperatorIssue = false
+reportIndexIssue = false
+reportCallIssue = false
+reportReturnType = false
+reportAssignmentType = false
+# Intentional guards
+reportUnnecessaryComparison = false
+reportUnnecessaryIsInstance = false
+reportRedeclaration = false
+reportUnusedFunction = false
+
+[tool.pyright.defineConstant]
+TYPE_CHECKING = true
+
+[tool.semantic_release]
+major_on_zero = false
+version_toml = ["pyproject.toml:project.version"]
+version_variables = [
+    "custom_components/anker_x1_smartgrid/manifest.json:version"
+]
+tag_format = "v{version}"
+commit_message = "chore(release): {version}"
+build_command = ""
+
+[tool.semantic_release.changelog]
+changelog_file = ""
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "chore"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]

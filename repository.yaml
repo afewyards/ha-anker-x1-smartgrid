@@ -1,0 +1,9 @@
+name: Anker X1 SmartGrid Add-ons
+url: https://github.com/afewyards/ha-anker-x1-smartgrid
+maintainer: afewyards
+
+# NOTE: The anker_x1_forecast add-on currently resides in addon/anker_x1_forecast/ (nested structure).
+# Home Assistant add-on repositories conventionally expect each add-on in a top-level directory.
+# When installing this repository via the HA add-on store, the add-on may need to be relocated
+# to the repo root, or HA's nested path support must be confirmed. P1 validation uses Local
+# add-on installation, so this is flagged for the git-distribution step.
