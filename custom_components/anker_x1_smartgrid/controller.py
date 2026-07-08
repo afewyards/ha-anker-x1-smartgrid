@@ -1169,6 +1169,8 @@ class Controller:
         self._committed_slot_minutes: int = 60
         self._last_purge_hour = -1
         self._last_rollup_hour = -1
+        self._last_weather_hour = -1
+        self._weather_forecast: list[dict] = []
         self._first_tick_after_start = True
         self._last_remote_forecast_hour = -1
         self._remote_forecast_map: dict | None = None
@@ -1498,10 +1500,16 @@ class Controller:
         # planner uses the static scalar; the curve rebuilds on the first tick after
         # the flag is flipped on.
         await self._refresh_efficiency_curve(now)
-        # Fetch hourly weather forecast once per tick for the weather columns.
-        # read_hourly_weather_forecast returns [] on any error; get_forecast_for_hour
-        # returns None for an empty list — both result in NULL for all 4 columns.
-        _wf_list = await coordinator.read_hourly_weather_forecast(self._hass, self._data)
+        # Hour-gate: the hourly forecast changes at most hourly, and an unbounded
+        # await here (a hung weather integration) would otherwise wedge every 60 s
+        # tick with the inverter parked. Fetch once per clock-hour; keep the last
+        # good forecast if a refresh returns [] (transient failure).
+        if now.hour != self._last_weather_hour:
+            self._last_weather_hour = now.hour
+            _fetched = await coordinator.read_hourly_weather_forecast(self._hass, self._data)
+            if _fetched:
+                self._weather_forecast = _fetched
+        _wf_list = self._weather_forecast
         _now_hour = now.replace(minute=0, second=0, microsecond=0)
         _weather_entry = coordinator.get_forecast_for_hour(_wf_list, _now_hour)
         # Home-presence count for this tick (on-loop state reads).
