@@ -1347,3 +1347,31 @@ def test_migration_v7_to_v8_recovers_from_partial_alter(tmp_path):
         assert col in s_cols
     for col in _V8_HOURLY_COLS:
         assert col in h_cols
+
+
+# ---------------------------------------------------------------------------
+# D1 — rollup watermark clamp + future hourly-row purge; NULL-ts purge
+# ---------------------------------------------------------------------------
+
+def test_rollup_recovers_after_future_dated_watermark(tmp_path):
+    """A future-dated sample rolled during a pre-NTP boot must NOT freeze the
+    hourly rollup once the clock steps back; the bogus future hourly row is dropped."""
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2027-01-01T10:05:00+00:00", "p1_w": 100.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 100.0})
+    rec.rollup_hours("2027-01-01T11:00:00+00:00")           # future watermark written
+    rec.append({"ts": "2026-07-08T09:10:00+00:00", "p1_w": 200.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 200.0})
+    rec.rollup_hours("2026-07-08T10:00:00+00:00")           # clock corrected
+    hours = {r["hour_ts"] for r in rec.read_hourly_rows()}
+    assert "2026-07-08T09:00:00+00:00" in hours             # recovered
+    assert "2027-01-01T10:00:00+00:00" not in hours         # bogus future row dropped
+    rec.close()
+
+
+def test_purge_removes_null_ts_rows(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": None, "p1_w": 1.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 1.0})
+    removed = rec.purge_older_than("2026-07-08T00:00:00+00:00", 30)
+    assert removed == 1
+    rec.close()

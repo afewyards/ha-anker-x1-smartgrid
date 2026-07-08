@@ -466,7 +466,9 @@ class DataRecorder:
     def purge_older_than(self, now_iso: str, retention_days: int) -> int:
         cutoff = (datetime.fromisoformat(now_iso) - timedelta(days=retention_days)).isoformat()
         with self._lock:
-            cur = self._conn.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
+            cur = self._conn.execute(
+                "DELETE FROM samples WHERE ts < ? OR ts IS NULL", (cutoff,)
+            )
             self._conn.commit()
             return cur.rowcount
 
@@ -677,6 +679,16 @@ class DataRecorder:
         current_hour_iso = current_hour.isoformat()
 
         with self._lock:
+            # D1 (write-side companion to the watermark clamp): a completed hour can
+            # never be >= now. Any such row is from a pre-NTP-boot rollup on a future
+            # wall clock; drop it so MAX(hour_ts) falls back to a real past hour and
+            # the bounded watermark read resumes (no perpetual full-scan). append()
+            # has no clock reference, so a future RAW ts cannot be rejected there —
+            # this is the correct home.
+            self._conn.execute(
+                "DELETE FROM samples_hourly WHERE hour_ts >= ?", (current_hour_iso,)
+            )
+
             # Hours already present in samples_hourly — used to skip work on re-run.
             existing_hours = {
                 row[0]
@@ -696,6 +708,13 @@ class DataRecorder:
                 watermark_hour_end = (
                     datetime.fromisoformat(str(watermark_hour)) + timedelta(hours=1)
                 ).isoformat()
+            else:
+                watermark_hour_end = None
+            # Use the bounded read ONLY when the watermark is strictly before the
+            # current hour; otherwise full-scan completed hours to recover (belt-and-
+            # suspenders with the future-row DELETE above). existing_hours + upsert
+            # keep it idempotent.
+            if watermark_hour_end is not None and watermark_hour_end < current_hour_iso:
                 cur.execute(
                     "SELECT * FROM samples WHERE ts >= ? AND ts < ? ORDER BY ts ASC",
                     (watermark_hour_end, current_hour_iso),
