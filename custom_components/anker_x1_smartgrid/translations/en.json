@@ -1,0 +1,193 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Anker X1 SmartGrid",
+        "description": "Pick your Anker SOLIX X1 and the core sensors the planner reads. Everything else gets sensible defaults and can be tuned later via Configure.",
+        "data": {
+          "anker_device": "Anker SOLIX X1 device",
+          "ent_price": "Import price sensor",
+          "ent_weather_forecast": "Weather forecast entity",
+          "ent_house_load": "House load sensor",
+          "forecast_service": "Solar forecast integrations"
+        },
+        "data_description": {
+          "anker_device": "Battery capacity and the SoC, battery-power, setpoint, work-mode and Modbus-control entities are derived from this device automatically.",
+          "ent_price": "Sensor reporting the current electricity import tariff in €/kWh (e.g. Zonneplan). Drives all charge and export planning.",
+          "ent_weather_forecast": "Weather entity providing the hourly forecast used by the load model.",
+          "ent_house_load": "Sensor measuring total household consumption in watts. Feeds the load forecast.",
+          "forecast_service": "Pick one or more forecast integrations. Their PV sensors are added together (summed), so select multiple only when they cover different arrays — otherwise PV reads high."
+        }
+      }
+    },
+    "error": {
+      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "sections": {
+          "devices": {
+            "name": "Devices & sensors",
+            "description": "The X1 device and the core sensors the planner reads.",
+            "data": {
+              "anker_device": "Anker SOLIX X1 device",
+              "ent_price": "Import price sensor",
+              "ent_export_price": "Export price sensor",
+              "ent_house_load": "House load sensor",
+              "ent_weather_forecast": "Weather forecast entity",
+              "person_entities": "Person entities for home-presence"
+            },
+            "data_description": {
+              "anker_device": "Battery capacity and the control entities are re-derived automatically when this changes.",
+              "ent_price": "Sensor reporting the current electricity import tariff in €/kWh. Drives all charge and export planning.",
+              "ent_export_price": "Sensor with the feed-in price in €/kWh. Leave empty to mirror the import price (salderen).",
+              "ent_house_load": "Sensor measuring total household consumption in watts. Feeds the load forecast.",
+              "ent_weather_forecast": "Weather entity providing the hourly forecast used by the load model.",
+              "person_entities": "Person entities whose home/away state feeds the load forecast model. Leave empty to disable the home-presence signal."
+            }
+          },
+          "solar_forecast": {
+            "name": "Solar forecast",
+            "description": "Where PV production forecasts come from.",
+            "data": {
+              "forecast_service": "Solar forecast integrations",
+              "ent_pv_today": "PV energy today sensors",
+              "ent_pv_tomorrow": "PV energy tomorrow sensors",
+              "ent_pv_peak_today": "PV peak-time today sensors",
+              "ent_pv_peak_tomorrow": "PV peak-time tomorrow sensors"
+            },
+            "data_description": {
+              "forecast_service": "Pick one or more forecast integrations. Their PV sensors are added together (summed), so select multiple only when they cover different arrays — otherwise PV reads high. Leave empty to keep your current sensors.",
+              "ent_pv_today": "Sensors with today's remaining PV production in kWh; multiple sensors are summed. Auto-derived from the selected forecast integrations.",
+              "ent_pv_tomorrow": "Sensors with tomorrow's PV production in kWh; multiple sensors are summed. Auto-derived from the selected forecast integrations.",
+              "ent_pv_peak_today": "Sensors with today's PV peak-power time, index-aligned with the PV energy sensors. Auto-derived; edit only if you know the alignment rules.",
+              "ent_pv_peak_tomorrow": "Sensors with tomorrow's PV peak-power time, index-aligned with the PV energy sensors. Auto-derived; edit only if you know the alignment rules."
+            }
+          },
+          "battery": {
+            "name": "Battery & charging",
+            "description": "State-of-charge margins, efficiencies and charge economics.",
+            "data": {
+              "soc_floor": "SoC floor (%)",
+              "soc_target": "SoC target (%)",
+              "eta_charge": "Charge efficiency",
+              "round_trip_eff": "Round-trip efficiency",
+              "use_measured_eta": "Use measured efficiency",
+              "charge_margin_eur_per_kwh": "Charge margin (€/kWh)",
+              "charge_trough_lookback_h": "Charge trough look-back (hours)"
+            },
+            "data_description": {
+              "soc_floor": "Soft minimum state of charge the planner protects. The firmware enforces a hard 5% floor below this. Default 5.",
+              "soc_target": "State of charge the planner aims for in cheap hours. Default 97.",
+              "eta_charge": "One-way AC→battery charging efficiency (0.5–1.0), used while measured efficiency is off. Default 0.92.",
+              "round_trip_eff": "Charge+discharge round-trip efficiency (0.5–1.0) used to value stored energy. Default 0.85.",
+              "use_measured_eta": "Derive the efficiency curve from recorded charge sessions instead of the static values above. Default off.",
+              "charge_margin_eur_per_kwh": "Minimum saving a grid charge must clear before it is scheduled; stops overnight micro-charges. Default 0.",
+              "charge_trough_lookback_h": "Hours of past prices the cheap-charge band remembers, so hours after the trough are not judged cheap. 0 disables. Default 8."
+            }
+          },
+          "export": {
+            "name": "Export & arbitrage",
+            "description": "Selling battery energy to the grid at price peaks.",
+            "data": {
+              "enable_export": "Enable export",
+              "grid_export_limit_w": "Grid export limit (W)",
+              "export_fee_eur_per_kwh": "Export fee (€/kWh)",
+              "cycle_cost_eur_per_kwh": "Cycle cost (€/kWh)",
+              "reserve_anchor": "Reserve sizing",
+              "reserve_cheap_band": "Reserve cheap-relief band",
+              "export_dwell_min": "Export dwell (minutes)",
+              "export_eps_lo_kwh": "Export disengage threshold (kWh)",
+              "export_eps_hi_kwh": "Export engage threshold (kWh)",
+              "export_peak_band_frac": "Export peak band",
+              "export_peak_lookback_h": "Export peak look-back (hours)",
+              "export_min_block_kwh": "Minimum export block (kWh)",
+              "export_load_comp_factor": "Export load compensation"
+            },
+            "data_description": {
+              "enable_export": "Allow the planner to sell battery energy to the grid at price peaks. Default on.",
+              "grid_export_limit_w": "Maximum net export power your grid connection allows (fuse/contract limit — not a device property). Default 6000.",
+              "export_fee_eur_per_kwh": "Feed-in fee your supplier subtracts per exported kWh. Default 0.02.",
+              "cycle_cost_eur_per_kwh": "Battery wear cost per stored kWh; an export must beat this to be scheduled. Default 0.04.",
+              "reserve_anchor": "How the overnight survival reserve is sized: ride-to-trough (self-scaling, default) or the legacy debit-to-trough estimate.",
+              "reserve_cheap_band": "Fraction (0–1) above the forward trough price at which a later hour counts as cheap relief and ends the ride-out. Default 0.20.",
+              "export_dwell_min": "Minimum minutes between export engage/disengage transitions. Default 15.",
+              "export_eps_lo_kwh": "Surplus below which export disengages. Default 0.2.",
+              "export_eps_hi_kwh": "Surplus above which export engages. Default 0.4.",
+              "export_peak_band_frac": "Export only within this fraction below the horizon peak price (0.12 = within 12% of the peak). Default 0.12.",
+              "export_peak_lookback_h": "Hours of recent past the peak reference remembers, so post-peak hours are not sold cheap. 0 disables. Default 4.",
+              "export_min_block_kwh": "Contiguous export runs smaller than this are dropped from the plan. 0 disables. Default 0.5.",
+              "export_load_comp_factor": "Fraction of live house load added to the export setpoint so the planned NET export reaches the grid. 1.0 = full compensation. Default 1.0."
+            }
+          },
+          "price_anticipation": {
+            "name": "Price anticipation",
+            "description": "Estimating tomorrow-morning prices from price history.",
+            "data": {
+              "price_history_days": "Price history depth (days)",
+              "price_blend_weight_today": "Today blend weight",
+              "anticipation_confidence_haircut": "Anticipation haircut",
+              "anticipation_margin_eur_per_kwh": "Anticipation margin (€/kWh)"
+            },
+            "data_description": {
+              "price_history_days": "Days of realized prices kept for the price prior. Default 8.",
+              "price_blend_weight_today": "Weight of today's prices versus same-weekday-last-week in the morning estimate (0–1). Default 0.5.",
+              "anticipation_confidence_haircut": "Discount applied to the estimated morning price before comparing with tonight (0–1). Default 0.15.",
+              "anticipation_margin_eur_per_kwh": "The morning estimate must beat tonight's price by this much before charging is deferred. Default 0.02."
+            }
+          },
+          "load_ml": {
+            "name": "Load model & ML",
+            "description": "House-load forecasting and the machine-learning engine.",
+            "data": {
+              "use_learned_model": "Use learned load model",
+              "min_train_samples": "Minimum training samples",
+              "load_adapt_fraction": "Intraday adaptation strength",
+              "load_adapt_window_h": "Adaptation window (hours)",
+              "load_adapt_fade_h": "Adaptation fade (hours)",
+              "addon_enabled": "Use forecast add-on",
+              "addon_url": "Add-on URL",
+              "addon_timeout": "Add-on timeout (seconds)"
+            },
+            "data_description": {
+              "use_learned_model": "Forecast house load with the trained ML model instead of profile averages once enough data exists. Default on.",
+              "min_train_samples": "Recorder samples required before the ML model activates. Default 2000.",
+              "load_adapt_fraction": "How strongly the intraday corrector shifts the load forecast toward the last hours' residuals (0–1, 0 = off). Default 1.0.",
+              "load_adapt_window_h": "Hours of recent residuals the intraday corrector averages. Default 3.",
+              "load_adapt_fade_h": "Hours over which the intraday correction fades back to zero. Default 8.",
+              "addon_enabled": "Offload ML training and forecasting to the Anker X1 Forecast add-on instead of running in-process. Default off.",
+              "addon_url": "Base URL of the Anker X1 Forecast add-on. Default http://local-anker_x1_forecast:8099.",
+              "addon_timeout": "HTTP timeout for add-on requests, 1–60 seconds. Default 5."
+            }
+          },
+          "system": {
+            "name": "System",
+            "description": "Slot resolution, data retention and drift correction.",
+            "data": {
+              "slot_resolution": "Price slot resolution",
+              "retention_days": "Sample retention (days)",
+              "retention_hourly_days": "Hourly retention (days)",
+              "soc_hedge_fraction": "SoC drift hedge",
+              "soc_drift_deadband_kwh": "Drift deadband (kWh)",
+              "soc_drift_decay_halflife_h": "Drift decay half-life (hours)"
+            },
+            "data_description": {
+              "slot_resolution": "Planning slot length. Auto detects it from the price sensor's slot spacing. Default auto.",
+              "retention_days": "Days of per-minute recorder samples kept in the local database. Default 90.",
+              "retention_hourly_days": "Days of hourly rollups kept for the load model. Default 730.",
+              "soc_hedge_fraction": "Fraction of measured SoC drift debited from the plan when live SoC runs below it (0 = off). Default 0.",
+              "soc_drift_deadband_kwh": "SoC drift smaller than this is ignored. Default 0.3.",
+              "soc_drift_decay_halflife_h": "Half-life for decaying accumulated drift (0 = no decay). Default 0."
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration.",
+      "soc_floor_above_target": "SoC floor must be below SoC target."
+    }
+  }
+}
