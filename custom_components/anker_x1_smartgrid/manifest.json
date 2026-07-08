@@ -1,7 +1,7 @@
 {
   "domain": "anker_x1_smartgrid",
   "name": "Anker X1 SmartGrid",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "documentation": "https://github.com/afewyards/ha-anker-x1-smartgrid",
   "issue_tracker": "https://github.com/afewyards/ha-anker-x1-smartgrid/issues",
   "dependencies": [],
