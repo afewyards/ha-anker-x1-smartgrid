@@ -1,4 +1,7 @@
-"""TDD (C1): heuristic DP-fallback also honours the look-back trough."""
+"""On a DP exception the heuristic fallback selects no charge slots → PASSIVE,
+independent of charge_trough_lookback_h (heuristic charge selection was removed in
+the P80-survival cleanup). Pins the DP-exception → PASSIVE contract, not a look-back
+behaviour."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -39,15 +42,7 @@ def _run(cfg, lookback):
     return new_plan
 
 
-def test_lookback_blocks_evening_topup_on_fallback():
-    # With look-back, the 0.25 evening current hour is judged vs the past 0.13 trough → PASSIVE.
-    new_plan = _run(_cfg(charge_trough_lookback_h=8), 8)
-    assert new_plan.state is ControllerState.PASSIVE
-
-
-def test_lookback_zero_fallback_is_passive():
-    # Task 2 (P80-survival-removal): heuristic charge-slot selection deleted.
-    # On DP exception, selected=[] → PASSIVE regardless of charge_trough_lookback_h.
-    # (Previously: look-back off → forward-window trough 0.25 itself → FORCING. Bug now moot.)
-    new_plan = _run(_cfg(charge_trough_lookback_h=0), 0)
-    assert new_plan.state is ControllerState.PASSIVE
+def test_dp_exception_falls_back_to_passive():
+    for lookback in (0, 8):
+        new_plan = _run(_cfg(charge_trough_lookback_h=lookback), lookback)
+        assert new_plan.state is ControllerState.PASSIVE
