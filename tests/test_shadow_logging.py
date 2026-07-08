@@ -126,6 +126,9 @@ class _StubRecorder:
     def purge_hourly_older_than(self, cutoff_iso):
         return 0
 
+    def wal_checkpoint(self) -> None:
+        pass
+
     def read_load_samples(self, since_iso=None):
         if since_iso is None:
             return list(self._load_samples)

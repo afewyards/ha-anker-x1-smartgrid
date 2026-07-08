@@ -55,6 +55,7 @@ class _StubRecorder:
     def purge_decisions_older_than(self, cutoff): pass
     def rollup_hours(self, now_iso): return 0
     def purge_hourly_older_than(self, cutoff): return 0
+    def wal_checkpoint(self) -> None: pass
     def read_load_samples(self, since_iso=None): return []
     def read_persons_home_samples(self, since_iso=None): return []
     def read_feature_rows(self, since_iso=None): return []
