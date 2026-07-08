@@ -199,10 +199,10 @@ def build_plan_horizon(
             soc_sim += total_w * _eta_c * dt_h / cap_wh * 100.0
             # max_charge_w is used as an approximate discharge cap by design (no separate max_discharge_w config).
             _eta_d = eta_discharge if eta_curve is None else eta_curve.eta_discharge(self_discharge_w)
-            soc_sim -= (self_discharge_w / _eta_d) * dt_h / cap_wh * 100.0
+            soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * dt_h / cap_wh * 100.0
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
-            soc_sim -= (grid_export_w / _eta_de) * dt_h / cap_wh * 100.0
+            soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * dt_h / cap_wh * 100.0
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         if hedge_by_hour and cfg.capacity_kwh > 0:

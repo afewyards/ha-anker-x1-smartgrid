@@ -651,6 +651,21 @@ def test_eta_charge_guard_unified_at_subnano_boundary():
     assert socs_tiny == [e["soc"] for e in out_zero]                # same fallback path
 
 
+def test_build_plan_horizon_no_zerodiv_at_zero_round_trip_eff():
+    """F3: round_trip_eff=0.0 (eta_charge>0) drives eta_discharge to 0.0, which is
+    NOT caught by the eta_charge>1e-9 guard at line 128. The self_discharge_w/
+    grid_export_w division sites must guard their own denominator so an export
+    slot at zero round-trip efficiency doesn't ZeroDivisionError the display sim."""
+    cfg = Config.from_dict({
+        "capacity_kwh": 10.0, "soc_floor": 10.0, "soc_target": 90.0,
+        "max_charge_w": 3000.0, "eta_charge": 1.0, "round_trip_eff": 0.0,
+    })
+    t = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    out = plan.build_plan_horizon([PriceSlot(t, 0.20)], [], [], 80.0, t, cfg,
+                                   export_request_by_hour={t: 500.0})
+    assert out   # completes without ZeroDivisionError
+
+
 def test_build_plan_horizon_accepts_eta_curve_none_identical():
     """Adding the eta_curve kwarg must not change default behaviour: a call that
     omits it must be byte-identical to one that passes eta_curve=None explicitly."""

@@ -956,7 +956,11 @@ def score_regret(realized: dict, optimal: dict) -> dict:
     over_buy_kwh = max(0.0, r_kwh - o_kwh)
     under_buy_kwh = max(0.0, o_kwh - r_kwh)
 
-    avg_realized_price = r_eur / r_kwh if r_kwh > 1e-9 else 0.0
+    # Price over-buy at GROSS import cost (eur + export_revenue_eur), not the net
+    # eur: net goes negative on export-profitable days, which would price the
+    # excess purchase at a nonsensical negative rate.
+    gross_import_eur = r_eur + realized.get("export_revenue_eur", 0.0)
+    avg_realized_price = gross_import_eur / r_kwh if r_kwh > 1e-9 else 0.0
     over_buy_eur = over_buy_kwh * avg_realized_price
     cost_regret_eur = max(0.0, regret_eur - over_buy_eur)
 

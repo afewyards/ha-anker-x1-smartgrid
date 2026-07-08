@@ -207,6 +207,16 @@ class TestScoreRegret:
         assert result["under_buy_kwh"] == pytest.approx(0.0, abs=1e-6)
         assert result["cost_regret_eur"] == pytest.approx(0.0, abs=1e-6)
 
+    def test_over_buy_eur_uses_gross_import_price_when_export_profitable(self):
+        """F3: over_buy_eur must price at GROSS import cost (eur + export_revenue_eur),
+        not net eur — net goes negative on export-profitable days and would price
+        the excess purchase at a nonsensical negative rate."""
+        # eur is NET (gross import − export revenue): gross 10 kWh @0.20 = 2.0, export 3.0 → -1.0
+        realized = {"kwh": 10.0, "eur": -1.0, "export_revenue_eur": 3.0}
+        optimal = {"kwh": 6.0, "eur": -2.0, "export_revenue_eur": 3.0}
+        out = score_regret(realized, optimal)
+        assert out["over_buy_eur"] == pytest.approx(0.80, abs=1e-6)   # 4 kWh × 0.20 gross
+
     # -- (b) Under-buy -------------------------------------------------------
 
     def test_under_buy_regret_positive(self):
