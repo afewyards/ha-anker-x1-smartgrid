@@ -66,6 +66,22 @@ def test_predict_request_with_persons_home():
     assert request.hours[1].persons_home == 1.5
 
 
+def test_probe_db_readable_true_and_false(tmp_path):
+    """_probe_db_readable distinguishes a readable DB from missing/corrupt ones,
+    never raising (real RO immutable SELECT 1 probe backing /health's db_ok)."""
+    from forecast_core.recorder import DataRecorder
+    from server import _probe_db_readable
+    good = str(tmp_path / "good.db")
+    rec = DataRecorder(good)
+    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 1.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 1.0})
+    rec.wal_checkpoint(); rec.close()
+    assert _probe_db_readable(good) is True
+    assert _probe_db_readable(str(tmp_path / "missing.db")) is False
+    bad = tmp_path / "bad.db"; bad.write_text("not a database")
+    assert _probe_db_readable(str(bad)) is False
+
+
 def test_health_and_predict_smoke():
     """Exercise the real Pydantic request schema via TestClient (not importorskip'd
     away): /health returns ready flag; /predict validates the hours schema."""

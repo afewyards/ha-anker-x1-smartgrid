@@ -4,6 +4,7 @@ import asyncio
 import datetime as _dt
 import functools
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Optional
@@ -95,10 +96,27 @@ class PredictRequest(BaseModel):
     hours: list[HourIn]
 
 
+def _probe_db_readable(db_path: str | None) -> bool:
+    """Real RO probe: open immutable and SELECT 1 FROM samples. Never raises;
+    distinguishes 'DB unreadable' (H3) from 'no data yet' (state.ready False)."""
+    if not db_path or not Path(db_path).exists():
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=2.0)
+        conn.execute("SELECT 1 FROM samples LIMIT 1").fetchone()
+        return True
+    except Exception:  # noqa: BLE001 — health probe must never raise
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 @app.get("/health")
 def health() -> dict:
     """Return current training state. Non-blocking — reads in-memory STATE only."""
-    db_ok = bool(_DB_PATH) and Path(_DB_PATH).exists()
+    db_ok = _probe_db_readable(_DB_PATH)
     return build_health_payload(STATE, sklearn.__version__, sys.version, db_readable=db_ok)
 
 
