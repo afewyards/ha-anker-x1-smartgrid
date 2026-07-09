@@ -98,6 +98,7 @@ class Config:
 class PriceSlot:
     start: datetime
     price: float  # €/kWh all-in
+    duration_min: float | None = None
 
 
 @dataclass(frozen=True)

@@ -94,15 +94,22 @@ def resample_price_map(
     """
     out: dict[datetime, float] = {}
     ordered = sorted(slots, key=lambda s: s.start)
+    n = len(ordered)
     stride = timedelta(minutes=slot_minutes)
     for i, slot in enumerate(ordered):
-        if i + 1 < len(ordered):
-            own_end = ordered[i + 1].start
+        if i + 1 < n:
+            infer_end = ordered[i + 1].start
         elif horizon_end is not None:
-            own_end = horizon_end
+            infer_end = horizon_end
         else:
-            own_end = slot.start + stride
-        span_min = max(slot_minutes, round((own_end - slot.start).total_seconds() / 60.0))
+            infer_end = slot.start + stride
+        infer_span = round((infer_end - slot.start).total_seconds() / 60.0)
+        if slot.duration_min is None:
+            span_min = max(slot_minutes, infer_span)
+        elif i == n - 1 and horizon_end is not None:
+            span_min = max(slot_minutes, round(slot.duration_min), infer_span)
+        else:
+            span_min = max(slot_minutes, round(slot.duration_min))
         n_sub = max(1, round(span_min / slot_minutes))
         base = floor_to_slot(slot.start, slot_minutes)
         for k in range(n_sub):

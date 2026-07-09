@@ -115,6 +115,42 @@ def test_latch_keeps_finest_within_utc_day():
     assert eff2 == 15                       # no 15→60 flip within the day
 
 
+def _t(h, m=0):
+    return datetime(2026, 8, 1, h, m, tzinfo=UTC)
+
+
+def test_coarse_to_fine_boundary_fills_full_coarse_hour():
+    slots = [
+        PriceSlot(_t(10), 0.30, duration_min=60),
+        PriceSlot(_t(10, 15), 0.05, duration_min=15),
+        PriceSlot(_t(10, 30), 0.05, duration_min=15),
+        PriceSlot(_t(10, 45), 0.05, duration_min=15),
+    ]
+    out = res.resample_price_map(slots, 15)
+    assert out[_t(10)] == 0.30
+    assert out[_t(10, 15)] == 0.05
+    assert out[_t(10, 30)] == 0.05
+    assert out[_t(10, 45)] == 0.05
+
+
+def test_uniform_hourly_with_duration_is_byte_identical():
+    slots = [PriceSlot(_t(10), 0.30, duration_min=60), PriceSlot(_t(11), 0.20, duration_min=60)]
+    assert res.resample_price_map(slots, 60) == {_t(10): 0.30, _t(11): 0.20}
+
+
+def test_last_slot_honors_horizon_end_over_inherited_fine_duration():
+    slots = [
+        PriceSlot(_t(10), 0.30, duration_min=15),
+        PriceSlot(_t(10, 15), 0.20, duration_min=15),
+    ]
+    out = res.resample_price_map(slots, 15, horizon_end=_t(11, 15))
+    assert out[_t(10)] == 0.30
+    assert out[_t(10, 15)] == 0.20
+    assert out[_t(10, 30)] == 0.20
+    assert out[_t(10, 45)] == 0.20
+    assert out[_t(11)] == 0.20
+
+
 def test_latch_resets_at_utc_day_rollover():
     eff, state = res.latch_finest(15, datetime(2026, 8, 1, 23, 0, tzinfo=UTC), (15, date(2026, 8, 1)))
     assert eff == 15

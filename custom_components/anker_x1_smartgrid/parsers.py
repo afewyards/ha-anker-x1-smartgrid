@@ -38,7 +38,17 @@ def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
             continue  # "NaN"/"Infinity" parse as float; never let them reach the DP
         slots.append(PriceSlot(start, price))
     slots.sort(key=lambda s: s.start)
-    return slots
+    if len(slots) < 2:
+        return slots
+    durations = [
+        (slots[i + 1].start - slots[i].start).total_seconds() / 60.0
+        for i in range(len(slots) - 1)
+    ]
+    durations.append(durations[-1])
+    return [
+        PriceSlot(s.start, s.price, duration_min=d)
+        for s, d in zip(slots, durations)
+    ]
 
 
 def synth_pv_curve(
