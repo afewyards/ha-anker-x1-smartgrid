@@ -8,6 +8,7 @@ arch:
 startup: application
 boot: manual
 init: false        # we provide our own CMD/entrypoint (uvicorn), not HA's s6-overlay init
+watchdog: "http://[HOST]:8099/health"
 map:
   - config:ro      # forward-compat: P1+ reads /config/anker_x1_smartgrid.db; P0 reads nothing
 options:
