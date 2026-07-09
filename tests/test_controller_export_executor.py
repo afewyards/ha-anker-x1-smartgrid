@@ -427,6 +427,23 @@ class TestExportEngagePositiveSetpoint:
         assert result["state"] == "passive"
         assert result["export_setpoint_w"] is not None and result["export_setpoint_w"] > 0
 
+    @pytest.mark.asyncio
+    async def test_setpoint_saturates_at_real_grid_export_default(self, monkeypatch):
+        """max_export_w raised above the firmware cap so grid_export_limit_w's real
+        6000 W default binds; setpoint saturates at exactly 6000."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={
+            "max_export_w": 9000.0, "grid_export_limit_w": 6000.0})
+        _seed_passive_inputs(hass, soc="97.0", export_price="0.40")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(ctrl_mod, "compute_decision",
+                            _patched_compute_decision(export_request={cur_h: 8000.0}))
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+        await ctrl.tick()
+        sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
+        assert sp == pytest.approx(6000.0)   # exact, not just <=
+
 
 # ---------------------------------------------------------------------------
 # C3-2: reserve breach OR hurdle fail → release_to_self
