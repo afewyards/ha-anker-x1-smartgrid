@@ -99,6 +99,7 @@ async def test_options_flow_saves_flat_options(hass):
     assert result2["type"] == "create_entry"
     assert entry.options[const.CONF_SOC_TARGET] == 90.0
     assert all(key not in OPTIONS_SECTIONS for key in entry.options)
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -692,6 +693,7 @@ async def test_options_service_multiselect_derives_and_persists(hass):
     assert entry.options[const.CONF_ENT_PV_PEAK_TODAY] == ["sensor.home_power_highest_peak_time_today"]
     # selection is now PERSISTED (was transient)
     assert entry.options[const.CONF_FORECAST_SERVICE] == [src.entry_id]
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -708,6 +710,7 @@ async def test_options_empty_selection_keeps_current_pv(hass):
     )
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.manual_pv"]
     assert entry.options[const.CONF_FORECAST_SERVICE] == []  # persisted, empty = forget
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -735,6 +738,7 @@ async def test_options_missing_peak_drops_peak_list_for_alignment(hass):
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.home_energy_production_today_remaining"]
     # peak unresolved → dropped to [] to keep index alignment (replaces submitted manual peak)
     assert entry.options[const.CONF_ENT_PV_PEAK_TODAY] == []
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -763,6 +767,7 @@ async def test_options_two_sources_union_energy_and_align_peaks(hass):
         "sensor.roof1_power_highest_peak_time_today",
         "sensor.roof2_power_highest_peak_time_today",
     ]
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -789,6 +794,7 @@ async def test_options_unchanged_selection_does_not_rebuild(hass):
         }),
     )
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.hand_added"]
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -948,6 +954,7 @@ async def test_options_flow_device_resolves_into_options(hass):
     )
     assert entry.options[const.CONF_ENT_SOC] == "sensor.anker_x1_battery_soc"
     assert entry.options[const.CONF_ANKER_DEVICE] == device_id
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -960,6 +967,7 @@ async def test_options_flow_no_device_no_error_no_resolution(hass):
     )
     assert res2["type"] == "create_entry"
     assert const.CONF_ENT_SOC not in entry.options  # not a schema field; not resolved
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 

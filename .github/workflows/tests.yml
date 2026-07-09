@@ -31,7 +31,7 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Install add-on test dependencies
-        run: pip install scikit-learn==1.5.2 holidays==0.99 fastapi==0.115.6 uvicorn==0.34.0 pydantic
+        run: pip install holidays==0.99 fastapi==0.115.6 uvicorn==0.34.0 pydantic
 
       - name: Run add-on tests
         run: |
