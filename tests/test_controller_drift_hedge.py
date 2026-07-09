@@ -178,13 +178,14 @@ def _make_ctrl(hass, cfg: Config | None = None):
     """Build an enabled Controller with a minimal data config."""
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: ["sensor.phase_l1", "sensor.phase_l2", "sensor.phase_l3"],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -203,9 +204,7 @@ def _make_ctrl(hass, cfg: Config | None = None):
 def _seed_inputs(hass, *, soc: str = "60.0", now: datetime = BASE):
     """Seed HA state for the tick's read_plant_inputs path."""
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.phase_l1", "300.0")
-    hass.set_state("sensor.phase_l2", "0.0")
-    hass.set_state("sensor.phase_l3", "0.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")
@@ -660,9 +659,7 @@ async def test_hedge_keyed_at_trough_slot(monkeypatch):
         ]
     })
     hass.set_state("sensor.soc", "60.0")
-    hass.set_state("sensor.phase_l1", "300.0")
-    hass.set_state("sensor.phase_l2", "0.0")
-    hass.set_state("sensor.phase_l3", "0.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")

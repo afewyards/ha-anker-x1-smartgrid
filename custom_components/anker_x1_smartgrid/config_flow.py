@@ -47,10 +47,6 @@ def _schema(defaults: dict, services=None) -> vol.Schema:
                 default=defaults.get(const.CONF_ENT_WEATHER_FORECAST, const.DEFAULT_ENT_WEATHER_FORECAST),
             ): EntitySelector(EntitySelectorConfig(domain="weather")),
             vol.Optional(
-                const.CONF_ENT_HOUSE_LOAD,
-                default=defaults.get(const.CONF_ENT_HOUSE_LOAD, const.DEFAULT_ENT_HOUSE_LOAD),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
                 const.CONF_FORECAST_SERVICE,
                 description={"suggested_value": _stored_forecast_services(defaults, services)},
             ): SelectSelector(
@@ -128,7 +124,6 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_ANKER_DEVICE,
         const.CONF_ENT_PRICE,
         const.CONF_ENT_EXPORT_PRICE,
-        const.CONF_ENT_HOUSE_LOAD,
         const.CONF_ENT_WEATHER_FORECAST,
         const.CONF_PERSON_ENTITIES,
     ),
@@ -274,10 +269,6 @@ def _options_fields(defaults: dict, services=None) -> dict:
             vol.Optional(
                 const.CONF_ENT_EXPORT_PRICE,
                 description={"suggested_value": defaults.get(const.CONF_ENT_EXPORT_PRICE)},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
-                const.CONF_ENT_HOUSE_LOAD,
-                description={"suggested_value": defaults.get(const.CONF_ENT_HOUSE_LOAD)},
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
             # --- tunables promoted from install-only to editable ---
             # capacity_kwh intentionally omitted: it is ALWAYS-DERIVED from the Anker

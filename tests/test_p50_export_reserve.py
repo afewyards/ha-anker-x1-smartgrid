@@ -60,7 +60,7 @@ def _call_compute_decision(predictor):
     """Call compute_decision via the primary reserve path (sun_times + arrays)."""
     cfg = _cfg()
     plan = PlanState.initial(NOW - timedelta(hours=1))
-    inputs = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=80.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.40) for i in range(24)]
     return controller.compute_decision(
         plan, inputs, slots,

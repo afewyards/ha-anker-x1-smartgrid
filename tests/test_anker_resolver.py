@@ -15,6 +15,8 @@ _ROLES = {
     "battery_setpoint": ("number", "anker_x1_battery_setpoint_charge_discharge"),
     "work_mode_select": ("select", "anker_x1_work_mode"),
     "modbus_control": ("switch", "anker_x1_modbus_control_hand_battery_to_ha_vpp"),
+    "meter_total_power": ("sensor", "anker_x1_meter_total_power"),
+    "inverter_loss": ("sensor", "anker_x1_inverter_loss"),
 }
 
 
@@ -54,7 +56,41 @@ async def test_resolve_all_roles_present(hass):
     assert resolved[const.CONF_ENT_SETPOINT] == "number.anker_x1_battery_setpoint_charge_discharge"
     assert resolved[const.CONF_ENT_WORKMODE] == "select.anker_x1_work_mode"
     assert resolved[const.CONF_ENT_ENGAGE] == "switch.anker_x1_modbus_control_hand_battery_to_ha_vpp"
+    assert resolved[const.CONF_ENT_METER_POWER] == "sensor.anker_x1_meter_total_power"
+    assert resolved[const.CONF_ENT_INVERTER_LOSS] == "sensor.anker_x1_inverter_loss"
     assert resolved[const.CONF_CAPACITY_KWH] == 10.0
+
+
+async def test_resolve_meter_power_and_inverter_loss_roles(hass):
+    """Single-scalar meter power + inverter loss resolve like the hard roles when present."""
+    device_id, _ = _register_anker_device(hass)
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert resolved[const.CONF_ENT_METER_POWER] == "sensor.anker_x1_meter_total_power"
+    assert resolved[const.CONF_ENT_INVERTER_LOSS] == "sensor.anker_x1_inverter_loss"
+
+
+async def test_resolve_missing_meter_power_and_inverter_loss_soft(hass):
+    """Meter power / inverter loss are SOFT roles: a miss is omitted from the
+    resolved values but must NOT be reported as missing (must not block setup
+    on anker_x1 versions without these entities)."""
+    device_id, _ = _register_anker_device(
+        hass, drop=("meter_total_power", "inverter_loss")
+    )
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert const.CONF_ENT_METER_POWER not in resolved
+    assert const.CONF_ENT_INVERTER_LOSS not in resolved
+    # hard roles still resolve normally
+    assert resolved[const.CONF_ENT_SOC] == "sensor.anker_x1_battery_soc"
+
+
+async def test_resolve_missing_one_soft_role_still_resolves_other(hass):
+    device_id, _ = _register_anker_device(hass, drop=("inverter_loss",))
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert resolved[const.CONF_ENT_METER_POWER] == "sensor.anker_x1_meter_total_power"
+    assert const.CONF_ENT_INVERTER_LOSS not in resolved
 
 
 async def test_resolve_missing_role_reported(hass):

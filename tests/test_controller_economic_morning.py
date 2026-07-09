@@ -156,7 +156,7 @@ def test_morning_no_survival_charge_passive():
     """
     cfg = _cfg()
     now = _NOW0  # 05:00 UTC
-    inputs = PlantInputs(soc=_SOC_START, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=_SOC_START, meter_w=0.0, now=now)
     sunset = _NOW0 + timedelta(hours=17)   # 22:00 UTC — safely past the TABLE end (21:00)
     plan = _passive_plan(now)
     _out: dict = {}
@@ -219,7 +219,7 @@ def test_trough_economic_topoff_actuates():
     cfg = _cfg()
     now = _TROUGH_HOUR  # 11:00 UTC
     # SoC after riding the morning drain to the firmware floor.
-    inputs = PlantInputs(soc=5.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=5.0, meter_w=0.0, now=now)
     sunset = _NOW0 + timedelta(hours=17)   # 22:00 UTC
     plan = _passive_plan(now)
     _out: dict = {}

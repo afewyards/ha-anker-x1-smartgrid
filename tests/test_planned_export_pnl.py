@@ -41,7 +41,7 @@ def test_dp_select_slots_returns_export_revenue():
         enable_export=True,
         export_peak_band_frac=0.5,
     )
-    inputs = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=80.0, meter_w=0.0, now=now)
     deadline = now + timedelta(hours=6)
     slots = [PriceSlot(now + timedelta(hours=i), 0.20) for i in range(6)]
     ivs = [ForecastInterval(now + timedelta(hours=i), 0.0, 0.0, 1.0) for i in range(6)]

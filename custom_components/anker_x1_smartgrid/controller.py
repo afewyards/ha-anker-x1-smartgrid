@@ -1220,11 +1220,18 @@ class Controller:
         # Refreshed at most once per clock-hour (past hours never change).
         self._past_actuals_cache: dict | None = None
         self._past_actuals_hour: datetime | None = None
-        # N2: last known house load (W) — TELEMETRY fallback only, for the metered-net
-        # PnL computation when the live sensor reads None (sensor blip).  NOT persisted.
-        # NOT used by the actuation gross-setpoint compensation, which stays 0.0-on-None
-        # (under-export is the safe direction there).
+        # N2: last known COMPUTED house load (W) — fallback cache used whenever
+        # pv/batt sensors are unavailable (skips the compute for that tick).
+        # NOT persisted.  Recorder load_w / metered-net PnL / last_status all use
+        # this cache-fallback value regardless of freshness.  The actuation
+        # gross-setpoint compensation is the one consumer that must NOT act on a
+        # stale cache hit — it gates on `self._house_load_fresh` instead (0.0
+        # when not fresh; under-export is the safe direction there).
         self._last_house_load_w: float = 0.0
+        # True only when the most recent _compute_house_load_w call did a live
+        # compute (pv AND batt both available this tick); False when it fell back
+        # to the cache above.  Set on every call; read by the export executor.
+        self._house_load_fresh: bool = False
         # ── SoC drift-hedge accumulator state ─────────────────────────────────────────
         # Whole block gated on cfg.soc_hedge_fraction > 0 (default 0.0 = OFF / parity-safe).
         self._soc_drift_kwh: float = 0.0
@@ -2029,18 +2036,16 @@ class Controller:
         _reserve_kwh_val: float | None = None
         _surplus_kwh_val: float | None = None
 
-        # Live house load for export compensation (read once; reused by C3 and
+        # Live house load for export compensation (computed once; reused by C3 and
         # _record_sample to avoid actuation/log divergence across awaits).
-        # None/unavailable → None here; treated as 0.0 in C3, stored as NULL in record.
-        _house_load_ent = self._data.get(const.CONF_ENT_HOUSE_LOAD, const.DEFAULT_ENT_HOUSE_LOAD)
+        # house_load_w = pv + meter_w (signed net grid, + = import) + batt
+        # (+ = discharge, − = charge) − inverter_loss, clamped to ≥ 0.  pv/batt
+        # unavailable → skip the compute and fall back to the cached last-known
+        # value (N2); self._house_load_fresh is set False in that case so the
+        # export gross-setpoint compensation below knows not to act on it.
         # NB: distinct name from the module-level `house_load_w as _house_load_w`
         # import (a function) to avoid shadowing it within tick().
-        _house_load_now_w = (
-            coordinator.read_float(self._hass, _house_load_ent) if _house_load_ent else None
-        )
-        # N2: refresh the telemetry-only fallback cache whenever we get a live reading.
-        if _house_load_now_w is not None:
-            self._last_house_load_w = _house_load_now_w
+        _house_load_now_w = self._compute_house_load_w(inputs)
 
         # E3: reset the per-day PnL accumulator on local-day rollover, BEFORE
         # accumulating this tick's PnL.  Ensures the first export tick of a new day
@@ -2141,8 +2146,14 @@ class Controller:
                     # GROSS setpoint must cover house load (firmware serves house
                     # first, exports the remainder).  Bounded only by SETPOINT_MAX_W
                     # via discharge_cap_w (max_export_w already capped net_target).
-                    _load_comp_w = self.cfg.export_load_comp_factor * max(
-                        0.0, _house_load_now_w if _house_load_now_w is not None else 0.0
+                    # Only compensate with a FRESH read (A: fix for a safety
+                    # regression) — a stale cached value (pv/batt sensor blip this
+                    # tick, soc+meter still live so no failsafe) must not inflate
+                    # the gross setpoint beyond the reserve-aware target;
+                    # under-compensating (0.0) is the safe direction here.
+                    _load_comp_w = (
+                        self.cfg.export_load_comp_factor * _house_load_now_w
+                        if self._house_load_fresh else 0.0
                     )
                     _gross_w = _net_target_w + _load_comp_w
                     _export_sp = guard.command_setpoint(
@@ -2159,16 +2170,13 @@ class Controller:
                             _export_setpoint_w = _export_sp
                             # Metered net to grid = gross setpoint − house load
                             # (firmware serves house first).  Drives PnL + record.
-                            # N2: fall back to the cached last-known load when the live
-                            # sensor blips to None, so a blip doesn't credit the full
-                            # gross setpoint as net export.  TELEMETRY ONLY — the
-                            # actuation gross setpoint above (_load_comp_w) stays
-                            # 0.0-on-None; under-export is the safe direction there.
-                            _load_for_metering = (
-                                _house_load_now_w if _house_load_now_w is not None
-                                else getattr(self, "_last_house_load_w", 0.0)
-                            )
-                            _metered_net_w = max(0.0, _export_sp - _load_for_metering)
+                            # TELEMETRY ONLY: uses _house_load_now_w regardless of
+                            # freshness (N2 cache-fallback covers a pv/batt blip) —
+                            # unlike the actuation gross-setpoint compensation above,
+                            # which zeroes out on a stale (non-fresh) read.
+                            # _compute_house_load_w always returns a float, never
+                            # None (cache-fallback on pv/batt unavailable).
+                            _metered_net_w = max(0.0, _export_sp - _house_load_now_w)
                             _export_kwh = (
                                 _metered_net_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
                             )
@@ -2321,6 +2329,13 @@ class Controller:
         # export), so leaving last_status["state"] alone matches the recorded
         # history instead of diverging from it. A dedicated sensor reads the key.
         self.last_status["export_setpoint_w"] = _export_setpoint_w
+        # T16: surface the live per-tick house load for observability. Mirrors
+        # export_setpoint_w above — this line only runs in the enabled/"ok" tick
+        # path. last_status is a persistent dict mutated in place (same as
+        # export_setpoint_w), so a disabled/failsafe tick does NOT remove this
+        # key — it simply leaves whatever value the last enabled tick wrote.
+        # A dedicated sensor reads the key.
+        self.last_status["house_load_w"] = _house_load_now_w
         self.last_status["plan"] = {
             "horizon": horizon,
             "deadline": deadline.isoformat() if deadline else None,
@@ -2456,8 +2471,10 @@ class Controller:
                 batt_raw = float(s["batt_w"]) if s.get("batt_w") is not None else 0.0
                 p1_raw = float(s["p1_w"]) if s.get("p1_w") is not None else 0.0
 
-                # House load: prefer recorded sensor.power_usage (load_w, v6+);
-                # fall back to AC energy balance p1+batt+pv for pre-v6 rows.
+                # House load: prefer the recorded load_w column (now computed
+                # per-tick from pv+meter+batt−loss by _compute_house_load_w,
+                # not read from sensor.power_usage); fall back to AC energy
+                # balance p1+batt+pv for older rows that predate that column.
                 # Clamped to 0 to avoid negative "load" during export.
                 _raw_load = _house_load_w(s)
                 load_w = max(0.0, _raw_load) if _raw_load is not None else max(0.0, p1_raw + batt_raw + pv_raw)
@@ -2941,11 +2958,10 @@ class Controller:
             else None
         )
         # House load: use the value threaded from the active tick if provided
-        # (single read, consistent with actuation); otherwise read it here
-        # (disabled path).  None → stored as NULL → ages out naturally.
+        # (single compute, consistent with actuation); otherwise compute it here
+        # (disabled path, which does not pass house_load_w).
         if house_load_w is _UNSET:
-            house_load_ent = self._data.get(const.CONF_ENT_HOUSE_LOAD, const.DEFAULT_ENT_HOUSE_LOAD)
-            house_load = coordinator.read_float(self._hass, house_load_ent) if house_load_ent else None
+            house_load = self._compute_house_load_w(inputs)
         else:
             house_load = house_load_w
         # Read the live feed-in tariff from the configured export-price entity.
@@ -2964,10 +2980,12 @@ class Controller:
             "hour": now.hour,
             "weekday": now.weekday(),
             "soc": inputs.soc,
-            "p1_l1": inputs.phase_import_w[0],
-            "p1_l2": inputs.phase_import_w[1],
-            "p1_l3": inputs.phase_import_w[2],
-            "p1_w": sum(inputs.phase_import_w),
+            # Legacy 3-phase columns retired (the Anker X1 meter reports one signed
+            # scalar, not per-phase import); schema unchanged, so these stay NULL.
+            "p1_l1": None,
+            "p1_l2": None,
+            "p1_l3": None,
+            "p1_w": inputs.meter_w,
             "state": state,
             "setpoint_w": setpoint,
             "pv_w": pv_w,
@@ -2983,9 +3001,10 @@ class Controller:
             "cloud_cover": weather_entry.get("cloud_cover") if weather_entry else None,
             "humidity": weather_entry.get("humidity") if weather_entry else None,
             "wind_speed": weather_entry.get("wind_speed") if weather_entry else None,
-            # Ground-truth house load from sensor.power_usage (v6+).
-            # Raw value — sensor already applies max(0,...) in HA.
-            # NULL when entity missing/unavailable; ages out of load model naturally.
+            # Ground-truth house load, computed per-tick by _compute_house_load_w
+            # (pv + meter_w + batt − inverter_loss), which clamps to ≥ 0 itself.
+            # Never NULL in practice from the two tick() call sites — cache
+            # fallback (N2) covers a pv/batt sensor blip.
             "load_w": house_load,
             # v7 export-arbitrage signal columns.
             # Populated by the C3 export executor on export ticks; None otherwise.
@@ -3004,6 +3023,43 @@ class Controller:
     # branches.  Behaviour-identical: callers assign the return values to their
     # own local names (e.g. _shadow_export_price vs _export_price) so the
     # distinct naming in each branch is preserved.
+
+    def _compute_house_load_w(self, inputs) -> float:
+        """Live house load (W): pv + meter_w (signed net grid, + = import) +
+        batt (+ = discharge, − = charge) − inverter_loss, clamped to ≥ 0 (house
+        load cannot physically be negative; cross-read skew between the pv/
+        meter/batt sensors on a given tick can otherwise yield a small negative
+        value).
+
+        inverter_loss reads 0.0 when its sensor is unavailable (it genuinely
+        reads 0 while charging/idle and may drop out).  pv or batt unavailable
+        → skip the compute for this tick entirely and fall back to the cached
+        last-known value (N2) rather than publish a number built from a stale
+        mixture of reads.  On a successful compute, refresh the cache so later
+        unavailable ticks fall back to this fresher value.
+
+        Also sets ``self._house_load_fresh`` (True on a live compute, False on
+        a cache-fallback) so callers that must not act on stale data — the
+        export gross-setpoint compensation — can tell the two apart.
+        """
+        pv_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_PV_POWER])
+        batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
+        if pv_w is None or batt_w is None:
+            self._house_load_fresh = False
+            return self._last_house_load_w
+        loss_w = coordinator.read_float(
+            self._hass,
+            self._data.get(
+                const.CONF_ENT_INVERTER_LOSS,
+                const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS],
+            ),
+        )
+        house_load_w = max(
+            0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0)
+        )
+        self._last_house_load_w = house_load_w
+        self._house_load_fresh = True
+        return house_load_w
 
     def _read_forecast_bundle(self) -> tuple[list | None, list | None]:
         """Per-day PV watts arrays; warn when exactly one day is available."""

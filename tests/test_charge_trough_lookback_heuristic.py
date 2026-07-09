@@ -30,7 +30,7 @@ def _run(cfg, lookback):
               15: 0.25, 16: 0.28, 17: 0.34, 18: 0.42}
     slots = [PriceSlot(base.replace(hour=h), p) for h, p in prices.items()]
     now = base.replace(hour=15)
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=now)
     sunset = now + timedelta(hours=4)
     plan = PlanState.initial(now - timedelta(hours=2))
     predictor = LoadPredictor.from_profile({})

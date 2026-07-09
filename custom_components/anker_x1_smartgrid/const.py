@@ -37,7 +37,8 @@ CONF_ENT_WORKMODE = "ent_workmode"
 CONF_ENT_SOC = "ent_soc"
 CONF_ENT_BATTERY_POWER = "ent_battery_power"
 CONF_ENT_PV_POWER = "ent_pv_power"
-CONF_ENT_PHASE = "ent_phase"  # list of 3
+CONF_ENT_METER_POWER = "ent_meter_power"  # single scalar, + = grid import (Anker X1 meter)
+CONF_ENT_INVERTER_LOSS = "ent_inverter_loss"
 CONF_ENT_PRICE = "ent_price"
 CONF_ENT_PV_TODAY = "ent_pv_today"  # list
 CONF_ENT_PV_TOMORROW = "ent_pv_tomorrow"  # list
@@ -48,7 +49,6 @@ CONF_ENT_SUN = "ent_sun"
 CONF_ENT_TEMP = "ent_temp"
 CONF_ENT_WEATHER_FORECAST = "ent_weather_forecast"
 CONF_ENT_EXPORT_PRICE = "ent_export_price"
-CONF_ENT_HOUSE_LOAD = "ent_house_load"
 CONF_PERSON_ENTITIES = "person_entities"  # list of person.* entity ids (options-only)
 
 # Charge trough look-back config key
@@ -84,7 +84,6 @@ DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip
 DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
 DEFAULT_ENT_WEATHER_FORECAST = "weather.knmi_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
-DEFAULT_ENT_HOUSE_LOAD = "sensor.power_usage"
 DEFAULT_RETENTION_HOURLY_DAYS = 730
 DEFAULT_ADDON_ENABLED = False
 DEFAULT_ADDON_URL = "http://local-anker_x1_forecast:8099"
@@ -227,16 +226,18 @@ SETPOINT_MAX_W = 6000.0  # NET-EXPORT ceiling per A1 (full ~6000W, no firmware c
 WORKMODE_SELF = "Self-consumption"
 PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 
-# The 5 Anker-role entities (SOC, battery power, setpoint, workmode, engage) are
-# resolved at config time from CONF_ANKER_DEVICE via anker_resolver.resolve_anker_config,
-# so they are intentionally absent here.
+# The 5 hard Anker-role entities (SOC, battery power, setpoint, workmode,
+# engage) are resolved at config time from CONF_ANKER_DEVICE via
+# anker_resolver.resolve_anker_config, so they are intentionally absent here.
+# Meter power / inverter loss are SOFT Anker roles (also resolved via
+# resolve_anker_config, but a miss is never fatal): they ship a
+# DEFAULT_ENTITIES fallback below that runtime readers apply via
+# data.get(CONF_ENT_*, DEFAULT_ENTITIES[CONF_ENT_*]) whenever the resolver
+# didn't set them (soft-role miss, or a config predating the resolver).
 DEFAULT_ENTITIES = {
     CONF_ENT_PV_POWER: "sensor.solar_power",
-    CONF_ENT_PHASE: [
-        "sensor.p1_meter_power_phase_1",
-        "sensor.p1_meter_power_phase_2",
-        "sensor.p1_meter_power_phase_3",
-    ],
+    CONF_ENT_METER_POWER: "sensor.anker_x1_meter_total_power",
+    CONF_ENT_INVERTER_LOSS: "sensor.anker_x1_inverter_loss",
     CONF_ENT_PRICE: "sensor.zonneplan_current_electricity_tariff",
     CONF_ENT_PV_TODAY: [
         "sensor.home_energy_production_today_remaining",
@@ -255,7 +256,6 @@ DEFAULT_ENTITIES = {
     CONF_ENT_TEMP: "weather.knmi_home",
     CONF_ENT_WEATHER_FORECAST: DEFAULT_ENT_WEATHER_FORECAST,
     CONF_ENT_EXPORT_PRICE: DEFAULT_ENT_EXPORT_PRICE,
-    CONF_ENT_HOUSE_LOAD: DEFAULT_ENT_HOUSE_LOAD,
 }
 
 # --- Anker X1 device picker ---
@@ -264,11 +264,21 @@ CONF_ANKER_DEVICE = "anker_device"
 # x1 config-key -> Anker entity unique_id suffix.  Matched EXACTLY against
 # f"{anker_entry_id}_{suffix}".  Workmode uses the *select* suffix
 # (work_mode_select); _work_mode alone is the enum sensor and must not match.
+# HARD roles: a miss is appended to resolve_anker_config's `missing` list and
+# blocks config-flow setup/reload (anker_roles_missing).
 ANKER_ROLE_SUFFIXES: dict[str, str] = {
     CONF_ENT_SOC: "soc",
     CONF_ENT_BATTERY_POWER: "battery_power",
     CONF_ENT_SETPOINT: "battery_setpoint",
     CONF_ENT_WORKMODE: "work_mode_select",
     CONF_ENT_ENGAGE: "modbus_control",
+}
+# SOFT roles: resolved opportunistically (like ANKER_CAPACITY_SUFFIX below) —
+# a miss is omitted from resolved_values and NEVER appended to `missing`, so it
+# never blocks setup/reload.  Older anker_x1 versions may not ship these
+# entities yet; runtime falls back to DEFAULT_ENTITIES via .get() everywhere.
+ANKER_SOFT_ROLE_SUFFIXES: dict[str, str] = {
+    CONF_ENT_METER_POWER: "meter_total_power",
+    CONF_ENT_INVERTER_LOSS: "inverter_loss",
 }
 ANKER_CAPACITY_SUFFIX = "battery_nominal_capacity"

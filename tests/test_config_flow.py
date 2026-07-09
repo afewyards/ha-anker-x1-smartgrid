@@ -59,7 +59,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 49
+    assert len(section_keys) == 48
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -359,48 +359,29 @@ def test_default_entities_includes_ent_export_price():
 
 
 # ---------------------------------------------------------------------------
-# T1 — CONF_ENT_HOUSE_LOAD const
+# House-load field removed — house load is now computed (resolver-managed
+# meter/inverter-loss roles), not a user-configurable entity picker.
 # ---------------------------------------------------------------------------
 
-def test_conf_ent_house_load_value():
-    assert const.CONF_ENT_HOUSE_LOAD == "ent_house_load"
+def test_house_load_not_in_initial_schema():
+    from custom_components.anker_x1_smartgrid.config_flow import _schema
+    install_keys = {k.schema for k in _schema({}).schema}
+    assert "ent_house_load" not in install_keys
 
 
-def test_default_ent_house_load_value():
-    assert const.DEFAULT_ENT_HOUSE_LOAD == "sensor.power_usage"
-
-
-def test_default_entities_includes_ent_house_load():
-    """DEFAULT_ENTITIES must carry the ent_house_load key."""
-    assert const.CONF_ENT_HOUSE_LOAD in const.DEFAULT_ENTITIES
-    assert const.DEFAULT_ENTITIES[const.CONF_ENT_HOUSE_LOAD] == "sensor.power_usage"
-
-
-# ---------------------------------------------------------------------------
-# T2 — CONF_ENT_HOUSE_LOAD in options flow
-# ---------------------------------------------------------------------------
-
-def test_options_schema_includes_ent_house_load():
+def test_house_load_not_in_options_schema():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_ENT_HOUSE_LOAD in keys
+    assert "ent_house_load" not in _flat_keys(_options_schema({}))
 
 
-def test_options_schema_ent_house_load_suggested_value():
-    """House load uses suggested_value (clearable), not hard default."""
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-    schema_obj = _options_schema({"ent_house_load": "sensor.power_usage"})
-    schema_keys = _flat_markers(schema_obj)
-    key = schema_keys[const.CONF_ENT_HOUSE_LOAD]
-    assert key.description["suggested_value"] == "sensor.power_usage"
-
-
-def test_options_schema_ent_house_load_roundtrip():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-    schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {const.CONF_ENT_HOUSE_LOAD: "sensor.foo"})
-    assert result[const.CONF_ENT_HOUSE_LOAD] == "sensor.foo"
+def test_meter_power_and_inverter_loss_not_in_any_flow_schema():
+    """Resolver-managed Anker roles never appear as pickable flow fields."""
+    from custom_components.anker_x1_smartgrid.config_flow import _schema, _options_schema
+    install_keys = {k.schema for k in _schema({}).schema}
+    options_keys = _flat_keys(_options_schema({}))
+    for key in ("ent_meter_power", "ent_inverter_loss"):
+        assert key not in install_keys
+        assert key not in options_keys
 
 
 # ---------------------------------------------------------------------------
@@ -830,14 +811,6 @@ def test_export_price_uses_entity_selector():
     assert isinstance(validator, EntitySelector)
 
 
-def test_house_load_uses_entity_selector():
-    """CONF_ENT_HOUSE_LOAD should render as an EntitySelector, not cv.string."""
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-    schema = _options_schema({})
-    _marker, validator = _flat_schema_items(schema)["ent_house_load"]
-    assert isinstance(validator, EntitySelector)
-
-
 # ---------------------------------------------------------------------------
 # Task 2A — Dropdown label format + sentinel rename
 # ---------------------------------------------------------------------------
@@ -1201,7 +1174,6 @@ def test_install_schema_is_minimal_core_fields():
         const.CONF_ANKER_DEVICE,
         const.CONF_ENT_PRICE,
         const.CONF_ENT_WEATHER_FORECAST,
-        const.CONF_ENT_HOUSE_LOAD,
         const.CONF_FORECAST_SERVICE,
     }
 

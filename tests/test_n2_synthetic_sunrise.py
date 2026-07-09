@@ -54,7 +54,7 @@ def _overnight_result(cfg: Config):
     """Call compute_decision with sun_times=None and 2 tonight-only price slots."""
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.15) for i in range(2)]
     plan = PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=2), ())
-    inputs = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=80.0, meter_w=0.0, now=NOW)
     return ctrl.compute_decision(
         plan, inputs, slots,
         pv_remaining=0.0,

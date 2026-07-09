@@ -31,7 +31,7 @@ def test_cheapest_quarter_is_individually_resolvable_not_hour_collapsed():
         ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 400.0, 0.25)
         for i in range(8)
     ]
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     sel, grid, infeasible, exp, rev, ceil = ctrl._dp_select_slots(
         inputs=inputs,
         slots=slots,
@@ -58,7 +58,7 @@ def test_live_dp_path_uses_slot_scaled_dawn_boundary(monkeypatch):
     # boundary would put the switch at slot 4 in BOTH runs).
     now = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
     sun = (now + timedelta(hours=16), now + timedelta(hours=4), now + timedelta(hours=40))
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
 
     captured: dict = {}
     real_ceiling = ctrl.optimize_mod.solar_reservation_ceiling
@@ -98,7 +98,7 @@ def test_dp_window_is_byte_identical_at_slot_minutes_60():
     prices = [0.30, 0.10, 0.30, 0.30]
     slots = [PriceSlot(NOW + timedelta(hours=i), p) for i, p in enumerate(prices)]
     ivs = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 400.0, 1.0) for i in range(4)]
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     common = dict(
         inputs=inputs,
         slots=slots,

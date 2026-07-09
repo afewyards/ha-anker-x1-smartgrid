@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 
+from . import const, coordinator
 from .const import DOMAIN
 
 
@@ -50,6 +52,67 @@ class X1ExportSetpointSensor(_Base):
 
     def __init__(self, c, e):
         super().__init__(c, e, "export_setpoint_w", "SmartGrid export setpoint")
+
+
+class X1HouseLoadSensor(_Base):
+    """Live house load (W), event-driven off its 4 source entities.
+
+    Template-sensor semantics: recomputes on every state-change of pv/
+    meter/battery/inverter-loss, independent of the 60s controller tick.
+    Formula mirrors the controller's tick-time ``_compute_house_load_w``
+    (kept tick-synchronous for actuation/recording — this sensor is
+    display-only and reads live HA state directly, never last_status):
+    pv + meter (+ = import) + batt (+ = discharge, - = charge) -
+    inverter_loss, clamped to >= 0.
+
+    pv/meter/batt unavailable -> native_value None (HA shows unknown).
+    inverter_loss unavailable -> treated as 0.0.
+    """
+
+    _attr_native_unit_of_measurement = "W"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_should_poll = False
+
+    def __init__(self, c, e, pv_entity: str, meter_entity: str, batt_entity: str, loss_entity: str):
+        super().__init__(c, e, "house_load_w", "SmartGrid house load")
+        self._pv_entity = pv_entity
+        self._meter_entity = meter_entity
+        self._batt_entity = batt_entity
+        self._loss_entity = loss_entity
+        self._value: float | None = None
+
+    @property
+    def native_value(self):
+        return self._value
+
+    def _recompute(self) -> None:
+        pv = coordinator.read_float(self.hass, self._pv_entity)
+        meter = coordinator.read_float(self.hass, self._meter_entity)
+        batt = coordinator.read_float(self.hass, self._batt_entity)
+        if pv is None or meter is None or batt is None:
+            self._value = None
+            return
+        loss = coordinator.read_float(self.hass, self._loss_entity)
+        self._value = max(0.0, pv + meter + batt - (loss if loss is not None else 0.0))
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Prime the value at startup so it's present before the first
+        # source-entity state change fires.
+        self._recompute()
+
+        @callback
+        def _handle_source_change(event) -> None:
+            self._recompute()
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass,
+                [self._pv_entity, self._meter_entity, self._batt_entity, self._loss_entity],
+                _handle_source_change,
+            )
+        )
 
 
 class X1LoadMaeSensor(_Base):
@@ -205,12 +268,29 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]["controller"]
+    # Merged entry data (post Anker-device resolution) — same dict the
+    # controller reads from at tick time.  PV_POWER/BATTERY_POWER are
+    # guaranteed present (BATTERY_POWER is a hard Anker role with no
+    # DEFAULT_ENTITIES fallback; PV_POWER is always set by the config
+    # flow), matching controller._compute_house_load_w's direct indexing.
+    # METER_POWER/INVERTER_LOSS are soft roles, so they fall back to
+    # DEFAULT_ENTITIES like every other soft-role read in this integration.
+    entry_data = controller._data
+    pv_entity = entry_data.get(const.CONF_ENT_PV_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER])
+    meter_entity = entry_data.get(
+        const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]
+    )
+    batt_entity = entry_data[const.CONF_ENT_BATTERY_POWER]
+    loss_entity = entry_data.get(
+        const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]
+    )
     async_add_entities(
         [
             X1StateSensor(controller, entry.entry_id),
             X1SolarChargeSensor(controller, entry.entry_id),
             X1SetpointSensor(controller, entry.entry_id),
             X1ExportSetpointSensor(controller, entry.entry_id),
+            X1HouseLoadSensor(controller, entry.entry_id, pv_entity, meter_entity, batt_entity, loss_entity),
             X1LoadMaeSensor(controller, entry.entry_id),
             X1HorizonEnergyMae24hSensor(controller, entry.entry_id),
             X1HorizonEnergyMae12hSensor(controller, entry.entry_id),

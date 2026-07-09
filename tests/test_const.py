@@ -8,11 +8,31 @@ def test_domain():
 def test_defaults_present():
     assert const.DEFAULT_SOC_TARGET == 97.0
     assert const.PRICE_SCALE == 1e7
-    assert len(const.DEFAULT_ENTITIES[const.CONF_ENT_PHASE]) == 3
 
 
 def test_pv_power_entity_default():
     assert const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER] == "sensor.solar_power"
+
+
+def test_meter_power_and_inverter_loss_entities():
+    """Single-scalar Anker X1 meter power replaces the 3-phase P1 inputs."""
+    assert const.CONF_ENT_METER_POWER == "ent_meter_power"
+    assert const.CONF_ENT_INVERTER_LOSS == "ent_inverter_loss"
+    assert (
+        const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]
+        == "sensor.anker_x1_meter_total_power"
+    )
+    assert (
+        const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]
+        == "sensor.anker_x1_inverter_loss"
+    )
+
+
+def test_phase_and_house_load_constants_removed():
+    """P1 phase inputs + house-load input sensor are gone (house load is computed)."""
+    assert not hasattr(const, "CONF_ENT_PHASE")
+    assert not hasattr(const, "CONF_ENT_HOUSE_LOAD")
+    assert not hasattr(const, "DEFAULT_ENT_HOUSE_LOAD")
 
 
 def test_weather_forecast_const():

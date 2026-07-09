@@ -23,11 +23,10 @@ A Home Assistant custom integration that turns an [Anker SOLIX X1](https://www.a
 | Requirement | Details |
 |---|---|
 | Home Assistant | 2024.10+ |
-| Anker X1 integration | Provides SoC, battery power, Modbus setpoint, work mode, and engage entities |
+| Anker X1 integration | Provides SoC, battery power, Modbus setpoint, work mode, meter power, and engage entities |
 | Price sensor | Dynamic electricity tariff in EUR/kWh (e.g. [Zonneplan](https://www.zonneplan.nl/)) |
 | PV forecast | One or more solar forecast integrations (e.g. Open-Meteo, Forecast.Solar, Solcast) |
 | Weather entity | Hourly temperature forecast for the load model (e.g. KNMI) |
-| House load sensor | Total household consumption in watts (e.g. P1 meter `sensor.power_usage`) |
 
 ## Installation
 
@@ -47,11 +46,10 @@ Go to **Settings → Devices & Services → Add Integration → Anker X1 SmartGr
 
 The setup flow asks for:
 
-1. **Anker SOLIX X1 device** — battery capacity and all control entities (SoC, setpoint, work mode, Modbus) are derived automatically
+1. **Anker SOLIX X1 device** — battery capacity and all control entities (SoC, setpoint, work mode, Modbus, meter power) are derived automatically
 2. **Import price sensor** — your dynamic tariff sensor (EUR/kWh)
 3. **Weather forecast entity** — feeds the load model
-4. **House load sensor** — total consumption in watts
-5. **Solar forecast integrations** — pick one or more; multiple arrays are summed
+4. **Solar forecast integrations** — pick one or more; multiple arrays are summed
 
 Everything else defaults to sensible values and can be tuned later via **Configure**.
 

@@ -220,17 +220,14 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
     """Build a Controller with minimal data config and export price entity."""
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: [
-            "sensor.phase_l1",
-            "sensor.phase_l2",
-            "sensor.phase_l3",
-        ],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -257,9 +254,7 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
 def _seed_passive_inputs(hass, *, soc="80.0", export_price="0.30"):
     """Seed HA states so read_plant_inputs gives PASSIVE (high SoC = no deficit)."""
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.phase_l1", "100.0")
-    hass.set_state("sensor.phase_l2", "100.0")
-    hass.set_state("sensor.phase_l3", "100.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "2000.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")
@@ -306,9 +301,7 @@ class TestExportEngagePositiveSetpoint:
         ctrl, act, store = _make_controller(hass)
 
         hass.set_state("sensor.soc", "90.0")
-        hass.set_state("sensor.phase_l1", "100.0")
-        hass.set_state("sensor.phase_l2", "100.0")
-        hass.set_state("sensor.phase_l3", "100.0")
+        hass.set_state("sensor.meter_power", "300.0")
         hass.set_state("sensor.pv_power", "2000.0")
         hass.set_state("sensor.battery_power", "0.0")
         hass.set_state("sensor.irradiance", "600.0")
@@ -360,6 +353,11 @@ class TestExportEngagePositiveSetpoint:
         # Set max_export_w low so we hit the cap
         ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 500.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.30")
+        # Zero the computed house load (pv + meter_w + batt - loss) so the gross
+        # setpoint == net_target exactly; this test is about the max_export_w
+        # clamp on the net target, not the house-load compensation add-back.
+        hass.set_state("sensor.pv_power", "0.0")
+        hass.set_state("sensor.meter_power", "0.0")
         # Inject committed plan with rate >> cap so max_export_w is the binding constraint.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
@@ -391,6 +389,12 @@ class TestExportEngagePositiveSetpoint:
             cfg_overrides={"max_export_w": 3000.0, "grid_export_limit_w": 600.0},
         )
         _seed_passive_inputs(hass, soc="90.0", export_price="0.30")
+        # Zero the computed house load (pv + meter_w + batt - loss) so the gross
+        # setpoint == net_target exactly; this test is about the
+        # grid_export_limit_w clamp on the net target, not the house-load
+        # compensation add-back.
+        hass.set_state("sensor.pv_power", "0.0")
+        hass.set_state("sensor.meter_power", "0.0")
         # Inject committed plan with rate >> both caps so grid_export_limit_w is the binding constraint.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
@@ -683,9 +687,7 @@ class TestMutualExclusionWithForceCharge:
         )
         # Low SoC + cheap price → FORCING
         hass.set_state("sensor.soc", "15.0")
-        hass.set_state("sensor.phase_l1", "0.0")
-        hass.set_state("sensor.phase_l2", "0.0")
-        hass.set_state("sensor.phase_l3", "0.0")
+        hass.set_state("sensor.meter_power", "0.0")
         hass.set_state("sensor.pv_power", "0.0")
         hass.set_state("sensor.battery_power", "0.0")
         hass.set_state("sensor.irradiance", "0.0")
@@ -1063,7 +1065,8 @@ class TestExportHouseLoadCompensation:
         # max_export_w=3000 so net_target binds at 3000; house load 300 added on top.
         ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        hass.set_state(const.DEFAULT_ENT_HOUSE_LOAD, "300.0")
+        # Computed house load = pv + meter_w + batt - loss = 0 + 300 + 0 - 0 = 300W.
+        hass.set_state("sensor.pv_power", "0.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1086,7 +1089,8 @@ class TestExportHouseLoadCompensation:
             hass, cfg_overrides={"max_export_w": 3000.0, "export_load_comp_factor": 0.0}
         )
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        hass.set_state(const.DEFAULT_ENT_HOUSE_LOAD, "300.0")
+        # Computed house load = pv + meter_w + batt - loss = 0 + 300 + 0 - 0 = 300W.
+        hass.set_state("sensor.pv_power", "0.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1105,7 +1109,10 @@ class TestExportHouseLoadCompensation:
         hass = _StubHass()
         ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        # house-load entity NOT seeded → read_float → None → 0.0
+        # pv/batt unavailable → _compute_house_load_w falls back to the cached
+        # last-known value (0.0 on a fresh controller) → no load added.
+        hass.set_state("sensor.pv_power", "unknown")
+        hass.set_state("sensor.battery_power", "unknown")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1125,7 +1132,8 @@ class TestExportHouseLoadCompensation:
         hass = _StubHass()
         ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 2000.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        hass.set_state(const.DEFAULT_ENT_HOUSE_LOAD, "1500.0")
+        # Computed house load = pv + meter_w + batt - loss = 1200 + 300 + 0 - 0 = 1500W.
+        hass.set_state("sensor.pv_power", "1200.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1139,6 +1147,55 @@ class TestExportHouseLoadCompensation:
         assert sp == 3500.0, f"gross net(2000)+load(1500) must survive; got {sp}"
 
 
+class TestExportLoadCompFreshOnly:
+    """A: export gross-setpoint compensation must not act on a stale cache hit.
+
+    Regression scenario: a prior tick did a fresh compute and cached a
+    non-trivial house load; THIS tick pv/batt blips to unavailable (soc +
+    meter still live, so no failsafe). The stale cached load must NOT be
+    added to the gross export setpoint (that would overshoot the
+    reserve-aware target by the stale amount) — but the recorder row and
+    last_status still surface the (possibly cached) value for telemetry.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_not_added_to_gross_setpoint_on_pv_blip(self, monkeypatch):
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0})
+        _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
+        # Simulate a prior tick's successful compute that cached a large load.
+        ctrl._last_house_load_w = 3000.0
+        ctrl._house_load_fresh = True
+        # This tick: pv/batt blip to unavailable; soc + meter stay live (no failsafe).
+        hass.set_state("sensor.pv_power", "unknown")
+        hass.set_state("sensor.battery_power", "unknown")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod, "compute_decision",
+            _patched_compute_decision(export_request={cur_h: 3000.0}),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected engage_export; calls={act.calls}"
+        sp = export_calls[-1][1]
+        # Gross must be net_target ONLY (3000) — the stale 3000W cache must NOT
+        # compensate on top (would be 6000, doubling the export past the target).
+        assert sp == 3000.0, (
+            f"stale cache must not compensate the gross setpoint on a "
+            f"non-fresh tick; got {sp} (would be 6000 if the cache leaked in)"
+        )
+        # Cache-fallback flag must reflect this tick's non-fresh read.
+        assert ctrl._house_load_fresh is False
+        # Telemetry paths still use the (possibly cached) value, unaffected.
+        row = ctrl._recorder.rows[-1]
+        assert row["load_w"] == 3000.0
+        assert ctrl.last_status["house_load_w"] == 3000.0
+
+
 class TestExportPnlMeteredNet:
     """PnL/_export_kwh use metered net (gross − load), and recorded load_w is the read value."""
 
@@ -1148,7 +1205,8 @@ class TestExportPnlMeteredNet:
         hass = _StubHass()
         ctrl, act, store = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        hass.set_state(const.DEFAULT_ENT_HOUSE_LOAD, "300.0")
+        # Computed house load = pv + meter_w + batt - loss = 0 + 300 + 0 - 0 = 300W.
+        hass.set_state("sensor.pv_power", "0.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1166,12 +1224,15 @@ class TestExportPnlMeteredNet:
         assert row["load_w"] == 300.0
 
     @pytest.mark.asyncio
-    async def test_recorded_load_w_none_when_unavailable(self, monkeypatch):
+    async def test_recorded_load_w_uses_cached_fallback_when_unavailable(self, monkeypatch):
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
         ctrl, act, _ = _make_controller(hass)
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        # house-load entity NOT seeded → None preserved in record (not 0.0)
+        # pv/batt unavailable → _compute_house_load_w falls back to the cached
+        # last-known value (0.0 on a fresh controller) instead of None.
+        hass.set_state("sensor.pv_power", "unknown")
+        hass.set_state("sensor.battery_power", "unknown")
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
             _patched_compute_decision(export_request={}),
@@ -1180,7 +1241,9 @@ class TestExportPnlMeteredNet:
         await ctrl.tick()
 
         row = ctrl._recorder.rows[-1]
-        assert row["load_w"] is None, f"unavailable load must record NULL; got {row['load_w']}"
+        assert row["load_w"] == pytest.approx(0.0), (
+            f"unavailable pv/batt must fall back to cached load (0.0 fresh); got {row['load_w']}"
+        )
 
     @pytest.mark.asyncio
     async def test_metered_net_floored_at_zero_when_load_exceeds_gross(self, monkeypatch):
@@ -1197,7 +1260,8 @@ class TestExportPnlMeteredNet:
             cfg_overrides={"export_load_comp_factor": 0.0, "max_export_w": 3000.0},
         )
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        hass.set_state(const.DEFAULT_ENT_HOUSE_LOAD, "5000.0")
+        # Computed house load = pv + meter_w + batt - loss = 4700 + 300 + 0 - 0 = 5000W.
+        hass.set_state("sensor.pv_power", "4700.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1235,9 +1299,7 @@ async def test_engage_export_failure_resets_export_state_and_releases(monkeypatc
     ctrl, act, _ = _make_controller(hass, actuator=act)
     ctrl.enabled = True
     hass.set_state("sensor.soc", "90.0")
-    hass.set_state("sensor.phase_l1", "100.0")
-    hass.set_state("sensor.phase_l2", "100.0")
-    hass.set_state("sensor.phase_l3", "100.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "2000.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")

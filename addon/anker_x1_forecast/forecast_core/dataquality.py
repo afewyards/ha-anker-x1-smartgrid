@@ -58,9 +58,12 @@ def house_load_w(row: dict) -> float | None:
 
     Priority
     --------
-    1. ``load_w`` column (recorded from ``sensor.power_usage`` since v6) — ground
-       truth: the sensor measures physical house consumption directly and is
-       independent of battery export direction.  **Always preferred.**
+    1. ``load_w`` column (recorded since v6) — **Always preferred**, but note this is
+       a COMPUTED value written at sample time (``pv + p1_w(meter) + batt_w −
+       inverter_loss``, see recorder.py), not an independent sensor reading. It is
+       still preferred over row 2 because it's computed once, consistently, at
+       record time rather than re-derived per consumer, but it is derived from the
+       same p1/pv/batt terms as the fallback below, not a ground-truth measurement.
     2. ``derive_house_load_w(row)`` — fallback for pre-v6 rows where ``load_w`` is
        NULL; uses the AC energy balance ``p1 + batt + pv``.
 

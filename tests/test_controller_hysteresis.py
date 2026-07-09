@@ -56,7 +56,7 @@ def test_current_hour_decision_held_within_deadband():
     ):
         new_plan, *_ = ctrl.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=88.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=88.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -98,7 +98,7 @@ def test_committed_export_hour_not_force_charged():
     ):
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=30.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -133,7 +133,7 @@ def test_stale_commit_not_reinjected_across_slot_boundary():
     ):
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -170,7 +170,7 @@ def test_stale_commit_reinjected_within_same_slot():
     ):
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),

@@ -104,7 +104,7 @@ class _StubHass:
 
 _BASE_DATA = {
     const.CONF_ENT_SOC: "sensor.soc",
-    const.CONF_ENT_PHASE: ["sensor.l1", "sensor.l2", "sensor.l3"],
+    const.CONF_ENT_METER_POWER: "sensor.meter_power",
     const.CONF_ENT_PRICE: "sensor.price",
     const.CONF_ENT_PV_TODAY: [],
     const.CONF_ENT_PV_TOMORROW: [],

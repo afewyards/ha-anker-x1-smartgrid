@@ -272,17 +272,14 @@ def _make_floor_controller(hass, *, soc_pct: float = 5.0):
     """Build a Controller pre-seeded with all-expensive prices and SoC at the floor."""
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: [
-            "sensor.phase_l1",
-            "sensor.phase_l2",
-            "sensor.phase_l3",
-        ],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -306,11 +303,10 @@ def _make_floor_controller(hass, *, soc_pct: float = 5.0):
     )
     # Seed states
     hass.set_state("sensor.soc", str(soc_pct))
-    hass.set_state("sensor.phase_l1", "0.0")
-    hass.set_state("sensor.phase_l2", "0.0")
-    hass.set_state("sensor.phase_l3", "0.0")
+    hass.set_state("sensor.meter_power", "0.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.inverter_loss", "0.0")
     hass.set_state("sensor.irradiance", "0.0")
     hass.set_state("weather.home", "cloudy", {"temperature": 15.0})
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
@@ -424,7 +420,7 @@ class TestDrainedToFloorWarning:
         cfg = _cfg(soc_floor=5.0)
         slots = _slots([_ALL_EXPENSIVE_PRICE] * 9)
         sunset = BASE + timedelta(hours=8)
-        inputs = PlantInputs(soc=5.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+        inputs = PlantInputs(soc=5.0, meter_w=0.0, now=BASE)
         _out: dict = {}
 
         new_plan, *_ = compute_decision(

@@ -31,7 +31,7 @@ def test_new_flag_uses_full_horizon_as_edge():
     cfg = Config()
     _, _, returned_edge, _, hm, _ = ctrl.compute_decision(
         plan=PlanState.initial(now),
-        inputs=PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+        inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
         slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
         predictor=_FlatPredictor(), cur_temp=10.0, cfg=cfg,
     )
