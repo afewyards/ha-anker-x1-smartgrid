@@ -77,20 +77,17 @@ def resample_price_map(
 ) -> dict[datetime, float]:
     """Fine-grid price map keyed by slot-start; coarse slots forward-filled.
 
-    Each slot spans its own duration (delta to the next slot) expanded into
-    `slot_minutes`-wide sub-slots, so a coarse (e.g. 60-min) entry among fine
-    (15-min) entries is FORWARD-FILLED across its sub-slots.  At a uniform
-    resolution == `slot_minutes` every slot yields one key; at 60 the map
-    equals the legacy `{s.start.replace(minute=0,...): s.price}` dict (byte
-    parity).
+    Each slot spans its declared ``duration_min`` (from parse) expanded into
+    ``slot_minutes``-wide sub-slots, so a coarse (e.g. 60-min) entry among
+    fine (15-min) entries fills its full declared width.  When
+    ``duration_min`` is None (unit-test / non-parse callers), the legacy
+    successor-gap rule applies.  Sorted-ascending processing means a later
+    finer slot overwrites its sub-key, achieving "fine wins its own slot".
 
-    The chronologically LAST slot has no successor to infer a span from.
-    Default (`horizon_end=None`, byte-identical for every existing caller):
-    it gets a single `slot_minutes`-wide span.  Callers that know the true
-    horizon end (e.g. the real-price window boundary) can pass `horizon_end`
-    so the last slot spans `[slot.start, horizon_end)` instead — the same
-    successor-inferred rule interior slots already follow, just anchored to
-    the horizon edge instead of a real next slot.
+    The last slot uses ``max(duration_min, horizon_end-span)`` when
+    ``horizon_end`` is given, so a fine inherited tail duration cannot shrink
+    below the real horizon.  Without ``horizon_end`` (and ``duration_min``
+    None) it gets a single ``slot_minutes``-wide span.
     """
     out: dict[datetime, float] = {}
     ordered = sorted(slots, key=lambda s: s.start)

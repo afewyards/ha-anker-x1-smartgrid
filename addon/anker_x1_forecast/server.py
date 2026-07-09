@@ -145,5 +145,5 @@ def predict(req: PredictRequest) -> dict:
     with _PREDICT_LOCK:
         if _DB_PATH:
             trainer.refresh_model_lookups(state.model, _DB_PATH)
-    preds = predictor.predict_hours(state.model, [h.model_dump() for h in req.hours])
+        preds = predictor.predict_hours(state.model, [h.model_dump() for h in req.hours])
     return predictor.build_predict_payload(state, preds)

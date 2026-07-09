@@ -2257,7 +2257,7 @@ class Controller:
         await self._record_sample(
             now, inputs,
             setpoint=setpoint,
-            state=new_plan.state.value,
+            state="passive" if _engage_failed else new_plan.state.value,
             weather_entry=_weather_entry,
             export_setpoint_w=_export_setpoint_w,
             export_kwh=_export_kwh,
@@ -2275,7 +2275,7 @@ class Controller:
         ]
         self.last_decision = self._build_decision_snapshot(
             now=now,
-            active=new_plan.state is ControllerState.FORCING,
+            active=new_plan.state is ControllerState.FORCING and not _engage_failed,
             soc=inputs.soc,
             deadline=deadline,
             committed_slots=new_plan.committed_slots,
@@ -2283,7 +2283,7 @@ class Controller:
             tomorrow_total=tomorrow_total,
             price_window=_price_window_e,
             setpoint=setpoint,
-            state=new_plan.state.value,
+            state="passive" if _engage_failed else new_plan.state.value,
             horizon_mode=_horizon_mode_e,
         )
 
