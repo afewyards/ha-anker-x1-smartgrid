@@ -2044,6 +2044,7 @@ class Controller:
             self.today_export_pnl_eur = 0.0
             self._export_pnl_day = _today_for_pnl
 
+        _engage_failed = False
         if new_plan.state is ControllerState.FORCING:
             setpoint = guard.command_setpoint(
                 self.cfg.max_charge_w, self._actuator.last_setpoint_w, self.cfg,
@@ -2051,7 +2052,12 @@ class Controller:
             try:
                 await self._actuator.engage_and_charge(setpoint)
             except Exception:
-                _LOGGER.error("Actuator engage_and_charge failed (FORCING path)", exc_info=True)
+                # Publish truth for THIS tick without a hardware release or plan
+                # reset: the inverter never engaged, so setpoint 0 + PASSIVE is
+                # honest; self.plan stays FORCING so the next tick retries.
+                _LOGGER.error("Actuator engage_and_charge failed (FORCING path); publishing passive/0", exc_info=True)
+                _engage_failed = True
+                setpoint = 0.0
             # Mutual exclusion: export executor is skipped entirely while force-charging.
             # Release export state so we transition cleanly after force-charge ends.
             if self.export_state.engaged:
@@ -2297,6 +2303,9 @@ class Controller:
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
         solar_charge = required_kwh
         result = self._status(now, setpoint, deadline, "ok", solar_charge=solar_charge)
+        if _engage_failed:
+            # Override the published state only (self.plan intentionally left FORCING).
+            result["state"] = "passive"
         # E2: surface the live export setpoint for observability only.
         # _status publishes 0.0/"passive" because export runs in the non-FORCING
         # branch with setpoint=0.0 — state is intentionally left untouched.

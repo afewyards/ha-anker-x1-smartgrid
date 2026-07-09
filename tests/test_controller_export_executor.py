@@ -1252,3 +1252,32 @@ async def test_disabled_path_resets_export_state(monkeypatch):
     ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
     await ctrl.tick()
     assert ctrl.export_state.engaged is False
+
+
+@pytest.mark.asyncio
+async def test_forcing_engage_failure_publishes_honest_state(monkeypatch):
+    """A FORCING engage failure must publish setpoint 0 + state 'passive' for
+    THIS tick (not phantom 'forcing'+max_charge_w), WITHOUT releasing hardware
+    and WITHOUT resetting self.plan (intent retries next tick)."""
+    from custom_components.anker_x1_smartgrid.models import PlanState
+    from custom_components.anker_x1_smartgrid.controller import ControllerState
+
+    class _RaisingChargeActuator(_StubActuator):
+        async def engage_and_charge(self, setpoint_w):
+            self.calls.append(("engage_and_charge", setpoint_w))
+            raise RuntimeError("modbus busy")
+
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    hass = _StubHass()
+    act = _RaisingChargeActuator()
+    ctrl, act, _ = _make_controller(hass, actuator=act)
+    _seed_passive_inputs(hass, soc="30.0", export_price="0.10")
+    deadline = BASE + timedelta(hours=2)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", lambda *a, **k: (
+        PlanState(ControllerState.FORCING, BASE, ()), 0.0, deadline, [], "single-day", []))
+
+    result = await ctrl.tick()
+    assert result["state"] == "passive"                       # not "forcing"
+    assert result["setpoint_w"] == 0.0                        # not max_charge_w
+    assert not any(c[0] == "release_to_self" for c in act.calls)   # no hardware release
+    assert ctrl.plan.state is ControllerState.FORCING         # intent preserved for retry
