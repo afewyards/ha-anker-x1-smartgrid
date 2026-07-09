@@ -95,3 +95,11 @@ async def test_tick_exception_releases_actuator(controller, actuator):
     assert status["state"] == "failsafe"
     assert controller.export_state.engaged is False
     assert controller.plan.state.value == "passive"
+
+    # The exception path must release the tick lock: a later tick can still enter.
+    assert controller._tick_lock.locked() is False
+    async def ok():
+        return {"reason": "ok"}
+    controller._tick_impl = ok
+    result2 = await controller.tick()
+    assert result2.get("reason") != "disabled"  # actually entered (not the overlap-skip return)
