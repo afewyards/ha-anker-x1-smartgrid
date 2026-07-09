@@ -4,8 +4,11 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from .dataquality import FeatureRow
+
+_TZ_AMS = ZoneInfo("Europe/Amsterdam")
 from .hgbr import HGBRQuantileModel
 from .loadmodel import BucketedLoadModel
 
@@ -19,6 +22,8 @@ PROMOTE_MIN_IMPROVEMENT: float = 0.02
 # path (when the 24h horizon-energy MAE cannot be formed on gappy data).
 # ~7 days of hourly samples — high enough that a thin model is never promoted.
 MIN_PROMOTE_MAE_SAMPLES: int = 168
+
+MIN_HORIZON_ORIGINS_24H: int = 8
 
 
 def mae(pairs: list[tuple[float, float]]) -> float:
@@ -67,8 +72,8 @@ def _baseline_fit_hourly(hourly_rows: list[dict]) -> dict:
         load = row.get("house_load_mean")
         if ts_str is None or load is None:
             continue
-        t = datetime.fromisoformat(str(ts_str))
-        key = (t.weekday() >= 5, t.hour)
+        t_local = datetime.fromisoformat(str(ts_str)).astimezone(_TZ_AMS)
+        key = (t_local.weekday() >= 5, t_local.hour)
         acc.setdefault(key, []).append(float(load))
     return {k: sum(v) / len(v) for k, v in acc.items()}
 
@@ -95,8 +100,12 @@ def should_promote(metrics: dict | None) -> bool:
     margin = 1.0 - PROMOTE_MIN_IMPROVEMENT
     mae_ok = m_mae < b_mae * margin
 
-    # Primary gate: BOTH 24h horizon-energy AND per-step MAE clear the margin.
+    # Primary gate: BOTH 24h horizon-energy AND per-step MAE clear the margin,
+    # AND enough rolling origins produced the horizon-energy value.
     if h24 is not None and bh24 is not None:
+        n_origins = metrics.get("n_horizon_origins_24h", 0)
+        if not isinstance(n_origins, (int, float)) or n_origins < MIN_HORIZON_ORIGINS_24H:
+            return False
         return bool(h24 < bh24 * margin and mae_ok)
 
     # M3 gappy-data fallback: the 24h horizon-energy MAE could not be formed.
@@ -335,7 +344,7 @@ def walk_forward_hgbr(
                         pred_p50 = model.predict_load_w(ts, temp, fallback_w, quantile=0.5)
                         model_pairs.append((pred_p50, actual))
 
-                        base_key = (ts.weekday() >= 5, ts.hour)
+                        base_key = (ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour)
                         base_pairs.append((base.get(base_key, fallback_w), actual))
 
                         # Pinball losses — reuse the q=0.5 result already computed above
@@ -356,7 +365,7 @@ def walk_forward_hgbr(
                                 float(row["house_load_mean"]) for _, row in window
                             ) / 1000.0
                             base_kwh = sum(
-                                base.get((ts.weekday() >= 5, ts.hour), fallback_w)
+                                base.get((ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour), fallback_w)
                                 for ts, _ in window
                             ) / 1000.0
                             horizon_errs[h].append(abs(pred_kwh - act_kwh))
@@ -382,6 +391,7 @@ def walk_forward_hgbr(
             "model_rmse": rmse(model_pairs),
             "baseline_rmse": rmse(base_pairs),
             "n_test": len(model_pairs),
+            "n_horizon_origins_24h": len(horizon_errs.get(24, [])),
             "improvement_pct": improvement,
             "horizon_energy_mae_24h": _avg(horizon_errs.get(24, [])),
             "horizon_energy_mae_12h": _avg(horizon_errs.get(12, [])),

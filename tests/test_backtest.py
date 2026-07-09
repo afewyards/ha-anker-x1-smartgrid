@@ -197,6 +197,7 @@ def test_should_promote_true_when_beats_both():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 50.0,
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is True
 
@@ -208,6 +209,7 @@ def test_should_promote_false_tie_on_horizon():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 50.0,
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is False
 
@@ -219,6 +221,7 @@ def test_should_promote_false_worse_on_mae():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 200.0,
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is False
 
@@ -230,6 +233,7 @@ def test_should_promote_false_worse_on_horizon():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 50.0,
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is False
 
@@ -241,6 +245,7 @@ def test_should_promote_false_when_improvement_below_margin():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 99.5,                          # 0.5% better than 100 (< 2% margin)
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is False
 
@@ -252,8 +257,27 @@ def test_should_promote_true_when_improvement_clears_margin():
         "baseline_horizon_energy_mae_24h": 2.0,
         "model_mae": 95.0,                          # 5% better
         "baseline_mae": 100.0,
+        "n_horizon_origins_24h": 8,
     }
     assert backtest.should_promote(metrics) is True
+
+
+def test_baseline_buckets_amsterdam_local_hour():
+    """22:00 UTC in summer is 00:00 Amsterdam → weekday may advance; the baseline
+    key must use local time so it aligns with the HGBR local calendar."""
+    rows = [{"hour_ts": "2026-07-03T22:00:00+00:00", "house_load_mean": 500.0}]  # Fri 22:00Z = Sat 00:00 local
+    base = backtest._baseline_fit_hourly(rows)
+    assert (True, 0) in base            # (is_weekend=Sat, hour=0 local)
+    assert (False, 22) not in base      # NOT the raw-UTC (Fri, 22) key
+
+def test_promote_requires_min_horizon_origins():
+    """Primary 24h gate must not promote on too few rolling origins."""
+    m = {"model_mae": 1.0, "baseline_mae": 2.0,
+         "horizon_energy_mae_24h": 1.0, "baseline_horizon_energy_mae_24h": 2.0,
+         "n_horizon_origins_24h": 3}
+    assert backtest.should_promote(m) is False
+    m_ok = {**m, "n_horizon_origins_24h": 8}
+    assert backtest.should_promote(m_ok) is True
 
 
 def test_should_promote_false_for_none_dict():
