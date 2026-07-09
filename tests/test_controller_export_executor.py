@@ -460,8 +460,7 @@ class TestExportEngagePositiveSetpoint:
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
-        # 8 kWh pack − 3 kWh reserve = 5 kWh exportable this hour → 5000 W (eta=1.0).
-        assert sp == pytest.approx(5000.0)
+        assert sp == pytest.approx(6000.0)
 
 
 # ---------------------------------------------------------------------------

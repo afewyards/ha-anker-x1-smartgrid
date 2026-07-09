@@ -292,7 +292,7 @@ def test_read_efficiency_samples_filters_and_computes_residual(tmp_path):
     rec.append({"ts": "2026-07-01T00:02:00", "soc": 52.0, "batt_w": -3000.0,
                 "p1_w": 200.0, "pv_w": None, "load_w": -2800.0})
     out = rec.read_efficiency_samples()
-    assert [r["ts"] for r in out] == ["2026-07-01T00:00:00", "2026-07-01T00:02:00"]
+    assert [r["ts"] for r in out] == ["2026-07-01T00:00:00+00:00", "2026-07-01T00:02:00+00:00"]
     assert out[0]["residual_w"] == -2700.0 - 200.0 - 100.0
     assert out[1]["residual_w"] == -2800.0 - 200.0 - 0.0
     rec.close()
@@ -304,5 +304,5 @@ def test_read_efficiency_samples_since_filter(tmp_path):
         rec.append({"ts": f"2026-07-0{h+1}T00:00:00", "soc": 50.0, "batt_w": -3000.0,
                     "p1_w": 0.0, "pv_w": 0.0, "load_w": -3000.0})
     out = rec.read_efficiency_samples(since_iso="2026-07-02T00:00:00")
-    assert [r["ts"] for r in out] == ["2026-07-02T00:00:00", "2026-07-03T00:00:00"]
+    assert [r["ts"] for r in out] == ["2026-07-02T00:00:00+00:00", "2026-07-03T00:00:00+00:00"]
     rec.close()

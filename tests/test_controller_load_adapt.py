@@ -62,8 +62,8 @@ def test_ratio_produces_adaptive_wrapper():
     assert isinstance(out, AdaptivePredictor)
     assert ctl._load_adapt_ratio == pytest.approx(1.3)
     assert ctl._load_adapt_matched == 3
-    # Wrapper corrects at lead 0 relative to NOW:
-    assert out.predict(NOW, 20.0, 350.0) == pytest.approx(400.0 * 1.3)
+    # fraction=0.7 (default): 400 * (1 + 0.3*0.7) = 484
+    assert out.predict(NOW, 20.0, 350.0) == pytest.approx(484.0)
 
 
 def test_log_records_base_not_wrapped_prediction():

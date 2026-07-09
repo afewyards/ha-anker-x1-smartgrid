@@ -407,6 +407,7 @@ def test_walk_forward_hgbr_returns_same_keys_as_walk_forward():
         "n_test", "improvement_pct",
         "horizon_energy_mae_24h", "horizon_energy_mae_12h",
         "baseline_horizon_energy_mae_24h",
+        "n_horizon_origins_24h",
         "pinball_p50", "pinball_p80",
     }
     assert set(res.keys()) == expected_keys

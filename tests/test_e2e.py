@@ -67,9 +67,11 @@ async def test_e2e_low_soc_charges(hass):
     controller.enabled = True  # fresh install starts disabled (M5); e2e needs enabled
     status = await controller.tick()
     assert status["reason"] == "ok"
-    # Economic-only: cheap slot (0.05) below ceiling (0.34) → DP selects it → FORCING.
-    assert status["state"] == "forcing"
-    assert status["setpoint_w"] < 0.0  # negative = charging
+    # Economic-only: cheap slot (0.05) below ceiling (0.34) → DP selects FORCING,
+    # but engage_and_charge fails in the mock env (no HA services) so the honest-
+    # state fix (A2) publishes passive/0 instead of a phantom forcing setpoint.
+    assert status["state"] == "passive"
+    assert status["setpoint_w"] == 0.0
 
 
 async def test_e2e_high_soc_releases(hass):
