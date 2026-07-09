@@ -104,10 +104,6 @@ tag_format = "v{version}"
 commit_message = "chore(release): {version}"
 build_command = ""
 
-[tool.semantic_release.changelog]
-
-[tool.semantic_release.changelog.default_templates]
-changelog_file = ""
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "chore"]
