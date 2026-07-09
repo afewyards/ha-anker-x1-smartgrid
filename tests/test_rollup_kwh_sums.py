@@ -157,19 +157,28 @@ def test_aggregate_hour_kwh_sums_sparse_coverage_no_undercount():
     assert result["pv_kwh_sum"] == pytest.approx(0.06 * 60 / 6)   # 0.6
 
 
-def test_aggregate_hour_kwh_sums_grid_batt_sign_split_fallback():
-    """Tier 2 for grid/batt: sign-split mean of p1_w/batt_w computed inline
-    (import=+p1, export=-p1; discharge=+batt, charge=-batt)."""
+def test_aggregate_hour_grid_batt_kwh_sums_none_when_all_null():
+    """Tier-2 sign-split DROPPED: all-NULL-tick grid/batt kwh_sums are None (the
+    columns are unconsumed in production; mean-then-split zeroed oscillating hours)."""
     rows = [
         {"ts": "2026-07-06T10:00:00+00:00", "p1_w": -600.0, "batt_w": -400.0},
         {"ts": "2026-07-06T10:30:00+00:00", "p1_w": -400.0, "batt_w": -800.0},
     ]
-    # p1_mean = -500 (net export); batt_mean = -600 (net charge).
     result = aggregate_hour(rows)
-    assert result["grid_import_kwh_sum"] == pytest.approx(0.0)
-    assert result["grid_export_kwh_sum"] == pytest.approx(500.0 / 1000.0)
-    assert result["batt_charge_kwh_sum"] == pytest.approx(600.0 / 1000.0)
-    assert result["batt_discharge_kwh_sum"] == pytest.approx(0.0)
+    assert result["grid_import_kwh_sum"] is None
+    assert result["grid_export_kwh_sum"] is None
+    assert result["batt_charge_kwh_sum"] is None
+    assert result["batt_discharge_kwh_sum"] is None
+
+
+def test_tier2_house_load_and_pv_keep_mean_over_1000():
+    rows = [
+        {"ts": "2026-07-06T10:00:00+00:00", "load_w": 300.0, "pv_w": 200.0},
+        {"ts": "2026-07-06T10:01:00+00:00", "load_w": 300.0, "pv_w": 200.0},
+    ]  # no *_kwh ticks → tier-2 path; house_load/pv unchanged
+    r = aggregate_hour(rows)
+    assert r["house_load_kwh_sum"] == pytest.approx(0.3)   # 300 W mean / 1000
+    assert r["pv_kwh_sum"] == pytest.approx(0.2)           # 200 W mean / 1000
 
 
 def test_aggregate_hour_kwh_sums_all_none_when_no_data():

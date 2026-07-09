@@ -172,10 +172,11 @@ def _kwh_sum_pass(rows: list[dict], result: dict) -> None:
 
     Tier 2 (approximate, for pre-v9 rows where every tick is NULL): fall back
     to ``mean_watts × 1h / 1000``. house_load/pv reuse the stats already
-    computed in ``result``; grid import/export and battery charge/discharge
-    need a sign-split mean of ``p1_w``/``batt_w`` that isn't a rollup
-    feature, so it's computed inline here only (decision: not promoted to
-    ``_ROLLUP_FEATURES`` — these raw power means aren't useful ML inputs).
+    computed in ``result``. Grid import/export and battery charge/discharge
+    have NO tier-2 fallback — the sign-split mean of ``p1_w``/``batt_w`` was
+    removed because these four columns are unconsumed in production, and
+    averaging before sign-splitting zeroed oscillating import/export hours.
+    They stay ``None`` when tier-1 yields no data.
     """
     n_rows = len(rows)
     for col in _ENERGY_KWH_COLUMNS:
@@ -196,29 +197,7 @@ def _kwh_sum_pass(rows: list[dict], result: dict) -> None:
         mean = result.get("pv_w_mean")
         result["pv_kwh_sum"] = None if mean is None else mean / 1000.0
 
-    if result["grid_import_kwh_sum"] is None or result["grid_export_kwh_sum"] is None:
-        p1_values = [row["p1_w"] for row in rows if row.get("p1_w") is not None]
-        p1_mean = sum(p1_values) / len(p1_values) if p1_values else None
-        if result["grid_import_kwh_sum"] is None:
-            result["grid_import_kwh_sum"] = (
-                None if p1_mean is None else max(0.0, p1_mean) / 1000.0
-            )
-        if result["grid_export_kwh_sum"] is None:
-            result["grid_export_kwh_sum"] = (
-                None if p1_mean is None else max(0.0, -p1_mean) / 1000.0
-            )
-
-    if (
-        result["batt_charge_kwh_sum"] is None
-        or result["batt_discharge_kwh_sum"] is None
-    ):
-        batt_values = [row["batt_w"] for row in rows if row.get("batt_w") is not None]
-        batt_mean = sum(batt_values) / len(batt_values) if batt_values else None
-        if result["batt_charge_kwh_sum"] is None:
-            result["batt_charge_kwh_sum"] = (
-                None if batt_mean is None else max(0.0, -batt_mean) / 1000.0
-            )
-        if result["batt_discharge_kwh_sum"] is None:
-            result["batt_discharge_kwh_sum"] = (
-                None if batt_mean is None else max(0.0, batt_mean) / 1000.0
-            )
+    # Tier-2 sign-split DROPPED for grid import/export and battery charge/discharge:
+    # these four *_kwh_sum columns are unconsumed in production, and averaging
+    # p1_w/batt_w before the sign-split zeroed oscillating import/export hours.
+    # Leave them None (already set by the tier-1 loop above when all ticks NULL).
