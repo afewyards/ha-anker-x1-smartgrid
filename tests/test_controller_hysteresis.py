@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
     Config, ControllerState, PlanState, PlantInputs, PriceSlot,
@@ -44,20 +46,23 @@ def test_current_hour_decision_held_within_deadband():
     now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
-    # Previously committed to ~0 charge this hour. A tiny DP change must not flip it.
     plan = PlanState(ControllerState.PASSIVE, now, (), committed_charge_kwh=0.0)
-    out: dict = {}
-    new_plan, *_ = ctrl.compute_decision(
-        plan=plan,
-        inputs=PlantInputs(soc=88.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
-        slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-        predictor=_FlatPredictor(), cur_temp=10.0,
-        cfg=Config(end_soc_deadband=0.25),
-        _out=out,
-    )
-    # committed_charge_kwh persists and stays near the held value.
-    assert hasattr(new_plan, "committed_charge_kwh")
-    assert new_plan.committed_charge_kwh <= 0.25
+    # Fresh DP wants a small nonzero current-hour charge INSIDE the deadband; the
+    # hold must keep the prior commit (0.0), not adopt the fresh 0.15 delta.
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+        return_value={"schedule": [0.15] + [0.0] * 14, "kwh": 0.15, "eur": 0.0,
+                      "export_schedule": [0.0] * 15},
+    ):
+        new_plan, *_ = ctrl.compute_decision(
+            plan=plan,
+            inputs=PlantInputs(soc=88.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(), cur_temp=10.0,
+            cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
+            _out={},
+        )
+    assert new_plan.committed_charge_kwh == pytest.approx(0.0)   # held prior, not 0.15
 
 
 def test_committed_export_hour_not_force_charged():
