@@ -37,6 +37,10 @@ _UNSET = object()
 # discretisation (BIN_KWH ≈ 0.05 kWh) and are treated as zero charge.
 _DP_EPSILON_SCHEDULE_KWH = 0.01
 
+# Bounded wait for the tick lock during unload/reload so release()/recorder.close
+# never interleave with an in-flight tick's engage_*; unblocks if a tick wedges.
+_SHUTDOWN_LOCK_TIMEOUT_S = 15.0
+
 # NOTE: the regret.py oracle has NO charge band — optimize-vs-oracle parity runs
 # with chargeable=None — so this look-back is intentionally controller-only and is
 # NOT mirrored into regret.py/pricing_store.py (unlike the export peak band).
@@ -2776,11 +2780,31 @@ class Controller:
         return self.last_status
 
     async def release(self) -> None:
-        """Release actuator control back to self (best-effort; never raises)."""
+        """Release actuator control back to self (best-effort; never raises).
+
+        Waited behind the tick lock (bounded by _SHUTDOWN_LOCK_TIMEOUT_S) so an
+        unload/reload cannot interleave the release with an in-flight tick's
+        engage_* calls, and so __init__.async_unload_entry's recorder.close runs
+        only after the in-flight tick's awaited recorder writes have drained.
+        """
+        acquired = False
+        try:
+            await asyncio.wait_for(
+                self._tick_lock.acquire(), timeout=_SHUTDOWN_LOCK_TIMEOUT_S
+            )
+            acquired = True
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — never block teardown
+            _LOGGER.warning(
+                "release: tick lock not acquired within %ss; releasing anyway",
+                _SHUTDOWN_LOCK_TIMEOUT_S,
+            )
         try:
             await self._actuator.release_to_self()
         except Exception:
             _LOGGER.warning("release_to_self failed during controller release", exc_info=True)
+        finally:
+            if acquired:
+                self._tick_lock.release()
 
     async def _persist(self) -> None:
         await self._store.async_save({

@@ -58,6 +58,27 @@ async def test_overlapping_tick_is_skipped(controller):
     assert await t1 == {"state": "slow"}
 
 @pytest.mark.asyncio
+async def test_release_waits_for_in_flight_tick(controller, actuator):
+    """release() must not release_to_self until an in-flight tick (holding the
+    tick lock) completes — otherwise a reload interleaves release with engage_*."""
+    gate = asyncio.Event()
+    async def slow_impl():
+        await gate.wait()
+        return {"state": "slow"}
+    controller._tick_impl = slow_impl
+    t1 = asyncio.create_task(controller.tick())
+    await asyncio.sleep(0)                     # let t1 acquire the tick lock
+    rel = asyncio.create_task(controller.release())
+    await asyncio.sleep(0)
+    assert actuator.release_calls == 0         # release is blocked behind the lock
+    gate.set()
+    await t1
+    await rel
+    assert actuator.release_calls == 1         # released only after the tick finished
+    assert controller._tick_lock.locked() is False
+
+
+@pytest.mark.asyncio
 async def test_tick_exception_releases_actuator(controller, actuator):
     async def boom():
         raise RuntimeError("malformed forecast")
