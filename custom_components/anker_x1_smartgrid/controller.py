@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib.util
 import json
 import logging
@@ -1673,19 +1674,22 @@ class Controller:
             _shadow_dp_out: dict = {}
             if inputs is not None and slots and sunset is not None and pv_remaining is not None:
                 try:
-                    shadow_plan, _, shadow_deadline, _, _shadow_hm, _ = compute_decision(
-                        _prev_plan, inputs, slots, pv_remaining, sunset,
-                        self.predictor, cur_temp, self.cfg,
-                        tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
-                        today_watts=today_watts,
-                        tomorrow_watts=tomorrow_watts,
-                        export_price=_shadow_export_price,
-                        _out=_shadow_dp_out,
-                        _shadow_dp=True,
-                        export_price_matches_import=_shadow_export_matches_import,
-                        temp_by_hour=_temp_by_hour,
-                        slot_minutes=_slot_minutes,
-                        eta_curve=self._planner_curve(),
+                    shadow_plan, _, shadow_deadline, _, _shadow_hm, _ = await self._hass.async_add_executor_job(
+                        functools.partial(
+                            compute_decision,
+                            _prev_plan, inputs, slots, pv_remaining, sunset,
+                            self.predictor, cur_temp, self.cfg,
+                            tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
+                            today_watts=today_watts,
+                            tomorrow_watts=tomorrow_watts,
+                            export_price=_shadow_export_price,
+                            _out=_shadow_dp_out,
+                            _shadow_dp=True,
+                            export_price_matches_import=_shadow_export_matches_import,
+                            temp_by_hour=_temp_by_hour,
+                            slot_minutes=_slot_minutes,
+                            eta_curve=self._planner_curve(),
+                        )
                     )
                 except Exception:
                     _LOGGER.warning("Shadow compute_decision failed (disabled path)", exc_info=True)
@@ -1972,21 +1976,24 @@ class Controller:
                 )
                 hedge_drain_by_hour = {_trough_h: _hedge}
 
-        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = compute_decision(
-            self.plan, inputs, slots, pv_remaining, sunset,
-            _plan_predictor, cur_temp, self.cfg,
-            tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
-            today_watts=today_watts,
-            tomorrow_watts=tomorrow_watts,
-            export_price=_export_price,
-            _out=_dp_out,
-            export_price_matches_import=_export_matches_import,
-            estimated_tomorrow=_estimated_tomorrow,
-            temp_by_hour=_temp_by_hour,
-            past_actuals_by_hour=past_actuals,
-            hedge_drain_by_hour=hedge_drain_by_hour,
-            slot_minutes=_slot_minutes,
-            eta_curve=self._planner_curve(),
+        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._hass.async_add_executor_job(
+            functools.partial(
+                compute_decision,
+                self.plan, inputs, slots, pv_remaining, sunset,
+                _plan_predictor, cur_temp, self.cfg,
+                tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
+                today_watts=today_watts,
+                tomorrow_watts=tomorrow_watts,
+                export_price=_export_price,
+                _out=_dp_out,
+                export_price_matches_import=_export_matches_import,
+                estimated_tomorrow=_estimated_tomorrow,
+                temp_by_hour=_temp_by_hour,
+                past_actuals_by_hour=past_actuals,
+                hedge_drain_by_hour=hedge_drain_by_hour,
+                slot_minutes=_slot_minutes,
+                eta_curve=self._planner_curve(),
+            )
         )
         # Cache P50 intervals for next tick's drift accumulator step (only when hedging
         # is enabled; off→on toggle leaves it None so the H1 gate fires on the first
