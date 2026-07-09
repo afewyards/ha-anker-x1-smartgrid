@@ -94,7 +94,7 @@ def _call_dp(
     """
     n = len(prices)
     deadline = now + timedelta(hours=n)
-    inputs = PlantInputs(soc=soc, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=soc, meter_w=0.0, now=now)
     charge_schedule = schedule if schedule is not None else [0.0] * n
     mock_result = {
         "schedule": charge_schedule,
@@ -428,7 +428,7 @@ def test_real_dp_submin_dribble_dropped():
             export_peak_lookback_h=4,
             export_min_block_kwh=export_min_block_kwh,
         )
-        inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+        inputs = PlantInputs(soc=20.0, meter_w=0.0, now=now)
         return _dp_select_slots(
             inputs=inputs,
             slots=slots,

@@ -1,6 +1,16 @@
 """Unit tests for controller status sensors."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from homeassistant.components.sensor import SensorStateClass
+
+from custom_components.anker_x1_smartgrid import const
+from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+from custom_components.anker_x1_smartgrid.controller import Controller
+
 
 def test_export_setpoint_sensor_reads_key():
     from custom_components.anker_x1_smartgrid.sensor import X1ExportSetpointSensor
@@ -10,3 +20,320 @@ def test_export_setpoint_sensor_reads_key():
 
     s = X1ExportSetpointSensor(_C(), "e")
     assert s.native_value == 1500.0
+
+
+# ---------------------------------------------------------------------------
+# T16/T22: house load sensor — event-driven, reads live HA state directly
+# (not last_status / the 60s controller tick).
+# ---------------------------------------------------------------------------
+
+_PV_ENT = "sensor.pv_power"
+_METER_ENT = "sensor.meter_power"
+_BATT_ENT = "sensor.battery_power"
+_LOSS_ENT = "sensor.inverter_loss"
+
+
+class _StubController:
+    last_status: dict = {}
+
+
+def _seed_house_load_states(hass, *, pv="1200.0", meter="100.0", batt="-500.0", loss="30.0"):
+    hass.set_state(_PV_ENT, pv)
+    hass.set_state(_METER_ENT, meter)
+    hass.set_state(_BATT_ENT, batt)
+    hass.set_state(_LOSS_ENT, loss)
+
+
+def _make_house_load_sensor(hass):
+    from custom_components.anker_x1_smartgrid.sensor import X1HouseLoadSensor
+
+    s = X1HouseLoadSensor(_StubController(), "e", _PV_ENT, _METER_ENT, _BATT_ENT, _LOSS_ENT)
+    s.hass = hass
+    return s
+
+
+def test_house_load_sensor_unique_id_and_attrs():
+    s = _make_house_load_sensor(_StubHass())
+    assert s._attr_unique_id == "anker_x1_smartgrid_house_load_w"
+    assert s._attr_native_unit_of_measurement == "W"
+    assert s._attr_state_class == SensorStateClass.MEASUREMENT
+    assert s._attr_should_poll is False
+
+
+def test_house_load_sensor_recomputes_without_controller_tick():
+    """Value tracks live source-entity state directly on _recompute() calls
+    -- no controller tick / last_status involved at all."""
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass)
+
+    s._recompute()
+    assert s.native_value == 1200.0 + 100.0 + (-500.0) - 30.0
+
+    # A source entity changes -- mirrors what the state-change event handler
+    # observes -- and the recomputed value reflects it immediately.
+    hass.set_state(_PV_ENT, "1500.0")
+    s._recompute()
+    assert s.native_value == 1500.0 + 100.0 + (-500.0) - 30.0
+
+
+@pytest.mark.parametrize("entity", [_PV_ENT, _METER_ENT, _BATT_ENT])
+def test_house_load_sensor_any_of_pv_meter_batt_unavailable_is_none(entity):
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass)
+    hass.set_state(entity, "unavailable")
+
+    s._recompute()
+
+    assert s.native_value is None
+
+
+def test_house_load_sensor_loss_unavailable_treated_as_zero():
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass)
+    hass.set_state(_LOSS_ENT, "unavailable")
+
+    s._recompute()
+
+    assert s.native_value == 1200.0 + 100.0 + (-500.0) - 0.0
+
+
+def test_house_load_sensor_clamped_at_zero():
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass, pv="0.0", meter="0.0", batt="-2000.0", loss="0.0")
+
+    s._recompute()
+
+    assert s.native_value == 0.0
+
+
+def test_house_load_sensor_none_before_any_recompute():
+    """Mirrors sibling last_status keys pre-tick: None until first computed."""
+    s = _make_house_load_sensor(_StubHass())
+    assert s.native_value is None
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_subscribes_on_added_to_hass(monkeypatch):
+    """async_added_to_hass wires a state-change subscription on all 4 source
+    entities and primes the value at add time -- so the sensor is live from
+    startup without waiting for the first controller tick."""
+    from custom_components.anker_x1_smartgrid import sensor as sensor_mod
+
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass)
+
+    captured = {}
+
+    def _fake_track(hass_arg, entity_ids, action):
+        captured["hass"] = hass_arg
+        captured["entity_ids"] = list(entity_ids)
+        captured["action"] = action
+        return lambda: None  # unsub
+
+    monkeypatch.setattr(sensor_mod, "async_track_state_change_event", _fake_track)
+
+    await s.async_added_to_hass()
+
+    assert captured["hass"] is hass
+    assert captured["entity_ids"] == [_PV_ENT, _METER_ENT, _BATT_ENT, _LOSS_ENT]
+    # Primed at add time -- no controller tick required.
+    assert s.native_value == 1200.0 + 100.0 + (-500.0) - 30.0
+
+    # Firing the captured handler (the state-change callback) recomputes and
+    # writes state, mirroring a live HA state-changed event.
+    written = []
+    monkeypatch.setattr(s, "async_write_ha_state", lambda: written.append(True))
+    hass.set_state(_PV_ENT, "1800.0")
+    captured["action"](None)
+
+    assert s.native_value == 1800.0 + 100.0 + (-500.0) - 30.0
+    assert written == [True]
+
+
+# ---------------------------------------------------------------------------
+# T16: controller tick() publishes the computed house load into last_status
+# ---------------------------------------------------------------------------
+
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+
+
+class _StubActuator:
+    last_setpoint_w = 0.0
+    engaged: bool = False
+
+    async def engage_and_charge(self, w):
+        pass
+
+    async def release_to_self(self):
+        pass
+
+
+class _StubStore:
+    async def async_save(self, data):
+        pass
+
+
+class _StubRecorder:
+    """Minimal recorder stub — returns empty data on all read paths."""
+
+    def append(self, row):
+        pass
+
+    def append_decision(self, **kwargs):
+        pass
+
+    def purge_older_than(self, ts, days):
+        pass
+
+    def purge_decisions_older_than(self, cutoff):
+        pass
+
+    def rollup_hours(self, now_iso):
+        return 0
+
+    def purge_hourly_older_than(self, cutoff):
+        return 0
+
+    def wal_checkpoint(self) -> None:
+        pass
+
+    def read_load_samples(self, since_iso=None):
+        return []
+
+    def read_persons_home_samples(self, since_iso=None):
+        return []
+
+    def read_feature_rows(self, since_iso=None):
+        return []
+
+    def read_hourly_rows(self, since_iso=None):
+        return []
+
+    def upsert_daily_regret(self, **kwargs):
+        pass
+
+    def read_latest_daily_regret(self):
+        return None
+
+    def read_daily_regret_range(self, *a, **kw):
+        return []
+
+    def read_decisions(self, *a, **kw):
+        return []
+
+
+class _StubHass:
+    """Minimal hass stub with a state registry."""
+
+    def __init__(self):
+        self._states = {}
+
+    class _StateObj:
+        def __init__(self, state, attributes=None):
+            self.state = state
+            self.attributes = attributes or {}
+
+    def set_state(self, entity_id, state, attributes=None):
+        self._states[entity_id] = self._StateObj(state, attributes)
+
+    class _States:
+        def __init__(self, parent):
+            self._parent = parent
+
+        def get(self, entity_id):
+            return self._parent._states.get(entity_id)
+
+    @property
+    def states(self):
+        return self._States(self)
+
+    async def async_add_executor_job(self, fn, *args):
+        return fn(*args)
+
+
+def _make_controller(hass):
+    """Build a Controller with minimal data config (meter-power topology)."""
+    data = {
+        const.CONF_ENT_SOC: "sensor.soc",
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
+        const.CONF_ENT_PRICE: "sensor.price",
+        const.CONF_ENT_PV_TODAY: [],
+        const.CONF_ENT_PV_TOMORROW: [],
+        const.CONF_ENT_SUN: "sun.sun",
+        const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
+        const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
+        const.CONF_ENT_SETPOINT: "number.setpoint",
+        const.CONF_ENT_ENGAGE: "switch.engage",
+        const.CONF_ENT_WORKMODE: "select.workmode",
+        const.CONF_ENT_IRRADIANCE: "sensor.irradiance",
+        const.CONF_ENT_TEMP: "weather.home",
+    }
+    act = _StubActuator()
+    rec = _StubRecorder()
+    ctrl = Controller(
+        hass=hass,
+        data=data,
+        recorder=rec,
+        actuator=act,
+        store=_StubStore(),
+    )
+    return ctrl, act
+
+
+def _seed_valid_inputs(hass, *, soc="20.0"):
+    """Seed HA states so read_plant_inputs succeeds and tick() reaches "ok"."""
+    hass.set_state("sensor.soc", soc)
+    hass.set_state("sensor.meter_power", "100.0")
+    sunset_iso = (BASE + timedelta(hours=8)).isoformat()
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
+    hass.set_state("sensor.price", "0.05", {
+        "forecast": [
+            {
+                "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                "electricity_price": int(0.05 * const.PRICE_SCALE),
+            }
+            for i in range(9)
+        ]
+    })
+    hass.set_state("sensor.pv_power", "1200.0")
+    hass.set_state("sensor.battery_power", "-500.0")
+    hass.set_state("sensor.inverter_loss", "30.0")
+    hass.set_state("sensor.irradiance", "350.0")
+    hass.set_state("weather.home", "cloudy", {"temperature": 18.5})
+
+
+@pytest.mark.asyncio
+async def test_tick_publishes_computed_house_load_into_last_status(monkeypatch):
+    """After a successful ("ok") tick, last_status["house_load_w"] equals the
+    live per-tick house-load compute: pv + meter_w + batt − inverter_loss."""
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    hass = _StubHass()
+    ctrl, _act = _make_controller(hass)
+    _seed_valid_inputs(hass, soc="20.0")
+
+    result = await ctrl.tick()
+
+    assert result["reason"] == "ok"
+    expected = 1200.0 + 100.0 + (-500.0) - 30.0
+    assert result["house_load_w"] == expected
+    assert ctrl.last_status.get("house_load_w") == expected
+
+
+@pytest.mark.asyncio
+async def test_tick_house_load_absent_before_any_successful_compute():
+    """Mirrors sibling keys (e.g. export_setpoint_w): the failsafe tick path
+    never computes house load, so the key is absent from last_status."""
+    hass = _StubHass()
+    ctrl, _act = _make_controller(hass)
+    # sensor.soc left un-seeded → read_plant_inputs returns None → failsafe path.
+
+    result = await ctrl.tick()
+
+    assert result["reason"] == "failsafe"
+    assert ctrl.last_status.get("house_load_w") is None

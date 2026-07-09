@@ -139,17 +139,14 @@ def _make_controller(hass, actuator=None, data_overrides=None):
     """Build a Controller with minimal data config."""
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: [
-            "sensor.phase_l1",
-            "sensor.phase_l2",
-            "sensor.phase_l3",
-        ],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -173,9 +170,7 @@ def _make_controller(hass, actuator=None, data_overrides=None):
 def _seed_valid_inputs(hass, *, soc="20.0"):
     """Seed HA states so read_plant_inputs succeeds."""
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.phase_l1", "0.0")
-    hass.set_state("sensor.phase_l2", "0.0")
-    hass.set_state("sensor.phase_l3", "0.0")
+    hass.set_state("sensor.meter_power", "0.0")
     # Price with a forecast attribute so parse_price_curve gets called
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
@@ -319,7 +314,7 @@ def _slots(prices):
 def test_decision_forces_when_deficit_and_cheap_now():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0,
                  min_dwell_min=0, max_charge_w=6000.0)
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
@@ -335,7 +330,7 @@ def test_decision_forces_when_deficit_and_cheap_now():
 
 def test_decision_passive_when_solar_covers():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0, min_dwell_min=0)
-    inputs = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=80.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05] * 9)
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
@@ -349,7 +344,7 @@ def test_decision_passive_when_solar_covers():
 
 def test_decision_passive_high_soc():
     cfg = Config(soc_target=97.0, min_dwell_min=0)
-    inputs = PlantInputs(soc=96.5, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=96.5, meter_w=0.0, now=BASE)
     slots = _slots([0.05] * 9)
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
@@ -632,7 +627,7 @@ def test_compute_decision_horizon_spans_two_days_when_sun_times_present():
     from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 
     now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
-    inputs = PlantInputs(50.0, (0.0, 0.0, 0.0), now)
+    inputs = PlantInputs(50.0, 0.0, now)
     # 30 hourly slots from now → into tomorrow afternoon
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sunset = datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc)
@@ -662,7 +657,7 @@ def test_compute_decision_horizon_spans_two_days_when_sun_times_present():
 def test_compute_decision_display_horizon_shoulder_lift_with_arrays():
     """Display horizon via compute_decision with E/W tomorrow_arrays shows shoulder lift."""
     now = datetime(2026, 6, 20, 23, 0, tzinfo=timezone.utc)  # night
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
     # 30 slots — covers tomorrow daytime
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sunset = now + timedelta(hours=1)  # minimal today window → deadline ≈ now + 1h
@@ -1519,13 +1514,14 @@ async def test_purge_block_purges_decisions(monkeypatch):
     rec = _PurgingRecorder()
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: ["sensor.phase_l1", "sensor.phase_l2", "sensor.phase_l3"],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -1570,7 +1566,7 @@ def test_compute_decision_display_uses_p50():
     The deficit return slot was removed entirely in Task 3.  The display horizon
     must still reflect P50 loads (200 W), not the P80 value.
     """
-    inputs = PlantInputs(soc=0.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=0.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05] * 10)
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
@@ -1646,19 +1642,19 @@ async def test_tick_disabled_engaged_releases_once_then_stops():
 
 
 # ---------------------------------------------------------------------------
-# T5 — controller records load_w from sensor.power_usage each tick
+# T5 — controller computes load_w = pv + meter_w + batt - inverter_loss each tick
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_record_sample_stores_load_w_from_house_load_entity():
-    """When sensor.power_usage is available, appended row["load_w"] == its float value."""
+async def test_record_sample_computes_load_w_from_pv_meter_batt():
+    """load_w is computed live each tick: pv + meter_w (signed net grid) + batt
+    (loss omitted here — its sensor is unavailable, defaults to 0.0)."""
     hass = _StubHass()
-    ctrl, _ = _make_controller(
-        hass,
-        data_overrides={const.CONF_ENT_HOUSE_LOAD: "sensor.power_usage"},
-    )
+    ctrl, _ = _make_controller(hass)
     _seed_valid_inputs(hass)
-    hass.set_state("sensor.power_usage", "210.0")
+    hass.set_state("sensor.pv_power", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.meter_power", "210.0")
 
     await ctrl.tick()
 
@@ -1692,43 +1688,77 @@ async def test_record_sample_stores_persons_home_count():
     )
 
 
-@pytest.mark.asyncio
-async def test_record_sample_stores_none_load_w_when_entity_unavailable():
-    """When house-load entity is unavailable, load_w is None and tick does not crash."""
+def test_compute_house_load_w_falls_back_to_cache_when_pv_unavailable():
+    """_compute_house_load_w skips the compute and returns the cached last-known
+    value (N2) when pv is unavailable, instead of crashing or returning None.
+    On a fresh controller with no prior successful compute, the cache starts
+    at 0.0."""
     hass = _StubHass()
-    ctrl, _ = _make_controller(
-        hass,
-        data_overrides={const.CONF_ENT_HOUSE_LOAD: "sensor.power_usage"},
+    ctrl, _ = _make_controller(hass)
+    hass.set_state("sensor.pv_power", "unavailable")
+    hass.set_state("sensor.battery_power", "-500.0")
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=BASE)
+
+    result = ctrl._compute_house_load_w(inputs)
+
+    assert result == pytest.approx(0.0), (
+        f"Expected cached fallback 0.0 when pv unavailable, got {result}"
     )
+
+
+@pytest.mark.asyncio
+async def test_record_sample_subtracts_inverter_loss_when_available():
+    """When the inverter-loss entity reports a value, it is subtracted from the
+    computed load_w (pv + meter_w + batt - loss)."""
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
     _seed_valid_inputs(hass)
-    # Do NOT set sensor.power_usage → unavailable → None
+    hass.set_state("sensor.pv_power", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.meter_power", "350.0")
+    hass.set_state("sensor.inverter_loss", "20.0")
 
     await ctrl.tick()
 
     rec = ctrl._recorder
     assert len(rec.rows) >= 1, "expected at least one appended row"
     last_row = rec.rows[-1]
-    assert last_row["load_w"] is None, (
-        f"Expected load_w=None when entity unavailable, got {last_row.get('load_w')}"
+    assert last_row["load_w"] == pytest.approx(330.0), (
+        f"Expected load_w=330.0 (350 meter - 20 inverter loss), got {last_row.get('load_w')}"
+    )
+
+
+def test_compute_house_load_w_reuses_cache_across_calls_when_batt_unavailable():
+    """After a successful compute, a subsequent call with batt unavailable reuses
+    the cached value from the last successful compute instead of resetting."""
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    hass.set_state("sensor.pv_power", "100.0")
+    hass.set_state("sensor.battery_power", "50.0")
+    hass.set_state("sensor.meter_power", "250.0")
+    inputs = PlantInputs(soc=50.0, meter_w=250.0, now=BASE)
+
+    first = ctrl._compute_house_load_w(inputs)
+    assert first == pytest.approx(400.0)  # 100 pv + 250 meter + 50 batt - 0 loss
+
+    hass.set_state("sensor.battery_power", "unavailable")
+    second = ctrl._compute_house_load_w(inputs)
+    assert second == pytest.approx(400.0), (
+        f"Expected cached load_w=400.0 reused when batt unavailable, got {second}"
     )
 
 
 @pytest.mark.asyncio
-async def test_record_sample_uses_default_house_load_entity_when_conf_absent():
-    """When CONF_ENT_HOUSE_LOAD is absent from config data, controller falls back to
-    DEFAULT_ENT_HOUSE_LOAD ("sensor.power_usage") and records a non-null load_w.
-
-    This is the regression test for the v6 upgrade bug: existing config entries that
-    were created before ent_house_load was added have no key in their data dict, so
-    self._data.get(CONF_ENT_HOUSE_LOAD) returns None, which suppresses the sensor read
-    and leaves load_w NULL forever. The fix is to apply the default at read-time.
-    """
+async def test_record_sample_loss_defaults_to_zero_when_unavailable():
+    """When the inverter-loss sensor is unavailable, loss defaults to 0.0 rather
+    than suppressing the computed load_w."""
     hass = _StubHass()
-    # No CONF_ENT_HOUSE_LOAD in data_overrides — simulates a pre-v6 config entry
     ctrl, _ = _make_controller(hass)
     _seed_valid_inputs(hass)
-    # The default entity (sensor.power_usage) is alive with a known value
-    hass.set_state("sensor.power_usage", "350.0")
+    hass.set_state("sensor.pv_power", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.meter_power", "350.0")
+    # Do NOT set sensor.inverter_loss → unavailable → treated as 0.0
 
     await ctrl.tick()
 
@@ -1736,49 +1766,7 @@ async def test_record_sample_uses_default_house_load_entity_when_conf_absent():
     assert len(rec.rows) >= 1, "expected at least one appended row"
     last_row = rec.rows[-1]
     assert last_row["load_w"] == pytest.approx(350.0), (
-        f"Expected load_w=350.0 via DEFAULT_ENT_HOUSE_LOAD fallback, "
-        f"got {last_row.get('load_w')}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_record_sample_stores_none_load_w_when_conf_absent_and_sensor_unavailable():
-    """When CONF_ENT_HOUSE_LOAD is absent and sensor.power_usage is unavailable,
-    load_w is still None — the default is applied but the sensor read returns None."""
-    hass = _StubHass()
-    # No CONF_ENT_HOUSE_LOAD in data_overrides → uses DEFAULT_ENT_HOUSE_LOAD
-    ctrl, _ = _make_controller(hass)
-    _seed_valid_inputs(hass)
-    # Do NOT seed sensor.power_usage → unavailable → read_float returns None
-
-    await ctrl.tick()
-
-    rec = ctrl._recorder
-    assert len(rec.rows) >= 1, "expected at least one appended row"
-    last_row = rec.rows[-1]
-    assert last_row["load_w"] is None, (
-        f"Expected load_w=None when default entity is unavailable, "
-        f"got {last_row.get('load_w')}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_record_sample_stores_none_load_w_when_conf_empty_string():
-    """When CONF_ENT_HOUSE_LOAD is an empty string, load_w is None (treated as unset)."""
-    hass = _StubHass()
-    ctrl, _ = _make_controller(
-        hass,
-        data_overrides={const.CONF_ENT_HOUSE_LOAD: ""},  # empty string → treat as absent
-    )
-    _seed_valid_inputs(hass)
-
-    await ctrl.tick()
-
-    rec = ctrl._recorder
-    assert len(rec.rows) >= 1, "expected at least one appended row"
-    last_row = rec.rows[-1]
-    assert last_row["load_w"] is None, (
-        f"Expected load_w=None when conf is empty string, got {last_row.get('load_w')}"
+        f"Expected load_w=350.0 (loss defaults to 0.0), got {last_row.get('load_w')}"
     )
 
 

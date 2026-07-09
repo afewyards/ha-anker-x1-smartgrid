@@ -8,7 +8,7 @@ BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
 
 def test_compute_decision_returns_horizon():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0, min_dwell_min=0)
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = [PriceSlot(BASE + timedelta(hours=i), 0.30) for i in range(6)]
     sunset = BASE + timedelta(hours=6)
     predictor = forecast.LoadPredictor.from_profile({})
@@ -66,7 +66,7 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
         max_export_w=3000.0, grid_export_limit_w=6000.0,
         min_dwell_min=0,
     )
-    inputs = PlantInputs(soc=90.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=90.0, meter_w=0.0, now=BASE)
     predictor = forecast.LoadPredictor.from_profile({})
     plan_state = PlanState.initial(BASE - timedelta(hours=1))
 
@@ -131,7 +131,7 @@ def test_compute_decision_forwards_temp_by_hour_to_display_horizon(monkeypatch):
         BASE + timedelta(hours=18),   # tomorrow_sunrise
         BASE + timedelta(hours=32),   # tomorrow_sunset
     )
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=BASE)
     predictor = forecast.LoadPredictor.from_profile({})
     plan_state = PlanState.initial(BASE - timedelta(hours=1))
     temp_by_hour = {

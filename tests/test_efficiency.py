@@ -1,8 +1,19 @@
 import math
 from datetime import datetime, timedelta
 
+import pytest
+
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, segment_episodes, run_eta
+
+# NOTE: run_eta (and, transitively, EfficiencyCurve.build) is gated off — see
+# efficiency.py's module docstring. Since the meter/house-load refactor,
+# load_w is a COMPUTED value (pv + meter + batt - loss), so the AC residual
+# it feeds the measured-efficiency fit is no longer independent of batt_w;
+# run_eta now always returns None regardless of input. Tests below that
+# exercised the (now-unreachable) deep computation are skip-marked rather
+# than deleted, so the original math is still documented/discoverable for a
+# future re-enable; the gate itself is asserted directly.
 
 
 def _charge_run(t0: datetime, resid_w: float = 10000.0):
@@ -97,31 +108,46 @@ def _run(soc0, soc1, resid_w, n=4, step_s=60):
     ]
 
 
-def test_charge_run_eta_below_one():
+def test_run_eta_gated_off_returns_none_for_previously_valid_run():
+    """run_eta is gated off (measured-eta pipeline) — see efficiency.py's
+    module docstring: load_w is now computed, so the AC residual is no
+    longer independent of batt_w. This run's inputs would previously have
+    produced a confident eta (~0.96, inside the plausibility envelope);
+    the gate must still return None. (was: test_charge_run_eta_below_one)
+    """
     cfg = Config(capacity_kwh=10.0)
     run = [
         {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 + 2 * i, "batt_w": -13000, "residual_w": -13000}
         for i in range(4)
     ]
-    res = run_eta(run, cfg)
-    assert res is not None and res.direction == "charge"
-    assert 0.50 <= res.eta <= 1.02
-    assert res.dc_power_w > 0
+    assert run_eta(run, cfg) is None
 
 
+@pytest.mark.skip(
+    reason="run_eta gated off (measured-eta pipeline); exercises the now-"
+    "unreachable _run_eta_impl ΔSoC noise-floor gate. See efficiency.py."
+)
 def test_dsoc_gate_rejects_small_runs():
     cfg = Config(capacity_kwh=10.0)
     run = _run(50.0, 51.0, -3000)
     assert run_eta(run, cfg) is None
 
 
+@pytest.mark.skip(
+    reason="run_eta gated off (measured-eta pipeline); exercises the now-"
+    "unreachable _run_eta_impl plausibility envelope. See efficiency.py."
+)
 def test_envelope_rejects_over_unity_run():
     cfg = Config(capacity_kwh=10.0)
     run = _run(50.0, 60.0, -100)
     assert run_eta(run, cfg) is None
 
 
-def test_build_confident_bin_uses_median():
+def test_build_stays_on_static_fallback_when_gated():
+    """EfficiencyCurve.build() must never promote past the static fallback
+    while run_eta is gated off — even with abundant, previously-confident-
+    shaped synthetic samples. (was: test_build_confident_bin_uses_median)
+    """
     cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
     now = datetime(2026, 7, 4, 12, 0, 0)
     rows = []
@@ -130,11 +156,15 @@ def test_build_confident_bin_uses_median():
     rows.sort(key=lambda r: r["ts"])  # segment_episodes expects chronological input
     c = EfficiencyCurve.build(rows, cfg, now)
     top = c._charge[5]
-    assert top.confident is True
-    assert top.n_runs >= 10 and top.dc_kwh >= 2.0
-    assert 0.85 <= top.eta <= 1.0
+    assert top.confident is False
+    assert top.fallback_reason == "no_data"  # no runs ever collected — gated
+    assert top.eta == 0.92  # static config scalar, not a measured median
 
 
+@pytest.mark.skip(
+    reason="run_eta gated off (measured-eta pipeline); exercises the now-"
+    "unreachable low-confidence-vs-no-data distinction. See efficiency.py."
+)
 def test_build_low_confidence_bin_falls_back():
     cfg = Config(capacity_kwh=10.0, eta_charge=0.92)
     now = datetime(2026, 7, 4, 12, 0, 0)
@@ -146,6 +176,9 @@ def test_build_low_confidence_bin_falls_back():
 
 
 def test_build_drops_out_of_window_rows():
+    # Also trivially guaranteed by the run_eta gate now (no bin is ever
+    # confident), but kept live: it still documents/verifies the window-
+    # filtering behavior of EfficiencyCurve.build() for a future re-enable.
     cfg = Config(capacity_kwh=10.0)
     now = datetime(2026, 7, 4, 12, 0, 0)
     old = _charge_run(now - timedelta(days=40))

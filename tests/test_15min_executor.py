@@ -139,7 +139,7 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh():
     ):
         new_plan, *_ = ctrl_mod.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=30.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -171,7 +171,7 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh_fails_without_dt_h_fix():
     ):
         new_plan, *_ = ctrl_mod.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=30.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -217,7 +217,7 @@ def test_anti_fight_guard_slot_floors_cur_h_mid_hour():
     ):
         new_plan, setpoint, *_ = ctrl_mod.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=30.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
@@ -283,7 +283,7 @@ def test_charge_ceiling_soc_slot_floors_lookup_mid_hour():
     ):
         ctrl_mod.compute_decision(
             plan=plan,
-            inputs=PlantInputs(soc=30.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
             slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
             predictor=_FlatPredictor(), cur_temp=10.0,
             cfg=cfg,
@@ -429,11 +429,8 @@ def _cfg(**overrides) -> Config:
 def _make_controller(hass, cfg_overrides=None):
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: [
-            "sensor.phase_l1",
-            "sensor.phase_l2",
-            "sensor.phase_l3",
-        ],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
@@ -457,9 +454,7 @@ def _make_controller(hass, cfg_overrides=None):
 
 def _seed_inputs(hass):
     hass.set_state("sensor.soc", "50.0")
-    hass.set_state("sensor.phase_l1", "100.0")
-    hass.set_state("sensor.phase_l2", "100.0")
-    hass.set_state("sensor.phase_l3", "100.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "0.0")

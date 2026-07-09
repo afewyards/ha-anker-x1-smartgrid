@@ -31,8 +31,9 @@ def resolve_anker_config(
     Returns (resolved_values, missing_roles):
       * resolved_values: {CONF_ENT_*: entity_id, [CONF_CAPACITY_KWH: float]}.
       * missing_roles: CONF_ENT_* keys (of the 5 hard roles) with no exact match.
-    Capacity is soft: a miss is omitted from resolved_values and never added to
-    missing_roles.
+    Soft roles (meter power, inverter loss — ANKER_SOFT_ROLE_SUFFIXES) and
+    capacity behave the same way: a miss is omitted from resolved_values and
+    never added to missing_roles.
     """
     reg = er.async_get(hass)
     entries = er.async_entries_for_device(
@@ -49,6 +50,16 @@ def resolve_anker_config(
         ent = by_uid.get(f"{anker_entry_id}_{suffix}")
         if ent is None:
             missing.append(conf_key)
+        else:
+            resolved[conf_key] = ent.entity_id
+
+    for conf_key, suffix in const.ANKER_SOFT_ROLE_SUFFIXES.items():
+        ent = by_uid.get(f"{anker_entry_id}_{suffix}")
+        if ent is None:
+            _LOGGER.debug(
+                "Anker device %s: soft role %s (%s) not found; DEFAULT_ENTITIES will apply",
+                device_id, conf_key, suffix,
+            )
         else:
             resolved[conf_key] = ent.entity_id
 

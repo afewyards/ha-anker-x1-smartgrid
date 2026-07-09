@@ -176,17 +176,14 @@ def _make_export_cfg(**overrides) -> Config:
 def _make_controller(hass, actuator=None, cfg_overrides=None):
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: [
-            "sensor.phase_l1",
-            "sensor.phase_l2",
-            "sensor.phase_l3",
-        ],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
         const.CONF_ENT_SUN: "sun.sun",
         const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
         const.CONF_ENT_PV_POWER: "sensor.pv_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_SETPOINT: "number.setpoint",
         const.CONF_ENT_ENGAGE: "switch.engage",
         const.CONF_ENT_WORKMODE: "select.workmode",
@@ -211,9 +208,7 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
 
 def _seed_export_inputs(hass, *, soc="80.0", export_price="0.30"):
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.phase_l1", "100.0")
-    hass.set_state("sensor.phase_l2", "100.0")
-    hass.set_state("sensor.phase_l3", "100.0")
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "2000.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")
@@ -476,13 +471,17 @@ class TestMeteredNetHouseLoadFallback:
 
     @pytest.mark.asyncio
     async def test_metered_net_uses_cached_load_when_sensor_is_none(self):
-        """Live house-load sensor (sensor.power_usage) is never seeded in this
-        file's stub, so it reads None on every tick. With a cached previous
-        reading of 400W, the metered-net export_kwh must be computed against
-        that cache, not the full gross setpoint."""
+        """House load is now computed (pv + meter_w + batt - loss), not read from a
+        single sensor. When pv/batt are unavailable this tick, _compute_house_load_w
+        falls back to the cached previous reading (400W) instead of computing a
+        stale mixture — the metered-net export_kwh must be computed against that
+        cache, not the full gross setpoint."""
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
+        # pv/batt unavailable this tick → falls back to the cached load below.
+        hass.set_state("sensor.pv_power", "unknown")
+        hass.set_state("sensor.battery_power", "unknown")
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         ctrl._last_house_load_w = 400.0  # cached previous reading
 
@@ -553,6 +552,11 @@ class TestExportKwhCadence:
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
+        # Zero the computed house load (pv + meter_w + batt - loss) so gross ==
+        # net_target exactly; this test is about the TICK_SECONDS cadence, not
+        # the house-load compensation term.
+        hass.set_state("sensor.pv_power", "0.0")
+        hass.set_state("sensor.meter_power", "0.0")
         ctrl.export_state = ExportState(
             engaged=True, state_since=BASE - timedelta(hours=1)
         )

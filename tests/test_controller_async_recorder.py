@@ -42,10 +42,14 @@ async def test_record_sample_is_async_and_appends_via_executor():
         const.CONF_ENT_BATTERY_POWER: "sensor.batt",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_IRRADIANCE: "sensor.irr",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.loss",
     }
     ctl._recorder = _Rec()
+    # Controller.__new__ bypasses __init__, so the N2 house-load fallback cache
+    # (normally seeded in __init__) must be set explicitly here.
+    ctl._last_house_load_w = 0.0
     now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
 
     await ctl._record_sample(now, inputs, setpoint=0.0, state="passive", weather_entry=None)
 
@@ -65,9 +69,12 @@ class _ExecutorSpyHass(_StubHass):
 
 def _seed_purge_scenario(hass):
     hass.set_state("sensor.soc", "80.0")
-    hass.set_state("sensor.phase_l1", "100.0")
-    hass.set_state("sensor.phase_l2", "100.0")
-    hass.set_state("sensor.phase_l3", "100.0")
+    # Single signed meter entity (+ = grid import) replaces the old 3-phase P1 sum
+    # (100+100+100=300); _make_controller's data dict maps CONF_ENT_METER_POWER to
+    # "sensor.meter_power", so this must be seeded or read_plant_inputs() returns
+    # None and tick() takes the failsafe early-return before scheduling any
+    # executor work (append / purge_older_than / purge_decisions_older_than).
+    hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "0.0")

@@ -12,13 +12,17 @@ from .dataquality import house_load_w as _house_load_w
 from .rollup import aggregate_hour
 
 _COLUMNS = [
+    # p1_w: grid import/export power, sourced from the Anker meter_total_power
+    # sensor (was: sum of the p1_l1/l2/l3 phase sensors). p1_l1/l2/l3 are now
+    # legacy per-phase columns, written NULL (kept for schema/history compat).
     "ts", "hour", "weekday", "soc", "pv_w", "batt_w", "p1_w",
     "p1_l1", "p1_l2", "p1_l3", "import_price", "export_price",
     "temp", "irradiance", "state", "setpoint_w",
     # Weather-forecast columns added in v3 migration (nullable, aligned to clock-hour).
     "temp_forecast", "cloud_cover", "humidity", "wind_speed",
-    # load_w: recorded from sensor.power_usage each tick (v6 migration, nullable).
-    # NULL = pre-v6 row; rollup/training use ONLY non-null rows.
+    # load_w: computed house load each tick = pv + meter (p1_w) + batt − inverter
+    # loss (v6 migration, nullable). NULL = pre-v6 row; rollup/training use ONLY
+    # non-null rows.
     "load_w",
     # v7 export-arbitrage signal columns (nullable; NULL for pre-v7 rows).
     # export_setpoint_w: the net-export setpoint issued to the inverter (W).
@@ -79,7 +83,8 @@ _SCHEMA_SAMPLES_HOURLY = (
     # DO NOT reorder; see rollup.py::_ROLLUP_FEATURES for the feature list.
     "CREATE TABLE IF NOT EXISTS samples_hourly ("
     "hour_ts TEXT PRIMARY KEY, "
-    # house_load: load_w (v6+ sensor.power_usage) primary; derive p1+batt+pv fallback — ML target source.
+    # house_load: load_w (v6+, computed at sample time = pv + meter + batt − inverter
+    # loss) primary; derive p1+batt+pv fallback — ML target source.
     # During the ~14-day transition window after deploying v6, hourly aggregates blend derived (old)
     # and recorded (new) values; the mix shifts to ground-truth readings as old rows age out.
     "house_load_mean REAL, house_load_max REAL, house_load_min REAL, "
@@ -287,8 +292,10 @@ class DataRecorder:
 
         if version < 6:
             # v5 → v6: add nullable load_w column to samples.
-            # Records the live sensor.power_usage reading each tick — ground-truth
-            # house load, free of inverter-loss overcounting from derive_house_load_w.
+            # Records the computed house load each tick (pv + meter + batt −
+            # inverter loss) — ground-truth house load, free of the overcounting
+            # derive_house_load_w has when it must reconstruct load from
+            # p1+batt+pv alone (no loss term).
             # NULL for pre-v6 rows; rollup/training use ONLY non-null rows to avoid
             # contaminating the ML target with the overcounted derived values.
             # Guard with PRAGMA table_info so a crash between the ALTER and the
@@ -554,9 +561,10 @@ class DataRecorder:
 
         House-load value uses the same precedence as
         :func:`~dataquality.house_load_w`: ``load_w`` column when non-null
-        (recorded from ``sensor.power_usage``, v6+), else derived from
-        ``p1_w + batt_w + pv_w`` (pre-v6 rows).  A row is skipped only when
-        BOTH ``load_w`` and ``p1_w`` are NULL (no load value at all).
+        (computed at sample time as pv + meter + batt − inverter loss, v6+),
+        else derived from ``p1_w + batt_w + pv_w`` (pre-v6 rows).  A row is
+        skipped only when BOTH ``load_w`` and ``p1_w`` are NULL (no load
+        value at all).
 
         During the ~14-day transition window after deploying v6, most rows will
         still be pre-v6 (load_w=NULL) and will be served via the derive fallback.
@@ -614,21 +622,27 @@ class DataRecorder:
         return [(str(ts), float(v)) for ts, v in raw]
 
     def read_efficiency_samples(self, since_iso: str | None = None) -> list[dict]:
-        """Return per-tick residual-power samples for empirical efficiency fitting.
+        """Return per-tick residual-power samples for the (currently gated-off)
+        efficiency-fitting pipeline.
 
-        Ground-truth only: requires ``load_w`` (v6+ ``sensor.power_usage``
-        recording), ``p1_w``, ``soc``, and ``batt_w`` to all be non-NULL — rows
-        missing any of these (pre-v6, or a dropped reading) are skipped rather
-        than falling back to the derived house-load estimate, since a residual
-        computed from a derived load would double up on the same p1/pv/batt
-        terms it's being compared against.
+        NOTE — no longer ground truth / no longer independent: ``load_w`` is
+        a COMPUTED house load (``pv + p1_w(meter) + batt_w − inverter_loss``,
+        since the meter/house-load refactor), not a measured sensor. That
+        means ``residual_w = load_w - p1_w - pv_w`` algebraically collapses
+        to ``batt_w - inverter_loss`` — tautological with the battery's own
+        signal rather than an independent AC cross-check, and inverter_loss
+        is the Anker's own estimate (0 while charging). This function still
+        requires ``load_w``, ``p1_w``, ``soc``, and ``batt_w`` to all be
+        non-NULL (rows missing any of these — pre-v6, or a dropped reading —
+        are skipped), but that filtering no longer buys independence.
+        Consumers are gated: ``efficiency.run_eta`` short-circuits to no-result
+        so this data is not used to fit a measured curve (see efficiency.py's
+        module docstring). Re-enable only once an independent AC house-load
+        measurement exists again.
 
-        ``residual_w`` is the AC power NOT accounted for by grid import/export
-        and PV production: ``load_w - p1_w - pv_w`` (``pv_w`` NULL treated as
-        0, matching the derive/rollup convention elsewhere in this module).
-        This residual is what the battery's charge/discharge, net of
-        round-trip losses, must be supplying/absorbing — the raw signal an
-        efficiency-curve fit works from.
+        ``residual_w`` is computed as ``load_w - p1_w - pv_w`` (``pv_w`` NULL
+        treated as 0, matching the derive/rollup convention elsewhere in this
+        module).
 
         Optionally filtered to ts >= since_iso.  Ordered by ts ascending.
         """

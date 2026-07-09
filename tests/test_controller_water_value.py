@@ -22,7 +22,7 @@ def _price_slots(now, prices):
 def _base_kwargs(now, slots):
     return dict(
         plan=PlanState.initial(now),
-        inputs=PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+        inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
         slots=slots,
         pv_remaining=0.0,
         sunset=now + timedelta(hours=2),
@@ -52,7 +52,7 @@ def test_water_value_terminal_does_not_force_target_when_full_enough():
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _price_slots(now, prices)
     kw = _base_kwargs(now, slots)
-    kw["inputs"] = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    kw["inputs"] = PlantInputs(soc=80.0, meter_w=0.0, now=now)
     out: dict = {}
     plan, sp, deadline, horizon, hm, _ = ctrl.compute_decision(**kw, _out=out)
     # With water value keyed to the cheap trough and ample SoC, the DP should not
@@ -86,7 +86,7 @@ def test_heavy_drain_does_not_set_dp_infeasible():
     out: dict = {}
     ctrl.compute_decision(
         plan=PlanState.initial(now),
-        inputs=PlantInputs(soc=12.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+        inputs=PlantInputs(soc=12.0, meter_w=0.0, now=now),
         slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
         predictor=_HeavyPredictor(), cur_temp=10.0, cfg=Config(),
         _out=out,
@@ -115,7 +115,7 @@ def test_new_mode_shield_does_not_inflate_safe_schedule():
     out: dict = {}
     ctrl.compute_decision(
         plan=PlanState.initial(now),
-        inputs=PlantInputs(soc=85.0, phase_import_w=(0.0, 0.0, 0.0), now=now),
+        inputs=PlantInputs(soc=85.0, meter_w=0.0, now=now),
         slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=1),
         predictor=_LightPredictor(), cur_temp=10.0,
         cfg=Config(),

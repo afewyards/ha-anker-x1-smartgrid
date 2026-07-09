@@ -82,7 +82,7 @@ def _make_t6_controller(hass, rec):
 
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: ["sensor.l1", "sensor.l2", "sensor.l3"],
+        const.CONF_ENT_METER_POWER: "sensor.meter",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
@@ -123,7 +123,7 @@ def _slots(prices):
 
 def test_compute_decision_accepts_predictor():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0, min_dwell_min=0)
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05] + [0.40] * 8)
     sunset = BASE + timedelta(hours=8)
     predictor = forecast.LoadPredictor.from_profile({})
@@ -152,7 +152,7 @@ def test_compute_decision_propagates_cur_temp_to_predictor():
             return fallback_w
 
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0, min_dwell_min=0)
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05] + [0.40] * 8)
     sunset = BASE + timedelta(hours=8)
     spy = _SpyPredictor()
@@ -246,6 +246,10 @@ def _make_recording_controller():
         # No CONF_ENT_TEMP → temp=None (tests the optional-entity path too)
     }
     ctl._recorder = _CaptureRecorder()
+    # __new__ bypasses __init__: seed the N2 house-load cache __init__ would set,
+    # since _compute_house_load_w falls back to it when pv/batt read None
+    # (this fixture's _MinimalHass always returns None for every state).
+    ctl._last_house_load_w = 0.0
     return ctl
 
 
@@ -253,7 +257,7 @@ async def test_record_sample_with_weather_entry_persists_four_columns():
     """_record_sample with a matching forecast entry stores all 4 weather columns."""
     ctl = _make_recording_controller()
     now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
     entry = {
         "datetime": datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc),
         "temp_forecast": 19.5,
@@ -276,7 +280,7 @@ async def test_record_sample_with_no_weather_entry_stores_none_for_all_four():
     """_record_sample with weather_entry=None (empty forecast) stores None for all 4 columns."""
     ctl = _make_recording_controller()
     now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
 
     await ctl._record_sample(now, inputs, setpoint=0.0, state="passive", weather_entry=None)
 

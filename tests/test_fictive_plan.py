@@ -82,7 +82,7 @@ def _call(cfg: Config, *, soc: float = 20.0, slots=None, _out=None):
     """Call compute_decision with minimal valid inputs."""
     if slots is None:
         slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
-    inputs = PlantInputs(soc=soc, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=8)
     kwargs = {}
     if _out is not None:

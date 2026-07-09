@@ -48,7 +48,7 @@ def _day96():
 
 def test_dp_charges_cheapest_quarter_and_exports_priciest_quarter():
     slots, ivs = _day96()
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     sel, grid, infeasible, exp, rev, ceil_ = ctrl._dp_select_slots(
         inputs=inputs, slots=slots, deadline=NOW + timedelta(hours=24),
         ceiling=0.30, cfg=_cfg(), export_price=0.60,

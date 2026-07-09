@@ -188,7 +188,8 @@ class _StubHass:
 def _make_controller(hass, data_overrides=None):
     data = {
         const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_PHASE: ["sensor.phase_l1", "sensor.phase_l2", "sensor.phase_l3"],
+        const.CONF_ENT_METER_POWER: "sensor.meter_power",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
         const.CONF_ENT_PRICE: "sensor.price",
         const.CONF_ENT_PV_TODAY: [],
         const.CONF_ENT_PV_TOMORROW: [],
@@ -217,9 +218,8 @@ def _make_controller(hass, data_overrides=None):
 
 def _seed_valid_inputs(hass, *, soc="20.0"):
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.phase_l1", "0.0")
-    hass.set_state("sensor.phase_l2", "0.0")
-    hass.set_state("sensor.phase_l3", "0.0")
+    hass.set_state("sensor.meter_power", "0.0")
+    hass.set_state("sensor.inverter_loss", "0.0")
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
     hass.set_state("sensor.price", "0.05", {
@@ -246,7 +246,7 @@ def test_shadow_dp_true_replaces_selected():
     """_shadow_dp=True with DP always-on: DP still replaces selected."""
     cfg = _cfg()
     _out: dict = {}
-    inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
     sunset = BASE + timedelta(hours=8)
 

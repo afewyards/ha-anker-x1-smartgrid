@@ -112,9 +112,9 @@ class ForecastInterval:
 @dataclass(frozen=True)
 class PlantInputs:
     soc: float
-    # SIGNED per-phase power in watts: positive = importing from grid,
+    # SIGNED net grid power W, positive = importing from grid,
     # negative = exporting to grid.  Not import-only.
-    phase_import_w: tuple[float, float, float]
+    meter_w: float
     now: datetime
 
 

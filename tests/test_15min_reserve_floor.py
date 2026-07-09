@@ -81,7 +81,7 @@ def _run(slot_minutes: int) -> dict:
     captured, side_effect = _make_reserve_capture()
     cfg = _cfg()
     plan = PlanState(ControllerState.PASSIVE, BASE - timedelta(hours=2), ())
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=8)
     slots = _slots(30)
 

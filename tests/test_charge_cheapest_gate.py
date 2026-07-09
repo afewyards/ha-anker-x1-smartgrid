@@ -222,7 +222,7 @@ class TestHeuristicWorthyTroughBand:
         slots = self._slots(prices)
         cfg = self._make_cfg()  # band=0.005 by default
 
-        inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=self._BASE)
+        inputs = PlantInputs(soc=20.0, meter_w=0.0, now=self._BASE)
         sunset = self._BASE + timedelta(hours=10)
         plan = PlanState.initial(self._BASE - timedelta(hours=2))
         predictor = LoadPredictor.from_profile({})
@@ -261,7 +261,7 @@ class TestHeuristicWorthyTroughBand:
         slots = self._slots(prices)
         cfg = self._make_cfg()
 
-        inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=self._BASE)
+        inputs = PlantInputs(soc=20.0, meter_w=0.0, now=self._BASE)
         sunset = self._BASE + timedelta(hours=10)
         plan = PlanState.initial(self._BASE - timedelta(hours=2))
         predictor = LoadPredictor.from_profile({})

@@ -41,13 +41,13 @@ def read_plant_inputs(hass: HomeAssistant, data: dict) -> PlantInputs | None:
     soc = read_float(hass, data[const.CONF_ENT_SOC])
     if soc is None:
         return None
-    phases = []
-    for ent in data[const.CONF_ENT_PHASE]:
-        v = read_float(hass, ent)
-        if v is None:
-            return None
-        phases.append(v)
-    return PlantInputs(soc, (phases[0], phases[1], phases[2]), dt_util.utcnow())
+    meter_w = read_float(
+        hass,
+        data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]),
+    )
+    if meter_w is None:
+        return None
+    return PlantInputs(soc, meter_w, dt_util.utcnow())
 
 
 def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:

@@ -30,13 +30,17 @@ Design decisions (recorded here to avoid future guessing):
   - hour_ts format    : UTC ISO string truncated to the clock-hour, preserving
     the timezone offset, e.g. "2026-06-20T14:00:00+00:00".
   - All-NULL field    : mean/max/min/std = None, count = 0.
-  - house_load        : load_w column (sensor.power_usage, v6+) takes priority;
-    falls back to derive_house_load_w (p1+batt+pv, pv NULL→0) for pre-v6 rows.
-    None when both load_w and p1_w are NULL → excluded from stats.
+  - house_load        : load_w column (v6+, COMPUTED at sample time as
+    pv + p1_w(meter) + batt_w − inverter_loss — not an independent sensor
+    reading) takes priority; falls back to derive_house_load_w (p1+batt+pv,
+    pv NULL→0) for pre-v6 rows. None when both load_w and p1_w are NULL →
+    excluded from stats.
   - transition window : during the ~14-day post-v6 window most raw rows are
     pre-v6 (load_w=NULL) so hourly aggregates blend derived (old) + recorded
     (new) values for house_load.  The mix automatically shifts toward the
-    ground-truth sensor readings as stale rows age out of the retention window.
+    recorded (v6+ computed) values as stale rows age out of the retention
+    window — both are derived from the same p1/pv/batt terms, just at
+    different points in the pipeline (sample-time vs. rollup-time).
   - kWh sums (v10)    : each *_kwh_sum column is a two-tier aggregate of the
     per-tick *_kwh energy-delta columns (v9). Tier 1 (accurate): if ANY row
     in the hour has a non-NULL *_kwh value, the result is the sum of the

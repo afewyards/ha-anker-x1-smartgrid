@@ -14,8 +14,9 @@ def _seed_states(hass, data, soc, pv_remaining, cheap_now=True):
     # Mirrors the pattern used in test_coordinator after that commit.
     data["ent_pv_today"] = ["sensor.pv_e2e_today_0", "sensor.pv_e2e_today_1"]
     hass.states.async_set(data["ent_soc"], str(soc))
-    for e in data["ent_phase"]:
-        hass.states.async_set(e, "0")
+    # Single signed meter entity (+ = grid import) replaces the old 3-phase P1 sum;
+    # both old phases were seeded at 0 so the meter value is 0 too.
+    hass.states.async_set(data["ent_meter_power"], "0")
     hass.states.async_set(data["ent_pv_today"][0], str(pv_remaining / 2))
     hass.states.async_set(data["ent_pv_today"][1], str(pv_remaining / 2))
     now = dt_util.utcnow()

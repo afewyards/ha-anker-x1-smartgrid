@@ -97,7 +97,7 @@ def _call(
         slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
     if plan is None:
         plan = _plan()
-    inputs = PlantInputs(soc=soc, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=sunset_offset_h)
     return compute_decision(
         plan, inputs, slots, pv_remaining, sunset,
@@ -286,7 +286,7 @@ def test_dp_infeasible_at_low_soc_records_infeasible_and_stays_passive():
     cfg = _cfg(soc_floor=5.0)
     # All slots far above the gate ceiling → mask all-False → DP cannot charge.
     slots = _slots([0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90, 0.90])
-    inputs = PlantInputs(soc=5.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=5.0, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=8.0)
     _out: dict = {}
     new_plan, *_ = compute_decision(
@@ -329,7 +329,7 @@ class TestExportRequestPlumbing:
         cfg = _cfg(enable_export=True)
         # Cheap slot to trigger charge, rest expensive
         slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
-        inputs = PlantInputs(soc=20.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+        inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
         sunset = BASE + timedelta(hours=8.0)
         _out: dict = {}
         compute_decision(
@@ -354,7 +354,7 @@ class TestExportRequestPlumbing:
         """
         cfg = _cfg(enable_export=True)
         slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
-        inputs = PlantInputs(soc=80.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+        inputs = PlantInputs(soc=80.0, meter_w=0.0, now=BASE)
         sunset = BASE + timedelta(hours=8.0)
         _out: dict = {}
         compute_decision(
@@ -394,7 +394,7 @@ def _call_dp_select_slots(
     if prices is None:
         prices = [0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40]
     sl = _slots(prices)
-    inputs = PlantInputs(soc=soc, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     deadline = BASE + timedelta(hours=len(prices))
     return ctrl_mod._dp_select_slots(
         inputs=inputs,
@@ -455,8 +455,7 @@ async def test_options_override_data_field(hass):
     entry.add_to_hass(hass)
 
     hass.states.async_set(data["ent_soc"], "50")
-    for ent in data["ent_phase"]:
-        hass.states.async_set(ent, "0")
+    hass.states.async_set(data["ent_meter_power"], "0")
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -494,7 +493,7 @@ def _call_compute_decision(
     T5a hedge plumbing (default None → no behaviour change).
     """
     sl = _slots(prices)
-    inputs = PlantInputs(soc=soc, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=len(prices))
     return compute_decision(
         _plan(), inputs, sl, 0.0, sunset,
@@ -611,7 +610,7 @@ def test_compute_decision_threads_per_hour_temp_to_predictor():
     cfg = _cfg()
     # 12 slots from BASE
     slots = _slots([0.20] * 12)
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=12)
 
     # Build distinct per-hour temps (0.0, 2.0, 4.0, ... 22.0)

@@ -25,18 +25,47 @@ async def test_read_float_handles_unavailable(hass):
 async def test_read_plant_inputs(hass):
     d = _data()
     hass.states.async_set(d[const.CONF_ENT_SOC], "42")
-    for i, ent in enumerate(d[const.CONF_ENT_PHASE]):
-        hass.states.async_set(ent, str(100 * (i + 1)))
+    hass.states.async_set(d[const.CONF_ENT_METER_POWER], "150")
     pi = coordinator.read_plant_inputs(hass, d)
     assert pi.soc == 42.0
-    assert pi.phase_import_w == (100.0, 200.0, 300.0)
+    assert pi.meter_w == 150.0
+
+
+async def test_read_plant_inputs_negative_meter_w_is_export(hass):
+    """meter_w is signed: negative means exporting to grid."""
+    d = _data()
+    hass.states.async_set(d[const.CONF_ENT_SOC], "42")
+    hass.states.async_set(d[const.CONF_ENT_METER_POWER], "-250")
+    pi = coordinator.read_plant_inputs(hass, d)
+    assert pi.meter_w == -250.0
 
 
 async def test_read_plant_inputs_none_when_soc_missing(hass):
     d = _data()
-    for ent in d[const.CONF_ENT_PHASE]:
-        hass.states.async_set(ent, "100")
+    hass.states.async_set(d[const.CONF_ENT_METER_POWER], "100")
     assert coordinator.read_plant_inputs(hass, d) is None
+
+
+async def test_read_plant_inputs_none_when_meter_missing(hass):
+    """Meter entity unset (unavailable) → read_plant_inputs returns None,
+    same fail-safe semantics as a missing SoC reading."""
+    d = _data()
+    hass.states.async_set(d[const.CONF_ENT_SOC], "42")
+    assert coordinator.read_plant_inputs(hass, d) is None
+
+
+async def test_read_plant_inputs_meter_power_key_absent_uses_default_entity(hass):
+    """CONF_ENT_METER_POWER key entirely absent from the data dict (pre-upgrade
+    config entry that never persisted it) → falls back to the
+    DEFAULT_ENTITIES entity id and reads its live numeric state instead of
+    raising KeyError."""
+    d = _data()
+    del d[const.CONF_ENT_METER_POWER]
+    hass.states.async_set(d[const.CONF_ENT_SOC], "42")
+    hass.states.async_set(const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER], "150")
+    pi = coordinator.read_plant_inputs(hass, d)
+    assert pi is not None
+    assert pi.meter_w == 150.0
 
 
 async def test_read_price_slots(hass):

@@ -70,7 +70,7 @@ def test_n1_short_reserve_list_is_padded_not_dropped():
     captured: dict = {}
     spy = _spy_factory(captured)
 
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     # 6 price slots spanning [10:00, 15:00] — window_len=5 uses hours 10..14
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
     # 6 intervals with zero PV and 500 W load
@@ -121,7 +121,7 @@ def test_n1_exact_length_reserve_list_is_not_changed():
     captured: dict = {}
     spy = _spy_factory(captured)
 
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
     intervals = [
         ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)
@@ -151,7 +151,7 @@ def test_n1_none_reserve_stays_none():
     spy = _spy_factory(captured)
 
     cfg = _cfg()
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=NOW)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
     intervals = [
         ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)

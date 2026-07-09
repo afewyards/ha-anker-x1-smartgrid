@@ -8,14 +8,12 @@
           "anker_device": "Anker SOLIX X1 device",
           "ent_price": "Import price sensor",
           "ent_weather_forecast": "Weather forecast entity",
-          "ent_house_load": "House load sensor",
           "forecast_service": "Solar forecast integrations"
         },
         "data_description": {
           "anker_device": "Battery capacity and the SoC, battery-power, setpoint, work-mode and Modbus-control entities are derived from this device automatically.",
           "ent_price": "Sensor reporting the current electricity import tariff in €/kWh (e.g. Zonneplan). Drives all charge and export planning.",
           "ent_weather_forecast": "Weather entity providing the hourly forecast used by the load model.",
-          "ent_house_load": "Sensor measuring total household consumption in watts. Feeds the load forecast.",
           "forecast_service": "Pick one or more forecast integrations. Their PV sensors are added together (summed), so select multiple only when they cover different arrays — otherwise PV reads high."
         }
       }
@@ -35,7 +33,6 @@
               "anker_device": "Anker SOLIX X1 device",
               "ent_price": "Import price sensor",
               "ent_export_price": "Export price sensor",
-              "ent_house_load": "House load sensor",
               "ent_weather_forecast": "Weather forecast entity",
               "person_entities": "Person entities for home-presence"
             },
@@ -43,7 +40,6 @@
               "anker_device": "Battery capacity and the control entities are re-derived automatically when this changes.",
               "ent_price": "Sensor reporting the current electricity import tariff in €/kWh. Drives all charge and export planning.",
               "ent_export_price": "Sensor with the feed-in price in €/kWh. Leave empty to mirror the import price (salderen).",
-              "ent_house_load": "Sensor measuring total household consumption in watts. Feeds the load forecast.",
               "ent_weather_forecast": "Weather entity providing the hourly forecast used by the load model.",
               "person_entities": "Person entities whose home/away state feeds the load forecast model. Leave empty to disable the home-presence signal."
             }

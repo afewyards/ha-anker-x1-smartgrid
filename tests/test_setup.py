@@ -17,8 +17,9 @@ def _make_entry(hass, extra=None, options=None):
     entry.add_to_hass(hass)
     # provide minimal states so a tick doesn't crash
     hass.states.async_set(data["ent_soc"], "50")
-    for e in data["ent_phase"]:
-        hass.states.async_set(e, "0")
+    # Single signed meter entity (+ = grid import) replaces the old 3-phase P1 sum;
+    # both old phases were seeded at 0 so the meter value is 0 too.
+    hass.states.async_set(data["ent_meter_power"], "0")
     return entry
 
 

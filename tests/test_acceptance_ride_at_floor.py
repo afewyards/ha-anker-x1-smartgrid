@@ -90,7 +90,7 @@ def test_compute_decision_passive_at_floor_all_expensive():
     cfg = _cfg(soc_floor=5.0)
     slots = _slots([_ALL_EXPENSIVE_PRICE] * 9)
     sunset = BASE + timedelta(hours=8)
-    inputs = PlantInputs(soc=5.0, phase_import_w=(0.0, 0.0, 0.0), now=BASE)
+    inputs = PlantInputs(soc=5.0, meter_w=0.0, now=BASE)
     _out: dict = {}
 
     new_plan, setpoint, *_ = compute_decision(

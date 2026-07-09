@@ -30,8 +30,8 @@ def test_price_slot_and_interval():
     assert PriceSlot(t, 0.12).price == 0.12
     fi = ForecastInterval(t, 3000.0, 500.0, 1.0)
     assert fi.pv_w == 3000.0 and fi.dt_h == 1.0
-    pi = PlantInputs(50.0, (100.0, 200.0, -50.0), t)
-    assert pi.phase_import_w[2] == -50.0
+    pi = PlantInputs(50.0, 250.0, t)
+    assert pi.meter_w == 250.0
 
 
 def test_planstate_roundtrips_committed_charge_kwh():

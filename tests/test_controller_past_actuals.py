@@ -23,7 +23,7 @@ def test_compute_decision_threads_past_actuals_into_horizon():
     """past_actuals_by_hour is plumbed into build_plan_horizon (sun_times=None path)."""
     cfg = Config()
     now = datetime(2026, 6, 29, 10, tzinfo=timezone.utc)
-    inputs = PlantInputs(soc=50.0, phase_import_w=(0.0, 0.0, 0.0), now=now)
+    inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
     slots = [_slot(8), _slot(9), _slot(10), _slot(11)]
     past = {
         datetime(2026, 6, 29, 8, tzinfo=timezone.utc): {
