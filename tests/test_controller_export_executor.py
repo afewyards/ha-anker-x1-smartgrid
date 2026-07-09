@@ -444,6 +444,25 @@ class TestExportEngagePositiveSetpoint:
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
         assert sp == pytest.approx(6000.0)   # exact, not just <=
 
+    @pytest.mark.asyncio
+    async def test_executor_reserve_value_bounds_setpoint(self, monkeypatch):
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh",
+                            lambda now, ivs, cfg, **kw: 3.0)
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={
+            "capacity_kwh": 10.0, "soc_floor": 5.0, "eta_charge": 1.0,
+            "round_trip_eff": 1.0, "max_export_w": 9000.0, "grid_export_limit_w": 9000.0})
+        _seed_passive_inputs(hass, soc="80.0", export_price="0.40")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(ctrl_mod, "compute_decision",
+                            _patched_compute_decision(export_request={cur_h: 9000.0}))
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+        await ctrl.tick()
+        sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
+        # 8 kWh pack − 3 kWh reserve = 5 kWh exportable this hour → 5000 W (eta=1.0).
+        assert sp == pytest.approx(5000.0)
+
 
 # ---------------------------------------------------------------------------
 # C3-2: reserve breach OR hurdle fail → release_to_self
