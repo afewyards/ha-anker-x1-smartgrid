@@ -1,14 +1,14 @@
 {
   "domain": "anker_x1_smartgrid",
   "name": "Anker X1 SmartGrid",
-  "version": "0.2.0",
-  "documentation": "https://github.com/afewyards/ha-anker-x1-smartgrid",
-  "issue_tracker": "https://github.com/afewyards/ha-anker-x1-smartgrid/issues",
-  "dependencies": [],
   "codeowners": [],
-  "requirements": ["holidays>=0.40"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/afewyards/ha-anker-x1-smartgrid",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "config_flow": true,
-  "single_config_entry": true
+  "issue_tracker": "https://github.com/afewyards/ha-anker-x1-smartgrid/issues",
+  "requirements": ["holidays>=0.40"],
+  "single_config_entry": true,
+  "version": "0.2.0"
 }
