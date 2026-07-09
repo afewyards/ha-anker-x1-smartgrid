@@ -82,6 +82,47 @@ def test_probe_db_readable_true_and_false(tmp_path):
     assert _probe_db_readable(str(bad)) is False
 
 
+def test_predict_snapshots_state_and_locks_refresh(monkeypatch):
+    """B2: /predict snapshots STATE once and serializes refresh_model_lookups
+    under _PREDICT_LOCK so concurrent requests cannot race on shared model state."""
+    import server
+    import threading
+
+    calls = []
+
+    class _FakeModel:
+        pass
+
+    fake_model = _FakeModel()
+    fake_state = server.TrainState(
+        ready=True, promoted=True, last_trained=None,
+        n_rows=100, metrics=None, model=fake_model,
+    )
+    monkeypatch.setattr(server, "STATE", fake_state)
+    monkeypatch.setattr(server, "_DB_PATH", "/fake/db")
+
+    def _tracking_refresh(model, db_path):
+        calls.append(("refresh", model, db_path, threading.current_thread().name))
+
+    monkeypatch.setattr("trainer.refresh_model_lookups", _tracking_refresh)
+    monkeypatch.setattr(
+        "predictor.predict_hours",
+        lambda model, hours: [{"ts": h.get("ts", ""), "p50": 100.0, "p80": 120.0} for h in hours],
+    )
+    monkeypatch.setattr(
+        "predictor.build_predict_payload",
+        lambda state, preds: {"predictions": preds, "ready": state.ready},
+    )
+
+    from fastapi.testclient import TestClient
+    result = TestClient(server.app).post(
+        "/predict", json={"hours": [{"ts": "2026-07-09T10:00:00+00:00"}]},
+    )
+    assert result.status_code == 200
+    assert len(calls) == 1
+    assert calls[0][1] is fake_model
+
+
 def test_health_and_predict_smoke():
     """Exercise the real Pydantic request schema via TestClient (not importorskip'd
     away): /health returns ready flag; /predict validates the hours schema."""

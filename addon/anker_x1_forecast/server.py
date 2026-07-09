@@ -6,6 +6,7 @@ import functools
 import logging
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +40,8 @@ STATE: TrainState = TrainState(
     metrics=None,
     model=None,
 )
+
+_PREDICT_LOCK = threading.Lock()
 
 
 async def _scheduler(db_path: str, retrain_hour: int) -> None:
@@ -136,10 +139,11 @@ def predict(req: PredictRequest) -> dict:
                 f"got {len(req.hours)}"
             ),
         )
-    if STATE.model is None or not STATE.ready:
-        return predictor.build_predict_payload(STATE, [])
-    # Intraday adaptation: re-anchor lag features on live history (never raises).
-    if _DB_PATH:
-        trainer.refresh_model_lookups(STATE.model, _DB_PATH)
-    preds = predictor.predict_hours(STATE.model, [h.model_dump() for h in req.hours])
-    return predictor.build_predict_payload(STATE, preds)
+    state = STATE
+    if state.model is None or not state.ready:
+        return predictor.build_predict_payload(state, [])
+    with _PREDICT_LOCK:
+        if _DB_PATH:
+            trainer.refresh_model_lookups(state.model, _DB_PATH)
+    preds = predictor.predict_hours(state.model, [h.model_dump() for h in req.hours])
+    return predictor.build_predict_payload(state, preds)
