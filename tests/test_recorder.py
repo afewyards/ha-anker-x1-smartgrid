@@ -1388,3 +1388,35 @@ def test_wal_checkpoint_makes_rows_visible_to_immutable_reader(tmp_path):
     ro.close()
     rec.close()
     assert n == 1
+
+
+def test_append_normalizes_non_utc_ts_to_plus0000(tmp_path):
+    """A +02:00 ts is stored as its canonical +00:00 equivalent so lexicographic
+    ts compares (rollup watermark / purge cutoff) stay sound."""
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2026-07-08T12:00:00+02:00", "p1_w": 100.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 100.0})
+    stored = rec._conn.execute("SELECT ts FROM samples").fetchone()[0]
+    assert stored == "2026-07-08T10:00:00+00:00"
+    rec.close()
+
+
+def test_append_utc_ts_is_byte_identical(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 1.0, "batt_w": 0.0,
+                "pv_w": 0.0, "load_w": 1.0})
+    stored = rec._conn.execute("SELECT ts FROM samples").fetchone()[0]
+    assert stored == "2026-07-08T09:00:00+00:00"
+    rec.close()
+
+
+def test_append_decision_normalizes_ts(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append_decision(
+        ts="2026-07-08T12:00:00+02:00", active=True, start_soc=50.0, deadline=None,
+        committed_hours=[], horizon_mode="single-day",
+        pv_today_forecast_kwh=None, pv_tomorrow_forecast_kwh=None,
+        predicted_load_json=None, price_window_json=None, setpoint_w=0.0, state="passive")
+    stored = rec._conn.execute("SELECT ts FROM decisions").fetchone()[0]
+    assert stored == "2026-07-08T10:00:00+00:00"
+    rec.close()

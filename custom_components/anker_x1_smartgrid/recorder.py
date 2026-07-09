@@ -5,7 +5,7 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .const import TICK_SECONDS
 from .dataquality import house_load_w as _house_load_w
@@ -169,6 +169,24 @@ _ENERGY_NULLS = {
     "batt_charge_kwh": None,
     "batt_discharge_kwh": None,
 }
+
+
+def _normalize_utc_iso(ts_raw):
+    """Canonicalize a ts to a UTC ISO string ('+00:00') so lexicographic ts
+    compares (rollup watermark bounded read, purge cutoff) stay sound.
+
+    Naive input is assumed UTC. Unparseable input is returned unchanged —
+    the telemetry INSERT must never fail on a bad ts.
+    """
+    if ts_raw is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_raw))
+    except (ValueError, TypeError):
+        return ts_raw
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 class DataRecorder:
@@ -416,6 +434,7 @@ class DataRecorder:
         placeholders = ",".join("?" for _ in _COLUMNS)
         cols = ",".join(_COLUMNS)
         with self._lock:
+            row = {**row, "ts": _normalize_utc_iso(row.get("ts"))}
             row = {**row, **self._energy_deltas(row)}
             values = [row.get(col) for col in _COLUMNS]
             self._conn.execute(
@@ -494,7 +513,7 @@ class DataRecorder:
     ) -> None:
         """Append one decision row.  committed_hours is serialised to JSON."""
         values = [
-            ts,
+            _normalize_utc_iso(ts),
             int(active),
             start_soc,
             deadline,
