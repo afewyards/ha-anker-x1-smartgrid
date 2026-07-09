@@ -184,8 +184,8 @@ CONF_LOAD_ADAPT_FRACTION = "load_adapt_fraction"
 CONF_LOAD_ADAPT_WINDOW_H = "load_adapt_window_h"
 CONF_LOAD_ADAPT_FADE_H = "load_adapt_fade_h"
 # fraction=0.0 disables (byte-identical planning).
-DEFAULT_LOAD_ADAPT_FRACTION = 1.0
-DEFAULT_LOAD_ADAPT_WINDOW_H = 3
+DEFAULT_LOAD_ADAPT_FRACTION = 0.7
+DEFAULT_LOAD_ADAPT_WINDOW_H = 5
 DEFAULT_LOAD_ADAPT_FADE_H = 8
 
 # Measured efficiency curve (eta as a function of DC power) config key + tunables.

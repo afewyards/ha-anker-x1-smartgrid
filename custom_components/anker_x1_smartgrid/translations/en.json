@@ -154,8 +154,8 @@
             "data_description": {
               "use_learned_model": "Forecast house load with the trained ML model instead of profile averages once enough data exists. Default on.",
               "min_train_samples": "Recorder samples required before the ML model activates. Default 2000.",
-              "load_adapt_fraction": "How strongly the intraday corrector shifts the load forecast toward the last hours' residuals (0–1, 0 = off). Default 1.0.",
-              "load_adapt_window_h": "Hours of recent residuals the intraday corrector averages. Default 3.",
+              "load_adapt_fraction": "How strongly the intraday corrector shifts the load forecast toward the last hours' residuals (0–1, 0 = off). Default 0.7.",
+              "load_adapt_window_h": "Hours of recent residuals the intraday corrector averages. Default 5.",
               "load_adapt_fade_h": "Hours over which the intraday correction fades back to zero. Default 8.",
               "addon_enabled": "Offload ML training and forecasting to the Anker X1 Forecast add-on instead of running in-process. Default off.",
               "addon_url": "Base URL of the Anker X1 Forecast add-on. Default http://local-anker_x1_forecast:8099.",

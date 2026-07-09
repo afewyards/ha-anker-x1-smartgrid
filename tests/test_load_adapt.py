@@ -68,9 +68,9 @@ def test_ratio_basic():
 
 
 def test_ratio_clamped_up_and_down():
-    log = _log_with({1: 400.0, 2: 400.0})
-    hi, _ = compute_ratio(log, _actuals({1: 4000.0, 2: 4000.0}), H, 3)
-    lo, _ = compute_ratio(log, _actuals({1: 40.0, 2: 40.0}), H, 3)
+    log = _log_with({1: 400.0, 2: 400.0, 3: 400.0})
+    hi, _ = compute_ratio(log, _actuals({1: 4000.0, 2: 4000.0, 3: 4000.0}), H, 3)
+    lo, _ = compute_ratio(log, _actuals({1: 40.0, 2: 40.0, 3: 40.0}), H, 3)
     assert hi == load_adapt.RATIO_MAX
     assert lo == load_adapt.RATIO_MIN
 
@@ -83,10 +83,10 @@ def test_ratio_requires_min_matched_hours():
 
 
 def test_ratio_skips_hours_missing_either_side():
-    log = _log_with({1: 400.0, 3: 400.0})             # hour-2 not logged
-    actuals = _actuals({1: 440.0, 2: 999.0, 3: 440.0})  # hour-2 unmatched
-    ratio, matched = compute_ratio(log, actuals, H, 3)
-    assert matched == 2
+    log = _log_with({1: 400.0, 3: 400.0, 4: 400.0})           # hour-2 not logged
+    actuals = _actuals({1: 440.0, 2: 999.0, 3: 440.0, 4: 440.0})  # hour-2 unmatched
+    ratio, matched = compute_ratio(log, actuals, H, 4)
+    assert matched == 3
     assert ratio == pytest.approx(1.1)
 
 
@@ -160,8 +160,8 @@ def test_config_defaults_and_from_dict():
     from custom_components.anker_x1_smartgrid.models import Config
 
     cfg = Config.from_dict({})
-    assert cfg.load_adapt_fraction == 1.0
-    assert cfg.load_adapt_window_h == 3
+    assert cfg.load_adapt_fraction == 0.7
+    assert cfg.load_adapt_window_h == 5
     assert cfg.load_adapt_fade_h == 8
 
     cfg2 = Config.from_dict({
@@ -172,3 +172,25 @@ def test_config_defaults_and_from_dict():
     assert cfg2.load_adapt_fraction == 0.0
     assert cfg2.load_adapt_window_h == 4
     assert cfg2.load_adapt_fade_h == 6
+
+
+def test_load_adapt_retuned_defaults():
+    from custom_components.anker_x1_smartgrid import const
+    assert const.DEFAULT_LOAD_ADAPT_WINDOW_H == 5
+    assert load_adapt.MIN_MATCHED_HOURS == 3
+    assert const.DEFAULT_LOAD_ADAPT_FRACTION == 0.7
+
+
+def test_min_matched_hours_gate_needs_three():
+    """2 matched hours no longer produce a ratio (None); 3 do."""
+    now_h = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
+    log = PredictionLog()
+    pa = {}
+    for back in (1, 2):
+        h = now_h - timedelta(hours=back)
+        log.record(h, 100.0); pa[h] = {"load_w": 120.0}
+    assert compute_ratio(log, pa, now_h, window_h=5) == (None, 2)
+    h3 = now_h - timedelta(hours=3)
+    log.record(h3, 100.0); pa[h3] = {"load_w": 120.0}
+    ratio, matched = compute_ratio(log, pa, now_h, window_h=5)
+    assert matched == 3 and ratio is not None

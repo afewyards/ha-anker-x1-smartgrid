@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 RATIO_MIN = 0.7
 RATIO_MAX = 1.5
-MIN_MATCHED_HOURS = 2
+MIN_MATCHED_HOURS = 3
 LOG_MAX_ENTRIES = 48
 
 
