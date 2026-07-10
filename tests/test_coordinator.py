@@ -723,3 +723,22 @@ def test_read_price_slots_sensor_mode_absent_price_key_returns_empty(hass):
     d = _data()
     d.pop(const.CONF_ENT_PRICE, None)  # sensor mode, no price sensor configured
     assert coordinator.read_price_slots(hass, d) == []
+
+
+async def test_read_pv_remaining_kwh_key_absent_returns_zero(hass):
+    d = _data()
+    d.pop(const.CONF_ENT_PV_TODAY, None)
+    assert coordinator.read_pv_remaining_kwh(hass, d) == 0.0
+
+
+async def test_read_pv_tomorrow_kwh_key_absent_returns_zero(hass):
+    d = _data()
+    d.pop(const.CONF_ENT_PV_TOMORROW, None)
+    assert coordinator.read_pv_tomorrow_kwh(hass, d) == 0.0
+
+
+async def test_read_pv_today_arrays_key_absent_returns_empty(hass):
+    d = _data()
+    d.pop(const.CONF_ENT_PV_TODAY, None)
+    d.pop(const.CONF_ENT_PV_PEAK_TODAY, None)
+    assert coordinator.read_pv_today_arrays(hass, d) == []

@@ -93,12 +93,12 @@ def read_pv_remaining_kwh(hass: HomeAssistant, data: dict) -> float | None:
     """
     total = 0.0
     any_available = False
-    for ent in data[const.CONF_ENT_PV_TODAY]:
+    for ent in data.get(const.CONF_ENT_PV_TODAY, []):
         v = read_float(hass, ent)
         if v is not None:
             total += v
             any_available = True
-    if not any_available and data[const.CONF_ENT_PV_TODAY]:
+    if not any_available and data.get(const.CONF_ENT_PV_TODAY, []):
         return None
     return total
 
@@ -111,12 +111,12 @@ def read_pv_tomorrow_kwh(hass: HomeAssistant, data: dict) -> float | None:
     """
     total = 0.0
     any_available = False
-    for ent in data[const.CONF_ENT_PV_TOMORROW]:
+    for ent in data.get(const.CONF_ENT_PV_TOMORROW, []):
         v = read_float(hass, ent)
         if v is not None:
             total += v
             any_available = True
-    if not any_available and data[const.CONF_ENT_PV_TOMORROW]:
+    if not any_available and data.get(const.CONF_ENT_PV_TOMORROW, []):
         return None
     return total
 
@@ -292,8 +292,8 @@ def _read_pv_arrays(
     peak_key: str,
 ) -> list[tuple[float, datetime | None]] | None:
     """Shared helper for read_pv_today_arrays / read_pv_tomorrow_arrays."""
-    kwh_list = data.get(kwh_key, const.DEFAULT_ENTITIES[kwh_key])
-    peak_list = data.get(peak_key, const.DEFAULT_ENTITIES[peak_key])
+    kwh_list = data.get(kwh_key, [])
+    peak_list = data.get(peak_key, [])
     arrays: list[tuple[float, datetime | None]] = []
     any_available = False
     for i, kwh_ent in enumerate(kwh_list):
