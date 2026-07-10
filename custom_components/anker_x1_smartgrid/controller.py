@@ -3070,6 +3070,11 @@ class Controller:
             # does not silently zero today's total.
             "today_export_pnl_eur": self.today_export_pnl_eur,
             "export_pnl_day": self._export_pnl_day,
+            # Cash ledger: persist so a mid-day restart does not zero today's
+            # figures, and so the lifetime total actually survives.
+            "today_charge_cost_eur": self.today_charge_cost_eur,
+            "today_export_revenue_eur": self.today_export_revenue_eur,
+            "total_net_eur": self.total_net_eur,
             # SoC drift-hedge accumulator: persist so a restart resumes from the
             # same closed-loop state rather than re-accumulating from scratch.
             "soc_drift_kwh": self._soc_drift_kwh,
@@ -3118,6 +3123,17 @@ class Controller:
                 self.today_export_pnl_eur = float(saved["today_export_pnl_eur"])
             if "export_pnl_day" in saved and saved["export_pnl_day"] is not None:
                 self._export_pnl_day = str(saved["export_pnl_day"])
+        except (KeyError, ValueError, TypeError):
+            pass
+        # Cash ledger accumulators (silently skip on upgrade from older stores
+        # — leaves the 0.0 defaults from __init__ in place).
+        try:
+            if "today_charge_cost_eur" in saved:
+                self.today_charge_cost_eur = float(saved["today_charge_cost_eur"])
+            if "today_export_revenue_eur" in saved:
+                self.today_export_revenue_eur = float(saved["today_export_revenue_eur"])
+            if "total_net_eur" in saved:
+                self.total_net_eur = float(saved["total_net_eur"])
         except (KeyError, ValueError, TypeError):
             pass
         # SoC drift-hedge accumulator (silently skip on upgrade from pre-drift stores).

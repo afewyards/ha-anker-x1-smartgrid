@@ -165,6 +165,20 @@ class TestCashLedgerAccumulate:
         assert ctrl.today_charge_cost_eur == pytest.approx(0.015)
         assert ctrl.total_net_eur == pytest.approx(-0.015)
 
+    def test_credit_leg_priced_post_fee_with_nonzero_export_fee(self):
+        # Wiring check: _accumulate_cash_ledger must route the raw export
+        # price through effective_export_price (fee subtracted) before
+        # pricing the credit leg — not the raw price directly.
+        hass = _StubHass()
+        ctrl, _act, _store, _rec = _make_controller(
+            hass, cfg_overrides={"export_fee_eur_per_kwh": 0.02}
+        )
+        hass.set_state("sensor.battery_power", "1800.0")  # discharging
+        inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)  # exporting
+        ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, 0.25)
+        # 1500/1000 * (60/3600) * (0.25 - 0.02) = 0.00575
+        assert ctrl.today_export_revenue_eur == pytest.approx(0.00575)
+
 
 class TestCashLedgerRollover:
     def test_rollover_resets_daily_fields_not_total(self):
@@ -200,3 +214,42 @@ class TestCashLedgerStatus:
         assert status["today_export_revenue_eur"] == pytest.approx(2.0)
         assert status["battery_net_today_eur"] == pytest.approx(1.25)
         assert status["battery_net_total_eur"] == pytest.approx(12.345)
+
+
+class TestCashLedgerPersistence:
+    @pytest.mark.asyncio
+    async def test_persist_includes_cash_fields(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.today_charge_cost_eur = 0.11
+        ctrl.today_export_revenue_eur = 0.22
+        ctrl.total_net_eur = 3.33
+        await ctrl._persist()
+        saved = ctrl._store.saved  # adapt to _StubStore's actual attribute
+        assert saved["today_charge_cost_eur"] == pytest.approx(0.11)
+        assert saved["today_export_revenue_eur"] == pytest.approx(0.22)
+        assert saved["total_net_eur"] == pytest.approx(3.33)
+
+    def test_restore_round_trip(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.restore({
+            "today_charge_cost_eur": 0.11,
+            "today_export_revenue_eur": 0.22,
+            "total_net_eur": 3.33,
+        })
+        assert ctrl.today_charge_cost_eur == pytest.approx(0.11)
+        assert ctrl.today_export_revenue_eur == pytest.approx(0.22)
+        assert ctrl.total_net_eur == pytest.approx(3.33)
+
+    def test_restore_from_pre_cash_blob_defaults_to_zero(self):
+        # Upgrade path: old store without the new keys must not raise and
+        # must leave the __init__ defaults (0.0) in place.
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.restore({"today_export_pnl_eur": 0.5, "export_pnl_day": "2026-06-24"})
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.today_export_revenue_eur == 0.0
+        assert ctrl.total_net_eur == 0.0
+
+    def test_restore_garbage_value_is_silently_skipped(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.restore({"total_net_eur": "not-a-number"})
+        assert ctrl.total_net_eur == 0.0
