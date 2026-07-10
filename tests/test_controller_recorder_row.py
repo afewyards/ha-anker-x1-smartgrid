@@ -102,3 +102,69 @@ async def test_recorder_row_computes_house_load_when_not_threaded_in():
     assert row["p1_l2"] is None
     assert row["p1_l3"] is None
     assert row["load_w"] == 500.0 + 50.0 + (-100.0) - 20.0
+
+
+# ---------------------------------------------------------------------------
+# Multi-sensor PV list: recorded row's pv_w sums CONF_ENT_PV_POWER when it's
+# a list of entity ids (B — controller consumes the normalized list).
+# ---------------------------------------------------------------------------
+
+
+def _make_ctrl_multi_pv(hass, *, last_house_load_w: float = 0.0) -> Controller:
+    ctrl = Controller.__new__(Controller)
+    ctrl._hass = hass
+    ctrl._data = {
+        const.CONF_ENT_PV_POWER: ["sensor.pv_1", "sensor.pv_2"],
+        const.CONF_ENT_BATTERY_POWER: "sensor.batt",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.loss",
+        const.CONF_ENT_PRICE: "sensor.price",
+        const.CONF_ENT_IRRADIANCE: "sensor.irr",
+    }
+    ctrl._recorder = _Recorder()
+    ctrl._last_house_load_w = last_house_load_w
+    return ctrl
+
+
+async def test_recorder_row_pv_w_sums_multi_sensor_list():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "300.0")
+    hass.states.set("sensor.pv_2", "150.0")
+    hass.states.set("sensor.batt", "-50.0")
+    hass.states.set("sensor.loss", "10.0")
+    ctrl = _make_ctrl_multi_pv(hass)
+    inputs = PlantInputs(soc=55.0, meter_w=20.0, now=NOW)
+
+    await ctrl._record_sample(NOW, inputs, setpoint=0.0, state="disabled")
+
+    row = ctrl._recorder.rows[0]
+    assert row["pv_w"] == 450.0
+
+
+async def test_recorder_row_pv_w_one_sensor_unavailable_uses_the_other():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "unavailable")
+    hass.states.set("sensor.pv_2", "150.0")
+    hass.states.set("sensor.batt", "-50.0")
+    hass.states.set("sensor.loss", "10.0")
+    ctrl = _make_ctrl_multi_pv(hass)
+    inputs = PlantInputs(soc=55.0, meter_w=20.0, now=NOW)
+
+    await ctrl._record_sample(NOW, inputs, setpoint=0.0, state="disabled")
+
+    row = ctrl._recorder.rows[0]
+    assert row["pv_w"] == 150.0
+
+
+async def test_recorder_row_pv_w_all_unavailable_is_none():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "unavailable")
+    hass.states.set("sensor.pv_2", "unknown")
+    hass.states.set("sensor.batt", "0.0")
+    hass.states.set("sensor.loss", "0.0")
+    ctrl = _make_ctrl_multi_pv(hass)
+    inputs = PlantInputs(soc=55.0, meter_w=20.0, now=NOW)
+
+    await ctrl._record_sample(NOW, inputs, setpoint=0.0, state="disabled")
+
+    row = ctrl._recorder.rows[0]
+    assert row["pv_w"] is None

@@ -156,6 +156,107 @@ async def test_house_load_sensor_subscribes_on_added_to_hass(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# PV-multi B: house load sensor consumes a normalized list of PV entities
+# (const.resolve_pv_power_entities), summed together. Legacy single-string
+# construction (above) stays byte-identical.
+# ---------------------------------------------------------------------------
+
+_PV_ENT_2 = "sensor.pv_power_2"
+
+
+def _make_house_load_sensor_multi(hass, pv_entities):
+    from custom_components.anker_x1_smartgrid.sensor import X1HouseLoadSensor
+
+    s = X1HouseLoadSensor(_StubController(), "e", pv_entities, _METER_ENT, _BATT_ENT, _LOSS_ENT)
+    s.hass = hass
+    return s
+
+
+def test_house_load_sensor_sums_multiple_pv_entities():
+    hass = _StubHass()
+    s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])
+    hass.set_state(_PV_ENT, "800.0")
+    hass.set_state(_PV_ENT_2, "400.0")
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-500.0")
+    hass.set_state(_LOSS_ENT, "30.0")
+
+    s._recompute()
+
+    assert s.native_value == 800.0 + 400.0 + 100.0 + (-500.0) - 30.0
+
+
+def test_house_load_sensor_multi_pv_one_unavailable_uses_the_other():
+    hass = _StubHass()
+    s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])
+    hass.set_state(_PV_ENT, "unavailable")
+    hass.set_state(_PV_ENT_2, "400.0")
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-50.0")
+    hass.set_state(_LOSS_ENT, "30.0")
+
+    s._recompute()
+
+    assert s.native_value == 400.0 + 100.0 + (-50.0) - 30.0
+
+
+def test_house_load_sensor_multi_pv_all_unavailable_is_none():
+    hass = _StubHass()
+    s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])
+    hass.set_state(_PV_ENT, "unavailable")
+    hass.set_state(_PV_ENT_2, "unknown")
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-500.0")
+    hass.set_state(_LOSS_ENT, "30.0")
+
+    s._recompute()
+
+    assert s.native_value is None
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_subscribes_to_all_pv_entities_in_list(monkeypatch):
+    """Subscription includes EVERY entity in the normalized PV list, and a
+    state change of either one alone triggers a recompute."""
+    from custom_components.anker_x1_smartgrid import sensor as sensor_mod
+
+    hass = _StubHass()
+    s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])
+    hass.set_state(_PV_ENT, "800.0")
+    hass.set_state(_PV_ENT_2, "400.0")
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-500.0")
+    hass.set_state(_LOSS_ENT, "30.0")
+
+    captured = {}
+
+    def _fake_track(hass_arg, entity_ids, action):
+        captured["hass"] = hass_arg
+        captured["entity_ids"] = list(entity_ids)
+        captured["action"] = action
+        return lambda: None  # unsub
+
+    monkeypatch.setattr(sensor_mod, "async_track_state_change_event", _fake_track)
+
+    await s.async_added_to_hass()
+
+    assert captured["hass"] is hass
+    assert captured["entity_ids"] == [_PV_ENT, _PV_ENT_2, _METER_ENT, _BATT_ENT, _LOSS_ENT]
+    assert s.native_value == 800.0 + 400.0 + 100.0 + (-500.0) - 30.0
+
+    written = []
+    monkeypatch.setattr(s, "async_write_ha_state", lambda: written.append(True))
+
+    # A state change of only the SECOND pv entity alone triggers a recompute
+    # that reflects the new sum.
+    hass.set_state(_PV_ENT_2, "600.0")
+    captured["action"](None)
+
+    assert s.native_value == 800.0 + 600.0 + 100.0 + (-500.0) - 30.0
+    assert written == [True]
+
+
+# ---------------------------------------------------------------------------
 # T16: controller tick() publishes the computed house load into last_status
 # ---------------------------------------------------------------------------
 

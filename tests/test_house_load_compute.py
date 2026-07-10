@@ -262,3 +262,68 @@ def test_fresh_flag_recovers_true_after_a_prior_cache_fallback_tick():
     hass.states.set("sensor.loss", "0.0")
     ctrl._compute_house_load_w(inputs)
     assert ctrl._house_load_fresh is True
+
+
+# ---------------------------------------------------------------------------
+# Multi-sensor PV list (const.resolve_pv_power_entities / summed read): B —
+# CONF_ENT_PV_POWER may now store a list of entity ids, summed together.
+# ---------------------------------------------------------------------------
+
+
+def _make_ctrl_multi_pv(hass, *, last_house_load_w: float = 0.0) -> Controller:
+    ctrl = Controller.__new__(Controller)
+    ctrl._hass = hass
+    ctrl._data = {
+        const.CONF_ENT_PV_POWER: ["sensor.pv_1", "sensor.pv_2"],
+        const.CONF_ENT_BATTERY_POWER: "sensor.batt",
+        const.CONF_ENT_INVERTER_LOSS: "sensor.loss",
+    }
+    ctrl._last_house_load_w = last_house_load_w
+    ctrl._house_load_fresh = False
+    return ctrl
+
+
+def test_multi_pv_list_sums_both_sensors():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "300.0")
+    hass.states.set("sensor.pv_2", "200.0")
+    hass.states.set("sensor.batt", "-200.0")
+    hass.states.set("sensor.loss", "30.0")
+    ctrl = _make_ctrl_multi_pv(hass)
+    inputs = PlantInputs(soc=50.0, meter_w=100.0, now=NOW)
+
+    result = ctrl._compute_house_load_w(inputs)
+
+    assert result == (300.0 + 200.0) + 100.0 + (-200.0) - 30.0
+    assert ctrl._last_house_load_w == result
+    assert ctrl._house_load_fresh is True
+
+
+def test_multi_pv_list_one_unavailable_uses_the_other():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "unavailable")
+    hass.states.set("sensor.pv_2", "200.0")
+    hass.states.set("sensor.batt", "-200.0")
+    hass.states.set("sensor.loss", "30.0")
+    ctrl = _make_ctrl_multi_pv(hass)
+    inputs = PlantInputs(soc=50.0, meter_w=100.0, now=NOW)
+
+    result = ctrl._compute_house_load_w(inputs)
+
+    assert result == 200.0 + 100.0 + (-200.0) - 30.0
+    assert ctrl._house_load_fresh is True
+
+
+def test_multi_pv_list_all_unavailable_falls_back_to_cached():
+    hass = _Hass()
+    hass.states.set("sensor.pv_1", "unavailable")
+    hass.states.set("sensor.pv_2", "unknown")
+    hass.states.set("sensor.batt", "0.0")
+    hass.states.set("sensor.loss", "0.0")
+    ctrl = _make_ctrl_multi_pv(hass, last_house_load_w=77.0)
+    inputs = PlantInputs(soc=50.0, meter_w=100.0, now=NOW)
+
+    result = ctrl._compute_house_load_w(inputs)
+
+    assert result == 77.0
+    assert ctrl._house_load_fresh is False

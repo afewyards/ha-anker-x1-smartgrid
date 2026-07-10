@@ -3090,7 +3090,7 @@ class Controller:
         ``reserve_kwh``       — DC kWh the battery must retain (ride-out reserve).
         ``surplus_kwh``       — DC kWh available above the reserve (available to export).
         """
-        pv_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_PV_POWER])
+        pv_w = coordinator.read_pv_power_w(self._hass, self._data)
         batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
         import_price = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_PRICE, ""))
         irradiance = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_IRRADIANCE, ""))
@@ -3175,17 +3175,21 @@ class Controller:
         value).
 
         inverter_loss reads 0.0 when its sensor is unavailable (it genuinely
-        reads 0 while charging/idle and may drop out).  pv or batt unavailable
-        → skip the compute for this tick entirely and fall back to the cached
-        last-known value (N2) rather than publish a number built from a stale
-        mixture of reads.  On a successful compute, refresh the cache so later
-        unavailable ticks fall back to this fresher value.
+        reads 0 while charging/idle and may drop out).  pv is read via
+        coordinator.read_pv_power_w, which sums every entity in the
+        normalized CONF_ENT_PV_POWER list (legacy single-string config sums
+        just that one entity); it is None only when every resolved PV entity
+        is unavailable.  pv or batt unavailable → skip the compute for this
+        tick entirely and fall back to the cached last-known value (N2)
+        rather than publish a number built from a stale mixture of reads.
+        On a successful compute, refresh the cache so later unavailable
+        ticks fall back to this fresher value.
 
         Also sets ``self._house_load_fresh`` (True on a live compute, False on
         a cache-fallback) so callers that must not act on stale data — the
         export gross-setpoint compensation — can tell the two apart.
         """
-        pv_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_PV_POWER])
+        pv_w = coordinator.read_pv_power_w(self._hass, self._data)
         batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
         if pv_w is None or batt_w is None:
             self._house_load_fresh = False
