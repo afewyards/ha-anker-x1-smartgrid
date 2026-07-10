@@ -2953,8 +2953,8 @@ class Controller:
         """
         pv_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_PV_POWER])
         batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
-        import_price = coordinator.read_float(self._hass, self._data[const.CONF_ENT_PRICE])
-        irradiance = coordinator.read_float(self._hass, self._data[const.CONF_ENT_IRRADIANCE])
+        import_price = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_PRICE, ""))
+        irradiance = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_IRRADIANCE, ""))
         temp_ent = self._data.get(const.CONF_ENT_TEMP)
         temp = (
             coordinator.read_attr(self._hass, temp_ent, "temperature")
@@ -3079,7 +3079,15 @@ class Controller:
         return today_watts, tomorrow_watts
 
     def _resolve_export_price(self) -> tuple[float | None, bool]:
-        """Live feed-in tariff + whether it points at the same entity as import."""
+        """Live feed-in tariff + whether it points at the same entity as import.
+
+        Static tariff mode bypasses the sensor path entirely: it returns the
+        configured constant ``static_price_export`` (None when <= 0, i.e. no
+        export credit) and never mirrors the import price.
+        """
+        if self.cfg.price_mode == const.PRICE_MODE_STATIC:
+            px = self.cfg.static_price_export
+            return (px if px > 0.0 else None), False
         export_ent = self._data.get(const.CONF_ENT_EXPORT_PRICE, "")
         import_ent = self._data.get(const.CONF_ENT_PRICE, "")
         price = coordinator.read_float(self._hass, export_ent) if export_ent else None
