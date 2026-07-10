@@ -44,6 +44,7 @@ class _StubRecorder:
         self.decision_rows: list[dict] = []
         self.daily_regret_rows: dict[str, dict] = {}
         self._load_samples: list[tuple[str, float]] = []
+        self._hourly_rows: list[dict] = []
 
     def append(self, row):
         self.rows.append(row)
@@ -82,9 +83,11 @@ class _StubRecorder:
             return list(self.rows)
         return [r for r in self.rows if r.get("ts", "") >= since_iso]
 
-    def read_hourly_rows(self):
-        """Stub for HGBR path — no hourly rows in unit tests."""
-        return []
+    def read_hourly_rows(self, since_iso=None):
+        """Stub for HGBR/bucketed/profile paths — empty unless a test seeds _hourly_rows."""
+        if since_iso is None:
+            return list(self._hourly_rows)
+        return [r for r in self._hourly_rows if r.get("hour_ts", "") >= since_iso]
 
     def read_efficiency_samples(self, since_iso=None):
         self.efficiency_calls = getattr(self, "efficiency_calls", 0) + 1
@@ -406,18 +409,20 @@ async def test_refresh_profile_populates_profile():
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
 
-    # Two samples in the SAME (weekend, hour-10) bucket. Anchor them to the most
-    # recent weekend relative to *now* so they never age out of the rolling
-    # lookback window — hardcoded calendar dates rot as real time advances.
+    # Two hourly-energy rows in the SAME (weekend, hour-10) bucket (kwh_sum ->
+    # hourly_load_w via featureset.hourly_load_w: 1.2 kWh -> 1200 W, 0.8 kWh ->
+    # 800 W). Anchor them to the most recent weekend relative to *now* so they
+    # never age out of the rolling lookback window — hardcoded calendar dates
+    # rot as real time advances.
     ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
     now = datetime.now(timezone.utc)
     last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
         hour=10, minute=0, second=0, microsecond=0
     )  # weekday: Mon=0..Sun=6
     last_saturday = last_sunday - timedelta(days=1)
-    ctrl._recorder._load_samples = [
-        (last_saturday.isoformat(), 1200.0),
-        (last_sunday.isoformat(), 800.0),
+    ctrl._recorder._hourly_rows = [
+        {"hour_ts": last_saturday.isoformat(), "house_load_kwh_sum": 1.2},
+        {"hour_ts": last_sunday.isoformat(), "house_load_kwh_sum": 0.8},
     ]
 
     await ctrl.refresh_profile()
@@ -443,12 +448,13 @@ async def test_refresh_profile_predictor_returns_p80_for_spread_distribution():
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
 
-    # 10 weekday samples at hour 8 in one (weekday, hour-8) bucket with a spread
-    # distribution so P80 > P50. Anchor to the most recent weekdays relative to
+    # 10 weekday hourly-energy rows at hour 8 in one (weekday, hour-8) bucket with a
+    # spread distribution so P80 > P50. Anchor to the most recent weekdays relative to
     # *now* so they never age out of the lookback window — hardcoded calendar
     # dates rot as real time advances. Values 100..1000: P50=550 (interpolated),
     # P80=820 (pos=0.8*9=7.2 → 800+0.2*100). Quantiles sort the values, so the
-    # date↔value pairing is irrelevant.
+    # date↔value pairing is irrelevant. kwh_sum = W / 1000 so hourly_load_w
+    # round-trips back to the same W value (full-coverage hour, no count rescale).
     now = datetime.now(timezone.utc)
     weekdays = []
     d = now.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -457,8 +463,9 @@ async def test_refresh_profile_predictor_returns_p80_for_spread_distribution():
             weekdays.append(d)
         d -= timedelta(days=1)
     load_values = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0]
-    ctrl._recorder._load_samples = [
-        (wd.isoformat(), w) for wd, w in zip(weekdays, load_values)
+    ctrl._recorder._hourly_rows = [
+        {"hour_ts": wd.isoformat(), "house_load_kwh_sum": w / 1000.0}
+        for wd, w in zip(weekdays, load_values)
     ]
 
     # Lookback wide enough to cover all 10 weekdays (~2 calendar weeks)
@@ -476,18 +483,80 @@ async def test_refresh_profile_predictor_returns_p80_for_spread_distribution():
 
 
 @pytest.mark.asyncio
+async def test_refresh_profile_row_without_kwh_sum_falls_back_to_house_load_mean():
+    """A row lacking house_load_kwh_sum (e.g. pre-v10 hourly rollup) still feeds the
+    profile via featureset.hourly_load_w's house_load_mean fallback."""
+    import dataclasses
+    from custom_components.anker_x1_smartgrid import forecast as forecast_mod
+
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
+
+    now = datetime.now(timezone.utc)
+    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    ctrl._recorder._hourly_rows = [
+        # No house_load_kwh_sum key at all -> hourly_load_w must use house_load_mean.
+        {"hour_ts": last_sunday.isoformat(), "house_load_mean": 650.0},
+    ]
+
+    await ctrl.refresh_profile()
+
+    assert ctrl.profile, "Expected non-empty profile from the house_load_mean fallback"
+    learned = forecast_mod.predict_load_w(ctrl.profile, last_sunday, fallback_w=400.0)
+    assert learned == pytest.approx(650.0), f"Expected mean-fallback value 650.0, got {learned}"
+
+
+@pytest.mark.asyncio
+async def test_refresh_profile_skips_rows_where_hourly_load_w_returns_none():
+    """Rows with neither house_load_kwh_sum nor house_load_mean (hourly_load_w -> None)
+    are skipped without raising, while valid rows in the same batch still build the
+    profile."""
+    import dataclasses
+    from custom_components.anker_x1_smartgrid import forecast as forecast_mod
+
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
+
+    now = datetime.now(timezone.utc)
+    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    last_monday = last_sunday + timedelta(days=1)
+    last_monday = last_monday.replace(hour=11)
+    ctrl._recorder._hourly_rows = [
+        # Neither key present -> hourly_load_w returns None -> must be skipped, not raise.
+        {"hour_ts": last_sunday.isoformat()},
+        # Valid row in a different bucket -> must still populate the profile.
+        {"hour_ts": last_monday.isoformat(), "house_load_kwh_sum": 0.5},
+    ]
+
+    await ctrl.refresh_profile()
+
+    assert ctrl._last_profile_refresh is not None, "refresh_profile must not raise/abort"
+    assert ctrl.profile, "Expected the valid row to populate the profile"
+    # The null-load hour (weekend, 10) must NOT appear in the profile.
+    assert (True, 10) not in ctrl.profile
+    learned = forecast_mod.predict_load_w(ctrl.profile, last_monday, fallback_w=400.0)
+    assert learned == pytest.approx(500.0), f"Expected 0.5 kWh -> 500W, got {learned}"
+
+
+@pytest.mark.asyncio
 async def test_tick_triggers_profile_refresh():
     """First tick sets _last_profile_refresh and populates profile when samples exist."""
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     _seed_valid_inputs(hass, soc="20.0")
 
-    # Seed recent load samples (relative to now, not hardcoded dates) so they
+    # Seed recent hourly-energy rows (relative to now, not hardcoded dates) so they
     # stay inside the lookback window (now - lookback_days) as real time advances.
     recent = datetime.now(timezone.utc)
-    ctrl._recorder._load_samples = [
-        ((recent - timedelta(hours=2)).isoformat(), 900.0),
-        ((recent - timedelta(hours=1)).isoformat(), 750.0),
+    ctrl._recorder._hourly_rows = [
+        {"hour_ts": (recent - timedelta(hours=2)).isoformat(), "house_load_kwh_sum": 0.9},
+        {"hour_ts": (recent - timedelta(hours=1)).isoformat(), "house_load_kwh_sum": 0.75},
     ]
 
     result = await ctrl.tick()
@@ -910,19 +979,19 @@ async def test_tick_disabled_refreshes_profile():
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     _seed_valid_inputs(hass, soc="50.0")
-    # Recent samples relative to now (see test_tick_triggers_profile_refresh):
+    # Recent hourly-energy rows relative to now (see test_tick_triggers_profile_refresh):
     # hardcoded absolute dates rot past the lookback window over time.
     recent = datetime.now(timezone.utc)
-    ctrl._recorder._load_samples = [
-        ((recent - timedelta(hours=2)).isoformat(), 900.0),
-        ((recent - timedelta(hours=1)).isoformat(), 750.0),
+    ctrl._recorder._hourly_rows = [
+        {"hour_ts": (recent - timedelta(hours=2)).isoformat(), "house_load_kwh_sum": 0.9},
+        {"hour_ts": (recent - timedelta(hours=1)).isoformat(), "house_load_kwh_sum": 0.75},
     ]
     ctrl.enabled = False
 
     await ctrl.tick()
 
     assert ctrl._last_profile_refresh is not None, "disabled tick must refresh the profile"
-    assert ctrl.profile, "profile populated from recorded samples while disabled"
+    assert ctrl.profile, "profile populated from recorded hourly-energy rows while disabled"
 
 
 @pytest.mark.asyncio
@@ -1779,7 +1848,14 @@ async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
     """Recorder rows with load_w=NULL but valid p1_w/batt_w/pv_w build a non-empty
     load profile via the derive fallback (not the flat 400W DEFAULT_FALLBACK_LOAD_W).
 
-    Uses the real DataRecorder (not _StubRecorder) to exercise the full path.
+    Uses the real DataRecorder (not _StubRecorder) to exercise the full path:
+    raw per-tick samples -> rollup_hours (samples_hourly, house_load derived via
+    dataquality.house_load_w with no house_load_kwh delta column -> Tier-2
+    house_load_kwh_sum = house_load_mean/1000 fallback) -> refresh_profile reads
+    read_hourly_rows and converts each row via featureset.hourly_load_w. Full
+    60-ticks/hour coverage (one row per minute) keeps house_load_count == 60 so
+    hourly_load_w's partial-coverage rescale does not fire, and the Tier-2 kwh_sum
+    round-trips back to the honest 750W mean.
     """
     from custom_components.anker_x1_smartgrid import forecast as forecast_mod
     from custom_components.anker_x1_smartgrid.recorder import DataRecorder
@@ -1792,15 +1868,19 @@ async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
         hour=10, minute=0, second=0, microsecond=0
     )
 
-    # Seed rows; no load_w.
+    # Seed a full hour of rows (one per minute); no load_w.
     # p1_w=600, batt_w=100, pv_w=50 → derived load = 750W (not 400W).
-    for i in range(5):
-        ts = (recent + timedelta(minutes=i * 10)).isoformat()
+    for i in range(60):
+        ts = (recent + timedelta(minutes=i)).isoformat()
         real_rec.append({
             "ts": ts,
             "p1_w": 600.0, "batt_w": 100.0, "pv_w": 50.0,
             "load_w": None,  # explicit NULL → derive fallback must be used
         })
+
+    # Roll the seeded hour up into samples_hourly (refresh_profile now reads
+    # read_hourly_rows, not the raw per-tick samples table).
+    real_rec.rollup_hours(datetime.now(timezone.utc).isoformat())
 
     ctrl, _ = _make_controller(hass)
     ctrl._recorder = real_rec  # swap in real recorder
@@ -1827,6 +1907,9 @@ async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
 async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_path):
     """Recorder rows with both load_w=NULL and p1_w=NULL → no valid profile samples →
     predictor returns DEFAULT_FALLBACK_LOAD_W without crashing.
+
+    house_load_mean/house_load_kwh_sum both end up NULL for the rolled-up hour, so
+    featureset.hourly_load_w(row) returns None and refresh_profile skips the row.
     """
     from custom_components.anker_x1_smartgrid import forecast as forecast_mod
     from custom_components.anker_x1_smartgrid.recorder import DataRecorder
@@ -1846,6 +1929,10 @@ async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_p
             "batt_w": 100.0, "pv_w": 50.0,
             # p1_w=None (omitted), load_w=None (omitted) → no valid house load
         })
+
+    # Roll the seeded hour up into samples_hourly (refresh_profile now reads
+    # read_hourly_rows, not the raw per-tick samples table).
+    real_rec.rollup_hours(datetime.now(timezone.utc).isoformat())
 
     ctrl, _ = _make_controller(hass)
     ctrl._recorder = real_rec  # swap in real recorder

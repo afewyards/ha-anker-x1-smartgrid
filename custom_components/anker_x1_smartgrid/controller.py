@@ -15,7 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, forecast as forecast_mod, guard, load_adapt, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
+from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, load_adapt, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -1379,7 +1379,16 @@ class Controller:
         )
 
     async def refresh_profile(self) -> None:
-        """Read load samples from recorder and update the rolling load profile.
+        """Read hourly energy rows from recorder and update the rolling load profile.
+
+        Tier-3 (profile) fallback is now fed hourly-energy tuples — one per
+        completed clock-hour, derived via ``featureset.hourly_load_w`` (kwh_sum
+        x1000, coverage-rescaled by house_load_count, house_load_mean fallback)
+        — instead of raw per-tick W samples. One tuple per hour removes the
+        implicit count-weighting bias that per-tick sampling had (hours with
+        more/fewer live ticks no longer over/under-influence the mean), and the
+        profile's empirical quantiles become hourly-energy quantiles, consistent
+        with the bucketed (Tier 2) model.
 
         Called on first tick and roughly hourly.  On error, keeps the existing
         profile and logs — never raises into tick().
@@ -1387,9 +1396,14 @@ class Controller:
         try:
             now = dt_util.utcnow()
             since_iso = (now - timedelta(days=self.cfg.lookback_days)).isoformat()
-            samples = await self._hass.async_add_executor_job(
-                self._recorder.read_load_samples, since_iso
+            rows = await self._hass.async_add_executor_job(
+                self._recorder.read_hourly_rows, since_iso
             )
+            samples = [
+                (str(r["hour_ts"]), load)
+                for r in rows
+                if (load := featureset.hourly_load_w(r)) is not None
+            ]
             self.profile = forecast_mod.rolling_load_profile(
                 samples, self.cfg.lookback_days, now
             )
