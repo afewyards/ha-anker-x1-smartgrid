@@ -153,6 +153,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_ENT_PRICE,
         const.CONF_ENT_EXPORT_PRICE,
         const.CONF_ENT_WEATHER_FORECAST,
+        const.CONF_ENT_PV_POWER,
         const.CONF_PERSON_ENTITIES,
     ),
     SECTION_SOLAR: (
@@ -287,6 +288,23 @@ def _options_fields(defaults: dict, services=None) -> dict:
             vol.Optional(
                 const.CONF_ENT_PV_PEAK_TOMORROW,
                 description={"suggested_value": defaults.get(const.CONF_ENT_PV_PEAK_TOMORROW, [])},
+            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
+            # Live PV-power sensors (W), summed at read time — distinct from the
+            # ent_pv_today/tomorrow *forecast* (kWh) lists above. Supports the
+            # legacy single entity-id string (normalized to a one-element list
+            # for display) alongside the new multi-sensor list (99a7b53).
+            # suggested_value is None (not []) when unconfigured so the
+            # DEFAULT_ENTITIES soft-role fallback (resolve_pv_power_entities)
+            # stays in effect on save-through — an explicit [] would persist as
+            # "configured to nothing" rather than "unconfigured", though both
+            # currently resolve identically at runtime.
+            vol.Optional(
+                const.CONF_ENT_PV_POWER,
+                description={
+                    "suggested_value": const.normalize_pv_power_entities(
+                        defaults.get(const.CONF_ENT_PV_POWER)
+                    ) or None
+                },
             ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
             vol.Optional(
                 const.CONF_ENT_WEATHER_FORECAST,

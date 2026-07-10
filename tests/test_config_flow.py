@@ -59,7 +59,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 53
+    assert len(section_keys) == 54
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -719,6 +719,7 @@ def test_options_schema_includes_entity_dropdowns():
         const.CONF_ENT_PV_TOMORROW,
         const.CONF_ENT_PV_PEAK_TODAY,
         const.CONF_ENT_PV_PEAK_TOMORROW,
+        const.CONF_ENT_PV_POWER,
         const.CONF_ENT_WEATHER_FORECAST,
         const.CONF_ENT_PRICE,
         const.CONF_ENT_EXPORT_PRICE,
@@ -731,6 +732,81 @@ def test_options_schema_pv_today_roundtrips_a_list():
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_ENT_PV_TODAY: ["sensor.a", "sensor.b"]})
     assert result[const.CONF_ENT_PV_TODAY] == ["sensor.a", "sensor.b"]
+
+
+# ---------------------------------------------------------------------------
+# PV-multi C — ent_pv_power multi-select picker (options flow, devices section)
+# ---------------------------------------------------------------------------
+
+def test_options_schema_includes_pv_power_multiselect():
+    """ent_pv_power renders as a multi-select EntitySelector."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    items = _flat_schema_items(schema_obj)
+    assert const.CONF_ENT_PV_POWER in items
+    _marker, selector = items[const.CONF_ENT_PV_POWER]
+    assert isinstance(selector, EntitySelector)
+    assert selector.config["multiple"] is True
+
+
+def test_options_schema_pv_power_in_devices_section():
+    from custom_components.anker_x1_smartgrid.config_flow import (
+        OPTIONS_SECTIONS, SECTION_DEVICES,
+    )
+    assert const.CONF_ENT_PV_POWER in OPTIONS_SECTIONS[SECTION_DEVICES]
+
+
+def test_options_schema_pv_power_legacy_string_suggested_as_list():
+    """A stored legacy single entity-id string renders prefilled as a one-element list."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({const.CONF_ENT_PV_POWER: "sensor.solar_power"})
+    marker = _flat_markers(schema_obj)[const.CONF_ENT_PV_POWER]
+    assert marker.description == {"suggested_value": ["sensor.solar_power"]}
+
+
+def test_options_schema_pv_power_empty_suggests_none():
+    """Nothing stored -> suggested_value is None (not []), so the DEFAULT_ENTITIES
+    soft-role fallback (resolve_pv_power_entities) stays in effect on save-through."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    marker = _flat_markers(schema_obj)[const.CONF_ENT_PV_POWER]
+    assert marker.description == {"suggested_value": None}
+
+
+def test_options_schema_pv_power_roundtrips_a_list():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    result = _validate_flat(schema_obj, {const.CONF_ENT_PV_POWER: ["sensor.a", "sensor.b"]})
+    assert result[const.CONF_ENT_PV_POWER] == ["sensor.a", "sensor.b"]
+
+
+async def test_options_save_pv_power_two_entities_stores_list(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_ENT_PV_POWER: ["sensor.pv_a", "sensor.pv_b"]}),
+    )
+    assert entry.options[const.CONF_ENT_PV_POWER] == ["sensor.pv_a", "sensor.pv_b"]
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_save_pv_power_empty_list_accepted(hass):
+    """Saving with no PV-power sensors selected is accepted (falls back to the
+    soft-role default at runtime), not rejected as a form error."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_ENT_PV_POWER: []}),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_ENT_PV_POWER] == []
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 def test_options_schema_soc_target_roundtrips():

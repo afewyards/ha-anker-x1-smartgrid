@@ -34,6 +34,7 @@
               "ent_price": "Import price sensor",
               "ent_export_price": "Export price sensor",
               "ent_weather_forecast": "Weather forecast entity",
+              "ent_pv_power": "PV power sensors",
               "person_entities": "Person entities for home-presence"
             },
             "data_description": {
@@ -41,6 +42,7 @@
               "ent_price": "Sensor reporting the current electricity import tariff in €/kWh. Drives all charge and export planning.",
               "ent_export_price": "Sensor with the feed-in price in €/kWh. Leave empty to mirror the import price (salderen).",
               "ent_weather_forecast": "Weather entity providing the hourly forecast used by the load model.",
+              "ent_pv_power": "Live PV power sensors (W); multiple sensors are summed, so select more than one only when they cover different arrays. Leave empty to use the Anker device's own PV power sensor.",
               "person_entities": "Person entities whose home/away state feeds the load forecast model. Leave empty to disable the home-presence signal."
             }
           },
