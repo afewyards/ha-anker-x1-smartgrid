@@ -870,3 +870,191 @@ def test_daydata_export_uses_min_rule_on_measured_energy_deltas():
     export_row = captured_realized[-1]["realized_export_by_hour"]
     assert export_row is not None
     assert export_row[test_hour] == pytest.approx(0.03, abs=1e-9)
+
+
+def _capture_realized_charge(ctrl: Controller, day: str, ts_now: str) -> list[float]:
+    """Run _run_daily_regret_sync while capturing the realized_charge list
+    passed positionally into regret.realized_grid_cost (2nd positional arg)."""
+    captured: list[list[float]] = []
+
+    def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
+        captured.append(list(realized_charge_by_hour))
+        return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
+
+    with patch(
+        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+        side_effect=_spy_realized,
+    ), patch(
+        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ):
+        ctrl._run_daily_regret_sync(day, ts_now)
+    assert captured, "realized_grid_cost must have been called"
+    return captured[-1]
+
+
+def test_daydata_solar_charge_hour_realized_charge_is_zero():
+    """REGRESSION (review HIGH finding): batt_charge_kwh is TOTAL battery
+    charge (solar + grid), NOT grid-sourced charge.  An hour where the
+    battery charges entirely from solar surplus (PV covers house load +
+    battery charge + a small export, zero grid import) must produce
+    realized_charge == 0.0 for that hour.  Before the fix, the code summed
+    the raw batt_charge_kwh delta directly, billing phantom grid cost for
+    solar charging and double-charging the sim's SoC.
+
+    Per-tick (1-minute ticks): pv_w=3000 (pv_kwh=0.05), house load 500W
+    (house_load_kwh~=0.00833), battery charging 2000W (batt_charge_kwh
+    ~=0.03333), meter exporting the 500W surplus (grid_export_kwh~=0.00833),
+    grid_import_kwh=0.0, batt_discharge_kwh=0.0.  Power balances:
+    3000 = 500 (load) + 2000 (batt charge) + 500 (export).
+    """
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 12
+    rows = [
+        {
+            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0,
+            "pv_w": 3000.0,
+            "batt_w": -2000.0,      # charging
+            "p1_w": -500.0,         # exporting surplus
+            "import_price": 0.30,
+            "export_price": 0.10,
+            "pv_kwh": 0.05,
+            "house_load_kwh": 500.0 / 1000.0 / 60.0,
+            "batt_charge_kwh": 2000.0 / 1000.0 / 60.0,
+            "grid_import_kwh": 0.0,
+            "grid_export_kwh": 500.0 / 1000.0 / 60.0,
+            "batt_discharge_kwh": 0.0,
+        }
+        for m in (10, 20, 40)
+    ]
+    _replace_hour_rows(rec, day, test_hour, rows)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    realized_charge = _capture_realized_charge(ctrl, day, ts_now)
+
+    assert realized_charge[test_hour] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_daydata_charge_uses_min_rule_on_measured_energy_deltas():
+    """Grid-sourced charge: grid_import_kwh=0.04, batt_charge_kwh=0.03 per
+    tick -> the min-rule contributes 0.03 (the grid import can fully cover
+    the battery charge, so all of it is grid-sourced).  Sums across n ticks
+    -> 0.03*n."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 3
+    rows = [
+        {
+            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0,
+            "pv_w": 0.0,
+            "batt_w": -1800.0,      # legacy fallback trap value — must NOT be used
+            "p1_w": 2400.0,         # legacy fallback trap value — must NOT be used
+            "import_price": 0.25,
+            "batt_charge_kwh": 0.03,
+            "grid_import_kwh": 0.04,
+        }
+        for m in (10, 30)
+    ]
+    _replace_hour_rows(rec, day, test_hour, rows)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    realized_charge = _capture_realized_charge(ctrl, day, ts_now)
+
+    assert realized_charge[test_hour] == pytest.approx(0.06, abs=1e-9)
+
+
+def test_daydata_charge_mixed_usability_excludes_null_grid_import_tick():
+    """Mixed usability: a tick with batt_charge_kwh present but
+    grid_import_kwh NULL is excluded from the delta sum -> an hour of ONLY
+    such ticks has zero usable deltas and falls back to the legacy
+    mean(grid_charge_w)x dt_h path (not biased to 0)."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 4
+    rows = [
+        {
+            # batt_charge_kwh present, grid_import_kwh NULL (key absent) ->
+            # not usable, excluded from the delta sum.
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0,
+            "pv_w": 0.0,
+            "batt_w": -1200.0,      # -> legacy grid_charge_w = 1200 W
+            "p1_w": 1200.0,
+            "import_price": 0.25,
+            "batt_charge_kwh": 0.02,
+        },
+    ]
+    _replace_hour_rows(rec, day, test_hour, rows)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    realized_charge = _capture_realized_charge(ctrl, day, ts_now)
+
+    # Legacy fallback: grid_charge_w = max(0, 1200 - 0) = 1200 W -> 1.2 kWh at
+    # dt_h=1.0 (single tick mean).
+    assert realized_charge[test_hour] == pytest.approx(1.2, abs=1e-9)
+
+
+def test_daydata_export_mixed_usability_excludes_null_batt_discharge_tick():
+    """MEDIUM review gap (export side): a tick with grid_export_kwh set but
+    batt_discharge_kwh absent is excluded from the export delta sum -> an
+    hour of ONLY such ticks has zero usable export deltas and falls back to
+    the legacy mean(actual_export_w)x dt_h path, NOT biased to 0."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 17
+    rows = [
+        {
+            # grid_export_kwh present, batt_discharge_kwh NULL (key absent)
+            # -> not usable, excluded from the export delta sum.
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0,
+            "pv_w": 500.0,
+            "batt_w": 800.0,        # discharging -> legacy actual_export_w = min(900,800)=800 W
+            "p1_w": -900.0,
+            "import_price": 0.25,
+            "export_price": 0.10,
+            "grid_export_kwh": 0.015,
+        },
+    ]
+    _replace_hour_rows(rec, day, test_hour, rows)
+
+    captured_realized: list[dict] = []
+
+    def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
+        captured_realized.append({
+            "realized_export_by_hour": (
+                list(kwargs["realized_export_by_hour"])
+                if kwargs.get("realized_export_by_hour") is not None else None
+            ),
+        })
+        return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    with patch(
+        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+        side_effect=_spy_realized,
+    ), patch(
+        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ):
+        ctrl._run_daily_regret_sync(day, ts_now)
+
+    assert captured_realized, "realized_grid_cost must have been called"
+    export_row = captured_realized[-1]["realized_export_by_hour"]
+    assert export_row is not None
+    # Legacy fallback: actual_export_w = min(max(0,900), max(0,800)) = 800 W
+    # -> 0.8 kWh at dt_h=1.0 (single tick mean). NOT 0.0.
+    assert export_row[test_hour] == pytest.approx(0.8, abs=1e-9)

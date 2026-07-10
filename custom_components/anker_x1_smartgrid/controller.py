@@ -2500,16 +2500,24 @@ class Controller:
             hours_with_data: set[int] = set()
 
             # R1: measured v9 per-tick energy-delta buckets (recorder.py's
-            # pv_kwh/house_load_kwh/batt_charge_kwh/grid_export_kwh/
-            # batt_discharge_kwh columns).  Only ticks with a non-NULL delta for
-            # a given quantity contribute — a NULL tick is simply "not usable"
-            # for that quantity and is excluded (not treated as zero).  When an
-            # hour ends up with zero usable ticks for a quantity, the mean-W×dt_h
-            # path below is used instead (pre-v9 rows are byte-identical to
-            # today).  See docs/superpowers/specs/2026-07-06-per-tick-energy-
-            # accounting-design.md.
+            # pv_kwh/house_load_kwh/batt_charge_kwh/grid_import_kwh/
+            # grid_export_kwh/batt_discharge_kwh columns).  Only ticks with a
+            # non-NULL delta for a given quantity contribute — a NULL tick is
+            # simply "not usable" for that quantity and is excluded (not
+            # treated as zero).  When an hour ends up with zero usable ticks
+            # for a quantity, the mean-W×dt_h path below is used instead
+            # (pre-v9 rows are byte-identical to today).  See
+            # docs/superpowers/specs/2026-07-06-per-tick-energy-accounting-
+            # design.md.
             pv_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
             load_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
+            # charge_kwh_delta_by_hour holds GRID-SOURCED battery-charge energy
+            # only (min(batt_charge_kwh, grid_import_kwh) per usable tick — see
+            # below).  batt_charge_kwh alone is TOTAL battery charge (solar +
+            # grid); realized_grid_cost bills this as deliberate grid charging
+            # while solar charging is already accounted for separately via
+            # _apply_solar_load, so using the raw column here would double-
+            # count solar-charged energy as phantom grid cost.
             charge_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
             # Battery-sourced export energy analogue of actual_export_w (min of
             # W): min(grid_export_kwh, batt_discharge_kwh) per tick, only when
@@ -2575,8 +2583,22 @@ class Controller:
                     pv_kwh_delta_by_hour[h].append(float(s["pv_kwh"]))
                 if s.get("house_load_kwh") is not None:
                     load_kwh_delta_by_hour[h].append(float(s["house_load_kwh"]))
-                if s.get("batt_charge_kwh") is not None:
-                    charge_kwh_delta_by_hour[h].append(float(s["batt_charge_kwh"]))
+                # Grid-sourced battery-charge delta: min-of-energy rule,
+                # mirroring grid_charge_w's min-of-power rule above (and the
+                # export delta's min-of-energy rule below).  batt_charge_kwh
+                # is TOTAL battery charge (solar + grid); battery charge
+                # sourced from the grid cannot exceed metered import, so
+                # min(batt_charge_kwh, grid_import_kwh) isolates the
+                # grid-sourced portion — a solar-only charging tick
+                # (grid_import_kwh == 0) contributes 0.0, not the full
+                # battery-charge energy.  Both columns must be non-NULL on
+                # this tick; else the tick is not usable.
+                _batt_charge_kwh = s.get("batt_charge_kwh")
+                _grid_import_kwh = s.get("grid_import_kwh")
+                if _batt_charge_kwh is not None and _grid_import_kwh is not None:
+                    charge_kwh_delta_by_hour[h].append(
+                        min(max(0.0, float(_batt_charge_kwh)), max(0.0, float(_grid_import_kwh)))
+                    )
                 # Battery-sourced export delta: min-of-energy rule, mirroring
                 # actual_export_w's min-of-power rule.  Both columns must be
                 # non-NULL on this tick; else the tick is not usable.
@@ -2625,8 +2647,12 @@ class Controller:
                 for h in range(_spd)
             )
             price = tuple(_mean(price_by_hour[h], 0.20) for h in range(_spd))
-            # Realized grid charge per slot: prefer the measured batt_charge_kwh
-            # delta sum; fall back to mean(grid_charge_w)×dt_h per slot.
+            # Realized GRID-SOURCED charge per slot: prefer the sum of
+            # min(batt_charge_kwh, grid_import_kwh) usable-tick deltas (see
+            # charge_kwh_delta_by_hour above) so solar-charged energy is
+            # excluded; fall back to mean(grid_charge_w)×dt_h per slot, which
+            # already applies the equivalent min-of-power rule
+            # (grid_charge_w = max(0, battery_charge_w − solar_surplus_w)).
             realized_charge = [
                 _energy_kwh(
                     charge_kwh_delta_by_hour[h], _mean(charge_by_hour[h]) / 1000.0 * _dt_h,
