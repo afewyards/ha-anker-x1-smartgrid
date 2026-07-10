@@ -137,7 +137,7 @@ async def _create_entry(hass):
 
 def test_weather_forecast_config_default():
     cfg = Config()
-    assert cfg.ent_weather_forecast == "weather.knmi_home"
+    assert cfg.ent_weather_forecast == "weather.forecast_home"
 
 
 def test_weather_forecast_config_override():

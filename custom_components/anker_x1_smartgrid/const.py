@@ -97,7 +97,7 @@ DEFAULT_BACKTEST_TEST_DAYS = 3
 DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip
 
 DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
-DEFAULT_ENT_WEATHER_FORECAST = "weather.knmi_home"
+DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
 DEFAULT_ADDON_ENABLED = False
@@ -258,27 +258,18 @@ PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 # data.get(CONF_ENT_*, DEFAULT_ENTITIES[CONF_ENT_*]) whenever the resolver
 # didn't set them (soft-role miss, or a config predating the resolver).
 DEFAULT_ENTITIES = {
+    # Anker-device soft-role fallbacks (also resolved per-device by anker_resolver).
     CONF_ENT_PV_POWER: "sensor.anker_x1_usable_pv_power",
     CONF_ENT_METER_POWER: "sensor.anker_x1_meter_total_power",
     CONF_ENT_INVERTER_LOSS: "sensor.anker_x1_inverter_loss",
-    CONF_ENT_PRICE: "sensor.zonneplan_current_electricity_tariff",
-    CONF_ENT_PV_TODAY: [
-        "sensor.home_energy_production_today_remaining",
-    ],
-    CONF_ENT_PV_TOMORROW: [
-        "sensor.home_energy_production_tomorrow",
-    ],
-    CONF_ENT_PV_PEAK_TODAY: [
-        "sensor.home_power_highest_peak_time_today",
-    ],
-    CONF_ENT_PV_PEAK_TOMORROW: [
-        "sensor.home_power_highest_peak_time_tomorrow",
-    ],
-    CONF_ENT_IRRADIANCE: "sensor.knmi_solar_irradiance",
+    # HA-universal defaults (not NL-specific).
     CONF_ENT_SUN: "sun.sun",
-    CONF_ENT_TEMP: "weather.knmi_home",
+    CONF_ENT_TEMP: DEFAULT_ENT_WEATHER_FORECAST,
     CONF_ENT_WEATHER_FORECAST: DEFAULT_ENT_WEATHER_FORECAST,
     CONF_ENT_EXPORT_PRICE: DEFAULT_ENT_EXPORT_PRICE,
+    # NL-install third-party defaults removed (ent_price, ent_irradiance, and the
+    # ent_pv_today/tomorrow/peak_* lists): every runtime reader tolerates a
+    # blank/missing id (None-degrade); see Tasks 4-6.
 }
 
 # --- Anker X1 device picker ---

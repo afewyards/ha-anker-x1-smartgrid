@@ -37,8 +37,27 @@ def test_phase_and_house_load_constants_removed():
 
 def test_weather_forecast_const():
     assert const.CONF_ENT_WEATHER_FORECAST == "ent_weather_forecast"
-    assert const.DEFAULT_ENT_WEATHER_FORECAST == "weather.knmi_home"
-    assert const.DEFAULT_ENTITIES[const.CONF_ENT_WEATHER_FORECAST] == "weather.knmi_home"
+    assert const.DEFAULT_ENT_WEATHER_FORECAST == "weather.forecast_home"
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_WEATHER_FORECAST] == "weather.forecast_home"
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_TEMP] == "weather.forecast_home"
+
+
+def test_default_entities_drops_nl_third_party_ids():
+    """NL-install third-party defaults are removed; only Anker-derived + sun kept."""
+    for key in (
+        const.CONF_ENT_PRICE,
+        const.CONF_ENT_IRRADIANCE,
+        const.CONF_ENT_PV_TODAY,
+        const.CONF_ENT_PV_TOMORROW,
+        const.CONF_ENT_PV_PEAK_TODAY,
+        const.CONF_ENT_PV_PEAK_TOMORROW,
+    ):
+        assert key not in const.DEFAULT_ENTITIES
+    # Kept:
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_SUN] == "sun.sun"
+    assert const.CONF_ENT_EXPORT_PRICE in const.DEFAULT_ENTITIES
+    assert const.CONF_ENT_METER_POWER in const.DEFAULT_ENTITIES
+    assert const.CONF_ENT_PV_POWER in const.DEFAULT_ENTITIES
 
 
 def test_retention_hourly_days_const():

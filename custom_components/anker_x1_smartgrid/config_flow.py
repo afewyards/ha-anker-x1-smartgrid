@@ -40,7 +40,7 @@ def _schema(defaults: dict, services=None) -> vol.Schema:
             ): DeviceSelector(DeviceSelectorConfig(integration=const.ANKER_X1_DOMAIN)),
             vol.Optional(
                 const.CONF_ENT_PRICE,
-                default=defaults.get(const.CONF_ENT_PRICE, const.DEFAULT_ENTITIES[const.CONF_ENT_PRICE]),
+                description={"suggested_value": defaults.get(const.CONF_ENT_PRICE)},
             ): EntitySelector(EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 const.CONF_ENT_WEATHER_FORECAST,
