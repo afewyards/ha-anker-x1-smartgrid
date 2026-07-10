@@ -1,6 +1,9 @@
 # Our OWN glibc base — NOT HA's Alpine add-on base. python:3.12-slim is Debian/glibc cp312;
 # on aarch64 it pulls scikit-learn's prebuilt manylinux wheel. That is the entire point of P0.
-FROM python:3.12-slim@sha256:afdbd1e03f1f46c63fe1aad93f7c96c1c4ab5b2e76eddd1e89fe94e44e9c1418
+# Pin the TAG, not a digest: Docker Hub garbage-collects untagged digests when 3.12-slim is
+# rebuilt for patch releases, so a digest pin (afdbd1e0…) eventually stops resolving and breaks
+# the build. The glibc/cp312 guarantee we actually depend on holds across every 3.12-slim rebuild.
+FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
