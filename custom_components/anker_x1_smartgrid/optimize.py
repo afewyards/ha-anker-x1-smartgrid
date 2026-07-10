@@ -60,6 +60,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
+from . import const
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -539,6 +540,12 @@ def optimize_grid(
     # ------------------------------------------------------------------
     cap_kwh = cfg.capacity_kwh
     floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
+    # Firmware hard discharge floor (const.FIRMWARE_SOC_FLOOR, 5%) — the actual
+    # physical wall the pack sags to.  cfg.soc_floor is a pure DECISION margin
+    # above this (export floor + terminal water-value credit anchor); it no
+    # longer forces a fake physical clamp.  Byte-identical to floor_kwh when
+    # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default).
+    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
     eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
 
@@ -739,10 +746,13 @@ def optimize_grid(
 
                 new_soc_pre = soc_after + g_dc
                 # Floor import on the POST-charge SoC: the charge offsets the
-                # below-floor deficit first; only the remainder is a priced
-                # grid->load import.  Zero whenever new_soc_pre >= floor.
-                floor_import_cost = max(0.0, floor_kwh - new_soc_pre) * price_h
-                new_soc = max(new_soc_pre, floor_kwh)
+                # below-firmware-floor deficit first; only the remainder is a
+                # priced grid->load import.  Booked only where it physically
+                # occurs — below const.FIRMWARE_SOC_FLOOR — not below the
+                # soft cfg.soc_floor margin.  Zero whenever new_soc_pre >=
+                # firmware_floor_kwh.
+                floor_import_cost = max(0.0, firmware_floor_kwh - new_soc_pre) * price_h
+                new_soc = max(new_soc_pre, firmware_floor_kwh)
                 new_b = to_bin(new_soc)
                 eta_g = (
                     eta if eta_curve is None
@@ -765,7 +775,7 @@ def optimize_grid(
                     # backtracking can accumulate the exact values the DP used for routing,
                     # ensuring reported eur == best_cost exactly — even when hedge_drain_kwh
                     # sags a state below floor (MAJOR-1: no unhedged recompute in backtrack).
-                    floor_import_kwh_step = max(0.0, floor_kwh - new_soc_pre)
+                    floor_import_kwh_step = max(0.0, firmware_floor_kwh - new_soc_pre)
                     par_h[new_b] = (b, g_ac, hour_credit, 0.0, floor_import_cost, floor_import_kwh_step)
 
             # Action class B: export discharge (e_dc > 0). Mutually exclusive with
@@ -838,7 +848,11 @@ def optimize_grid(
         # flagged here (it is handled in the shield path, Task C2a). Only the
         # all-pruned pathological case below sets infeasible.
         v = water_value if water_value is not None else 0.0
-        floor_b = to_bin(floor_kwh)
+        # Scan from the firmware floor (widened): sub-soft-floor end states are
+        # now reachable (transition clamp sags to firmware_floor_kwh, not
+        # floor_kwh).  The credit anchor stays at floor_kwh (soft margin) below
+        # so those sub-margin states simply earn zero credit, not a penalty.
+        floor_b = to_bin(firmware_floor_kwh)
         target_b = to_bin(target_kwh)
         best_score = INF
         best_end_b = -1

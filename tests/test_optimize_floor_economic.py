@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import (
     build_charge_mask,
@@ -111,25 +112,31 @@ def test_no_morning_force_charge_rides_to_floor():
 def test_below_floor_drain_priced_as_load_import():
     """All-expensive drain crossing the floor: served by priced direct import.
 
-    capacity 10 kWh, floor 20% (2 kWh), no PV, flat expensive price, water-value
+    capacity 10 kWh, soc_floor 20% (2 kWh, a pure DECISION margin — see D1:
+    passive-drain-to-firmware-floor), no PV, flat expensive price, water-value
     terminal mode with water_value=0 so there is no incentive to charge.  The
-    pack rides to the floor and the below-floor load is met by direct grid->load
-    import.
+    pack rides all the way down to the FIRMWARE floor (const.FIRMWARE_SOC_FLOOR,
+    5% = 0.5 kWh) — not the soft cfg.soc_floor margin — and the below-firmware-
+    floor load is met by direct grid->load import.
 
     eta_charge=0.92 (the live value): charging the battery to serve future load
     costs price/eta per delivered kWh, which is STRICTLY more than direct
     grid->load import (1:1, no eta).  So the DP never charges ahead — it rides to
-    the floor with a zero schedule and imports the deficit directly.  (At eta=1.0
-    the two are exactly tied and the DP may pick an equal-cost charge-ahead path;
-    the eur is identical but the schedule is no longer all-zero.)
+    the firmware floor with a zero schedule and imports the deficit directly.
+    (At eta=1.0 the two are exactly tied and the DP may pick an equal-cost
+    charge-ahead path; the eur is identical but the schedule is no longer
+    all-zero.)
 
-    SoC stays on 0.05 kWh bins (no PV, integer-kWh load/floor), so the import
-    arithmetic is still exact despite eta != 1.
+    SoC stays on 0.05 kWh bins (no PV, integer-kWh load / firmware floor), so
+    the import arithmetic is still exact despite eta != 1.
 
-    Expected (soc_start=3 kWh, load 1 kWh/h, 6 h):
-      h0: 3 -> 2 (== floor)           import 0
-      h1..h5: 2 -> 1 -> clamp 2       import 1.0 kWh each
-    -> eur = 5 x 1.0 kWh x 0.50 = 2.50 ; schedule all-zero (no force-charge).
+    Expected (soc_start=3 kWh, load 1 kWh/h, 6 h, firmware floor=0.5 kWh):
+      h0: 3   -> 2                     import 0   (above both floors)
+      h1: 2   -> 1                     import 0   (above the firmware floor)
+      h2: 1   -> 0   -> clamp 0.5      import 0.5 kWh
+      h3..h5: 0.5 -> -0.5 -> clamp 0.5 import 1.0 kWh each (3 hours)
+    -> kwh = 0.5 + 3x1.0 = 3.5 ; eur = (0.5 + 3.0) x 0.50 = 1.75 ; schedule
+    all-zero (no force-charge to hold either floor).
     """
     cfg = Config(
         capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0,
@@ -147,20 +154,21 @@ def test_below_floor_drain_priced_as_load_import():
         terminal_mode="water_value", water_value=0.0,
     )
 
-    # Independently compute the expected below-floor direct-import cost.
-    floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 2.0
+    # Independently compute the expected below-firmware-floor direct-import cost.
+    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cfg.capacity_kwh  # 0.5
     soc = soc_start / 100.0 * cfg.capacity_kwh
     expected_eur = 0.0
     for h in range(n):
         soc_after = _apply_solar_load(soc, pv[h] - load[h], cfg)
-        expected_eur += max(0.0, floor_kwh - soc_after) * price[h]
-        soc = max(soc_after, floor_kwh)
+        expected_eur += max(0.0, firmware_floor_kwh - soc_after) * price[h]
+        soc = max(soc_after, firmware_floor_kwh)
 
     assert sum(res["schedule"]) == pytest.approx(0.0, abs=1e-9), (
         f"DP must not force-charge to hold the floor, got {res['schedule']}"
     )
     assert res["eur"] == pytest.approx(expected_eur, abs=1e-6)
-    assert expected_eur == pytest.approx(2.50, abs=1e-9)  # sanity on the fixture
+    assert expected_eur == pytest.approx(1.75, abs=1e-9)  # sanity on the fixture
+    assert res["kwh"] == pytest.approx(3.5, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
