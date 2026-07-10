@@ -143,7 +143,7 @@ def test_out_absent_when_dp_raises():
 # 2. Fictive-plan schema parity with live plan
 # ===========================================================================
 
-_LIVE_PLAN_KEYS = {"start", "price", "pv_w", "load_w", "solar_charge_w", "grid_charge_w", "mode", "soc", "charge_w", "is_past_horizon", "grid_export_w", "self_discharge_w", "reserve_soc"}
+_LIVE_PLAN_KEYS = {"start", "price", "pv_w", "load_w", "solar_charge_w", "grid_charge_w", "mode", "soc", "charge_w", "is_past_horizon", "grid_export_w", "self_discharge_w", "reserve_soc", "pv_kwh", "load_kwh", "solar_charge_kwh", "grid_charge_kwh", "grid_export_kwh"}
 
 
 def test_fictive_horizon_schema_matches_live_plan():

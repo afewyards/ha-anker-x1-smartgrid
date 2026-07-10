@@ -113,6 +113,15 @@ def build_plan_horizon(
     ``cfg.eta_charge`` / round-trip-derived scalars exactly as before (parity-safe).
     When supplied, charge/self-discharge/export each look up a power-dependent
     eta from the curve instead.
+
+    Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
+    ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
+    DP's native unit, for planning/charting (e.g. the Lovelace energy card).
+    For future (planned) slots these are ``watts * dt_h / 1000`` derived from
+    the corresponding ``*_w`` field. For past slots they are the measured
+    ``∫P dt`` energy sums passed through verbatim from ``past_actuals_by_hour``
+    (``None`` when a cached actual predates these keys). The ``*_w`` fields
+    are retained unchanged for back-compat (average power over the slot).
     """
     if not slots:
         return []
@@ -156,6 +165,11 @@ def build_plan_horizon(
                     "grid_export_w": act["grid_export_w"],
                     "self_discharge_w": 0.0,
                     "reserve_soc": round(reserve_soc, 1),
+                    "pv_kwh": act.get("pv_kwh"),
+                    "load_kwh": act.get("load_kwh"),
+                    "solar_charge_kwh": act.get("solar_charge_kwh"),
+                    "grid_charge_kwh": act.get("grid_charge_kwh"),
+                    "grid_export_kwh": act.get("grid_export_kwh"),
                 }
             )
             continue
@@ -235,6 +249,11 @@ def build_plan_horizon(
                 "grid_export_w": round(grid_export_w, 1),
                 "self_discharge_w": round(self_discharge_w, 1),
                 "reserve_soc": round(reserve_soc, 1),
+                "pv_kwh": round(pv_w * dt_h / 1000.0, 3) if pv_w is not None else None,
+                "load_kwh": round(load_w * dt_h / 1000.0, 3) if load_w is not None else None,
+                "solar_charge_kwh": round(solar_charge_w * dt_h / 1000.0, 3),
+                "grid_charge_kwh": round(grid_charge_w * dt_h / 1000.0, 3),
+                "grid_export_kwh": round(grid_export_w * dt_h / 1000.0, 3),
             }
         )
     return out
