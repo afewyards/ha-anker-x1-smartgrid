@@ -18,7 +18,9 @@
 # NOTE: header/legend value readouts are intentionally OFF. Every series reads
 # the same entity (whose unit is "h" = planned grid hours), and ApexCharts would
 # otherwise print each series' LAST horizon point — deep night, i.e. 0 — with a
-# bogus "h" suffix ("Solar forecast: 0 h"). The graph itself carries the values.
+# bogus "h" suffix ("Solar forecast: 0 h"). Horizon values are per-slot kWh
+# energy (not instantaneous power); the custom hover tooltip carries the real
+# values in kWh.
 type: custom:config-template-card
 # Listed entities trigger a re-render (and thus a graph_span recompute) on update.
 entities:
@@ -70,11 +72,11 @@ card:
     - id: energy
       opposite: true
       # "Log scale" for the charge/export bars is done by transforming the DATA —
-      # each bar data_generator plots log10(watts) — NOT a native log axis (which
-      # breaks columns). This lifts small bars (a few hundred W) into a visible
-      # band instead of being squashed under the multi-kW bars. Floor: log10(1) = 0,
-      # so the baseline (min 0) is 1 W. The hover tooltip reverses it (10^v ÷ 1000)
-      # to show real kW.
+      # each bar data_generator plots log10(Wh) = log10(kWh × 1000) — NOT a
+      # native log axis (which breaks columns). This lifts small bars (a few
+      # hundred Wh) into a visible band instead of being squashed under the
+      # multi-kWh bars. Floor: log10(1) = 0, so the baseline (min 0) is 1 Wh.
+      # The hover tooltip reverses it (10^v ÷ 1000) to show real kWh.
       min: 0
       show: false
   series:
@@ -97,7 +99,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.pv_w]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
     - entity: sensor.smartgrid_plan
       name: Predicted load
       type: line
@@ -107,7 +109,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.load_w]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.load_kwh]);
     - entity: sensor.smartgrid_plan
       name: Projected SoC
       type: line
@@ -126,7 +128,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_w > 0 ? Math.log10(Math.max(1, h.grid_charge_w)) : null]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
     - entity: sensor.smartgrid_plan
       name: Solar charge
       type: column
@@ -135,11 +137,12 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.solar_charge_w > 0 ? Math.log10(Math.max(1, h.solar_charge_w)) : null]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.solar_charge_kwh > 0 ? Math.log10(Math.max(1, h.solar_charge_kwh * 1000)) : null]);
     # --- Export series (arbitrage leg) ---
-    # Grid export bars are POSITIVE kW on the same energy axis as the charge bars
-    # (charge and export never occur in the same hour, so they never overlap).
-    # Amber color distinguishes export from the red/green charge bars at a glance.
+    # Grid export bars plot POSITIVE per-slot kWh on the same energy axis as the
+    # charge bars (charge and export never occur in the same hour, so they never
+    # overlap). Amber color distinguishes export from the red/green charge bars
+    # at a glance.
     - entity: sensor.smartgrid_plan
       name: Grid export
       type: column
@@ -148,7 +151,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_w > 0 ? Math.log10(Math.max(1, h.grid_export_w)) : null]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
   apex_config:
     chart:
       height: 380
@@ -205,6 +208,8 @@ card:
     # The custom fn takes the hovered timestamp and looks up each series' value
     # AT THAT x via w.globals.seriesX, so misaligned/short series just drop out.
     # Per-series units fix the bogus shared "h" unit the note above warns about.
+    # All energy series (PV, load, charge/export bars) display in kWh; the bar
+    # series additionally reverse the log10(Wh) plot transform before formatting.
     # EVAL: makes apexcharts-card compile it; no ${...} inside, so
     # config-template-card leaves it untouched.
     tooltip:
@@ -214,18 +219,16 @@ card:
         EVAL:function ({ seriesIndex, dataPointIndex, w }) {
           var g = w.globals;
           var x = g.seriesX[seriesIndex][dataPointIndex];
+          var barSeries = { 'Grid charge': 1, 'Solar charge': 1, 'Grid export': 1 };
           var unit = function (name) {
             return name === 'Price' ? '€/kWh'
               : name === 'Projected SoC' ? '%'
-              : (name === 'Solar forecast' || name === 'Predicted load') ? 'W'
-              : 'kW';
+              : 'kWh';
           };
           var fmt = function (name, v) {
             var u = unit(name);
-            // The kW (charge/export) bars are plotted as log10(W) on a linear
-            // axis — undo it and convert back to kW for display.
-            if (u === 'kW') v = Math.pow(10, v) / 1000;
-            var d = u === '€/kWh' ? 3 : u === 'kW' ? 2 : 0;
+            if (barSeries[name]) v = Math.pow(10, v) / 1000;
+            var d = u === '€/kWh' ? 3 : u === 'kWh' ? 2 : 0;
             return Number(v).toFixed(d) + ' ' + u;
           };
           var rows = '';
