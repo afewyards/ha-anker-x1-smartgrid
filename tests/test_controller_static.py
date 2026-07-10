@@ -42,3 +42,39 @@ async def test_record_sample_tolerates_absent_price_and_irradiance(monkeypatch):
     row = ctrl._recorder.rows[-1]
     assert row["import_price"] is None
     assert row["irradiance"] is None
+
+
+from datetime import timedelta
+
+
+@pytest.mark.asyncio
+async def test_tick_static_mode_zero_price_entities_runs_dp(monkeypatch):
+    """Static mode with NO price sensor still ticks (reason ok) and populates a plan."""
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    hass = _StubHass()
+    ctrl, act = _make_controller(hass, data_overrides={
+        const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+        const.CONF_STATIC_PRICE_IMPORT: 0.30,
+        const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+        const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+        const.CONF_ENT_PRICE: "",          # no dynamic price sensor
+        const.CONF_ENT_PV_TODAY: [],
+        const.CONF_ENT_PV_TOMORROW: [],
+    })
+    # Seed plant inputs + sun ONLY — no price forecast entity exists.
+    hass.set_state("sensor.soc", "20.0")
+    hass.set_state("sensor.meter_power", "0.0")
+    hass.set_state("sun.sun", "above_horizon",
+                   {"next_setting": (BASE + timedelta(hours=8)).isoformat()})
+    hass.set_state("sensor.pv_power", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+
+    result = await ctrl.tick()
+
+    # NOT failsafe → synth produced slots, all inputs present, DP ran.
+    assert result["reason"] == "ok"
+    assert ctrl.last_decision, "last_decision must be populated in static mode"
+    assert isinstance(ctrl.last_decision["committed_hours"], list)
+    # The synthesized horizon carried both tariff levels.
+    slots = controller.coordinator.read_price_slots(hass, ctrl._data)
+    assert {round(s.price, 2) for s in slots} == {0.30, 0.10}
