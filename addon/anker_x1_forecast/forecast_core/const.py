@@ -57,6 +57,16 @@ CONF_CHARGE_TROUGH_LOOKBACK_H = "charge_trough_lookback_h"
 # Price-slot resolution: "auto" (detect from datetime spacing) | "15" | "30" | "60"
 CONF_SLOT_RESOLUTION = "slot_resolution"
 
+# Static tariff mode (price source selection) — France/EDF has no dynamic price
+# integration.  price_mode="static" synthesizes slots from these flat/HP-HC values.
+CONF_PRICE_MODE = "price_mode"
+CONF_STATIC_PRICE_IMPORT = "static_price_import"
+CONF_STATIC_PRICE_OFFPEAK = "static_price_offpeak"
+CONF_STATIC_OFFPEAK_HOURS = "static_offpeak_hours"
+CONF_STATIC_PRICE_EXPORT = "static_price_export"
+PRICE_MODE_SENSOR = "sensor"
+PRICE_MODE_STATIC = "static"
+
 # Defaults (spec §8)
 DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
@@ -87,7 +97,7 @@ DEFAULT_BACKTEST_TEST_DAYS = 3
 DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip
 
 DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
-DEFAULT_ENT_WEATHER_FORECAST = "weather.knmi_home"
+DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
 DEFAULT_ADDON_ENABLED = False
@@ -197,6 +207,14 @@ DEFAULT_LOAD_ADAPT_FADE_H = 8
 # (byte-identical / parity-safe); True switches to the recorder-derived curve.
 CONF_USE_MEASURED_ETA = "use_measured_eta"
 DEFAULT_USE_MEASURED_ETA = False
+
+# Static tariff mode defaults.  offpeak price 0.0 = flat-only; export 0.0 = no
+# export credit and never mirrors import (mirror = NL salderen assumption).
+DEFAULT_PRICE_MODE = PRICE_MODE_SENSOR
+DEFAULT_STATIC_PRICE_IMPORT = 0.25
+DEFAULT_STATIC_PRICE_OFFPEAK = 0.0
+DEFAULT_STATIC_OFFPEAK_HOURS = ""
+DEFAULT_STATIC_PRICE_EXPORT = 0.0
 EFFICIENCY_DC_BIN_EDGES_W = [400.0, 800.0, 1500.0, 2500.0, 4000.0]
 EFFICIENCY_MIN_RUNS = 10
 EFFICIENCY_MIN_DC_KWH = 2.0
@@ -240,27 +258,18 @@ PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 # data.get(CONF_ENT_*, DEFAULT_ENTITIES[CONF_ENT_*]) whenever the resolver
 # didn't set them (soft-role miss, or a config predating the resolver).
 DEFAULT_ENTITIES = {
-    CONF_ENT_PV_POWER: "sensor.solar_power",
+    # Anker-device soft-role fallbacks (also resolved per-device by anker_resolver).
+    CONF_ENT_PV_POWER: "sensor.anker_x1_usable_pv_power",
     CONF_ENT_METER_POWER: "sensor.anker_x1_meter_total_power",
     CONF_ENT_INVERTER_LOSS: "sensor.anker_x1_inverter_loss",
-    CONF_ENT_PRICE: "sensor.zonneplan_current_electricity_tariff",
-    CONF_ENT_PV_TODAY: [
-        "sensor.home_energy_production_today_remaining",
-    ],
-    CONF_ENT_PV_TOMORROW: [
-        "sensor.home_energy_production_tomorrow",
-    ],
-    CONF_ENT_PV_PEAK_TODAY: [
-        "sensor.home_power_highest_peak_time_today",
-    ],
-    CONF_ENT_PV_PEAK_TOMORROW: [
-        "sensor.home_power_highest_peak_time_tomorrow",
-    ],
-    CONF_ENT_IRRADIANCE: "sensor.knmi_solar_irradiance",
+    # HA-universal defaults (not NL-specific).
     CONF_ENT_SUN: "sun.sun",
-    CONF_ENT_TEMP: "weather.knmi_home",
+    CONF_ENT_TEMP: DEFAULT_ENT_WEATHER_FORECAST,
     CONF_ENT_WEATHER_FORECAST: DEFAULT_ENT_WEATHER_FORECAST,
     CONF_ENT_EXPORT_PRICE: DEFAULT_ENT_EXPORT_PRICE,
+    # NL-install third-party defaults removed (ent_price, ent_irradiance, and the
+    # ent_pv_today/tomorrow/peak_* lists): every runtime reader tolerates a
+    # blank/missing id (None-degrade); see Tasks 4-6.
 }
 
 # --- Anker X1 device picker ---
@@ -285,5 +294,8 @@ ANKER_ROLE_SUFFIXES: dict[str, str] = {
 ANKER_SOFT_ROLE_SUFFIXES: dict[str, str] = {
     CONF_ENT_METER_POWER: "meter_total_power",
     CONF_ENT_INVERTER_LOSS: "inverter_loss",
+    # Anker-native usable PV power replaces the NL-specific GoodWe sensor.solar_power
+    # default; resolved per-device, soft (a miss falls back to DEFAULT_ENTITIES).
+    CONF_ENT_PV_POWER: "usable_pv_power",
 }
 ANKER_CAPACITY_SUFFIX = "battery_nominal_capacity"
