@@ -67,3 +67,63 @@ def test_empty_and_bad_rows():
     assert aggregate_past_actuals([]) == {}
     assert aggregate_past_actuals([{"ts": "", "pv_w": 1.0}]) == {}
     assert aggregate_past_actuals([{"pv_w": 1.0}]) == {}  # no ts key
+
+
+def test_kwh_keys_sum_deltas():
+    # 3 rows in hour 10, each carrying v9 per-tick kWh deltas.
+    row = {
+        "pv_w": 1000.0,
+        "pv_kwh": 0.02,
+        "load_w": 500.0,
+        "house_load_kwh": 0.01,
+        "batt_w": -600.0,
+        "batt_charge_kwh": 0.01,
+        "p1_w": -200.0,
+        "grid_export_kwh": 0.005,
+        "soc": 50.0,
+    }
+    rows = [{**row, "ts": _ts(10, m)} for m in (0, 20, 40)]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_kwh"] == 0.06
+    assert rec["load_kwh"] == 0.03
+    assert rec["grid_export_kwh"] == 0.015
+    # energy-level solar-first split: surplus = pv_kwh - load_kwh = 0.03
+    assert rec["solar_charge_kwh"] == 0.03
+    assert rec["grid_charge_kwh"] == 0.0
+
+
+def test_kwh_fallback_from_means_when_deltas_null():
+    # No *_kwh columns present -> fall back to mean-W * 1h.
+    rows = [{"ts": _ts(10), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0}]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_kwh"] == 1.0
+    assert rec["load_kwh"] == 0.5
+    assert rec["solar_charge_kwh"] == 0.0
+    assert rec["grid_charge_kwh"] == 0.0
+    assert rec["grid_export_kwh"] == 0.0
+
+
+def test_w_keys_unchanged():
+    # Same rows as test_kwh_keys_sum_deltas: mean-W outputs must be byte-identical
+    # to pre-change behaviour (naive means over pv_w/load_w/soc/batt_w/p1_w).
+    row = {
+        "pv_w": 1000.0,
+        "pv_kwh": 0.02,
+        "load_w": 500.0,
+        "house_load_kwh": 0.01,
+        "batt_w": -600.0,
+        "batt_charge_kwh": 0.01,
+        "p1_w": -200.0,
+        "grid_export_kwh": 0.005,
+        "soc": 50.0,
+    }
+    rows = [{**row, "ts": _ts(10, m)} for m in (0, 20, 40)]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_w"] == 1000.0
+    assert rec["load_w"] == 500.0
+    assert rec["soc"] == 50.0
+    # charge_w = mean(max(0, -batt_w)) = 600; surplus = max(0, pv_w - load_w) = 500
+    assert rec["solar_charge_w"] == 500.0
+    assert rec["grid_charge_w"] == 100.0
+    # grid_export_w = mean(max(0, -p1_w)) = 200
+    assert rec["grid_export_w"] == 200.0
