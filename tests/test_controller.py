@@ -817,6 +817,7 @@ async def test_persist_writes_wrapped_payload():
     assert set(ctrl._store.saved.keys()) == {
         "plan", "enabled", "export_state",
         "today_export_pnl_eur", "export_pnl_day",
+        "today_charge_cost_eur", "today_export_revenue_eur", "total_net_eur",
         "soc_drift_kwh", "soc_drift_day", "soc_drift_last_update",
         "soc_drift_last_soc_pct", "soc_drift_engaged", "soc_drift_last_export_kwh_dc",
     }
