@@ -87,6 +87,13 @@ class Config:
     slot_resolution: str = const.DEFAULT_SLOT_RESOLUTION
     # Measured efficiency curve: False keeps static eta_charge/round_trip_eff (byte-identical).
     use_measured_eta: bool = const.DEFAULT_USE_MEASURED_ETA
+    # Static tariff mode (price source). price_mode="static" synthesizes slots
+    # from these values (see tariff.py); "sensor" keeps the dynamic-sensor path.
+    price_mode: str = const.DEFAULT_PRICE_MODE
+    static_price_import: float = const.DEFAULT_STATIC_PRICE_IMPORT
+    static_price_offpeak: float = const.DEFAULT_STATIC_PRICE_OFFPEAK
+    static_offpeak_hours: str = const.DEFAULT_STATIC_OFFPEAK_HOURS
+    static_price_export: float = const.DEFAULT_STATIC_PRICE_EXPORT
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":

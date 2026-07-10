@@ -57,6 +57,16 @@ CONF_CHARGE_TROUGH_LOOKBACK_H = "charge_trough_lookback_h"
 # Price-slot resolution: "auto" (detect from datetime spacing) | "15" | "30" | "60"
 CONF_SLOT_RESOLUTION = "slot_resolution"
 
+# Static tariff mode (price source selection) — France/EDF has no dynamic price
+# integration.  price_mode="static" synthesizes slots from these flat/HP-HC values.
+CONF_PRICE_MODE = "price_mode"
+CONF_STATIC_PRICE_IMPORT = "static_price_import"
+CONF_STATIC_PRICE_OFFPEAK = "static_price_offpeak"
+CONF_STATIC_OFFPEAK_HOURS = "static_offpeak_hours"
+CONF_STATIC_PRICE_EXPORT = "static_price_export"
+PRICE_MODE_SENSOR = "sensor"
+PRICE_MODE_STATIC = "static"
+
 # Defaults (spec §8)
 DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
@@ -197,6 +207,14 @@ DEFAULT_LOAD_ADAPT_FADE_H = 8
 # (byte-identical / parity-safe); True switches to the recorder-derived curve.
 CONF_USE_MEASURED_ETA = "use_measured_eta"
 DEFAULT_USE_MEASURED_ETA = False
+
+# Static tariff mode defaults.  offpeak price 0.0 = flat-only; export 0.0 = no
+# export credit and never mirrors import (mirror = NL salderen assumption).
+DEFAULT_PRICE_MODE = PRICE_MODE_SENSOR
+DEFAULT_STATIC_PRICE_IMPORT = 0.25
+DEFAULT_STATIC_PRICE_OFFPEAK = 0.0
+DEFAULT_STATIC_OFFPEAK_HOURS = ""
+DEFAULT_STATIC_PRICE_EXPORT = 0.0
 EFFICIENCY_DC_BIN_EDGES_W = [400.0, 800.0, 1500.0, 2500.0, 4000.0]
 EFFICIENCY_MIN_RUNS = 10
 EFFICIENCY_MIN_DC_KWH = 2.0
