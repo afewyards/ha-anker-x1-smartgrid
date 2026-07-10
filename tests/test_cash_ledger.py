@@ -92,3 +92,111 @@ class TestPriceAt:
 
     def test_empty_slots_returns_none(self):
         assert price_at([], BASE, 60) is None
+
+
+from custom_components.anker_x1_smartgrid.models import PlantInputs
+from tests.test_export_pnl_ledger import (  # noqa: E402
+    _StubHass,
+    _make_controller,
+)
+
+
+def _ledger_ctrl():
+    hass = _StubHass()
+    # export_fee_eur_per_kwh: _make_export_cfg's defaults dict does not
+    # override this field, so Config's own default (0.02, see
+    # const.DEFAULT_EXPORT_FEE_EUR_PER_KWH) would otherwise leak through and
+    # break the "eff = raw" pass-through assumed by the cash-ledger tests
+    # below. Zero it explicitly so effective_export_price(raw, cfg) == raw.
+    ctrl, _act, _store, _rec = _make_controller(
+        hass, cfg_overrides={"export_fee_eur_per_kwh": 0.0}
+    )
+    return ctrl, hass
+
+
+class TestCashLedgerAccumulate:
+    def test_grid_charge_tick_accumulates_cost(self):
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")  # charging
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)  # importing
+        slots = [PriceSlot(start=BASE, price=0.30)]
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        assert ctrl.today_charge_cost_eur == pytest.approx(0.0075)
+        assert ctrl.today_export_revenue_eur == 0.0
+        assert ctrl.total_net_eur == pytest.approx(-0.0075)
+
+    def test_export_tick_accumulates_credit_at_effective_price(self):
+        # export_fee_eur_per_kwh defaults to 0 in _make_export_cfg → eff = raw.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "1800.0")  # discharging
+        inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)  # exporting
+        ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, 0.25)
+        assert ctrl.today_export_revenue_eur == pytest.approx(0.00625)
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.total_net_eur == pytest.approx(0.00625)
+
+    def test_missing_battery_reading_skips_both_legs(self):
+        ctrl, hass = _ledger_ctrl()  # battery_power never set → read None
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)
+        ctrl._accumulate_cash_ledger(
+            BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, 0.25
+        )
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.today_export_revenue_eur == 0.0
+        assert ctrl.total_net_eur == 0.0
+
+    def test_no_matching_slot_skips_cost_leg_not_credit_leg(self):
+        # Static-mode regression guard: cost leg must key off the slots list.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "1800.0")
+        inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)
+        stale = [PriceSlot(start=BASE - timedelta(hours=6), price=0.30)]
+        ctrl._accumulate_cash_ledger(BASE, inputs, stale, 60, 0.25)
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.today_export_revenue_eur == pytest.approx(0.00625)
+
+    def test_accumulation_compounds_across_ticks(self):
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)
+        slots = [PriceSlot(start=BASE, price=0.30)]
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        assert ctrl.today_charge_cost_eur == pytest.approx(0.015)
+        assert ctrl.total_net_eur == pytest.approx(-0.015)
+
+
+class TestCashLedgerRollover:
+    def test_rollover_resets_daily_fields_not_total(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.today_export_pnl_eur = 0.5
+        ctrl.today_charge_cost_eur = 1.0
+        ctrl.today_export_revenue_eur = 2.0
+        ctrl.total_net_eur = 1.0
+        ctrl._export_pnl_day = "2026-06-24"  # yesterday relative to BASE
+        ctrl._rollover_daily_ledgers(BASE)
+        assert ctrl.today_export_pnl_eur == 0.0
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.today_export_revenue_eur == 0.0
+        assert ctrl.total_net_eur == 1.0  # lifetime survives
+        assert ctrl._export_pnl_day is not None
+
+    def test_same_day_rollover_is_noop(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl._rollover_daily_ledgers(BASE)  # sets the key
+        ctrl.today_charge_cost_eur = 1.0
+        ctrl._rollover_daily_ledgers(BASE + timedelta(minutes=5))
+        assert ctrl.today_charge_cost_eur == 1.0
+
+
+class TestCashLedgerStatus:
+    def test_status_exposes_cash_keys(self):
+        ctrl, _hass = _ledger_ctrl()
+        ctrl.today_charge_cost_eur = 0.75
+        ctrl.today_export_revenue_eur = 2.0
+        ctrl.total_net_eur = 12.345
+        status = ctrl._status(BASE, 0.0, None, "test")
+        assert status["today_charge_cost_eur"] == pytest.approx(0.75)
+        assert status["today_export_revenue_eur"] == pytest.approx(2.0)
+        assert status["battery_net_today_eur"] == pytest.approx(1.25)
+        assert status["battery_net_total_eur"] == pytest.approx(12.345)
