@@ -72,6 +72,26 @@ def floor_to_slot(dt: datetime, slot_minutes: int) -> datetime:
     return dt.replace(minute=minute, second=0, microsecond=0)
 
 
+def price_at(
+    slots: list[PriceSlot], at: datetime, slot_minutes: int
+) -> float | None:
+    """Price (€/kWh) of the slot covering ``at``; ``None`` when none matches.
+
+    Containment scan (``start <= at < start + duration``) rather than a
+    ``floor_to_slot`` equality so mixed-timezone slot starts and explicit
+    ``duration_min`` values both work; ``duration_min=None`` falls back to
+    ``slot_minutes``.  O(n) over ≤ ~100 slots per tick — negligible.
+
+    Static-tariff-safe by construction: callers pass the DP's slot list
+    (synthesized in static mode), never a raw CONF_ENT_PRICE read.
+    """
+    for s in slots:
+        dur = s.duration_min if s.duration_min else float(slot_minutes)
+        if s.start <= at < s.start + timedelta(minutes=dur):
+            return s.price
+    return None
+
+
 def resample_price_map(
     slots: list[PriceSlot], slot_minutes: int, *, horizon_end: datetime | None = None
 ) -> dict[datetime, float]:

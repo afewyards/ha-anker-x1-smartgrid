@@ -187,6 +187,44 @@ def export_pnl_eur(
     return revenue - cost - opportunity
 
 
+def cash_flows_eur(
+    meter_w: float,
+    batt_w: float,
+    import_price: float | None,
+    export_price_eff: float | None,
+    tick_h: float,
+) -> tuple[float, float]:
+    """Cash-basis ``(cost, credit)`` € pair for one tick interval.
+
+    Sign conventions: ``meter_w`` positive = grid import, negative = export;
+    ``batt_w`` positive = battery discharge, negative = charge.
+
+    - cost   — grid-attributed battery-charge energy × ``import_price``
+    - credit — battery-sourced export energy × ``export_price_eff``
+
+    Attribution is ``min()`` of the two signed readings: PV covers the house
+    first, PV-spill export is excluded — mirrors the C3 battery-sourced-export
+    rule in controller.py.  A leg whose price is ``None`` contributes 0.0
+    (caller-level skip).  Prices may be negative (negative day-ahead hours,
+    fee above tariff); results are deliberately unclamped — cash is cash.
+    NO cycle-cost / eta / opportunity deductions: this is the cash ledger,
+    distinct from the economic ``export_pnl_eur``.
+    """
+    grid_charge_w = min(max(0.0, meter_w), max(0.0, -batt_w))
+    batt_export_w = min(max(0.0, -meter_w), max(0.0, batt_w))
+    cost = (
+        grid_charge_w / 1000.0 * tick_h * import_price
+        if import_price is not None
+        else 0.0
+    )
+    credit = (
+        batt_export_w / 1000.0 * tick_h * export_price_eff
+        if export_price_eff is not None
+        else 0.0
+    )
+    return cost, credit
+
+
 def solar_reservation_ceiling(
     window_pv: list[float],
     window_load: list[float],
