@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Features
+
+- Train load predictors on energy-integral targets and extend plan-horizon slots with per-slot
+  energies
+
+Load predictors (HGBR target + lag features, bucketed tier, backtest baselines/actuals) now train
+  on energy integrals (house_load_kwh_sum × 1000, mean-W fallback) instead of instantaneous power.
+  Plan-horizon slots gain pv_kwh/load_kwh/solar_charge_kwh/grid_charge_kwh/grid_export_kwh
+  (per-slot energies); existing *_w fields are retained but deprecated for display. Past actuals
+  now record measured per-hour energy sums, and the bundled apexcharts card plots kWh instead of
+  average W. The min_train_samples config option no longer gates the bucketed tier — a new internal
+  48-hourly-row gate replaces it.
+
+### Chores
+
+- Add-on container requires a redeploy to pick up the new training target
+  (`addon/anker_x1_forecast`).
+
 ## v0.1.0 (2026-07-08)
 
 ### Chores

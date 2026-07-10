@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from . import featureset
 from .dataquality import FeatureRow
 
 _TZ_AMS = ZoneInfo("Europe/Amsterdam")
@@ -64,12 +65,13 @@ def _baseline_fit_hourly(hourly_rows: list[dict]) -> dict:
     """Hour-mean baseline from hourly rollup row dicts.
 
     Keyed by ``(is_weekend, hour_utc)`` — same convention as ``_baseline_fit``.
-    Rows with ``house_load_mean=None`` are silently skipped.
+    Target is the energy-derived hourly load (``house_load_kwh_sum``×1000,
+    ``house_load_mean`` fallback). Rows where it is ``None`` are silently skipped.
     """
     acc: dict[tuple, list[float]] = {}
     for row in hourly_rows:
         ts_str = row.get("hour_ts")
-        load = row.get("house_load_mean")
+        load = featureset.hourly_load_w(row)
         if ts_str is None or load is None:
             continue
         t_local = datetime.fromisoformat(str(ts_str)).astimezone(_TZ_AMS)
@@ -263,7 +265,8 @@ def walk_forward_hgbr(
     hourly_rows:
         List of ``samples_hourly`` row dicts ordered (or orderable) by
         ``hour_ts`` ASC.  Each row should contain at least ``hour_ts``
-        (UTC ISO string) and ``house_load_mean`` (W, float).
+        (UTC ISO string) and the energy-derived hourly load
+        (``house_load_kwh_sum``×1000, ``house_load_mean`` fallback), W.
     train_days, test_days:
         Rolling-origin window sizes in calendar days.
     fallback_w:
@@ -319,11 +322,12 @@ def walk_forward_hgbr(
                 row for ts, row in parsed
                 if origin - timedelta(days=train_days) <= ts < origin
             ]
-            # Only include test entries that have a real target (house_load_mean).
+            # Only include test entries that have a real target (energy-derived
+            # hourly load: house_load_kwh_sum×1000, house_load_mean fallback).
             test_entries = [
                 (ts, row) for ts, row in parsed
                 if origin <= ts < origin + timedelta(days=test_days)
-                and row.get("house_load_mean") is not None
+                and featureset.hourly_load_w(row) is not None
             ]
 
             if train_rows and test_entries:
@@ -337,7 +341,7 @@ def walk_forward_hgbr(
                     base = _baseline_fit_hourly(train_rows)
 
                     for ts, row in test_entries:
-                        actual = float(row["house_load_mean"])
+                        actual = featureset.hourly_load_w(row)
                         temp = row.get("temp_forecast_mean")
 
                         # Median prediction drives the primary error metrics.
@@ -362,7 +366,7 @@ def walk_forward_hgbr(
                                 for ts, row in window
                             ) / 1000.0
                             act_kwh = sum(
-                                float(row["house_load_mean"]) for _, row in window
+                                featureset.hourly_load_w(row) for _, row in window
                             ) / 1000.0
                             base_kwh = sum(
                                 base.get((ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour), fallback_w)
