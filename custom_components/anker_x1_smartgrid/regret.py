@@ -815,7 +815,7 @@ def realized_grid_cost(
          g_dc = min(g_ac × eta, rate_kwh_h × eta, headroom)
          Full AC cost paid regardless (excess = waste).  Rate cap mirrors DP.
     3. Forced floor-hit import — grid serves unmet load DIRECTLY (grid→load, 1:1):
-         If SoC < soc_floor after steps 1+2:
+         If SoC < firmware floor (const.FIRMWARE_SOC_FLOOR) after steps 1+2:
            forced_import_ac[h] = floor − soc  (1:1; NOT divided by eta).
            SoC clamps to soc_floor.
          Physics: the battery stopped at floor; the grid directly serves the
@@ -848,7 +848,7 @@ def realized_grid_cost(
         _validate_day_len(realized_export_by_hour, "realized_export_by_hour", _expected)
 
     cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
+    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
     eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
@@ -892,11 +892,13 @@ def realized_grid_cost(
                 soc = soc - e_dc_exp
 
         # Step 3: Forced floor-hit import — grid→load direct, 1:1 (no eta loss).
-        if soc < floor_kwh - 1e-9:
-            shortfall_dc = floor_kwh - soc
+        # Books only below the firmware hard floor (const.FIRMWARE_SOC_FLOOR, 5%)
+        # where the import physically occurs — mirrors D1 DP transition semantics.
+        if soc < firmware_floor_kwh - 1e-9:
+            shortfall_dc = firmware_floor_kwh - soc
             forced_ac = shortfall_dc          # 1:1: grid serves load directly
             forced_imports[h] = forced_ac
-            soc = floor_kwh
+            soc = firmware_floor_kwh
 
     total_kwh = sum(realized_charge_by_hour) + sum(forced_imports)
     eur = (

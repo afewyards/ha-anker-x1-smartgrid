@@ -1175,16 +1175,16 @@ def test_options_schema_range_bounds_on_soc_floor_target_eta():
 
 
 async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog):
-    """A soc_floor above the firmware 5% floor means the DP prices the
-    [firmware, soc_floor] band as phantom grid imports — Controller should
-    warn about that on construction (review 4.2)."""
+    """A soc_floor above the firmware 5% floor logs an INFO about the new
+    semantics: soc_floor is export margin only, passive drain modeled to
+    firmware floor."""
     import logging
     from unittest.mock import MagicMock
     from custom_components.anker_x1_smartgrid.controller import Controller
 
     data = dict(const.DEFAULT_ENTITIES)
     data[const.CONF_SOC_FLOOR] = 15.0
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         Controller(
             hass=hass,
             data=data,
@@ -1193,7 +1193,7 @@ async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog
             store=MagicMock(),
         )
     assert any(
-        "firmware" in record.message.lower() and "5" in record.message
+        "export margin only" in record.message and "firmware floor" in record.message
         for record in caplog.records
     )
 

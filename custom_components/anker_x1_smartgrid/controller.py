@@ -1178,13 +1178,11 @@ class Controller:
         self._tick_lock = asyncio.Lock()
         self._price_history_day: str | None = None
         self.cfg = Config.from_dict(data)
-        if self.cfg.soc_floor > const.DEFAULT_SOC_FLOOR + 1e-9:
-            _LOGGER.warning(
-                "soc_floor=%.1f%% > firmware floor %.0f%%: DP floor-import pricing "
-                "assumes the firmware floor; the [%.0f%%, %.1f%%] band is priced as "
-                "phantom grid imports (review 4.2 / L1 caveat)",
-                self.cfg.soc_floor, const.DEFAULT_SOC_FLOOR,
-                const.DEFAULT_SOC_FLOOR, self.cfg.soc_floor,
+        if self.cfg.soc_floor > const.FIRMWARE_SOC_FLOOR + 1e-9:
+            _LOGGER.info(
+                "soc_floor=%.1f%%: export margin only; passive drain modeled "
+                "to firmware floor (%.0f%%)",
+                self.cfg.soc_floor, const.FIRMWARE_SOC_FLOOR,
             )
         self.plan = PlanState.initial(dt_util.utcnow())
         self.enabled = True

@@ -572,42 +572,45 @@ class TestRealizedGridCost:
     # -- (a) Under-charge → forced floor import ---------------------------------
 
     def test_under_charge_forced_floor_import_appears(self):
-        """No deliberate charges; evening load drains battery to floor at h21.
+        """No deliberate charges; evening load drains battery below firmware floor.
 
-        soc_start=40% (4 kWh). Load 1.5 kWh/h at h20-h21. No PV.
+        soc_start=15% (1.5 kWh). Load 1.5 kWh/h at h20-h21. No PV.
         Prices: 0.05 €/kWh h0-h19 & h22-h23; 0.50 €/kWh h20-h21.
+        Firmware floor = 0.5 kWh (5% of 10 kWh); soft floor = 2.0 kWh (20%).
 
-        h0-h19: no change. soc=4.
-        h20: 4 → 2.5. Still above floor (2). No forced import.
-        h21: 2.5 → 1.0. Below floor. forced_import = 1.0 AC kWh at 0.50.
-             soc clamps to 2.0.
-        h22-h23: soc=2. No change.
+        h0-h19: no change. soc=1.5.
+        h20: 1.5 → 0.0. Below firmware floor (0.5).
+             forced_import = 0.5 kWh at 0.50. soc clamps to 0.5.
+        h21: 0.5 → -1.0. Below firmware floor.
+             forced_import = 1.5 kWh at 0.50. soc clamps to 0.5.
+        h22-h23: soc=0.5. No change.
 
         charge_kwh  = 0 (no deliberate charges stored)
-        forced_import_kwh[21] = 1.0, all others 0
-        grid_kwh = 0 + 1.0 = 1.0
-        eur      = 0 + 1.0 × 0.50 = 0.50
+        forced_import_kwh[20] = 0.5, [21] = 1.5, all others 0
+        grid_kwh = 0 + 2.0 = 2.0
+        eur      = 0.5 × 0.50 + 1.5 × 0.50 = 1.00
         """
         cfg = make_cfg()
         load = [0.0] * 20 + [1.5, 1.5] + [0.0] * 2
         price = [0.05] * 20 + [0.50, 0.50, 0.05, 0.05]
-        d = make_day(0, load, price, soc_start=40.0)
+        d = make_day(0, load, price, soc_start=15.0)
         result = realized_grid_cost(d, [0.0] * 24, cfg)
         assert result["charge_kwh"] == pytest.approx(0.0, abs=1e-6)
-        assert result["forced_import_kwh"][21] == pytest.approx(1.0, abs=1e-6)
-        assert sum(result["forced_import_kwh"]) == pytest.approx(1.0, abs=1e-6)
-        assert result["grid_kwh"] == pytest.approx(1.0, abs=1e-6)
-        assert result["eur"] == pytest.approx(0.50, abs=1e-6)
+        assert result["forced_import_kwh"][20] == pytest.approx(0.5, abs=1e-6)
+        assert result["forced_import_kwh"][21] == pytest.approx(1.5, abs=1e-6)
+        assert sum(result["forced_import_kwh"]) == pytest.approx(2.0, abs=1e-6)
+        assert result["grid_kwh"] == pytest.approx(2.0, abs=1e-6)
+        assert result["eur"] == pytest.approx(1.00, abs=1e-6)
 
     def test_under_charge_forced_import_at_peak_price(self):
         """Forced import is charged at the hour it occurs (peak price)."""
         cfg = make_cfg()
         load = [0.0] * 20 + [1.5, 1.5] + [0.0] * 2
         price = [0.05] * 20 + [0.50, 0.50, 0.05, 0.05]
-        d = make_day(0, load, price, soc_start=40.0)
+        d = make_day(0, load, price, soc_start=15.0)
         result = realized_grid_cost(d, [0.0] * 24, cfg)
-        # Forced import (1 kWh) occurs at h21 which has price 0.50
-        assert result["eur"] == pytest.approx(1.0 * 0.50, abs=1e-6)
+        # Forced imports (0.5 + 1.5 kWh) at h20-h21, both at price 0.50
+        assert result["eur"] == pytest.approx(2.0 * 0.50, abs=1e-6)
 
     # -- (b) Over-charge beyond headroom ----------------------------------------
 
@@ -905,25 +908,25 @@ class TestRealizedGridCostEta:
     """
 
     def test_eta_0_9_forced_import_is_1_to_1_not_divided_by_eta(self):
-        """1 kWh DC shortfall at eta=0.9 must give forced_import=1.0, eur=0.50.
+        """0.5 kWh DC shortfall at eta=0.9 must give forced_import=0.5, eur=0.25.
 
-        Bug: forced_ac = shortfall/eta → 1.111 kWh (WRONG).
+        Bug: forced_ac = shortfall/eta → 0.556 kWh (WRONG).
         Fix: forced_ac = shortfall (1:1, grid serves load directly).
 
-        Setup: soc_start=40% (4 kWh), load 1.5 kWh/h h20-h21, no PV, eta=0.9.
-        h20: 4→2.5 (above floor=2). No forced import.
-        h21: 2.5→1.0 < floor=2. shortfall=1.0. forced_ac=1.0 (NOT 1.0/0.9).
-        eur = 1.0 × 0.50 = 0.50.
+        Setup: soc_start=15% (1.5 kWh), load 1.5 kWh/h at h20, no PV, eta=0.9.
+        Firmware floor = 0.5 kWh (5% of 10 kWh).
+        h20: 1.5→0.0 < firmware floor 0.5. shortfall=0.5.
+             forced_ac=0.5 (NOT 0.5/0.9). eur = 0.5 × 0.50 = 0.25.
         """
         cfg = make_cfg(eta_charge=0.9)
-        load = [0.0] * 20 + [1.5, 1.5] + [0.0] * 2
-        price = [0.05] * 20 + [0.50, 0.50, 0.05, 0.05]
-        d = make_day(0, load, price, soc_start=40.0)
+        load = [0.0] * 20 + [1.5] + [0.0] * 3
+        price = [0.05] * 20 + [0.50] + [0.05] * 3
+        d = make_day(0, load, price, soc_start=15.0)
         result = realized_grid_cost(d, [0.0] * 24, cfg)
-        assert result["forced_import_kwh"][21] == pytest.approx(1.0, abs=1e-6)
-        assert sum(result["forced_import_kwh"]) == pytest.approx(1.0, abs=1e-6)
-        assert result["kwh"] == pytest.approx(1.0, abs=1e-6)
-        assert result["eur"] == pytest.approx(0.50, abs=1e-6)
+        assert result["forced_import_kwh"][20] == pytest.approx(0.5, abs=1e-6)
+        assert sum(result["forced_import_kwh"]) == pytest.approx(0.5, abs=1e-6)
+        assert result["kwh"] == pytest.approx(0.5, abs=1e-6)
+        assert result["eur"] == pytest.approx(0.25, abs=1e-6)
 
     def test_eta_0_9_realized_equals_optimal_no_forced_imports(self):
         """Realized == optimal on a simple night-charge day with eta=0.9.
@@ -1121,27 +1124,25 @@ class TestRealizedGridCostExport:
     def test_export_drains_soc_and_triggers_forced_import(self):
         """Change B: realized_grid_cost subtracts exported DC from SoC each hour.
 
-        Setup: cap=10 kWh, floor=20% (2 kWh), soc_start=30% (3 kWh).
+        Setup: cap=10 kWh, soc_floor=20% (2 kWh soft), firmware floor 0.5 kWh,
+        soc_start=10% (1.0 kWh).
         No PV, no load, no deliberate charge.
         Export 1.5 AC kWh at h0 with eta_d=1.0 → e_dc=1.5 kWh.
 
         SoC trajectory with B:
-          Before step 2.5: soc = 3.0 kWh
-          After export drain:  soc = 3.0 − 1.5 = 1.5 kWh  (< floor=2.0)
-          Forced import step:  forced_ac = 2.0 − 1.5 = 0.5 kWh, soc = 2.0
-
-        Without B (pre-fix):
-          SoC stays at 3.0 kWh throughout — no forced import — kwh=0, eur=−0.60.
+          Before step 2.5: soc = 1.0 kWh
+          After export drain:  soc = 1.0 − 1.5 = −0.5 kWh  (< firmware floor 0.5)
+          Forced import step:  forced_ac = 0.5 − (−0.5) = 1.0 kWh, soc = 0.5
 
         With B (post-fix):
-          kwh = 0.0 (no deliberate charge) + 0.5 (forced import) = 0.5
-          eur = 0.5 × 0.20 (price) − 1.5 × 0.40 (export) = 0.10 − 0.60 = −0.50
-          forced_import_kwh[0] = 0.5 > 0
+          kwh = 0.0 (no deliberate charge) + 1.0 (forced import) = 1.0
+          eur = 1.0 × 0.20 (price) − 1.5 × 0.40 (export) = 0.20 − 0.60 = −0.40
+          forced_import_kwh[0] = 1.0 > 0
         """
         cfg = self._cfg()
         price = [0.20] + [0.10] * 23
         ep = [0.40] + [0.0] * 23
-        d = make_day(0, 0, price, soc_start=30.0)   # 3 kWh; floor=2 kWh
+        d = make_day(0, 0, price, soc_start=10.0)   # 1 kWh; firmware floor=0.5 kWh
 
         actual_export = [1.5] + [0.0] * 23          # 1.5 AC kWh at h0
 
@@ -1151,17 +1152,17 @@ class TestRealizedGridCostExport:
             export_price=ep,
         )
 
-        # Forced import must appear: export drained SoC below floor.
-        assert result["forced_import_kwh"][0] == pytest.approx(0.5, abs=1e-6), (
-            f"h0 forced import must be 0.5 kWh (SoC 3→1.5→floor=2); "
+        # Forced import must appear: export drained SoC below firmware floor.
+        assert result["forced_import_kwh"][0] == pytest.approx(1.0, abs=1e-6), (
+            f"h0 forced import must be 1.0 kWh (SoC 1→−0.5→firmware floor=0.5); "
             f"got {result['forced_import_kwh'][0]:.6f}"
         )
-        assert result["kwh"] == pytest.approx(0.5, abs=1e-6), (
-            f"total kwh must be 0.5 (forced import only); got {result['kwh']:.6f}"
+        assert result["kwh"] == pytest.approx(1.0, abs=1e-6), (
+            f"total kwh must be 1.0 (forced import only); got {result['kwh']:.6f}"
         )
-        # eur = 0.5×0.20 − 1.5×0.40 = 0.10 − 0.60 = −0.50
-        assert result["eur"] == pytest.approx(-0.50, abs=1e-6), (
-            f"eur must be −0.50 (forced import cost − export revenue); got {result['eur']:.6f}"
+        # eur = 1.0×0.20 − 1.5×0.40 = 0.20 − 0.60 = −0.40
+        assert result["eur"] == pytest.approx(-0.40, abs=1e-6), (
+            f"eur must be −0.40 (forced import cost − export revenue); got {result['eur']:.6f}"
         )
         assert result["export_revenue_eur"] == pytest.approx(0.60, abs=1e-6), (
             f"export revenue must be 1.5×0.40=0.60; got {result['export_revenue_eur']:.6f}"

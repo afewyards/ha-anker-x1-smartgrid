@@ -24,7 +24,11 @@ import pytest
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
-from custom_components.anker_x1_smartgrid.regret import DayData, hindsight_optimal_grid
+from custom_components.anker_x1_smartgrid.regret import (
+    DayData,
+    hindsight_optimal_grid,
+    realized_grid_cost,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +323,72 @@ class TestFloor10Parity:
 
             opt, hind = _call_both(pv, load, price, soc_start=soc_start, cfg=cfg)
             _assert_parity(opt, hind, tol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# (e) D2: realized_grid_cost books forced imports at the firmware floor, not
+# cfg.soc_floor.
+# ---------------------------------------------------------------------------
+
+
+class TestRealizedGridCostFirmwareFloor:
+    """D2: the backtest leg (realized_grid_cost) must clamp forced floor-hit
+    imports at const.FIRMWARE_SOC_FLOOR (5%), mirroring the D1 DP/oracle
+    transition semantics — NOT at cfg.soc_floor (a pure decision margin)."""
+
+    def test_forced_imports_start_at_firmware_floor_not_soft_floor(self):
+        """soc_floor=10 (1.0 kWh soft floor); soc_start=15% (1.5 kWh); the
+        battery drains straight through the soft floor down to the firmware
+        floor (0.5 kWh) before any forced import is booked."""
+        cfg = Config(
+            capacity_kwh=10.0,
+            soc_floor=10.0,   # 1.0 kWh soft floor — must NOT gate imports
+            soc_target=80.0,
+            max_charge_w=3000.0,
+            eta_charge=1.0,
+            round_trip_eff=1.0,
+        )
+        pv = [0.0] * 4
+        load = [1.0] * 4
+        price = [0.20] * 4
+        day = DayData(
+            pv_kwh=tuple(pv), load_kwh=tuple(load),
+            price=tuple(price), soc_start=15.0,
+        )
+
+        result = realized_grid_cost(day, [0.0] * 4, cfg)
+
+        # h0: 1.5 -> 0.5 (== firmware floor exactly) -> NO import yet, even
+        # though 0.5 kWh is already well below the 1.0 kWh SOFT floor.
+        # h1-h3: 0.5 -> -0.5 each hour -> clamp to 0.5 -> 1.0 kWh import each.
+        assert result["forced_import_kwh"] == pytest.approx(
+            [0.0, 1.0, 1.0, 1.0], abs=1e-9,
+        )
+        assert result["kwh"] == pytest.approx(3.0, abs=1e-9)
+        assert result["eur"] == pytest.approx(0.60, abs=1e-9)
+
+    def test_drain_above_firmware_floor_books_zero_forced_imports(self):
+        """soc_floor=10 (1.0 kWh); a single hour drains 20% -> 7% (2.0 kWh ->
+        0.7 kWh) — below the soft floor but strictly above the firmware floor
+        (0.5 kWh) -> zero forced imports."""
+        cfg = Config(
+            capacity_kwh=10.0,
+            soc_floor=10.0,
+            soc_target=80.0,
+            max_charge_w=3000.0,
+            eta_charge=1.0,
+            round_trip_eff=1.0,
+        )
+        pv = [0.0]
+        load = [1.3]  # 2.0 kWh (20%) -> 0.7 kWh (7%), above the firmware floor
+        price = [0.20]
+        day = DayData(
+            pv_kwh=tuple(pv), load_kwh=tuple(load),
+            price=tuple(price), soc_start=20.0,
+        )
+
+        result = realized_grid_cost(day, [0.0], cfg)
+
+        assert result["forced_import_kwh"] == pytest.approx([0.0], abs=1e-9)
+        assert result["kwh"] == pytest.approx(0.0, abs=1e-9)
+        assert result["eur"] == pytest.approx(0.0, abs=1e-9)
