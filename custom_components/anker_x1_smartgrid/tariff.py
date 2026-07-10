@@ -75,3 +75,53 @@ def _resolution_minutes(ranges: list[tuple[int, int]]) -> int:
     if g <= 0:
         g = 60
     return max(15, g)
+
+
+def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
+    """Synthesize import PriceSlots for static tariff mode.
+
+    Horizon: top of the current local hour → local midnight ending tomorrow
+    (00:00 of now.date()+2 days), emitted as a contiguous UTC grid — a uniform
+    UTC stride with a local-time price lookup is DST-safe by construction.
+
+    Resolution: 60 min for a flat tariff or all-on-hour off-peak boundaries;
+    otherwise gcd of the boundary minute offsets, floored at 15 min.
+
+    Price: ``cfg.static_price_import`` (peak), or ``cfg.static_price_offpeak``
+    when the slot's local start time is in an off-peak range.  Off-peak is
+    active only when ranges are configured AND static_price_offpeak > 0 (0/unset
+    ⇒ flat-only).  An invalid ranges string is treated as flat (config flow
+    validates on entry; this guards direct/legacy edits).
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    try:
+        ranges = parse_offpeak_ranges(cfg.static_offpeak_hours)
+    except ValueError:
+        ranges = []
+    import_price = cfg.static_price_import
+    offpeak_price = cfg.static_price_offpeak
+    use_offpeak = bool(ranges) and offpeak_price > 0.0
+    step_min = _resolution_minutes(ranges) if use_offpeak else 60
+
+    now_local = now.astimezone(tz)
+    start_local = now_local.replace(minute=0, second=0, microsecond=0)
+    end_date = now_local.date() + timedelta(days=2)
+    end_local = datetime(end_date.year, end_date.month, end_date.day, 0, 0, tzinfo=tz)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    step = timedelta(minutes=step_min)
+    slots: list[PriceSlot] = []
+    t = start_utc
+    while t < end_utc:
+        local = t.astimezone(tz)
+        minute_of_day = local.hour * 60 + local.minute
+        price = (
+            offpeak_price
+            if use_offpeak and _in_offpeak(minute_of_day, ranges)
+            else import_price
+        )
+        slots.append(PriceSlot(t, price, duration_min=float(step_min)))
+        t += step
+    return slots
