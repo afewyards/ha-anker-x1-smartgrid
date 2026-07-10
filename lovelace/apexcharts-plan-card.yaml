@@ -25,9 +25,13 @@ type: custom:config-template-card
 # Listed entities trigger a re-render (and thus a graph_span recompute) on update.
 entities:
   - sensor.smartgrid_plan
+  - sensor.smartgrid_battery_net_today
 variables:
   H: states['sensor.smartgrid_plan'].attributes.horizon || []
   PNL: states['sensor.smartgrid_plan'].attributes.arbitrage_pnl
+  # Realized battery cash net for today (spec 2026-07-10). Guarded: missing
+  # entity or unknown/unavailable state renders as null, not NaN.
+  TODAY: (states['sensor.smartgrid_battery_net_today'] && !isNaN(Number(states['sensor.smartgrid_battery_net_today'].state))) ? Number(states['sensor.smartgrid_battery_net_today'].state) : null
 card:
   type: custom:apexcharts-card
   header:
@@ -169,13 +173,16 @@ card:
     stroke:
       dashArray: [0, 0, 0, 0, 0, 0, 0]
     subtitle:
-      text: "${ PNL != null ? 'Export PnL  ' + (PNL >= 0 ? '+' : '') + Number(PNL).toFixed(2) + ' €' : '' }"
+      # Realized cash net today (green/red by sign) + the plan's still-
+      # expected export revenue. Either half drops out when its source is
+      # missing; the separator only renders when both are present.
+      text: "${ (TODAY != null ? 'Today ' + (TODAY >= 0 ? '+' : '') + TODAY.toFixed(2) + ' €' : '') + (TODAY != null && PNL != null ? '  ·  ' : '') + (PNL != null ? 'Plan ' + (PNL >= 0 ? '+' : '') + Number(PNL).toFixed(2) + ' €' : '') }"
       align: left
       offsetY: 4
       style:
         fontSize: "13px"
         fontWeight: 600
-        color: "${ PNL != null && PNL < 0 ? '#ef4444' : '#10b981' }"
+        color: "${ TODAY != null && TODAY < 0 ? '#ef4444' : '#10b981' }"
     legend:
       show: true
       position: bottom
