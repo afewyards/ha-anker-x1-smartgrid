@@ -66,7 +66,7 @@ All tunables are editable via the integration's options flow (**Configure** butt
 | **Battery & charging** | SoC floor/target, efficiencies, charge margin hurdle, trough look-back |
 | **Export & arbitrage** | Enable/disable export, grid limit, fees, cycle cost, reserve sizing, peak band, dwell times |
 | **Price anticipation** | History depth, blend weight, confidence haircut, anticipation margin |
-| **Load model & ML** | Learned model toggle, training thresholds, intraday adaptation, add-on connection |
+| **Load model & ML** | Learned model toggle, intraday adaptation, add-on connection |
 | **System** | Slot resolution, data retention, SoC drift hedge |
 
 ## Entities
@@ -101,7 +101,7 @@ All tunables are editable via the integration's options flow (**Configure** butt
 
 The `sensor.smartgrid_plan` entity exposes the full schedule as attributes:
 
-- **`horizon`** — list of per-slot dicts with price, charge/export decisions, SoC trajectory, and PV forecast
+- **`horizon`** — list of per-slot dicts with price, charge/export decisions, SoC trajectory, and PV forecast — with per-slot energies (`pv_kwh`, `load_kwh`, `solar_charge_kwh`, `grid_charge_kwh`, `grid_export_kwh`) alongside the legacy `*_w` power fields
 - **`deadline`** — when the plan horizon ends
 - **`arbitrage_pnl`** — estimated export revenue (EUR)
 - **`slot_minutes`** — planning slot length (60 or 15)
@@ -109,7 +109,7 @@ The `sensor.smartgrid_plan` entity exposes the full schedule as attributes:
 
 ## Dashboard
 
-A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan visualization card is included in [`lovelace/apexcharts-plan-card.yaml`](lovelace/apexcharts-plan-card.yaml). It shows the price curve, charge/export schedule, and SoC trajectory on a single chart.
+A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan visualization card is included in [`lovelace/apexcharts-plan-card.yaml`](lovelace/apexcharts-plan-card.yaml). It shows the price curve, charge/export schedule (kWh per slot), and SoC trajectory on a single chart.
 
 **Requires** two HACS frontend cards:
 - `apexcharts-card`
@@ -120,11 +120,11 @@ A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan vi
 `addon/anker_x1_forecast/` is an optional companion add-on that offloads house-load forecasting to a dedicated container running scikit-learn.
 
 **What it does:**
-- Trains an HGBR (histogram gradient-boosted regression) model on the integration's recorder history
+- Trains an HGBR (histogram gradient-boosted regression) model on measured hourly energy (kWh) from the integration's recorder history
 - Serves P50/P80 load predictions via HTTP (`POST /predict`)
 - Runs in a glibc container (`python:3.12-slim`) because HAOS's musl/aarch64 Python has no prebuilt sklearn wheel
 
-**The integration works fine without it** — it falls back to in-process forecasting tiers (profile averages, then a locally trained model once enough data accumulates).
+**The integration works fine without it** — it falls back to in-process forecasting tiers (profile averages, then a locally trained model once ~2 days of hourly history accumulate).
 
 To enable: install the add-on, then toggle **Use forecast add-on** in the integration's options under Load model & ML.
 
