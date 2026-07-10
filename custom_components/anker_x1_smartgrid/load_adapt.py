@@ -53,6 +53,24 @@ def compute_ratio(
 
     Only hours present in BOTH the log and past_actuals count; requires
     ``MIN_MATCHED_HOURS`` matches else ``(None, matched)``.
+
+    The actual defaults to the measured hourly energy (``load_kwh`` x 1000,
+    a true integral of power over the clock hour — see
+    ``past_actuals.aggregate_past_actuals``), falling back to the naive-mean
+    ``load_w`` when ``load_kwh`` is ``None`` (pre-v9 rows / no v9 data yet).
+
+    Partial-hour trap: for a still-in-progress or gap-truncated hour,
+    ``load_kwh`` only integrates over the elapsed minutes, so
+    ``load_kwh x 1000`` under-reads the hour's true average power and would
+    wrongly deflate the ratio. The current, in-progress clock hour
+    (``now_h``) can never be matched here: this loop only visits
+    ``now_h - back`` for ``back >= 1`` (never ``back == 0``), and the caller
+    (``Controller._get_past_actuals``) additionally pre-filters
+    ``past_actuals`` to hours strictly before ``now_h``. Both are
+    belt-and-braces — this loop's own bounds are sufficient on their own; see
+    ``test_ratio_never_matches_current_hour_even_if_present_in_actuals``.
+    Gap-truncated *past* hours are a smaller residual risk, self-correcting
+    within ``window_h`` and bounded by the ``RATIO_MIN``/``RATIO_MAX`` clamp.
     """
     pred_sum = 0.0
     act_sum = 0.0
@@ -60,7 +78,9 @@ def compute_ratio(
     for back in range(1, max(1, int(window_h)) + 1):
         h = now_h - timedelta(hours=back)
         pred = log.get(h)
-        actual = (past_actuals.get(h) or {}).get("load_w")
+        act = past_actuals.get(h) or {}
+        load_kwh = act.get("load_kwh")
+        actual = load_kwh * 1000.0 if load_kwh is not None else act.get("load_w")
         if pred is None or actual is None or pred <= 0.0 or actual < 0.0:
             continue
         pred_sum += pred

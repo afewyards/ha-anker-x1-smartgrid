@@ -111,6 +111,46 @@ def test_ratio_actuals_entry_without_load_w_key():
     assert matched == 1
 
 
+def test_ratio_prefers_load_kwh_over_load_w():
+    """load_kwh (true energy integral) wins even when load_w disagrees."""
+    log = _log_with({1: 500.0, 2: 500.0, 3: 500.0})
+    actuals = {
+        H - timedelta(hours=b): {"load_kwh": 0.6, "load_w": 999.0}
+        for b in (1, 2, 3)
+    }
+    ratio, matched = compute_ratio(log, actuals, H, window_h=3)
+    assert matched == 3
+    assert ratio == pytest.approx(1.2)  # (0.6*1000)/500, NOT 999/500
+
+
+def test_ratio_falls_back_to_load_w_when_load_kwh_none():
+    log = _log_with({1: 400.0, 2: 400.0, 3: 400.0})
+    actuals = {
+        H - timedelta(hours=b): {"load_kwh": None, "load_w": 520.0}
+        for b in (1, 2, 3)
+    }
+    ratio, matched = compute_ratio(log, actuals, H, window_h=3)
+    assert matched == 3
+    assert ratio == pytest.approx(1.3)
+
+
+def test_ratio_never_matches_current_hour_even_if_present_in_actuals():
+    """Regression for the partial-hour trap: a still-in-progress current hour
+    (back=0) must never be matched, because its load_kwh only integrates the
+    elapsed minutes and would under-read (deflate) the true average power.
+    The loop only visits now_h - back for back >= 1, so an entry keyed
+    exactly at now_h — even present in both the log and past_actuals, with
+    an outlier value that would wildly deflate the ratio if matched — is
+    structurally never picked up.
+    """
+    log = _log_with({0: 999999.0, 1: 400.0, 2: 400.0, 3: 400.0})
+    actuals = _actuals({1: 520.0, 2: 520.0, 3: 520.0})
+    actuals[H] = {"load_kwh": 0.001, "load_w": 1.0}  # partial in-progress hour
+    ratio, matched = compute_ratio(log, actuals, H, window_h=4)
+    assert matched == 3            # current hour (back=0) never counted
+    assert ratio == pytest.approx(1.3)
+
+
 # ── AdaptivePredictor ──────────────────────────────────────────────────
 def test_wrapper_full_correction_at_lead_zero():
     base = _StubBase(400.0)
