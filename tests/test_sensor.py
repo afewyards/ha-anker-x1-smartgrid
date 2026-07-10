@@ -200,6 +200,23 @@ def test_house_load_sensor_multi_pv_one_unavailable_uses_the_other():
     assert s.native_value == 400.0 + 100.0 + (-50.0) - 30.0
 
 
+def test_house_load_sensor_pv_entity_in_kw_converted_before_summing():
+    """A PV entity reporting kW (unit_of_measurement="kW") is converted to W
+    via coordinator.read_pv_power_w -> read_power_w before summing into the
+    house-load computation."""
+    hass = _StubHass()
+    s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])
+    hass.set_state(_PV_ENT, "0.8", {"unit_of_measurement": "kW"})
+    hass.set_state(_PV_ENT_2, "400.0")
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-500.0")
+    hass.set_state(_LOSS_ENT, "30.0")
+
+    s._recompute()
+
+    assert s.native_value == 800.0 + 400.0 + 100.0 + (-500.0) - 30.0
+
+
 def test_house_load_sensor_multi_pv_all_unavailable_is_none():
     hass = _StubHass()
     s = _make_house_load_sensor_multi(hass, [_PV_ENT, _PV_ENT_2])

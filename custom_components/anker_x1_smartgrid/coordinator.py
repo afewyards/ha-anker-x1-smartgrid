@@ -24,6 +24,31 @@ def read_float(hass: HomeAssistant, entity_id: str) -> float | None:
         return None
 
 
+def read_power_w(hass: HomeAssistant, entity_id: str) -> float | None:
+    """Read a live power entity's state as Watts, unit-aware.
+
+    Parses the state exactly like ``read_float``, then rescales by the
+    entity's ``unit_of_measurement`` state attribute: a unit that
+    (case/whitespace-insensitively) equals ``"kW"`` multiplies the value
+    by 1000. Any other unit, a missing attribute, or a missing/malformed
+    attributes mapping is treated as W — the backward-compatible status
+    quo. Never raises on unexpected attribute types.
+    """
+    val = read_float(hass, entity_id)
+    if val is None:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None:
+        return val
+    try:
+        unit = state.attributes.get("unit_of_measurement")
+    except AttributeError:
+        return val
+    if isinstance(unit, str) and unit.strip().lower() == "kw":
+        return val * 1000.0
+    return val
+
+
 def read_attr(hass: HomeAssistant, entity_id: str, attr: str) -> float | None:
     """Return a state attribute as float, or None if missing/non-numeric."""
     state = hass.states.get(entity_id)
@@ -61,11 +86,15 @@ def read_pv_power_w(hass: HomeAssistant, data: dict) -> float | None:
     non-numeric entities contribute nothing; returns None only when EVERY
     resolved entity is unavailable (fail-safe — preserves the legacy
     single-sensor None-on-unavailable semantics).
+
+    Each entity is read unit-aware (read_power_w): a ``unit_of_measurement``
+    of "kW" is converted to W before summing; any other/missing unit is
+    assumed to already be W.
     """
     total = 0.0
     any_available = False
     for ent in const.resolve_pv_power_entities(data):
-        v = read_float(hass, ent)
+        v = read_power_w(hass, ent)
         if v is not None:
             total += v
             any_available = True

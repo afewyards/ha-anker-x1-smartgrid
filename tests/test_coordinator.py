@@ -796,3 +796,67 @@ async def test_read_pv_power_w_empty_uses_resolver_default(hass):
         {k: v for k, v in _data().items() if k != const.CONF_ENT_PV_POWER},
     ):
         assert coordinator.read_pv_power_w(hass, d) == 500.0
+
+
+# ---------------------------------------------------------------------------
+# read_power_w — unit-aware single-entity power read (W passthrough, kW→W)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_power_w_kw_unit_converts_to_watts(hass):
+    hass.states.async_set("sensor.pv_kw", "1.5", {"unit_of_measurement": "kW"})
+    assert coordinator.read_power_w(hass, "sensor.pv_kw") == 1500.0
+
+
+async def test_read_power_w_kw_unit_case_and_whitespace_insensitive(hass):
+    hass.states.async_set("sensor.pv_kw_1", "2", {"unit_of_measurement": "KW"})
+    assert coordinator.read_power_w(hass, "sensor.pv_kw_1") == 2000.0
+
+    hass.states.async_set("sensor.pv_kw_2", "3", {"unit_of_measurement": " kW "})
+    assert coordinator.read_power_w(hass, "sensor.pv_kw_2") == 3000.0
+
+
+async def test_read_power_w_no_unit_attribute_treated_as_watts(hass):
+    hass.states.async_set("sensor.pv_no_unit", "750")
+    assert coordinator.read_power_w(hass, "sensor.pv_no_unit") == 750.0
+
+
+async def test_read_power_w_explicit_w_unit_unchanged(hass):
+    hass.states.async_set("sensor.pv_w", "800", {"unit_of_measurement": "W"})
+    assert coordinator.read_power_w(hass, "sensor.pv_w") == 800.0
+
+
+async def test_read_power_w_non_string_unit_attribute_no_crash(hass):
+    """A malformed unit_of_measurement (e.g. numeric garbage) must not raise
+    -- treated as W, the safe backward-compatible default."""
+    hass.states.async_set("sensor.pv_bad_unit", "42", {"unit_of_measurement": 1234})
+    assert coordinator.read_power_w(hass, "sensor.pv_bad_unit") == 42.0
+
+
+async def test_read_power_w_unavailable_returns_none(hass):
+    hass.states.async_set("sensor.pv_unavail", "unavailable", {"unit_of_measurement": "kW"})
+    assert coordinator.read_power_w(hass, "sensor.pv_unavail") is None
+
+
+async def test_read_power_w_missing_entity_returns_none(hass):
+    assert coordinator.read_power_w(hass, "sensor.does_not_exist") is None
+
+
+# ---------------------------------------------------------------------------
+# read_pv_power_w — per-entity unit-aware summing (kW entities in the list)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_pv_power_w_kw_entity_converted_before_summing(hass):
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = "sensor.pv_kw_only"
+    hass.states.async_set("sensor.pv_kw_only", "1.2", {"unit_of_measurement": "kW"})
+    assert coordinator.read_pv_power_w(hass, d) == 1200.0
+
+
+async def test_read_pv_power_w_mixed_w_and_kw_entities_sum_correctly(hass):
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = ["sensor.pv_w", "sensor.pv_kw"]
+    hass.states.async_set("sensor.pv_w", "300", {"unit_of_measurement": "W"})
+    hass.states.async_set("sensor.pv_kw", "1.5", {"unit_of_measurement": "kW"})
+    assert coordinator.read_pv_power_w(hass, d) == 300.0 + 1500.0
