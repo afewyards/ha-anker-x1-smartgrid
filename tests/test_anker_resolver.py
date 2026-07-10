@@ -174,3 +174,48 @@ async def test_resolve_missing_usable_pv_power_is_soft(hass):
     resolved, missing = resolve_anker_config(hass, device_id)
     assert const.CONF_ENT_PV_POWER not in resolved   # miss omitted
     assert const.CONF_ENT_PV_POWER not in missing     # soft: never blocks setup
+
+
+async def test_apply_resolution_preserves_configured_pv_list(hass):
+    """A user-configured (non-empty) ent_pv_power list must survive reload
+    unchanged, even though the device exposes its own usable_pv_power sensor
+    (AC-coupled sites: Anker-native PV reads ~0 W and must never clobber a
+    real PV source). Other roles still refresh from the device as normal."""
+    device_id, _ = _register_anker_device(hass)
+    data = {
+        const.CONF_ANKER_DEVICE: device_id,
+        const.CONF_ENT_PV_POWER: ["sensor.envoy_x"],
+        const.CONF_ENT_SOC: "sensor.stale_soc",
+    }
+    apply_anker_resolution(hass, data)
+    assert data[const.CONF_ENT_PV_POWER] == ["sensor.envoy_x"]
+    assert data[const.CONF_ENT_SOC] == "sensor.anker_x1_battery_soc"
+
+
+async def test_apply_resolution_preserves_configured_pv_legacy_string(hass):
+    """Same as above, but the stored ent_pv_power is a legacy single string."""
+    device_id, _ = _register_anker_device(hass)
+    data = {
+        const.CONF_ANKER_DEVICE: device_id,
+        const.CONF_ENT_PV_POWER: "sensor.envoy_x",
+    }
+    apply_anker_resolution(hass, data)
+    assert data[const.CONF_ENT_PV_POWER] == "sensor.envoy_x"
+
+
+async def test_apply_resolution_fills_pv_when_absent(hass):
+    """When ent_pv_power is absent entirely, the device's usable_pv_power IS
+    applied as the default (first-time setup / no user PV config yet)."""
+    device_id, _ = _register_anker_device(hass)
+    data = {const.CONF_ANKER_DEVICE: device_id}
+    apply_anker_resolution(hass, data)
+    assert data[const.CONF_ENT_PV_POWER] == "sensor.anker_x1_usable_pv_power"
+
+
+async def test_apply_resolution_fills_pv_when_empty_list(hass):
+    """When ent_pv_power is present but an empty list, the device's
+    usable_pv_power IS applied — same treatment as absent."""
+    device_id, _ = _register_anker_device(hass)
+    data = {const.CONF_ANKER_DEVICE: device_id, const.CONF_ENT_PV_POWER: []}
+    apply_anker_resolution(hass, data)
+    assert data[const.CONF_ENT_PV_POWER] == "sensor.anker_x1_usable_pv_power"

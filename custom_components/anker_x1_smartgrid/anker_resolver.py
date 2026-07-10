@@ -92,4 +92,11 @@ def apply_anker_resolution(hass: HomeAssistant, data: dict[str, Any]) -> None:
             "Anker device %s: roles %s unresolved on reload; keeping stored ids",
             device_id, missing,
         )
+    # ent_pv_power is a user-configurable options multi-select (config_flow),
+    # not an Anker device role like the others: the device's own PV sensor is
+    # only a default for an empty config, never an override of a stored
+    # choice, because AC-coupled sites (PV behind a separate inverter) read
+    # ~0 W from the Anker-native PV sensor.
+    if const.normalize_pv_power_entities(data.get(const.CONF_ENT_PV_POWER)):
+        resolved.pop(const.CONF_ENT_PV_POWER, None)
     data.update(resolved)
