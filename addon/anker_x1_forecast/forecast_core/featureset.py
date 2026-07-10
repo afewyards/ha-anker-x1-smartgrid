@@ -228,10 +228,22 @@ def encode_calendar_features(ts: Union[datetime, str]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+_EXPECTED_ROWS_PER_HOUR = 60.0  # recorder ticks every 60 s
+
+
 def hourly_load_w(row: dict) -> float | None:
-    """Energy-derived hourly-average load W: kwh_sum×1000 (true ∫P dt), mean-W fallback."""
+    """Energy-derived hourly-average load W: kwh_sum×1000 (true ∫P dt), mean-W fallback.
+
+    Partial-coverage hours (restart/gap): kwh_sum only integrates observed ticks
+    but spans a full clock-hour, so it is rescaled by expected/observed rows
+    (house_load_count) to the time-weighted average W over the observed window
+    instead of diluting the target toward zero.
+    """
     kwh = row.get("house_load_kwh_sum")
     if kwh is not None:
+        count = row.get("house_load_count")
+        if count is not None and 0 < float(count) < _EXPECTED_ROWS_PER_HOUR:
+            return float(kwh) * 1000.0 * (_EXPECTED_ROWS_PER_HOUR / float(count))
         return float(kwh) * 1000.0
     mean = row.get("house_load_mean")
     return float(mean) if mean is not None else None

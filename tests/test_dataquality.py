@@ -162,3 +162,17 @@ def test_clean_hourly_clamps_to_load_max():
     # _LOAD_MAX_W is 25000.0 in dataquality.py (not 15000.0).
     rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 99.0}]
     assert dq.clean_hourly_rows(rows)[0].load_w == 25000.0
+
+
+def test_clean_hourly_partial_coverage_rescaled_by_count():
+    # 30 of 60 expected ticks: 20.0 kWh * 1000 * 60/30 = 40000 W, then clamped
+    # to _LOAD_MAX_W (25000.0). Clamp must apply AFTER rescaling.
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 20.0,
+             "house_load_count": 30}]
+    assert dq.clean_hourly_rows(rows)[0].load_w == 25000.0
+
+
+def test_clean_hourly_full_coverage_unscaled():
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5,
+             "house_load_count": 60}]
+    assert dq.clean_hourly_rows(rows)[0].load_w == 500.0
