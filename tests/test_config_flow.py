@@ -359,6 +359,104 @@ def test_default_entities_includes_ent_export_price():
 
 
 # ---------------------------------------------------------------------------
+# Bug fix — options flow could never be saved on a fresh install: the
+# stored ent_export_price default is "" (mirror-import sentinel), a bare
+# EntitySelector rejects "" outright ("Entity is neither a valid entity ID
+# nor a valid UUID"), and clearing any optional picker hits the same wall.
+# ---------------------------------------------------------------------------
+
+async def test_options_save_with_export_price_blank_succeeds(hass):
+    """Fresh-install default ent_export_price="" must round-trip through a
+    real options-flow save instead of raising an EntitySelector Invalid."""
+    entry = await _create_entry(hass)
+    assert entry.data[const.CONF_ENT_EXPORT_PRICE] == ""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_ENT_EXPORT_PRICE: ""}),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_ENT_EXPORT_PRICE] == ""
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_save_with_export_price_omitted_succeeds(hass):
+    """An untouched picker (key omitted entirely) must also save cleanly."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_SOC_TARGET: 90.0}),
+    )
+    assert result2["type"] == "create_entry"
+    assert const.CONF_ENT_EXPORT_PRICE not in entry.options or entry.options[const.CONF_ENT_EXPORT_PRICE] == ""
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_save_real_export_price_entity_roundtrips(hass):
+    """A real entity id must still validate and be stored verbatim."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_ENT_EXPORT_PRICE: "sensor.feed_in"}),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_ENT_EXPORT_PRICE] == "sensor.feed_in"
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+def test_options_schema_stored_blank_export_price_suggests_none():
+    """A stored "" must not prefill the picker with an invalid blank value
+    (a prefilled "" would just get echoed straight back on save)."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({const.CONF_ENT_EXPORT_PRICE: ""})
+    marker = _flat_markers(schema_obj)[const.CONF_ENT_EXPORT_PRICE]
+    assert marker.description["suggested_value"] is None
+
+
+def test_options_schema_stored_blank_price_suggests_none():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({const.CONF_ENT_PRICE: ""})
+    marker = _flat_markers(schema_obj)[const.CONF_ENT_PRICE]
+    assert marker.description["suggested_value"] is None
+
+
+def test_options_schema_stored_blank_weather_forecast_suggests_none():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({const.CONF_ENT_WEATHER_FORECAST: ""})
+    marker = _flat_markers(schema_obj)[const.CONF_ENT_WEATHER_FORECAST]
+    assert marker.description["suggested_value"] is None
+
+
+def test_options_schema_serializes_for_frontend_with_blank_pickers():
+    """Regression guard for the actual fix mechanism: the options schema
+    must still convert to the frontend JSON shape (voluptuous_serialize,
+    the same helper HA's options-flow HTTP view uses to render the form)
+    even when ent_price/ent_export_price/ent_weather_forecast are stored
+    blank. A naive vol.Any("", EntitySelector(...)) wrapper passes plain
+    vol.Schema validation but crashes this conversion (TypeError from
+    voluptuous_serialize's issubclass(..., Enum) fallback), which would
+    break the options form's rendering entirely — worse than the bug."""
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({
+        const.CONF_ENT_EXPORT_PRICE: "",
+        const.CONF_ENT_PRICE: "",
+        const.CONF_ENT_WEATHER_FORECAST: "",
+    })
+    converted = voluptuous_serialize.convert(schema_obj, custom_serializer=cv.custom_serializer)
+    assert converted
+
+
+# ---------------------------------------------------------------------------
 # House-load field removed — house load is now computed (resolver-managed
 # meter/inverter-loss roles), not a user-configurable entity picker.
 # ---------------------------------------------------------------------------

@@ -24,6 +24,34 @@ from .anker_resolver import resolve_anker_config
 _LOGGER = logging.getLogger(__name__)
 
 
+class _ClearableEntitySelector(EntitySelector):
+    """EntitySelector that also accepts "" (an optional picker with a
+    legitimate blank state).
+
+    A bare EntitySelector raises "Entity is neither a valid entity ID nor
+    a valid UUID" on "" — but "" is a real, expected value here: the
+    const.py DEFAULT_ENT_EXPORT_PRICE sentinel ("no dedicated sensor,
+    mirror import"), and what the frontend resubmits when a user clears an
+    already-set picker. Every fresh install stores ent_export_price="", so
+    without this the options form could never be saved at all.
+
+    Deliberately a Selector subclass, NOT a vol.Any("", EntitySelector(...))
+    wrapper: HA's frontend renders the options form by running the schema
+    through voluptuous_serialize.convert(), which only special-cases
+    vol.Any in the vol.Maybe shape (`vol.Any(None, X)`) and otherwise
+    can't serialize it — a vol.Any("", ...) validator crashes that
+    conversion (TypeError), breaking the form entirely rather than just
+    its submit. Subclassing keeps `isinstance(_, selector.Selector)` true,
+    so serialization (and the rendered widget) stay identical to a plain
+    EntitySelector; only validation of "" changes.
+    """
+
+    def __call__(self, data):
+        if data == "":
+            return data
+        return super().__call__(data)
+
+
 def _schema(defaults: dict, services=None) -> vol.Schema:
     """Initial-setup schema: the Anker device + core sensors only.
 
@@ -262,19 +290,19 @@ def _options_fields(defaults: dict, services=None) -> dict:
             ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
             vol.Optional(
                 const.CONF_ENT_WEATHER_FORECAST,
-                description={"suggested_value": defaults.get(const.CONF_ENT_WEATHER_FORECAST)},
-            ): EntitySelector(EntitySelectorConfig(domain="weather")),
+                description={"suggested_value": defaults.get(const.CONF_ENT_WEATHER_FORECAST) or None},
+            ): _ClearableEntitySelector(EntitySelectorConfig(domain="weather")),
             # NOTE: no device_class filter — €/kWh tariff sensors (e.g. the
             # Zonneplan default) typically carry no device_class, so a
             # "monetary" filter here hides them from the picker (Task 16).
             vol.Optional(
                 const.CONF_ENT_PRICE,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PRICE)},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                description={"suggested_value": defaults.get(const.CONF_ENT_PRICE) or None},
+            ): _ClearableEntitySelector(EntitySelectorConfig(domain="sensor")),
             vol.Optional(
                 const.CONF_ENT_EXPORT_PRICE,
-                description={"suggested_value": defaults.get(const.CONF_ENT_EXPORT_PRICE)},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                description={"suggested_value": defaults.get(const.CONF_ENT_EXPORT_PRICE) or None},
+            ): _ClearableEntitySelector(EntitySelectorConfig(domain="sensor")),
             # --- tunables promoted from install-only to editable ---
             # capacity_kwh intentionally omitted: it is ALWAYS-DERIVED from the Anker
             # nominal-capacity sensor (see _schema above + anker_resolver.resolve_anker_config),
