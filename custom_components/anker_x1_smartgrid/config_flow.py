@@ -18,7 +18,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from . import const, forecast_sources
+from . import const, forecast_sources, tariff
 from .anker_resolver import resolve_anker_config
 
 _LOGGER = logging.getLogger(__name__)
@@ -159,6 +159,11 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_EXPORT_LOAD_COMP_FACTOR,
     ),
     SECTION_PRICE: (
+        const.CONF_PRICE_MODE,
+        const.CONF_STATIC_PRICE_IMPORT,
+        const.CONF_STATIC_PRICE_OFFPEAK,
+        const.CONF_STATIC_OFFPEAK_HOURS,
+        const.CONF_STATIC_PRICE_EXPORT,
         const.CONF_PRICE_HISTORY_DAYS,
         const.CONF_PRICE_BLEND_WEIGHT_TODAY,
         const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT,
@@ -352,6 +357,34 @@ def _options_fields(defaults: dict, services=None) -> dict:
                 default=defaults.get(const.CONF_CHARGE_TROUGH_LOOKBACK_H, const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H),
             ): vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
             vol.Optional(
+                const.CONF_PRICE_MODE,
+                default=defaults.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=const.PRICE_MODE_SENSOR, label="Dynamic price sensor"),
+                        SelectOptionDict(value=const.PRICE_MODE_STATIC, label="Static tariff (flat / HP-HC)"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                const.CONF_STATIC_PRICE_IMPORT,
+                default=defaults.get(const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+            vol.Optional(
+                const.CONF_STATIC_PRICE_OFFPEAK,
+                default=defaults.get(const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+            vol.Optional(
+                const.CONF_STATIC_OFFPEAK_HOURS,
+                default=defaults.get(const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS),
+            ): cv.string,
+            vol.Optional(
+                const.CONF_STATIC_PRICE_EXPORT,
+                default=defaults.get(const.CONF_STATIC_PRICE_EXPORT, const.DEFAULT_STATIC_PRICE_EXPORT),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+            vol.Optional(
                 const.CONF_PRICE_HISTORY_DAYS,
                 default=defaults.get(const.CONF_PRICE_HISTORY_DAYS, const.DEFAULT_PRICE_HISTORY_DAYS),
             ): vol.All(vol.Coerce(int), vol.Range(min=2, max=30)),
@@ -501,6 +534,31 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
                 const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR
             ) >= user_input.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET):
                 errors["base"] = "soc_floor_above_target"
+            if not errors and user_input.get(
+                const.CONF_PRICE_MODE, merged.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE)
+            ) == const.PRICE_MODE_STATIC:
+                _imp = user_input.get(
+                    const.CONF_STATIC_PRICE_IMPORT,
+                    merged.get(const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT),
+                )
+                _op_hours = (user_input.get(
+                    const.CONF_STATIC_OFFPEAK_HOURS,
+                    merged.get(const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS),
+                ) or "").strip()
+                _op_price = user_input.get(
+                    const.CONF_STATIC_PRICE_OFFPEAK,
+                    merged.get(const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK),
+                )
+                if _imp <= 0:
+                    errors["base"] = "static_import_price_required"
+                elif _op_hours:
+                    if _op_price <= 0:
+                        errors["base"] = "static_offpeak_price_required"
+                    else:
+                        try:
+                            tariff.parse_offpeak_ranges(_op_hours)
+                        except ValueError:
+                            errors["base"] = "static_offpeak_hours_invalid"
             if not errors:
                 chosen = user_input.get(const.CONF_FORECAST_SERVICE, []) or []
                 stored = {**self._config_entry.data, **self._config_entry.options}.get(

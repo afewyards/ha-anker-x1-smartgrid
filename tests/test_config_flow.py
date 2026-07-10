@@ -59,7 +59,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 48
+    assert len(section_keys) == 53
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1206,3 +1206,99 @@ async def test_user_flow_derives_pv_from_forecast_service(hass):
         "sensor.home_energy_production_today_remaining"
     ]
     assert result2["data"][const.CONF_FORECAST_SERVICE] == [src.entry_id]
+
+
+def test_options_schema_includes_static_price_fields():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    keys = _flat_keys(_options_schema({}))
+    for k in (
+        const.CONF_PRICE_MODE,
+        const.CONF_STATIC_PRICE_IMPORT,
+        const.CONF_STATIC_PRICE_OFFPEAK,
+        const.CONF_STATIC_OFFPEAK_HOURS,
+        const.CONF_STATIC_PRICE_EXPORT,
+    ):
+        assert k in keys
+
+
+async def test_options_static_mode_requires_positive_import(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_IMPORT: 0.0,
+        }),
+    )
+    assert result2["type"] == "form"
+    assert result2["errors"]["base"] == "static_import_price_required"
+
+
+async def test_options_static_offpeak_hours_must_parse(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_IMPORT: 0.30,
+            const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+            const.CONF_STATIC_OFFPEAK_HOURS: "25:00-07:00",
+        }),
+    )
+    assert result2["type"] == "form"
+    assert result2["errors"]["base"] == "static_offpeak_hours_invalid"
+
+
+async def test_options_static_offpeak_requires_positive_price(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_IMPORT: 0.30,
+            const.CONF_STATIC_PRICE_OFFPEAK: 0.0,
+            const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+        }),
+    )
+    assert result2["type"] == "form"
+    assert result2["errors"]["base"] == "static_offpeak_price_required"
+
+
+async def test_options_static_mode_valid_saves(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_IMPORT: 0.30,
+            const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+            const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+        }),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_PRICE_MODE] == const.PRICE_MODE_STATIC
+    assert entry.options[const.CONF_STATIC_PRICE_IMPORT] == 0.30
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_sensor_mode_ignores_static_fields(hass):
+    """Default price_mode=sensor: a zero static_price_import does NOT error."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({
+            const.CONF_PRICE_MODE: const.PRICE_MODE_SENSOR,
+            const.CONF_STATIC_PRICE_IMPORT: 0.0,
+        }),
+    )
+    assert result2["type"] == "create_entry"
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()

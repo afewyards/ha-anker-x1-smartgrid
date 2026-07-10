@@ -119,15 +119,25 @@
             }
           },
           "price_anticipation": {
-            "name": "Price anticipation",
-            "description": "Estimating tomorrow-morning prices from price history.",
+            "name": "Price source & anticipation",
+            "description": "Where prices come from (dynamic sensor or static tariff) and how tomorrow-morning prices are estimated.",
             "data": {
+              "price_mode": "Price source",
+              "static_price_import": "Static import price (€/kWh)",
+              "static_price_offpeak": "Static off-peak price (€/kWh)",
+              "static_offpeak_hours": "Off-peak hours",
+              "static_price_export": "Static export price (€/kWh)",
               "price_history_days": "Price history depth (days)",
               "price_blend_weight_today": "Today blend weight",
               "anticipation_confidence_haircut": "Anticipation haircut",
               "anticipation_margin_eur_per_kwh": "Anticipation margin (€/kWh)"
             },
             "data_description": {
+              "price_mode": "Dynamic price sensor (default) reads the import price sensor above; Static tariff synthesizes prices from the values below (for installs with no dynamic price integration).",
+              "static_price_import": "Flat price, or the peak (HP) price when off-peak hours are set. Required in static mode. Default 0.25.",
+              "static_price_offpeak": "Off-peak (HC) price. 0 = flat-only (off-peak hours ignored). Default 0.",
+              "static_offpeak_hours": "Comma-separated local-time ranges HH:MM-HH:MM (e.g. 01:30-07:30,12:30-14:30); a range may span midnight. Empty = flat.",
+              "static_price_export": "Constant feed-in price in static mode. 0 = no export credit. Does not mirror the import price. Default 0.",
               "price_history_days": "Days of realized prices kept for the price prior. Default 8.",
               "price_blend_weight_today": "Weight of today's prices versus same-weekday-last-week in the morning estimate (0–1). Default 0.5.",
               "anticipation_confidence_haircut": "Discount applied to the estimated morning price before comparing with tonight (0–1). Default 0.15.",
@@ -183,7 +193,10 @@
     },
     "error": {
       "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration.",
-      "soc_floor_above_target": "SoC floor must be below SoC target."
+      "soc_floor_above_target": "SoC floor must be below SoC target.",
+      "static_import_price_required": "Static mode needs a positive import price.",
+      "static_offpeak_price_required": "Set a positive off-peak price, or clear the off-peak hours.",
+      "static_offpeak_hours_invalid": "Off-peak hours must be comma-separated HH:MM-HH:MM ranges."
     }
   }
 }
