@@ -174,7 +174,11 @@ class _Rec:
     def read_feature_rows(self, since_iso=None):
         return self._rows
     def read_hourly_rows(self, since_iso=None):
-        return []  # HGBR path: is_ready([]) → False → falls through to bucketed
+        # Tier 2 (bucketed) now trains on hourly rollups: >=48 rows clears
+        # DEFAULT_MIN_TRAIN_HOURS while staying far under HGBR's ~28-day
+        # coverage gate, so is_ready() still returns False naturally and the
+        # bucketed tier is the one that engages below.
+        return _cold_warm_hourly_rows()
     def append(self, row): pass
     def purge_older_than(self, *a): return 0
 
@@ -188,6 +192,28 @@ def _cold_warm_rows(n_per=1500):
             cold = d % 2 == 0
             rows.append({"ts": ts.isoformat(), "p1_w": 1000.0 if cold else 300.0,
                          "batt_w": 0.0, "pv_w": 0.0, "temp": 2.0 if cold else 18.0})
+    return rows
+
+
+def _cold_warm_hourly_rows(days=20):
+    """Hourly-rollup equivalent of _cold_warm_rows: one row per hour per day,
+    alternating cold/warm by day (mirrors the per-tick fixture's intent so the
+    bucketed model still sees two distinct per-hour/temp cells). 20 days = 480
+    hourly rows: clears DEFAULT_MIN_TRAIN_HOURS (48) with room to spare, but
+    only ~13 lag-complete dates (20 - 7) — well under HGBR's is_ready()
+    min_days=21 default, so the HGBR coverage gate still fails naturally.
+    """
+    rows = []
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    for d in range(days):
+        cold = d % 2 == 0
+        for h in range(24):
+            ts = base + timedelta(days=d, hours=h)
+            rows.append({
+                "hour_ts": ts.isoformat(),
+                "house_load_kwh_sum": 1.0 if cold else 0.3,
+                "temp_mean": 2.0 if cold else 18.0,
+            })
     return rows
 
 
@@ -514,7 +540,7 @@ def test_retrain_hgbr_ready_but_not_promoted_falls_to_bucketed(monkeypatch):
     monkeypatch.setattr(bt_mod, "walk_forward_hgbr", lambda *a, **kw: metrics)
     monkeypatch.setattr(bt_mod, "should_promote", lambda m: False)
 
-    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=[])
+    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=_cold_warm_hourly_rows())
     ctl = _make_retrain_ctl(rec, min_train_samples=100)
     ctl._retrain_sync("2025-01-01T00:00:00+00:00")
 
@@ -522,12 +548,12 @@ def test_retrain_hgbr_ready_but_not_promoted_falls_to_bucketed(monkeypatch):
 
 
 def test_retrain_hgbr_not_ready_falls_to_bucketed(monkeypatch):
-    """is_ready=False → HGBR skipped entirely; bucketed wins when enough feature rows."""
+    """is_ready=False → HGBR skipped entirely; bucketed wins when enough hourly rows."""
     from custom_components.anker_x1_smartgrid import hgbr as hgbr_mod
 
     monkeypatch.setattr(hgbr_mod.HGBRQuantileModel, "is_ready", lambda self, rows, **kw: False)
 
-    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=[])
+    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=_cold_warm_hourly_rows())
     ctl = _make_retrain_ctl(rec, min_train_samples=100)
     ctl._retrain_sync("2025-01-01T00:00:00+00:00")
 
@@ -560,8 +586,8 @@ def test_retrain_empty_recorder_no_crash():
     ctl = _make_retrain_ctl(rec)
     # Must complete without raising.
     ctl._retrain_sync("2025-01-01T00:00:00+00:00")
-    # With no hourly rows, is_ready returns False → bucketed path; but clean=[] so
-    # len(clean) < min_train_samples → profile.
+    # With no hourly rows, is_ready([]) returns False → HGBR skipped; and
+    # clean_h=[] so len(clean_h) < DEFAULT_MIN_TRAIN_HOURS → profile.
     assert ctl.active_model_name == "profile"
 
 
@@ -571,7 +597,7 @@ def test_retrain_bucketed_path_unchanged(monkeypatch):
 
     monkeypatch.setattr(hgbr_mod.HGBRQuantileModel, "is_ready", lambda self, rows, **kw: False)
 
-    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=[])
+    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=_cold_warm_hourly_rows())
     ctl = _make_retrain_ctl(rec, min_train_samples=100)
     ctl._retrain_sync("2025-01-01T00:00:00+00:00")
 

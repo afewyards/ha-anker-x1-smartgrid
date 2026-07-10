@@ -136,3 +136,29 @@ def test_clean_rows_filters_and_parses():
     assert out[0].load_w == 500.0
     assert out[0].is_weekend is True  # 2026-06-20 is Saturday
     assert out[1].load_w == 25000.0  # clamped
+
+
+# ---------------------------------------------------------------------------
+# clean_hourly_rows — hourly energy-rollup FeatureRows for the bucketed tier
+# ---------------------------------------------------------------------------
+
+
+def test_clean_hourly_prefers_kwh_sum():
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5,
+             "house_load_mean": 700.0, "temp_mean": 18.5}]
+    out = dq.clean_hourly_rows(rows)
+    assert out[0].load_w == 500.0 and out[0].temp == 18.5 and out[0].hour == 10
+
+
+def test_clean_hourly_fallback_and_skips():
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_mean": 700.0},
+            {"hour_ts": "2026-07-09T11:00:00+00:00"},
+            {"house_load_kwh_sum": 1.0}]
+    out = dq.clean_hourly_rows(rows)
+    assert len(out) == 1 and out[0].load_w == 700.0
+
+
+def test_clean_hourly_clamps_to_load_max():
+    # _LOAD_MAX_W is 25000.0 in dataquality.py (not 15000.0).
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 99.0}]
+    assert dq.clean_hourly_rows(rows)[0].load_w == 25000.0

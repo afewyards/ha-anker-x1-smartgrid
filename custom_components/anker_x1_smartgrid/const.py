@@ -77,6 +77,11 @@ DEFAULT_RETENTION_DAYS = 90
 DEFAULT_USE_LEARNED_MODEL = True
 DEFAULT_RETRAIN_HOURS = 24
 DEFAULT_MIN_TRAIN_SAMPLES = 2000
+# Bucketed tier now trains on samples_hourly energy rollups (one FeatureRow per
+# hour) rather than per-tick W samples; 48h = 2 days of hourly rollups. Replaces
+# the 2000-tick min_train_samples gate for this tier. min_train_samples / its
+# config option are kept-dead (still read elsewhere) by decision.
+DEFAULT_MIN_TRAIN_HOURS = 48
 DEFAULT_TRAIN_DAYS = 14
 DEFAULT_BACKTEST_TEST_DAYS = 3
 DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip

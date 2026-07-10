@@ -20,7 +20,7 @@ from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
 from .export_filter import apply_min_export_block
-from .dataquality import clean_rows, house_load_w as _house_load_w
+from .dataquality import clean_hourly_rows, house_load_w as _house_load_w
 from .forecast import build_intervals, LoadPredictor
 from .hgbr import HGBRQuantileModel
 from .loadmodel import BucketedLoadModel
@@ -1408,7 +1408,9 @@ class Controller:
         1. **HGBR** — tried first when the coverage gate (``is_ready``) and
            quality gate (``should_promote``) both pass.  Falls through on any
            failure so the next tier always gets a chance.
-        2. **Bucketed** — existing BucketedLoadModel path, unchanged.
+        2. **Bucketed** — BucketedLoadModel, now trained on hourly energy
+           rollups (``samples_hourly`` → ``clean_hourly_rows``) instead of
+           per-tick W samples; gated on ``DEFAULT_MIN_TRAIN_HOURS``.
         3. **Profile** — rolling profile fallback when all else fails.
         """
         # ------------------------------------------------------------------
@@ -1419,8 +1421,8 @@ class Controller:
             self.active_model_name = "remote"
             return
 
-        rows = self._recorder.read_feature_rows(since_iso=since_iso)
-        clean = clean_rows(rows)
+        hourly_rows = self._recorder.read_hourly_rows(since_iso=since_iso)
+        clean_h = clean_hourly_rows(hourly_rows)
         if self.cfg.use_learned_model:
             # ------------------------------------------------------------------
             # Tier 1: HistGBR (coverage + quality gated)
@@ -1450,12 +1452,14 @@ class Controller:
                     exc_info=True,
                 )
             # ------------------------------------------------------------------
-            # Tier 2: BucketedLoadModel (unchanged behaviour)
+            # Tier 2: BucketedLoadModel — trained on hourly energy rollups
+            # (samples_hourly), one FeatureRow per hour; gated on
+            # DEFAULT_MIN_TRAIN_HOURS rather than the old per-tick sample count.
             # ------------------------------------------------------------------
-            if len(clean) >= self.cfg.min_train_samples:
-                model = BucketedLoadModel.fit(clean)
+            if len(clean_h) >= const.DEFAULT_MIN_TRAIN_HOURS:
+                model = BucketedLoadModel.fit(clean_h)
                 self.backtest_result = bt.walk_forward(
-                    clean,
+                    clean_h,
                     train_days=self.cfg.train_days,
                     test_days=self.cfg.backtest_test_days,
                     fallback_w=const.DEFAULT_FALLBACK_LOAD_W,

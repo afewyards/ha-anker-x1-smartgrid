@@ -110,3 +110,38 @@ def clean_rows(rows: list[dict]) -> list[FeatureRow]:
             )
         )
     return out
+
+
+def clean_hourly_rows(rows: list[dict]) -> list[FeatureRow]:
+    """Parse ``samples_hourly`` rollup rows into FeatureRows for the bucketed tier.
+
+    Preference order for load: ``house_load_kwh_sum`` (energy-derived hourly-average
+    W, ``× 1000``) then ``house_load_mean`` (fallback, e.g. pre-rollup rows or a
+    partial hour). Temp comes from ``temp_mean``. Rows missing ``hour_ts`` or both
+    load fields are dropped; outlier-clamped the same way as ``clean_rows``.
+    """
+    out: list[FeatureRow] = []
+    for row in rows:
+        ts_raw = row.get("hour_ts")
+        if not ts_raw:
+            continue
+        kwh = row.get("house_load_kwh_sum")
+        load = kwh * 1000.0 if kwh is not None else row.get("house_load_mean")
+        if load is None:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_raw))
+        except (ValueError, TypeError):
+            continue
+        load = min(max(0.0, float(load)), _LOAD_MAX_W)
+        temp = row.get("temp_mean")
+        out.append(
+            FeatureRow(
+                ts=ts,
+                hour=ts.hour,
+                is_weekend=ts.weekday() >= 5,
+                load_w=load,
+                temp=float(temp) if temp is not None else None,
+            )
+        )
+    return out
