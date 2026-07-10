@@ -31,7 +31,9 @@ variables:
   PNL: states['sensor.smartgrid_plan'].attributes.arbitrage_pnl
   # Realized battery cash net for today (spec 2026-07-10). Guarded: missing
   # entity or unknown/unavailable state renders as null, not NaN.
-  TODAY: (states['sensor.smartgrid_battery_net_today'] && !isNaN(Number(states['sensor.smartgrid_battery_net_today'].state))) ? Number(states['sensor.smartgrid_battery_net_today'].state) : null
+  # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
+  # YAML plain scalar ("mapping values are not allowed here").
+  TODAY: "(states['sensor.smartgrid_battery_net_today'] && !isNaN(Number(states['sensor.smartgrid_battery_net_today'].state))) ? Number(states['sensor.smartgrid_battery_net_today'].state) : null"
 card:
   type: custom:apexcharts-card
   header:
