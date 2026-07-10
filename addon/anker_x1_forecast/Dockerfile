@@ -12,5 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py health.py trainer.py predictor.py run.sh ./
 COPY forecast_core ./forecast_core
 RUN chmod +x run.sh && useradd --create-home --uid 1000 appuser && chown -R appuser /app
-USER appuser
+# Stays root at container start (no USER line): Supervisor writes
+# /data/options.json root-only, so run.sh must fix its perms before appuser
+# can read it. run.sh drops privileges to appuser itself before exec'ing uvicorn.
 CMD ["./run.sh"]

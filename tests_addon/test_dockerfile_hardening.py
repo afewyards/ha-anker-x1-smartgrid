@@ -10,11 +10,14 @@ _ADDON = Path(__file__).resolve().parent.parent / "addon" / "anker_x1_forecast"
 _BASE_IMAGE_RE = re.compile(r"FROM python:3\.12-slim(@sha256:[0-9a-f]{64})?\b")
 
 
-def test_dockerfile_pins_base_and_drops_root():
+def test_dockerfile_pins_base_and_creates_nonroot_user():
     df = (_ADDON / "Dockerfile").read_text()
     assert _BASE_IMAGE_RE.search(df)  # version-pinned tag, optional digest suffix
     assert "python:3.12-slim:latest" not in df  # never float on :latest
-    assert "\nUSER " in df  # non-root user set
+    # Container starts as root (no USER line) so run.sh can fix
+    # Supervisor-written /data perms, then drops to appuser itself before
+    # exec'ing the app — see tests_addon/test_runtime_privileges.py.
+    assert "appuser" in df  # non-root user still created
 
 
 def test_dockerignore_keeps_source_sha256():
