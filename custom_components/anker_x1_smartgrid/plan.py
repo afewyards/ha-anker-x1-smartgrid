@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from . import const
 from .models import Config, ForecastInterval, PriceSlot
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
 
@@ -107,6 +108,16 @@ def build_plan_horizon(
     ``reserve_by_hour`` maps an hour-start datetime to the ride-out reserve in
     DC kWh (from ``energy.ride_out_reserve_kwh``).  Converted to a ``reserve_soc`` %
     on the SoC axis.  When ``None``, ``reserve_soc`` defaults to ``cfg.soc_floor``.
+
+    The projected-SoC simulation (``soc_sim``) is clamped to the PHYSICAL range
+    ``[const.FIRMWARE_SOC_FLOOR, cfg.soc_target]``, not ``[cfg.soc_floor, cfg.soc_target]``.
+    ``cfg.soc_floor`` is a soft planning margin — nothing force-charges to hold it, so on
+    a deficit night the real battery keeps sagging past it down to the firmware's hard
+    discharge cutoff (``const.FIRMWARE_SOC_FLOOR``, 5%). Clamping the sim at ``cfg.soc_floor``
+    would flat-line the display above where the battery actually settles (or, for
+    ``cfg.soc_floor`` < 5, show an unreachable value below the firmware cutoff).
+    ``reserve_soc`` (the ride-out-reserve display line) is unaffected and still derives
+    from ``cfg.soc_floor`` / ``reserve_by_hour`` as before.
 
     ``eta_curve`` is an optional measured ``EfficiencyCurve`` (see
     ``efficiency.py``).  When ``None`` (default), the SoC sim uses the static
@@ -221,7 +232,7 @@ def build_plan_horizon(
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         if hedge_by_hour and cfg.capacity_kwh > 0:
             soc_sim -= hedge_by_hour.get(hour, 0.0) / cfg.capacity_kwh * 100.0
-        soc_sim = min(max(soc_sim, cfg.soc_floor), cfg.soc_target)
+        soc_sim = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
         # reserve_soc: ride-out reserve as % on the SoC axis, or cfg.soc_floor as default.
         if rsv_by_hour:
             rsv_kwh = rsv_by_hour.get(hour, cfg.soc_floor / 100.0 * cfg.capacity_kwh)

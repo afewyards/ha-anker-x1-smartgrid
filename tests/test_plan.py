@@ -95,7 +95,10 @@ def test_soc_discharges_on_deficit():
     assert out[0]["charge_w"] == 0.0
 
 
-def test_soc_discharge_clamped_at_floor():
+def test_soc_discharge_clamped_at_firmware_floor():
+    """Deficit night (load > pv, no charge, no export): the projected-SoC sim sags to
+    the firmware hard floor (5%), NOT the soft cfg.soc_floor planning margin — nothing
+    force-charges to hold soc_floor, so the real battery keeps draining past it."""
     cfg = Config(capacity_kwh=10.0, soc_floor=10.0, soc_target=100.0,
                  max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
     slots = _slots(3)
@@ -105,8 +108,43 @@ def test_soc_discharge_clamped_at_floor():
     ]
     out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
     socs = [e["soc"] for e in out]
-    # hour0: 20 - 60 -> floored to 10; stays at 10 thereafter
-    assert socs == [10.0, 10.0, 10.0]
+    # hour0: 20 - 60 -> sags well below soc_floor=10, clamps at the firmware floor
+    # (5.0), never at the soft soc_floor=10 config value.
+    assert socs == [5.0, 5.0, 5.0]
+
+
+def test_soc_discharge_clamp_identical_at_live_default_soc_floor():
+    """soc_floor=5 (live default) == FIRMWARE_SOC_FLOOR, so the clamp result is
+    byte-identical to the pre-change behaviour (regression guard for the firmware-
+    floor clamp: same deficit scenario as test_soc_discharge_clamped_at_firmware_floor,
+    just with soc_floor lowered to the firmware value)."""
+    cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
+                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    slots = _slots(3)
+    intervals = [
+        ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0)
+        for i in range(3)
+    ]
+    out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
+    socs = [e["soc"] for e in out]
+    assert socs == [5.0, 5.0, 5.0]
+
+
+def test_soc_discharge_never_below_firmware_floor_when_soc_floor_set_lower():
+    """soc_floor=3 (below the firmware floor) must never let the sim display below
+    5.0 — the firmware refuses to discharge past its hard floor regardless of the
+    (soft) config value."""
+    cfg = Config(capacity_kwh=10.0, soc_floor=3.0, soc_target=100.0,
+                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    slots = _slots(3)
+    intervals = [
+        ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0)
+        for i in range(3)
+    ]
+    out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
+    socs = [e["soc"] for e in out]
+    assert socs == [5.0, 5.0, 5.0]
+    assert all(s >= 5.0 for s in socs)
 
 
 def test_soc_discharge_capped_load_by_max_charge_w():

@@ -71,6 +71,7 @@ PRICE_MODE_STATIC = "static"
 DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
 DEFAULT_SOC_TARGET = 97.0
+FIRMWARE_SOC_FLOOR = 5.0  # X1 hardware floor (%): discharge stops here regardless of cfg.soc_floor
 # Device-derived (X1 nominal charge ceiling): forced at setup in __init__.py,
 # never a UI option.
 DEFAULT_MAX_CHARGE_W = 6000.0
