@@ -273,6 +273,38 @@ DEFAULT_ENTITIES = {
     # blank/missing id (None-degrade); see Tasks 4-6.
 }
 
+
+def normalize_pv_power_entities(value) -> list[str]:
+    """Normalize a stored ``ent_pv_power`` config value to a list of entity ids.
+
+    ``ent_pv_power`` historically stored a single entity-id string (like the
+    other hard/soft Anker roles). It now also supports a list of entity ids
+    summed together (mirroring CONF_ENT_PV_TODAY et al). This normalizes
+    either shape — plus None/""/[] (unconfigured) — to a plain list so every
+    read path (coordinator/controller/sensor/config_flow) can treat
+    ent_pv_power uniformly. Falsy list entries (None, "") are dropped.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value if v]
+
+
+def resolve_pv_power_entities(data: dict) -> list[str]:
+    """Resolve the effective list of PV-power entities for a config-entry data dict.
+
+    Normalizes the stored CONF_ENT_PV_POWER value (legacy single string, new
+    list, or absent/empty); when that normalizes to an empty list, falls back
+    to the DEFAULT_ENTITIES soft-role default (also normalized to a list) so
+    callers always get a list — never a bare string or KeyError.
+    """
+    stored = normalize_pv_power_entities(data.get(CONF_ENT_PV_POWER))
+    if stored:
+        return stored
+    return normalize_pv_power_entities(DEFAULT_ENTITIES.get(CONF_ENT_PV_POWER))
+
+
 # --- Anker X1 device picker ---
 ANKER_X1_DOMAIN = "anker_x1"
 CONF_ANKER_DEVICE = "anker_device"

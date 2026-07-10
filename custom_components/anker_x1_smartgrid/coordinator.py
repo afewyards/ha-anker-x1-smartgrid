@@ -51,6 +51,29 @@ def read_plant_inputs(hass: HomeAssistant, data: dict) -> PlantInputs | None:
     return PlantInputs(soc, meter_w, dt_util.utcnow())
 
 
+def read_pv_power_w(hass: HomeAssistant, data: dict) -> float | None:
+    """Sum live PV-power entities (W).
+
+    ``CONF_ENT_PV_POWER`` supports either a single legacy entity-id string
+    or a list of entity ids summed together (const.resolve_pv_power_entities
+    normalizes both shapes, falling back to the DEFAULT_ENTITIES soft-role
+    default when the stored value is empty/absent). Missing/unavailable/
+    non-numeric entities contribute nothing; returns None only when EVERY
+    resolved entity is unavailable (fail-safe — preserves the legacy
+    single-sensor None-on-unavailable semantics).
+    """
+    total = 0.0
+    any_available = False
+    for ent in const.resolve_pv_power_entities(data):
+        v = read_float(hass, ent)
+        if v is not None:
+            total += v
+            any_available = True
+    if not any_available:
+        return None
+    return total
+
+
 def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     # Static tariff mode: synthesize slots from config, ignore any price sensor.
     if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:

@@ -742,3 +742,57 @@ async def test_read_pv_today_arrays_key_absent_returns_empty(hass):
     d.pop(const.CONF_ENT_PV_TODAY, None)
     d.pop(const.CONF_ENT_PV_PEAK_TODAY, None)
     assert coordinator.read_pv_today_arrays(hass, d) == []
+
+
+# ---------------------------------------------------------------------------
+# read_pv_power_w — multi-sensor summed live PV power (W)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_pv_power_w_legacy_string_single_sensor_unchanged(hass):
+    """A legacy string-valued CONF_ENT_PV_POWER behaves exactly like a single
+    read_float call: value passthrough, None when unavailable."""
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = "sensor.solar_power"
+    hass.states.async_set("sensor.solar_power", "1234")
+    assert coordinator.read_pv_power_w(hass, d) == 1234.0
+
+    hass.states.async_set("sensor.solar_power", "unavailable")
+    assert coordinator.read_pv_power_w(hass, d) is None
+
+
+async def test_read_pv_power_w_sums_two_sensors(hass):
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = ["sensor.pv_1", "sensor.pv_2"]
+    hass.states.async_set("sensor.pv_1", "100")
+    hass.states.async_set("sensor.pv_2", "200")
+    assert coordinator.read_pv_power_w(hass, d) == 300.0
+
+
+async def test_read_pv_power_w_one_unavailable_uses_other(hass):
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = ["sensor.pv_1", "sensor.pv_2"]
+    hass.states.async_set("sensor.pv_1", "unavailable")
+    hass.states.async_set("sensor.pv_2", "250")
+    assert coordinator.read_pv_power_w(hass, d) == 250.0
+
+
+async def test_read_pv_power_w_all_unavailable_returns_none(hass):
+    d = _data()
+    d[const.CONF_ENT_PV_POWER] = ["sensor.pv_1", "sensor.pv_2"]
+    hass.states.async_set("sensor.pv_1", "unavailable")
+    hass.states.async_set("sensor.pv_2", "unknown")
+    assert coordinator.read_pv_power_w(hass, d) is None
+
+
+async def test_read_pv_power_w_empty_uses_resolver_default(hass):
+    """Stored value normalizes to [] (empty string, empty list, or key
+    absent) → falls back to the DEFAULT_ENTITIES soft-role default."""
+    default_entity = const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER]
+    hass.states.async_set(default_entity, "500")
+    for d in (
+        {**_data(), const.CONF_ENT_PV_POWER: ""},
+        {**_data(), const.CONF_ENT_PV_POWER: []},
+        {k: v for k, v in _data().items() if k != const.CONF_ENT_PV_POWER},
+    ):
+        assert coordinator.read_pv_power_w(hass, d) == 500.0

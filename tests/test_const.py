@@ -141,3 +141,52 @@ def test_export_drain_window_default():
     from custom_components.anker_x1_smartgrid.models import Config
     assert const.DEFAULT_EXPORT_DRAIN_WINDOW_H == 0.0
     assert Config().export_drain_window_h == 0.0
+
+
+# ── PV-power multi-sensor normalization (const.normalize_pv_power_entities) ──
+
+
+def test_normalize_pv_power_entities_none_is_empty_list():
+    assert const.normalize_pv_power_entities(None) == []
+
+
+def test_normalize_pv_power_entities_empty_string_is_empty_list():
+    assert const.normalize_pv_power_entities("") == []
+
+
+def test_normalize_pv_power_entities_empty_list_is_empty_list():
+    assert const.normalize_pv_power_entities([]) == []
+
+
+def test_normalize_pv_power_entities_legacy_string_wraps_in_list():
+    assert const.normalize_pv_power_entities("sensor.solar_power") == ["sensor.solar_power"]
+
+
+def test_normalize_pv_power_entities_list_passthrough():
+    assert const.normalize_pv_power_entities(
+        ["sensor.pv_1", "sensor.pv_2"]
+    ) == ["sensor.pv_1", "sensor.pv_2"]
+
+
+def test_normalize_pv_power_entities_drops_falsy_list_entries():
+    assert const.normalize_pv_power_entities(["sensor.pv_1", "", None]) == ["sensor.pv_1"]
+
+
+# ── PV-power resolution (const.resolve_pv_power_entities) ───────────────────
+
+
+def test_resolve_pv_power_entities_legacy_string_stored():
+    data = {const.CONF_ENT_PV_POWER: "sensor.solar_power"}
+    assert const.resolve_pv_power_entities(data) == ["sensor.solar_power"]
+
+
+def test_resolve_pv_power_entities_list_stored():
+    data = {const.CONF_ENT_PV_POWER: ["sensor.pv_1", "sensor.pv_2"]}
+    assert const.resolve_pv_power_entities(data) == ["sensor.pv_1", "sensor.pv_2"]
+
+
+def test_resolve_pv_power_entities_empty_falls_back_to_default():
+    for data in ({const.CONF_ENT_PV_POWER: ""}, {const.CONF_ENT_PV_POWER: []}, {}):
+        assert const.resolve_pv_power_entities(data) == [
+            const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER]
+        ]
