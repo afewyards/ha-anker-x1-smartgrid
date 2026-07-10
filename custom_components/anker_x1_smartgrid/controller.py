@@ -161,10 +161,14 @@ def _dp_select_slots(
     Export-credit term
     ------------------
     ``export_price`` (live feed-in tariff, €/kWh) seeds a per-hour export
-    price forecast for the window.  When ``export_price_matches_import=True``
-    (the common case: both entities point at the same Zonneplan tariff),
-    ``feed_in = window_price`` exactly — the per-hour import curve is reused,
-    so the planner sees the real evening peak in the export credit.  When the
+    price forecast for the window.  In static tariff mode
+    (``cfg.price_mode == PRICE_MODE_STATIC``), ``export_price`` is the
+    configured constant and is always flat-broadcast — never ratio-scaled by
+    the import curve's shape, even under an HP/HC import schedule.  In
+    sensor mode, when ``export_price_matches_import=True`` (the common case:
+    both entities point at the same Zonneplan tariff), ``feed_in =
+    window_price`` exactly — the per-hour import curve is reused, so the
+    planner sees the real evening peak in the export credit.  When the
     entities differ, the import curve is ratio-scaled by
     ``export_price / window_price[0]`` (current-hour import price), guarding
     against divide-by-zero (falls back to flat broadcast when current import ≈ 0).
@@ -262,6 +266,13 @@ def _dp_select_slots(
     #
     # Strategy (fixes flat-broadcast bug — planner was blind to evening peaks):
     #
+    # Case 0 — static tariff mode (cfg.price_mode == PRICE_MODE_STATIC).
+    #   export_price is the configured constant (static_price_export), not a
+    #   sensor value that tracks the import curve — always flat-broadcast it.
+    #   Never ratio-scale by the import curve's shape here: an HP/HC import
+    #   schedule would otherwise make the export credit swing between hours
+    #   instead of staying the flat configured constant.
+    #
     # Case 1 — export entity == import entity (common: both are the Zonneplan
     #   tariff).  Reuse window_price directly so the planner sees the real
     #   per-hour curve, including the evening peak.
@@ -280,6 +291,17 @@ def _dp_select_slots(
     if export_price is None:
         window_export_price: list[float] = [0.0] * window_len
         feed_in: list[float] | None = None
+    elif cfg.price_mode == const.PRICE_MODE_STATIC:
+        # Static tariff mode: export_price IS the configured constant
+        # (static_price_export), not a live sensor tracking the import curve.
+        # Always flat-broadcast it — never ratio-scale by the import curve's
+        # shape. Ratio-scaling here would make a fixed export credit swing
+        # with an HP/HC import schedule (e.g. 0.30 peak / 0.10 offpeak),
+        # mirroring the import curve instead of staying the configured flat
+        # constant, which the static-mode spec explicitly forbids.
+        eff = optimize_mod.effective_export_price(export_price, cfg)
+        window_export_price = [eff] * window_len
+        feed_in = [eff] * window_len
     elif export_price_matches_import:
         # Same entity → per-hour export prices == per-hour import prices, less the fee.
         window_export_price = [optimize_mod.effective_export_price(p, cfg) for p in window_price]
