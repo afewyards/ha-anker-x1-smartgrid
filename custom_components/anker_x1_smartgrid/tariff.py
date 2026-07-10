@@ -8,9 +8,9 @@ tomorrow-local-midnight horizon.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from math import gcd
 
 from .models import Config, PriceSlot
+from .resolution import _ALLOWED as _RESOLUTION_STEPS  # (15, 30, 60)
 
 
 def _parse_hhmm(value: str) -> int:
@@ -64,17 +64,25 @@ def _in_offpeak(minute_of_day: int, ranges: list[tuple[int, int]]) -> bool:
 
 
 def _resolution_minutes(ranges: list[tuple[int, int]]) -> int:
-    """Slot width: 60 if every boundary is on the hour, else gcd of the boundary
-    minute-of-hour offsets, floored at 15."""
+    """Slot width, always one the planner's resolution grid can represent.
+
+    60 for a flat tariff or when every boundary sits on the hour; otherwise the
+    largest of resolution.py's {60,30,15} (_RESOLUTION_STEPS, mirrors
+    resolution._ALLOWED/_snap) that evenly divides every boundary's
+    minute-of-hour offset. If no candidate divides exactly (e.g. :20/:40
+    boundaries -- gcd would give an unrepresentable 20), falls back to 15, the
+    finest representable grid: the emitted slot-start membership test (see
+    _in_offpeak / synth_static_price_slots) still prices such odd boundaries
+    correctly, since each slot's price is evaluated at its own start time
+    rather than requiring the boundary to land exactly on a slot edge.
+    """
     if not ranges:
         return 60
-    g = 60
-    for start, end in ranges:
-        g = gcd(g, start % 60)
-        g = gcd(g, end % 60)
-    if g <= 0:
-        g = 60
-    return max(15, g)
+    offsets = {v % 60 for pair in ranges for v in pair}
+    for candidate in sorted(_RESOLUTION_STEPS, reverse=True):
+        if all(o % candidate == 0 for o in offsets):
+            return candidate
+    return 15
 
 
 def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
@@ -85,7 +93,9 @@ def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
     UTC stride with a local-time price lookup is DST-safe by construction.
 
     Resolution: 60 min for a flat tariff or all-on-hour off-peak boundaries;
-    otherwise gcd of the boundary minute offsets, floored at 15 min.
+    otherwise the largest of {60,30,15} that evenly divides every boundary
+    offset, else 15 min (see ``_resolution_minutes``) -- always a width the
+    planner's resolution grid (resolution.py) can represent.
 
     Price: ``cfg.static_price_import`` (peak), or ``cfg.static_price_offpeak``
     when the slot's local start time is in an off-peak range.  Off-peak is

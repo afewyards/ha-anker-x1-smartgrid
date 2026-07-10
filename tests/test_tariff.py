@@ -64,7 +64,14 @@ def test_resolution_minutes_floored_at_15():
     assert tariff._resolution_minutes([(65, 125)]) == 15   # :05 → gcd 5 → floor 15
 
 
-from datetime import datetime, timezone
+def test_resolution_minutes_offhour_offset_not_on_allowed_grid_snaps_to_15():
+    # 01:20-06:20 → boundary offset :20 is not a multiple of 30 or 60, and the
+    # planner's resolution grid only has {15,30,60} (no 20) — must snap to 15,
+    # not the raw gcd(40,20)=20 (an unrepresentable slot width).
+    assert tariff._resolution_minutes([(80, 380)]) == 15
+
+
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from custom_components.anker_x1_smartgrid.models import Config
@@ -113,6 +120,23 @@ def test_synth_half_hour_resolution():
     assert by[datetime(2026, 7, 11, 1, 0, tzinfo=_UTC)] == 0.30
     assert by[datetime(2026, 7, 11, 6, 0, tzinfo=_UTC)] == 0.10
     assert by[datetime(2026, 7, 11, 6, 30, tzinfo=_UTC)] == 0.30
+
+
+def test_synth_offhour_offset_uniform_15min_stride():
+    # Off-peak boundaries at :20 (not representable on the {15,30,60} grid at
+    # any coarser width) must synthesize on a uniform 15-min UTC stride, not
+    # leave gaps from an unrepresentable 20-min step.
+    now = datetime(2026, 7, 10, 14, 0, tzinfo=_UTC)
+    cfg = _cfg(static_price_import=0.30, static_price_offpeak=0.10, static_offpeak_hours="01:20-06:20")
+    slots = tariff.synth_static_price_slots(now, cfg, _UTC)
+    assert all(s.duration_min == 15.0 for s in slots)
+    starts = [s.start for s in slots]
+    assert all((starts[i + 1] - starts[i]) == timedelta(minutes=15) for i in range(len(starts) - 1))
+    by = {s.start: s.price for s in slots}
+    assert by[datetime(2026, 7, 11, 1, 15, tzinfo=_UTC)] == 0.30   # before 01:20 -> still peak
+    assert by[datetime(2026, 7, 11, 1, 30, tzinfo=_UTC)] == 0.10   # first 15-min slot inside range
+    assert by[datetime(2026, 7, 11, 6, 15, tzinfo=_UTC)] == 0.10   # before 06:20 -> still offpeak
+    assert by[datetime(2026, 7, 11, 6, 30, tzinfo=_UTC)] == 0.30   # after end -> peak
 
 
 def test_synth_midnight_span_offpeak():
