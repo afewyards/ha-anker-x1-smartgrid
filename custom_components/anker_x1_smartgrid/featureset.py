@@ -228,6 +228,15 @@ def encode_calendar_features(ts: Union[datetime, str]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def hourly_load_w(row: dict) -> float | None:
+    """Energy-derived hourly-average load W: kwh_sum×1000 (true ∫P dt), mean-W fallback."""
+    kwh = row.get("house_load_kwh_sum")
+    if kwh is not None:
+        return float(kwh) * 1000.0
+    mean = row.get("house_load_mean")
+    return float(mean) if mean is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Canonical lag helper — single source of truth for train AND predict paths
 # ---------------------------------------------------------------------------
@@ -251,7 +260,8 @@ def encode_lag_features_from_lookups(
     Parameters
     ----------
     utc_lookup:
-        Mapping of UTC-aware :class:`datetime` → ``house_load_mean`` (W) or
+        Mapping of UTC-aware :class:`datetime` → energy-derived hourly load
+        (``house_load_kwh_sum``×1000, ``house_load_mean`` fallback) in W, or
         ``None`` (SQLite NULL).  Built once per training batch or stored in
         ``HGBRQuantileModel._utc_lookup`` for reuse at serve time.
     local_date_kwh:
@@ -392,14 +402,16 @@ def build_feature_matrix(
     Returns
     -------
     X:     list[list[float]] — one feature vector per kept row (18 values each).
-    y:     list[float] — ``house_load_mean`` target for each kept row.
+    y:     list[float] — energy-derived hourly load (``house_load_kwh_sum``×1000,
+           ``house_load_mean`` fallback) target for each kept row.
     index: list[str] — ``hour_ts`` string for each kept row (same order as X/y).
 
     Target exclusion contract
     -------------------------
-    Rows whose **target** (``house_load_mean``) is ``None`` or NaN are
-    **excluded** from all three return values.  Feature-column NaN values are
-    *kept* — ``HistGBR`` handles them natively.
+    Rows whose **target** (energy-derived hourly load: ``house_load_kwh_sum``×1000,
+    ``house_load_mean`` fallback) is ``None`` or NaN are **excluded** from all
+    three return values.  Feature-column NaN values are *kept* — ``HistGBR``
+    handles them natively.
     ``HGBRQuantileModel.fit()`` (Phase 3) relies on this contract.
 
     Complexity
@@ -419,7 +431,7 @@ def build_feature_matrix(
         if not ts_str:
             continue
         ts = datetime.fromisoformat(str(ts_str))
-        load = row.get("house_load_mean")
+        load = hourly_load_w(row)
         utc_lookup[ts] = load
 
         kwh = row.get("house_load_kwh_sum")
@@ -435,7 +447,7 @@ def build_feature_matrix(
 
     for row in hourly_rows:
         # Exclude rows where the target is missing/NaN — cannot train on them.
-        target_val = row.get("house_load_mean")
+        target_val = hourly_load_w(row)
         if target_val is None:
             continue
         try:

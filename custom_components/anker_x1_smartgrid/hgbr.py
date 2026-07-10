@@ -130,7 +130,9 @@ class HGBRQuantileModel:
         # Predict-time lag lookups — built from hourly rows during fit(),
         # refreshed on every retrain call.
         #
-        # _utc_lookup:       UTC datetime → house_load_mean (W) or None
+        # _utc_lookup:       UTC datetime → energy-derived hourly load (W,
+        #                    house_load_kwh_sum×1000 / house_load_mean
+        #                    fallback) or None
         # _local_date_kwh:   Europe/Amsterdam calendar date → daily kWh total
         #                    (summed from house_load_kwh_sum)
         self._utc_lookup: dict[datetime, float | None] = {}
@@ -372,7 +374,7 @@ class HGBRQuantileModel:
             if not ts_str:
                 continue
             ts = datetime.fromisoformat(str(ts_str))
-            load = row.get("house_load_mean")
+            load = featureset.hourly_load_w(row)
             utc_lookup[ts] = load
 
             kwh = row.get("house_load_kwh_sum")
