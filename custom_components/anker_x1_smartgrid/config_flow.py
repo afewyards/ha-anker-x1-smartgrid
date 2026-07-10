@@ -245,7 +245,7 @@ def _options_fields(defaults: dict, services=None) -> dict:
             vol.Optional(
                 const.CONF_SOC_FLOOR,
                 default=defaults.get(const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=50.0)),
+            ): vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0)),
             vol.Optional(
                 const.CONF_ADDON_ENABLED,
                 default=defaults.get(const.CONF_ADDON_ENABLED, const.DEFAULT_ADDON_ENABLED),

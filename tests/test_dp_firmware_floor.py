@@ -139,17 +139,12 @@ class TestFloor10DeficitNight:
     no-charge end state (7%) is BELOW the old floor_b (10%) and would have
     been excluded from the old scan, forcing a phantom top-up charge.
 
-    NOTE on parity scope: the terminal end-state scan widening (item 4) is
-    optimize.py-ONLY by design — regret.hindsight_optimal_grid's water_value
-    branch is exercised only by tests, never by production code (the live
-    controller only calls optimize_grid with terminal_mode="water_value").
-    So these two tests exercise optimize_grid directly rather than asserting
-    opt/hind parity: at water_value=0.0 with a natural end state below the
-    OLD floor_b, the two functions are EXPECTED to diverge (hind still scans
-    from cfg.soc_floor, unwidened). test_optimize_parity.py's existing
-    water_value parity test (test_floor_binding_parity) stays green because
-    its scenario's true optimum sits well above soc_floor, so the widening
-    never changes which end state wins there.
+    The terminal end-state scan widening (item 4) applies to BOTH
+    optimize_grid and hindsight_optimal_grid (parity-critical: both must
+    scan from firmware_floor_kwh). These tests exercise optimize_grid
+    directly; parity with hindsight_optimal_grid is covered by
+    test_optimize_parity.py (including test_two_peaks_water_value_mode
+    which guards the matched widening).
     """
 
     def _cfg(self, **overrides) -> Config:

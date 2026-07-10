@@ -727,16 +727,9 @@ def optimize_grid(
             # old "force a grid charge to hold the floor" prune.  soc_after is NOT
             # pre-clamped: the floor import is computed per-step on the POST-charge
             # SoC (soc_after + g_dc), so the DP optimises the TRUE grid bill
-            # (regret ~= 0).  When soc_after >= floor the import is 0 for every
-            # step and new_soc == soc_after + g_dc (floor never binds => byte
-            # parity preserved); every reachable state still has SoC >= floor, so
-            # the terminal end-state scan / to_bin behaviour is unchanged.
-            #
-            # L1: this economic model assumes cfg.soc_floor == the firmware hard
-            # discharge floor (5%).  Raising soc_floor above 5 would over-price
-            # load in the [5%, soc_floor] band, because nothing force-charges to
-            # hold that band anymore — the DP would bill it as direct grid->load
-            # import that never actually occurs at the firmware level.
+            # (regret ~= 0).  When soc_after >= firmware_floor the import is 0
+            # for every step and new_soc == soc_after + g_dc (floor never
+            # binds => byte parity preserved).
             n_steps = round(max_grid_dc / bin_kwh)
 
             for step in range(n_steps + 1):
