@@ -8,14 +8,20 @@ Energy keys (``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``, ``grid_charge_kwh``
 recorder's v9 per-tick kWh delta columns (``pv_kwh``, ``house_load_kwh``,
 ``batt_charge_kwh``, ``grid_export_kwh``) for the hour, rather than deriving
 energy from the mean power. Pre-v9 rows (and the first tick after a restart)
-have NULL deltas; for those, energy falls back to mean-W-derived (mean power x
-1h). The W keys (``pv_w``, ``load_w``, ``soc``, ``solar_charge_w``,
-``grid_charge_w``, ``grid_export_w``) remain unchanged naive means — they are
-still consumed by ``load_adapt`` and must not be altered by this change.
+have NULL deltas; for those, energy falls back to mean-W-derived, scaled by
+the observed tick coverage of the hour (mean power x 1h x rows/60, capped at
+1.0) so a partial hour right after a restart isn't over-stated as if it had
+run the full hour. The W keys (``pv_w``, ``load_w``, ``soc``,
+``solar_charge_w``, ``grid_charge_w``, ``grid_export_w``) remain unchanged
+naive means — they are still consumed by ``load_adapt`` and must not be
+altered by this change.
 
 Note: a hour bucket with fewer ticks than a full hour (e.g. the current,
-still-in-progress hour) yields "energy so far" for that partial hour, by
-design — the energy keys are not extrapolated to a full-hour total.
+still-in-progress hour, or a fallback-derived hour right after a restart)
+yields "energy so far" for that partial hour, by design — the energy keys
+are never extrapolated to a full-hour total, and the mean-W fallback is
+coverage-scaled so it doesn't over-count a partial hour as a full hour's
+worth of energy either.
 """
 from __future__ import annotations
 
@@ -61,8 +67,9 @@ def aggregate_past_actuals(rows: list[dict]) -> dict[datetime, dict]:
 
     Energy keys (``pv_kwh, load_kwh, solar_charge_kwh, grid_charge_kwh,
     grid_export_kwh``) sum the v9 per-tick kWh deltas (true energy, not
-    mean-power-derived) with a mean-W x 1h fallback for pre-v9 rows; see
-    module docstring for details. The W keys are unchanged naive means.
+    mean-power-derived) with a mean-W x 1h x coverage fallback for pre-v9
+    rows, where coverage = min(1, rows_in_hour / 60); see module docstring
+    for details. The W keys are unchanged naive means.
     """
     buckets: dict[datetime, list[dict]] = {}
     for row in rows:
@@ -94,16 +101,21 @@ def aggregate_past_actuals(rows: list[dict]) -> dict[datetime, dict]:
         grid_charge_w = max(0.0, charge_w - solar_charge_w)
 
         # Energy (kWh): sum the v9 per-tick deltas (true integral of power over
-        # time) with a mean-W x 1h fallback for pre-v9 rows / restart gaps.
+        # time) with a mean-W x 1h x coverage fallback for pre-v9 rows / restart
+        # gaps. coverage = ticks_in_hour / 60 (capped at 1.0) prevents a partial
+        # hour (e.g. 20 ticks after a restart) from being over-stated as a full
+        # hour's worth of energy.
+        coverage = min(1.0, len(group) / 60.0)
+
         pv_kwh = _kwh_sum(group, "pv_kwh")
-        pv_kwh = pv_kwh if pv_kwh is not None else pv_w / 1000.0
+        pv_kwh = pv_kwh if pv_kwh is not None else pv_w / 1000.0 * coverage
         load_kwh = _kwh_sum(group, "house_load_kwh")
         if load_kwh is None and load_w is not None:
-            load_kwh = load_w / 1000.0
+            load_kwh = load_w / 1000.0 * coverage
         charge_kwh = _kwh_sum(group, "batt_charge_kwh")
-        charge_kwh = charge_kwh if charge_kwh is not None else charge_w / 1000.0
+        charge_kwh = charge_kwh if charge_kwh is not None else charge_w / 1000.0 * coverage
         export_kwh = _kwh_sum(group, "grid_export_kwh")
-        export_kwh = export_kwh if export_kwh is not None else grid_export_w / 1000.0
+        export_kwh = export_kwh if export_kwh is not None else grid_export_w / 1000.0 * coverage
 
         surplus_kwh = max(0.0, pv_kwh - (load_kwh or 0.0))
         solar_charge_kwh = min(charge_kwh, surplus_kwh)

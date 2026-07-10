@@ -93,14 +93,56 @@ def test_kwh_keys_sum_deltas():
 
 
 def test_kwh_fallback_from_means_when_deltas_null():
-    # No *_kwh columns present -> fall back to mean-W * 1h.
+    # No *_kwh columns present, single tick (1/60 of an hour) -> fall back to
+    # mean-W * 1h * coverage, not the full mean-W * 1h (coverage-scaled fix).
     rows = [{"ts": _ts(10), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0}]
     rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
-    assert rec["pv_kwh"] == 1.0
-    assert rec["load_kwh"] == 0.5
+    assert rec["pv_kwh"] == round(1.0 * 1 / 60, 3)
+    assert rec["load_kwh"] == round(0.5 * 1 / 60, 3)
     assert rec["solar_charge_kwh"] == 0.0
     assert rec["grid_charge_kwh"] == 0.0
     assert rec["grid_export_kwh"] == 0.0
+
+
+def test_kwh_fallback_scaled_by_partial_hour_coverage():
+    # 20 of 60 ticks present (e.g. 20 minutes after a restart) -> mean-W
+    # fallback scaled down to 20/60 of a full hour, not the full hour.
+    rows = [
+        {"ts": _ts(10, m), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0}
+        for m in range(20)
+    ]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_kwh"] == round(1.0 * 20 / 60, 3) == 0.333
+    assert rec["load_kwh"] == round(0.5 * 20 / 60, 3)
+
+
+def test_kwh_fallback_full_hour_coverage_unscaled():
+    # 60 ticks -> full-hour coverage; fallback equals plain mean-W * 1h.
+    rows = [
+        {"ts": _ts(10, m), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0}
+        for m in range(60)
+    ]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_kwh"] == 1.0
+    assert rec["load_kwh"] == 0.5
+
+
+def test_kwh_delta_sum_not_scaled_by_coverage():
+    # Even with few rows relative to a full hour, when v9 kWh deltas are
+    # present the sum path is used verbatim -- no coverage scaling applied.
+    row = {
+        "pv_w": 1000.0,
+        "pv_kwh": 0.02,
+        "load_w": 500.0,
+        "house_load_kwh": 0.01,
+        "batt_w": 0.0,
+        "p1_w": 0.0,
+        "soc": 50.0,
+    }
+    rows = [{**row, "ts": _ts(10, m)} for m in (0, 20, 40)]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=timezone.utc)]
+    assert rec["pv_kwh"] == 0.06
+    assert rec["load_kwh"] == 0.03
 
 
 def test_w_keys_unchanged():
