@@ -700,3 +700,26 @@ def test_get_forecast_for_hour_empty_returns_none():
     """Empty forecast list → None."""
     result = coordinator.get_forecast_for_hour([], datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc))
     assert result is None
+
+
+def test_read_price_slots_static_mode_synth(hass, monkeypatch):
+    import datetime as _dt
+    from custom_components.anker_x1_smartgrid import coordinator as _coord
+    fixed = _dt.datetime(2026, 7, 10, 14, 0, tzinfo=_dt.timezone.utc)
+    monkeypatch.setattr(_coord.dt_util, "utcnow", lambda: fixed)
+    d = {
+        const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+        const.CONF_STATIC_PRICE_IMPORT: 0.30,
+        const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+        const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+    }
+    slots = coordinator.read_price_slots(hass, d)
+    assert slots
+    assert slots[0].start == fixed
+    assert {round(s.price, 2) for s in slots} == {0.30, 0.10}
+
+
+def test_read_price_slots_sensor_mode_absent_price_key_returns_empty(hass):
+    d = _data()
+    d.pop(const.CONF_ENT_PRICE, None)  # sensor mode, no price sensor configured
+    assert coordinator.read_price_slots(hass, d) == []

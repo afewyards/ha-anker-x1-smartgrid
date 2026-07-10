@@ -7,8 +7,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import const
-from .models import PlantInputs, PriceSlot
+from .models import Config, PlantInputs, PriceSlot
 from .parsers import parse_price_curve, _parse_dt
+from .tariff import synth_static_price_slots
 
 _BAD = {"unknown", "unavailable", "none", ""}
 
@@ -51,7 +52,16 @@ def read_plant_inputs(hass: HomeAssistant, data: dict) -> PlantInputs | None:
 
 
 def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
-    state = hass.states.get(data[const.CONF_ENT_PRICE])
+    # Static tariff mode: synthesize slots from config, ignore any price sensor.
+    if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:
+        return synth_static_price_slots(
+            dt_util.utcnow(), Config.from_dict(data), dt_util.DEFAULT_TIME_ZONE
+        )
+    # Sensor mode (default): read the dynamic price sensor's forecast attribute.
+    ent = data.get(const.CONF_ENT_PRICE)
+    if not ent:
+        return []
+    state = hass.states.get(ent)
     if state is None:
         return []
     return parse_price_curve(state.attributes.get("forecast"))
