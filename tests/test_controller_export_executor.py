@@ -1197,16 +1197,25 @@ class TestExportLoadCompFreshOnly:
 
 
 class TestExportPnlMeteredNet:
-    """PnL/_export_kwh use metered net (gross − load), and recorded load_w is the read value."""
+    """R1: PnL/_export_kwh use the MEASURED battery-sourced export
+    (min(meter export, battery discharge)) read live from the meter +
+    battery sensors — NOT gross-setpoint-minus-load. Recorded load_w is
+    still the computed (pv + meter + batt − loss) read value, unaffected."""
 
     @pytest.mark.asyncio
     async def test_recorded_export_kwh_uses_metered_net(self, monkeypatch):
+        """export_kwh == min(meter export, battery discharge) x TICK_SECONDS/3600."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
         ctrl, act, store = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        # Computed house load = pv + meter_w + batt - loss = 0 + 300 + 0 - 0 = 300W.
+        # Metered scenario: meter shows 2000W export, battery discharging
+        # 2000W -> house load = pv(0) + meter(-2000) + batt(2000) - loss(0) = 0W,
+        # so the gross setpoint equals the surplus-based net target exactly
+        # (no load-comp term added).
         hass.set_state("sensor.pv_power", "0.0")
+        hass.set_state("sensor.meter_power", "-2000.0")
+        hass.set_state("sensor.battery_power", "2000.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1217,11 +1226,10 @@ class TestExportPnlMeteredNet:
         await ctrl.tick()
 
         row = ctrl._recorder.rows[-1]
-        # gross setpoint 3300 recorded; metered net = 3300 − 300 = 3000 W.
-        assert row["export_setpoint_w"] == 3300.0
-        expected_kwh = 3000.0 / 1000.0 * (const.TICK_SECONDS / 3600.0)
+        assert row["export_setpoint_w"] == 3000.0
+        expected_kwh = 2000.0 / 1000.0 * (const.TICK_SECONDS / 3600.0)
         assert abs(row["export_kwh"] - expected_kwh) < 1e-9, row["export_kwh"]
-        assert row["load_w"] == 300.0
+        assert row["load_w"] == 0.0
 
     @pytest.mark.asyncio
     async def test_recorded_load_w_uses_cached_fallback_when_unavailable(self, monkeypatch):
@@ -1246,12 +1254,16 @@ class TestExportPnlMeteredNet:
         )
 
     @pytest.mark.asyncio
-    async def test_metered_net_floored_at_zero_when_load_exceeds_gross(self, monkeypatch):
-        """Metered-net floor: max(0, gross − load) when load > gross setpoint.
+    async def test_metered_export_kwh_is_zero_when_meter_shows_no_export(self, monkeypatch):
+        """R1: measured export_kwh must be 0 when the live meter is NOT
+        actually exporting (still importing), even though a large export
+        setpoint was committed and actuated this tick — export_kwh reflects
+        what the meter measured, not what the controller commanded.
 
-        Scenario: factor=0.0 → gross == net_target (3000 W).  House load is
-        5000 W (larger than gross).  Metered net = max(0, 3000 − 5000) = 0 W,
-        so export_kwh must be 0.0 even though the setpoint was committed.
+        Scenario: factor=0.0 → gross == net_target (3000 W), but the meter
+        (per _seed_passive_inputs' default) still shows a 300W IMPORT this
+        tick, so min(max(0,-p1_raw), max(0,batt_raw)) = 0 regardless of the
+        battery reading.
         """
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
@@ -1260,8 +1272,6 @@ class TestExportPnlMeteredNet:
             cfg_overrides={"export_load_comp_factor": 0.0, "max_export_w": 3000.0},
         )
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
-        # Computed house load = pv + meter_w + batt - loss = 4700 + 300 + 0 - 0 = 5000W.
-        hass.set_state("sensor.pv_power", "4700.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod, "compute_decision",
@@ -1274,7 +1284,8 @@ class TestExportPnlMeteredNet:
         row = ctrl._recorder.rows[-1]
         # factor=0 → gross == net target; no load added to setpoint
         assert row["export_setpoint_w"] == 3000.0, row["export_setpoint_w"]
-        # metered net = max(0, 3000 − 5000) = 0 → no export energy recorded
+        # Meter still shows import (not export) -> measured export is 0,
+        # regardless of the committed setpoint.
         assert row["export_kwh"] == 0.0, row["export_kwh"]
 
 

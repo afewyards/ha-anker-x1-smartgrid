@@ -19,6 +19,7 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import coordinator as coord_mod
+from custom_components.anker_x1_smartgrid import regret as regret_mod
 from custom_components.anker_x1_smartgrid.controller import compute_decision, Controller
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 from custom_components.anker_x1_smartgrid.models import (
@@ -36,6 +37,12 @@ from custom_components.anker_x1_smartgrid.sensor import X1DpRegretSensor, X1Regr
 
 BASE = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)  # 10:00 UTC, Mon
 _PREDICTOR = LoadPredictor.from_profile({})
+
+# Captured BEFORE any test patches them, so the R1 spies below (which record
+# call args) can delegate to the real physics — mirrors the established
+# pattern in test_regret_export_effective_price.py.
+_ORIG_HINDSIGHT_OPTIMAL_GRID = regret_mod.hindsight_optimal_grid
+_ORIG_REALIZED_GRID_COST = regret_mod.realized_grid_cost
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -676,3 +683,190 @@ def test_regret_charge_only_day_unchanged():
     assert regret_eur is None or isinstance(regret_eur, float), (
         "regret_eur must be float or None on charge-only day"
     )
+
+
+# ===========================================================================
+# R1 — daily regret DayData sourced from measured v9 per-tick energy deltas
+# ===========================================================================
+#
+# _run_daily_regret_sync builds DayData/realized_charge/realized_export from
+# per-tick samples.  Before R1 it always used mean-W×dt_h, ignoring the v9
+# grid_import_kwh/grid_export_kwh/house_load_kwh/pv_kwh/batt_charge_kwh/
+# batt_discharge_kwh delta columns the recorder now writes.  R1 prefers the
+# SUM of a slot's usable measured deltas, falling back to the legacy
+# mean-W×dt_h estimate only when a slot has zero usable deltas for that
+# quantity (pre-v9 rows, first tick after restart, or a sensor blip that
+# nulled every tick in the slot).
+
+
+def _replace_hour_rows(rec: _StubRecorder, day_str: str, hour: int, rows: list[dict]) -> None:
+    """Drop the baseline single-tick row for `hour` (seeded by
+    _seed_sample_rows_for_day) and append the caller's replacement tick(s).
+    """
+    prefix = f"{day_str}T{hour:02d}:"
+    rec.rows = [r for r in rec.rows if not r["ts"].startswith(prefix)]
+    rec.rows.extend(rows)
+
+
+def _capture_day_data(ctrl: Controller, day: str, ts_now: str):
+    """Run _run_daily_regret_sync while capturing the DayData object built
+    for the (always-called) hindsight_optimal_grid leg.
+
+    pytest_homeassistant_custom_component's autouse enable_custom_integrations
+    fixture (tests/conftest.py) sets DEFAULT_TIME_ZONE to US/Pacific for the
+    WHOLE test session, not just tests requesting the real ``hass`` fixture.
+    Patch as_local to identity (NOT DEFAULT_TIME_ZONE itself — see
+    test_regret_export_effective_price.py's established idiom) so every
+    seeded UTC hour buckets 1:1 into the LOCAL hour this test reasons about.
+    """
+    captured: list = []
+
+    def _spy(day_data, cfg, **kwargs):
+        captured.append(day_data)
+        return _ORIG_HINDSIGHT_OPTIMAL_GRID(day_data, cfg, **kwargs)
+
+    with patch(
+        "custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid",
+        side_effect=_spy,
+    ), patch(
+        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ):
+        ctrl._run_daily_regret_sync(day, ts_now)
+    assert captured, "hindsight_optimal_grid must have been called"
+    return captured[-1]
+
+
+def test_daydata_pv_kwh_uses_measured_delta_sum_when_all_ticks_present():
+    """Hour with 3 ticks, each carrying a pv_kwh delta of 0.02 -> the DayData
+    pv_kwh slot must be the exact sum (0.06), NOT the mean-W×dt_h estimate
+    (a wildly different pv_w=1000.0 is planted on each tick to prove the
+    fallback path is not used)."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 14
+    _replace_hour_rows(rec, day, test_hour, [
+        {
+            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0,
+            "pv_w": 1000.0,   # legacy fallback trap value — must NOT be used
+            "batt_w": -200.0,
+            "p1_w": 500.0,
+            "import_price": 0.30,
+            "pv_kwh": 0.02,
+        }
+        for m in (10, 20, 30)
+    ])
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    day_data = _capture_day_data(ctrl, day, ts_now)
+
+    assert day_data.pv_kwh[test_hour] == pytest.approx(0.06, abs=1e-9)
+
+
+def test_daydata_falls_back_to_legacy_mean_when_hour_has_no_deltas():
+    """A day with NO v9 delta columns anywhere (pre-v9 shape) must produce
+    DayData values byte-identical to the legacy mean-W×dt_h computation."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    day_data = _capture_day_data(ctrl, day, ts_now)
+
+    # Hand-computed legacy values from _seed_sample_rows_for_day's fixture:
+    # hour 10 (8<=h<=18): pv_w=1000.0 -> 1000/1000*1.0 = 1.0 kWh
+    assert day_data.pv_kwh[10] == pytest.approx(1.0, abs=1e-9)
+    # hour 2 (night): pv_w=0.0 -> 0.0 kWh
+    assert day_data.pv_kwh[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_daydata_mixed_hour_sums_only_usable_ticks():
+    """Hour with 3 ticks: two carry a pv_kwh delta (0.02 each), one has NO
+    delta (NULL) but a large pv_w=5000.0 trap. The delta-sum path must fire
+    (since >=1 usable tick exists) using ONLY the usable ticks -> 0.04, not
+    diluted/replaced by the NULL tick's mean-W fallback."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 15
+    rows = [
+        {
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0, "pv_w": 1000.0, "batt_w": -200.0, "p1_w": 500.0,
+            "import_price": 0.30, "pv_kwh": 0.02,
+        },
+        {
+            "ts": datetime(2026, 6, 21, test_hour, 20, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0, "pv_w": 1000.0, "batt_w": -200.0, "p1_w": 500.0,
+            "import_price": 0.30, "pv_kwh": 0.02,
+        },
+        {
+            # NULL delta tick (no "pv_kwh" key at all) with a trap pv_w value.
+            "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=timezone.utc).isoformat(),
+            "soc": 60.0, "pv_w": 5000.0, "batt_w": -200.0, "p1_w": 500.0,
+            "import_price": 0.30,
+        },
+    ]
+    _replace_hour_rows(rec, day, test_hour, rows)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    day_data = _capture_day_data(ctrl, day, ts_now)
+
+    assert day_data.pv_kwh[test_hour] == pytest.approx(0.04, abs=1e-9)
+
+
+def test_daydata_export_uses_min_rule_on_measured_energy_deltas():
+    """R1's export analogue of the min-of-W rule, at the energy level:
+    grid_export_kwh=0.05, batt_discharge_kwh=0.03 -> the tick contributes
+    0.03 (min), NOT the metered p1_w/batt_w mean-W fallback trap values."""
+    hass = _StubHass()
+    ctrl, _, rec = _make_controller(hass)
+    day = "2026-06-21"
+    _seed_sample_rows_for_day(rec, day, n_hours=24)
+
+    test_hour = 16
+    _replace_hour_rows(rec, day, test_hour, [{
+        "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=timezone.utc).isoformat(),
+        "soc": 60.0,
+        "pv_w": 3000.0,
+        "batt_w": 2000.0,       # legacy fallback trap value — must NOT be used
+        "p1_w": -2500.0,        # legacy fallback trap value — must NOT be used
+        "import_price": 0.30,
+        "export_price": 0.40,
+        "grid_export_kwh": 0.05,
+        "batt_discharge_kwh": 0.03,
+    }])
+
+    captured_realized: list[dict] = []
+
+    def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
+        captured_realized.append({
+            "realized_export_by_hour": (
+                list(kwargs["realized_export_by_hour"])
+                if kwargs.get("realized_export_by_hour") is not None else None
+            ),
+        })
+        return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
+
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    # See _capture_day_data's docstring: the autouse enable_custom_integrations
+    # fixture sets DEFAULT_TIME_ZONE to US/Pacific session-wide, so as_local
+    # must be patched to identity to keep UTC hour == local hour bucketing.
+    with patch(
+        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+        side_effect=_spy_realized,
+    ), patch(
+        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ):
+        ctrl._run_daily_regret_sync(day, ts_now)
+
+    assert captured_realized, "realized_grid_cost must have been called"
+    export_row = captured_realized[-1]["realized_export_by_hour"]
+    assert export_row is not None
+    assert export_row[test_hour] == pytest.approx(0.03, abs=1e-9)

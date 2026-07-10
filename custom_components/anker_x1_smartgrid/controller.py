@@ -2194,17 +2194,27 @@ class Controller:
                         try:
                             await self._actuator.engage_export(_export_sp)
                             _export_setpoint_w = _export_sp
-                            # Metered net to grid = gross setpoint − house load
-                            # (firmware serves house first).  Drives PnL + record.
-                            # TELEMETRY ONLY: uses _house_load_now_w regardless of
-                            # freshness (N2 cache-fallback covers a pv/batt blip) —
-                            # unlike the actuation gross-setpoint compensation above,
-                            # which zeroes out on a stale (non-fresh) read.
-                            # _compute_house_load_w always returns a float, never
-                            # None (cache-fallback on pv/batt unavailable).
-                            _metered_net_w = max(0.0, _export_sp - _house_load_now_w)
+                            # R1: MEASURED export, not the commanded setpoint.
+                            # _metered_export_w is the battery-sourced portion of
+                            # the live grid export — min(meter export, battery
+                            # discharge) — read directly from the meter + battery
+                            # power sensors this tick.  Mirrors the daily-regret
+                            # battery-sourced export rule (F3/actual_export_w
+                            # above): PV-spill export is out of scope, only the
+                            # energy actually drawn from the battery counts.
+                            # Drives PnL + record; independent of the gross
+                            # setpoint (which may be inflated by load_comp/
+                            # quantization and does not reflect what was
+                            # actually metered).
+                            _batt_w_now = coordinator.read_float(
+                                self._hass, self._data[const.CONF_ENT_BATTERY_POWER]
+                            )
+                            _metered_export_w = min(
+                                max(0.0, -inputs.meter_w),
+                                max(0.0, _batt_w_now if _batt_w_now is not None else 0.0),
+                            )
                             _export_kwh = (
-                                _metered_net_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
+                                _metered_export_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
                             )
                             _reserve_kwh_val = _reserve
                             _surplus_kwh_val = _surplus
@@ -2215,9 +2225,9 @@ class Controller:
                             # convert AC metered export to DC drawn (AC / eta_discharge)
                             # so revenue = AC * price (the helper's eta_discharge cancels
                             # — no spurious second factor); cost/opportunity scale on DC
-                            # energy actually dispatched. Telemetry-only; export_pnl_eur
-                            # and _export_kwh (recorded AC) are unchanged.
-                            _eta_d = self._eta_d_at(_metered_net_w)
+                            # energy actually dispatched. _export_kwh (recorded AC) is
+                            # now the measured value above, not a setpoint estimate.
+                            _eta_d = self._eta_d_at(_metered_export_w)
                             _export_kwh_dc = (
                                 _export_kwh / _eta_d if _eta_d > 1e-9 else _export_kwh
                             )
@@ -2475,6 +2485,23 @@ class Controller:
             export_price_by_hour: dict[int, list[float]] = defaultdict(list)
             hours_with_data: set[int] = set()
 
+            # R1: measured v9 per-tick energy-delta buckets (recorder.py's
+            # pv_kwh/house_load_kwh/batt_charge_kwh/grid_export_kwh/
+            # batt_discharge_kwh columns).  Only ticks with a non-NULL delta for
+            # a given quantity contribute — a NULL tick is simply "not usable"
+            # for that quantity and is excluded (not treated as zero).  When an
+            # hour ends up with zero usable ticks for a quantity, the mean-W×dt_h
+            # path below is used instead (pre-v9 rows are byte-identical to
+            # today).  See docs/superpowers/specs/2026-07-06-per-tick-energy-
+            # accounting-design.md.
+            pv_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
+            load_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
+            charge_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
+            # Battery-sourced export energy analogue of actual_export_w (min of
+            # W): min(grid_export_kwh, batt_discharge_kwh) per tick, only when
+            # BOTH columns are non-NULL on that tick.
+            export_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
+
             soc_start: float | None = None
             for s in samples:
                 ts_str = s.get("ts", "")
@@ -2527,6 +2554,25 @@ class Controller:
                 if s.get("export_price") is not None:
                     export_price_by_hour[h].append(float(s["export_price"]))
 
+                # R1: measured v9 energy deltas, one usable-tick list per hour.
+                # A NULL value for a column on this tick means this tick is not
+                # usable for that quantity (not zero) — simply not appended.
+                if s.get("pv_kwh") is not None:
+                    pv_kwh_delta_by_hour[h].append(float(s["pv_kwh"]))
+                if s.get("house_load_kwh") is not None:
+                    load_kwh_delta_by_hour[h].append(float(s["house_load_kwh"]))
+                if s.get("batt_charge_kwh") is not None:
+                    charge_kwh_delta_by_hour[h].append(float(s["batt_charge_kwh"]))
+                # Battery-sourced export delta: min-of-energy rule, mirroring
+                # actual_export_w's min-of-power rule.  Both columns must be
+                # non-NULL on this tick; else the tick is not usable.
+                _grid_export_kwh = s.get("grid_export_kwh")
+                _batt_discharge_kwh = s.get("batt_discharge_kwh")
+                if _grid_export_kwh is not None and _batt_discharge_kwh is not None:
+                    export_kwh_delta_by_hour[h].append(
+                        min(max(0.0, float(_grid_export_kwh)), max(0.0, float(_batt_discharge_kwh)))
+                    )
+
             # Sparse-day guard: require at least half the day's slots present.
             if len(hours_with_data) < _spd // 2:
                 _LOGGER.debug(
@@ -2542,26 +2588,55 @@ class Controller:
             def _mean(lst: list[float], fallback: float = 0.0) -> float:
                 return sum(lst) / len(lst) if lst else fallback
 
-            pv_kwh = tuple(_mean(pv_by_hour[h]) / 1000.0 * _dt_h for h in range(_spd))
+            def _energy_kwh(deltas: list[float], fallback_kwh: float) -> float:
+                """R1: prefer the SUM of this slot's usable measured energy
+                deltas; fall back to the mean-W×dt_h estimate ONLY when zero
+                deltas were usable (pre-v9 rows, first-tick-after-restart, or a
+                sensor blip that nulled every tick in this slot) — that fallback
+                is byte-identical to the pre-R1 behaviour.
+                """
+                return sum(deltas) if deltas else fallback_kwh
+
+            pv_kwh = tuple(
+                _energy_kwh(
+                    pv_kwh_delta_by_hour[h], _mean(pv_by_hour[h]) / 1000.0 * _dt_h,
+                )
+                for h in range(_spd)
+            )
             load_kwh = tuple(
-                _mean(load_by_hour[h], const.DEFAULT_FALLBACK_LOAD_W) / 1000.0 * _dt_h
+                _energy_kwh(
+                    load_kwh_delta_by_hour[h],
+                    _mean(load_by_hour[h], const.DEFAULT_FALLBACK_LOAD_W) / 1000.0 * _dt_h,
+                )
                 for h in range(_spd)
             )
             price = tuple(_mean(price_by_hour[h], 0.20) for h in range(_spd))
-            # Realized grid charge per slot: mean of per-sample grid_charge_w → AC kWh.
-            realized_charge = [_mean(charge_by_hour[h]) / 1000.0 * _dt_h for h in range(_spd)]
+            # Realized grid charge per slot: prefer the measured batt_charge_kwh
+            # delta sum; fall back to mean(grid_charge_w)×dt_h per slot.
+            realized_charge = [
+                _energy_kwh(
+                    charge_kwh_delta_by_hour[h], _mean(charge_by_hour[h]) / 1000.0 * _dt_h,
+                )
+                for h in range(_spd)
+            ]
 
-            # F3: build per-slot actual export (AC kWh) and feed-in price arrays.
-            # Actual export is derived from metered −p1_w, capped at the battery's
-            # discharge power (NOT commanded setpoint) — see actual_export_w above.
-            # Only pass to the scoring functions when at least one export slot has
-            # a known feed-in price (otherwise no revenue can be computed).
+            # F3/R1: build per-slot actual export (AC kWh) and feed-in price
+            # arrays.  Actual export prefers the measured battery-sourced delta
+            # sum (min(grid_export_kwh, batt_discharge_kwh) per usable tick);
+            # falls back to mean(actual_export_w)×dt_h — derived from metered
+            # −p1_w capped at the battery's discharge power (NOT commanded
+            # setpoint) — see actual_export_w above.  Only pass to the scoring
+            # functions when at least one export slot has a known feed-in price
+            # (otherwise no revenue can be computed).
             _realized_export_kwh: list[float] | None = None
             _export_price_tuple: tuple[float, ...] | None = None
             if export_price_by_hour:
-                # Mean actual export W → AC kWh; 0.0 for slots with no export ticks.
                 _realized_export_kwh = [
-                    _mean(actual_export_by_hour[h]) / 1000.0 * _dt_h for h in range(_spd)
+                    _energy_kwh(
+                        export_kwh_delta_by_hour[h],
+                        _mean(actual_export_by_hour[h]) / 1000.0 * _dt_h,
+                    )
+                    for h in range(_spd)
                 ]
                 # Mean feed-in price per slot; 0.0 for slots without export_price data.
                 _export_price_tuple = tuple(
@@ -2969,7 +3044,9 @@ class Controller:
 
         C3 export signal columns: populated on export ticks; None on non-export ticks.
         ``export_setpoint_w`` — the positive inverter setpoint sent to engage_export.
-        ``export_kwh``        — approximate kWh per tick (setpoint/1000 / ticks_per_hour).
+        ``export_kwh``        — MEASURED battery-sourced export kWh for this tick
+                                 (R1: min(meter export, battery discharge) × TICK_SECONDS
+                                 /3600, not derived from the commanded setpoint).
         ``reserve_kwh``       — DC kWh the battery must retain (ride-out reserve).
         ``surplus_kwh``       — DC kWh available above the reserve (available to export).
         """

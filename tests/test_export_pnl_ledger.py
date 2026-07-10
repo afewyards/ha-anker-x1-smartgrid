@@ -208,9 +208,14 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
 
 def _seed_export_inputs(hass, *, soc="80.0", export_price="0.30"):
     hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.meter_power", "300.0")
+    # R1: meter/battery must reflect an ACTUAL metered export (grid meter
+    # negative = exporting, battery positive = discharging) — PnL is now
+    # measured (min(meter export, battery discharge)), not derived from the
+    # commanded setpoint, so a fixture with meter_power positive (importing)
+    # would always metering-export 0 regardless of what the executor commands.
+    hass.set_state("sensor.meter_power", "-1500.0")
     hass.set_state("sensor.pv_power", "2000.0")
-    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.battery_power", "1800.0")
     hass.set_state("sensor.irradiance", "600.0")
     hass.set_state("weather.home", "sunny", {"temperature": 22.0})
     hass.set_state("sensor.export_price", export_price)
@@ -458,50 +463,51 @@ class TestExportPnlTagging:
 
 
 # ---------------------------------------------------------------------------
-# N2: metered-net PnL falls back to the cached last-known house load when the
-# live sensor reads None (sensor blip), instead of crediting the full gross
-# setpoint as net export.  TELEMETRY ONLY — the actuation gross setpoint
-# (export_load_comp_factor compensation) must keep its existing 0.0-on-None
-# behavior; under-export is the safe direction there.
+# N2 / R1: the ACTUATION gross setpoint (export_load_comp_factor compensation)
+# falls back to the cached last-known house load when pv/batt are
+# unavailable — that mechanism is unchanged and covered below.  The recorded
+# export_kwh / PnL, however, are now MEASURED directly from the live meter +
+# battery sensors (R1), so they are independent of both the setpoint and the
+# house-load cache: when the battery sensor itself is unavailable, the
+# measured battery-sourced export honestly falls back to 0 (safe
+# under-count) rather than any cached/derived estimate.
 # ---------------------------------------------------------------------------
 
 
 class TestMeteredNetHouseLoadFallback:
-    """C3/N2: cached house load feeds metered-net telemetry, never actuation."""
+    """C3/N2/R1: cached house load feeds only actuation; PnL/export_kwh are measured."""
 
     @pytest.mark.asyncio
-    async def test_metered_net_uses_cached_load_when_sensor_is_none(self):
-        """House load is now computed (pv + meter_w + batt - loss), not read from a
-        single sensor. When pv/batt are unavailable this tick, _compute_house_load_w
-        falls back to the cached previous reading (400W) instead of computing a
-        stale mixture — the metered-net export_kwh must be computed against that
-        cache, not the full gross setpoint."""
+    async def test_metered_export_kwh_is_zero_when_battery_sensor_unavailable(self):
+        """R1: export_kwh/PnL are measured from the meter+battery power sensors,
+        not derived from the commanded setpoint or the house-load cache. When
+        the battery sensor is unavailable this tick, the measured
+        battery-sourced export honestly falls back to 0 — even though the
+        ACTUATION gross setpoint still fires normally (house-load N2 cache
+        fallback is unaffected by this change; see
+        test_actuation_gross_setpoint_ignores_cache below)."""
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
-        # pv/batt unavailable this tick → falls back to the cached load below.
-        hass.set_state("sensor.pv_power", "unknown")
+        # Battery sensor unavailable this tick -> measured battery-sourced
+        # export must be 0, regardless of the cached house load below.
         hass.set_state("sensor.battery_power", "unknown")
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
-        ctrl._last_house_load_w = 400.0  # cached previous reading
+        ctrl._last_house_load_w = 400.0  # cached previous reading — must not matter here
 
         await ctrl.tick()
 
         export_calls = [c for c in act.calls if c[0] == "engage_export"]
-        assert export_calls, f"expected an export tick, calls={act.calls}"
-        gross_setpoint_w = export_calls[-1][1]
-        gross_kwh = gross_setpoint_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
-        expected_metered_kwh = (
-            max(0.0, gross_setpoint_w - 400.0) / 1000.0 * (const.TICK_SECONDS / 3600.0)
-        )
+        assert export_calls, f"expected an export tick (actuation unaffected), calls={act.calls}"
+        assert export_calls[-1][1] > 0, "actuation gross setpoint must still fire"
 
         recorded_kwh = rec.rows[-1]["export_kwh"]
-        assert recorded_kwh == pytest.approx(expected_metered_kwh, rel=1e-6), (
-            "metered-net export_kwh must use the cached 400W load, not the full "
-            f"gross setpoint; got {recorded_kwh}, expected {expected_metered_kwh}"
+        assert recorded_kwh == pytest.approx(0.0, abs=1e-9), (
+            "measured export_kwh must be 0 when the battery sensor is "
+            f"unavailable (safe under-count); got {recorded_kwh}"
         )
-        assert recorded_kwh < gross_kwh - 1e-9, (
-            "cached load must reduce metered net below the full gross setpoint"
+        assert ctrl.today_export_pnl_eur == pytest.approx(0.0, abs=1e-9), (
+            "PnL must not accrue when the measured battery-sourced export is 0"
         )
 
     @pytest.mark.asyncio
@@ -548,15 +554,16 @@ class TestExportKwhCadence:
 
     @pytest.mark.asyncio
     async def test_export_kwh_uses_tick_seconds(self):
-        """Recorded export_kwh == setpoint_w / 1000 * (TICK_SECONDS / 3600)."""
+        """R1: recorded export_kwh == metered_export_w / 1000 * (TICK_SECONDS /
+        3600), where metered_export_w = min(meter export, battery discharge) —
+        the MEASURED battery-sourced export, not the commanded setpoint."""
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
-        # Zero the computed house load (pv + meter_w + batt - loss) so gross ==
-        # net_target exactly; this test is about the TICK_SECONDS cadence, not
-        # the house-load compensation term.
-        hass.set_state("sensor.pv_power", "0.0")
-        hass.set_state("sensor.meter_power", "0.0")
+        # Concrete metered scenario: 2000W exported at the meter, 2500W battery
+        # discharge -> battery-sourced (min) export = 2000W.
+        hass.set_state("sensor.meter_power", "-2000.0")
+        hass.set_state("sensor.battery_power", "2500.0")
         ctrl.export_state = ExportState(
             engaged=True, state_since=BASE - timedelta(hours=1)
         )
@@ -566,12 +573,65 @@ class TestExportKwhCadence:
         export_calls = [c for c in act.calls if c[0] == "engage_export"]
         assert export_calls, f"engage_export must fire; calls={act.calls}"
 
+        expected_metered_w = min(2000.0, 2500.0)
+        expected_kwh = expected_metered_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
         row = rec.rows[-1]
-        sp = row["export_setpoint_w"]
-        assert sp is not None and sp > 0, f"expected positive export setpoint, got {sp!r}"
-
-        expected_kwh = sp / 1000.0 * (const.TICK_SECONDS / 3600.0)
         assert row["export_kwh"] == pytest.approx(expected_kwh, rel=1e-9), (
-            f"export_kwh must equal setpoint x TICK_SECONDS/3600 ({expected_kwh}), "
-            f"got {row['export_kwh']} — ledger cadence is out of sync with TICK_SECONDS"
+            f"export_kwh must equal min(meter export, battery discharge) x "
+            f"TICK_SECONDS/3600 ({expected_kwh}), got {row['export_kwh']} — "
+            "ledger cadence is out of sync with TICK_SECONDS"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R1: live per-tick export PnL is MEASURED (min(meter export, battery
+# discharge)), not derived from the commanded setpoint.
+# ---------------------------------------------------------------------------
+
+
+class TestExportPnlMeasuredNotSetpoint:
+    """R1-B: PnL/export_kwh track the live meter+battery reading only."""
+
+    @pytest.mark.asyncio
+    async def test_pnl_matches_metered_min_rule_and_ignores_setpoint(self, monkeypatch):
+        """p1_raw=-2000 (2000W export), batt_raw=1500 (1500W discharge),
+        price=0.30 -> pnl == min(2000,1500)/1000 * (TICK_SECONDS/3600) *
+        eff_price, regardless of how large the commanded setpoint is (proven
+        by wildly inflating export_load_comp_factor)."""
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(
+            hass,
+            cfg_overrides=dict(
+                cycle_cost_eur_per_kwh=0.0,
+                export_load_comp_factor=50.0,  # wildly inflates the commanded setpoint
+            ),
+        )
+        _seed_export_inputs(hass, soc="80.0", export_price="0.30")
+        hass.set_state("sensor.meter_power", "-2000.0")
+        hass.set_state("sensor.battery_power", "1500.0")
+        # Zero out opportunity cost so pnl == revenue == metered_kwh * eff_price.
+        monkeypatch.setattr(ctrl_mod.optimize_mod, "compute_water_value", lambda *a, **k: 0.0)
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        wild_setpoint_w = export_calls[-1][1]
+        # Sanity: the inflated load-comp factor really did push the commanded
+        # setpoint far above the metered 2000W/1500W scenario -- proving PnL
+        # below is disconnected from it.
+        assert wild_setpoint_w > 4000.0, (
+            f"fixture setpoint not wild enough to prove the point: {wild_setpoint_w}"
+        )
+
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, ctrl.cfg)
+        expected_kwh = min(2000.0, 1500.0) / 1000.0 * (const.TICK_SECONDS / 3600.0)
+        expected_pnl = expected_kwh * eff_price
+
+        assert rec.rows[-1]["export_kwh"] == pytest.approx(expected_kwh, rel=1e-6)
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
+            f"PnL must equal the metered min-rule revenue ({expected_pnl}), "
+            f"not something derived from the wild setpoint ({wild_setpoint_w}); "
+            f"got {ctrl.today_export_pnl_eur}"
         )
