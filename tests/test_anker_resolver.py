@@ -17,6 +17,7 @@ _ROLES = {
     "modbus_control": ("switch", "anker_x1_modbus_control_hand_battery_to_ha_vpp"),
     "meter_total_power": ("sensor", "anker_x1_meter_total_power"),
     "inverter_loss": ("sensor", "anker_x1_inverter_loss"),
+    "usable_pv_power": ("sensor", "anker_x1_usable_pv_power"),
 }
 
 
@@ -159,3 +160,17 @@ async def test_apply_resolution_missing_role_keeps_stored(hass):
     apply_anker_resolution(hass, data)
     assert data[const.CONF_ENT_SOC] == "sensor.stale_soc"  # unresolved → kept
     assert data[const.CONF_ENT_BATTERY_POWER] == "sensor.anker_x1_battery_power"  # resolved
+
+
+async def test_resolve_usable_pv_power_soft_role(hass):
+    device_id, _ = _register_anker_device(hass)
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert resolved[const.CONF_ENT_PV_POWER] == "sensor.anker_x1_usable_pv_power"
+
+
+async def test_resolve_missing_usable_pv_power_is_soft(hass):
+    device_id, _ = _register_anker_device(hass, drop=("usable_pv_power",))
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert const.CONF_ENT_PV_POWER not in resolved   # miss omitted
+    assert const.CONF_ENT_PV_POWER not in missing     # soft: never blocks setup

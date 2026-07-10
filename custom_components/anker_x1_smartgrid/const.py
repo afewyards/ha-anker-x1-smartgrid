@@ -258,7 +258,7 @@ PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 # data.get(CONF_ENT_*, DEFAULT_ENTITIES[CONF_ENT_*]) whenever the resolver
 # didn't set them (soft-role miss, or a config predating the resolver).
 DEFAULT_ENTITIES = {
-    CONF_ENT_PV_POWER: "sensor.solar_power",
+    CONF_ENT_PV_POWER: "sensor.anker_x1_usable_pv_power",
     CONF_ENT_METER_POWER: "sensor.anker_x1_meter_total_power",
     CONF_ENT_INVERTER_LOSS: "sensor.anker_x1_inverter_loss",
     CONF_ENT_PRICE: "sensor.zonneplan_current_electricity_tariff",
@@ -303,5 +303,8 @@ ANKER_ROLE_SUFFIXES: dict[str, str] = {
 ANKER_SOFT_ROLE_SUFFIXES: dict[str, str] = {
     CONF_ENT_METER_POWER: "meter_total_power",
     CONF_ENT_INVERTER_LOSS: "inverter_loss",
+    # Anker-native usable PV power replaces the NL-specific GoodWe sensor.solar_power
+    # default; resolved per-device, soft (a miss falls back to DEFAULT_ENTITIES).
+    CONF_ENT_PV_POWER: "usable_pv_power",
 }
 ANKER_CAPACITY_SUFFIX = "battery_nominal_capacity"

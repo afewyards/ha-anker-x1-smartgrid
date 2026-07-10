@@ -11,7 +11,7 @@ def test_defaults_present():
 
 
 def test_pv_power_entity_default():
-    assert const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER] == "sensor.solar_power"
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER] == "sensor.anker_x1_usable_pv_power"
 
 
 def test_meter_power_and_inverter_loss_entities():
