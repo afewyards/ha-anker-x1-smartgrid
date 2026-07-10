@@ -209,6 +209,50 @@ class X1UnderBuyKwhSensor(_Base):
         super().__init__(c, e, "under_buy_kwh", "SmartGrid under-buy")
 
 
+class X1BatteryNetTodaySensor(_Base):
+    """Realized battery cash result for the current local day (€).
+
+    Cash basis: export credit − grid-charge spend, no cycle-cost or
+    opportunity deductions (distinct from the economic export-PnL ledger).
+    MEASUREMENT, not TOTAL: a daily-resetting value under TOTAL without
+    last_reset would make HA book every midnight reset as a negative delta
+    and corrupt the long-term statistics.  Per-day history charts come from
+    X1BatteryNetTotalSensor's statistics deltas instead.
+    """
+
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "battery_net_today_eur", "SmartGrid battery net today")
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "charge_cost_today": self._controller.last_status.get(
+                "today_charge_cost_eur"
+            ),
+            "export_revenue_today": self._controller.last_status.get(
+                "today_export_revenue_eur"
+            ),
+        }
+
+
+class X1BatteryNetTotalSensor(_Base):
+    """Lifetime battery cash net since deploy (€); never resets, may decrease.
+
+    TOTAL with no last_reset: HA long-term statistics track signed sum
+    deltas, so "profit per day" charts come natively from this sensor.
+    Starts at 0.0 on first deploy (no backfill — spec non-goal).
+    """
+
+    _attr_native_unit_of_measurement = "EUR"
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "battery_net_total_eur", "SmartGrid battery net total")
+
+
 class X1PlanSensor(_Base):
     _attr_native_unit_of_measurement = "h"
     # ~150 slots at 15-min blow HA's 16KB recorded-attribute cap and bloat the
@@ -314,5 +358,7 @@ async def async_setup_entry(
             X1DpRegretSensor(controller, entry.entry_id),
             X1OverBuyKwhSensor(controller, entry.entry_id),
             X1UnderBuyKwhSensor(controller, entry.entry_id),
+            X1BatteryNetTodaySensor(controller, entry.entry_id),
+            X1BatteryNetTotalSensor(controller, entry.entry_id),
         ]
     )
