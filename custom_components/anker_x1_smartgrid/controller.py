@@ -15,7 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
+from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -1271,6 +1271,8 @@ class Controller:
         # ── Layer B occupancy corrector state (occupancy.py) ─────────────────────────
         self._occ_table: occupancy.OccupancyTable | None = None
         self._persons_home_now: int | None = None
+        # ── Current-hour kWh accumulator (intra_hour.py; blend gated by cfg.current_hour_blend) ──
+        self._hour_acc = intra_hour.HourAccumulator()
         self._soc_drift_last_update: datetime | None = None
         self._soc_drift_last_soc_pct: float | None = None
         self._soc_drift_engaged: bool = False
@@ -1383,20 +1385,31 @@ class Controller:
         except Exception:  # noqa: BLE001 — never block the tick on logging
             pass
         try:
+            _partial = None
+            if (
+                self.cfg.load_adapt_partial_hour
+                and self._hour_acc.hour == now_h
+                and self._hour_acc.covered_s > 0.0
+            ):
+                _rate_w = self._hour_acc.kwh * 3_600_000.0 / self._hour_acc.covered_s
+                _partial = (_rate_w, self._hour_acc.covered_s / 3600.0)
             ratio, matched = load_adapt.compute_ratio(
                 self._load_adapt_log, past_actuals or {}, now_h,
-                self.cfg.load_adapt_window_h,
+                self.cfg.load_adapt_window_h, partial=_partial,
             )
         except Exception:  # noqa: BLE001
             ratio, matched = None, 0
         self._load_adapt_ratio = ratio
         self._load_adapt_matched = matched
-        if self.cfg.load_adapt_fraction <= 0.0 or ratio is None:
-            return base
-        return load_adapt.AdaptivePredictor(
-            base, ratio, now, self.cfg.load_adapt_fade_h,
-            self.cfg.load_adapt_fraction,
-        )
+        pred = base
+        if self.cfg.load_adapt_fraction > 0.0 and ratio is not None:
+            pred = load_adapt.AdaptivePredictor(
+                base, ratio, now, self.cfg.load_adapt_fade_h,
+                self.cfg.load_adapt_fraction,
+            )
+        if self.cfg.current_hour_blend:
+            pred = intra_hour.CurrentHourBlendPredictor(pred, self._hour_acc, now_h)
+        return pred
 
     async def refresh_profile(self) -> None:
         """Read hourly energy rows from recorder and update the rolling load profile.
@@ -2110,6 +2123,7 @@ class Controller:
         # NB: distinct name from the module-level `house_load_w as _house_load_w`
         # import (a function) to avoid shadowing it within tick().
         _house_load_now_w = self._compute_house_load_w(inputs)
+        self._hour_acc.add(now, _house_load_now_w)
 
         # E3 + cash ledger: reset ALL per-day € accumulators on local-day
         # rollover, BEFORE accumulating this tick.
