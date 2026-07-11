@@ -1,37 +1,35 @@
-"""Measured battery efficiency curve (pure module) — GATED OFF.
+"""Measured battery efficiency curve (pure module).
 
-AC energy from the energy-balance residual ``load_w - p1_w - pv_w`` (revenue-grade
-P1, independent of which inverter side ``batt_w`` measures); DC energy from
-``ΔSoC × capacity``; ``batt_w`` only segments episodes. Per-bin trailing-window
-median with a confidence gate; graceful fallback to the static config scalars.
-No Home Assistant imports — stdlib + project models only.
+AC energy from the energy-balance residual ``load_w - p1_w - pv_w``; DC
+energy from ``ΔSoC × capacity`` — the BMS coulomb counter, independent of
+``batt_w``; ``batt_w`` only segments episodes. Per-bin trailing-window
+median with a confidence gate; graceful fallback to the static config
+scalars. No Home Assistant imports — stdlib + project models only.
 
-GATED OFF (2026-07): the above "independent AC residual" assumption no longer
-holds. Since the meter/house-load refactor, ``load_w`` is a COMPUTED value
+Since the meter/house-load refactor, ``load_w`` is a COMPUTED value
 (``pv + p1_w(meter) + batt_w - inverter_loss``, see recorder.py's
-``read_efficiency_samples``), not a measured sensor. The residual
-``load_w - p1_w - pv_w`` therefore algebraically collapses to
-``batt_w - inverter_loss`` — a restatement of the Anker's own loss estimate
-(0 while charging), not an independent cross-check on DC ΔSoC. Fitting a
-measured efficiency curve against it would just bias ``eta_charge`` toward
-1.0 on tautological samples. ``run_eta`` is short-circuited to always return
-None (see its docstring) so ``EfficiencyCurve.build`` can never promote a bin
-past the static config-scalar fallback, independent of the
-``use_measured_eta`` config flag. Re-enable only once an independent AC
-house-load measurement (a real sensor, not derived from pv/meter/batt)
-is available again.
+``read_efficiency_samples``), so the residual ``load_w - p1_w - pv_w``
+algebraically collapses to ``batt_w - inverter_loss``: it is no longer an
+independent AC measurement. That no longer disqualifies this pipeline,
+though. The independent ground truth this curve actually calibrates
+against is ΔSoC — the BMS coulomb counter, which never depends on
+``batt_w`` or the residual. What gets measured is the mapping from that
+computed-AC quantity to measured ΔSoC, and that computed-AC quantity is
+exactly the "load" the planner already schedules charge/export against —
+so per-bin efficiency measured this way stays planning-consistent even
+though the AC side is no longer metrologically independent. Re-derive this
+note if an independent AC house-load sensor becomes available again (it
+would let the curve additionally validate the residual itself, rather than
+only calibrate against it).
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import median
 
 from . import const
 from .models import Config
-
-_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -251,41 +249,37 @@ class RunEta:
     dc_kwh: float
 
 
-_GATE_LOGGED = False  # module-level one-shot flag, see run_eta
-
-
 def run_eta(run: list[dict], cfg: Config) -> "RunEta | None":
-    """Per-run efficiency from ΔSoC (DC) vs. the energy-balance residual (AC).
+    """Per-run efficiency from ΔSoC (DC, BMS coulomb counter) vs. the
+    energy-balance residual (AC).
 
-    GATED OFF — always returns None (the same "no trustworthy sample"
-    outcome this pipeline already uses for insufficient data). See the
-    module docstring: since the meter/house-load refactor, ``load_w`` is
-    COMPUTED (pv + meter + batt - loss), so ``residual_w``
-    (``load_w - p1_w - pv_w``) is no longer an independent AC measurement —
-    it's tautological with ``batt_w``. Fitting an efficiency curve to a
-    self-referential signal would just bias it toward 1.0, so the actual
-    computation (``_run_eta_impl``) is short-circuited without being called.
-    It is kept intact, unused, for a future re-enable once an independent
-    house-load measurement exists again.
+    The DC side (``ΔSoC × capacity``) is independent of ``batt_w`` and thus
+    of the residual. The AC side now equals ``batt_w - inverter_loss``
+    (the battery-served share of house load) since the meter/house-load
+    refactor made ``load_w`` a computed quantity (see the module
+    docstring). That AC estimate shares its measurement basis with the
+    computed load the planner schedules against, so the fitted curve maps
+    planner-space AC to BMS-space DC consistently; independent AC
+    metrology isn't required for that purpose. Delegates to
+    ``_run_eta_impl`` for the actual gate/envelope/computation.
     """
-    global _GATE_LOGGED
-    if not _GATE_LOGGED:
-        _LOGGER.info(
-            "measured-eta gate: load_w is a computed value (not an "
-            "independent AC measurement) since the meter/house-load "
-            "refactor; run_eta short-circuits to no-result"
-        )
-        _GATE_LOGGED = True
-    return None
+    return _run_eta_impl(run, cfg)
 
 
 def _run_eta_impl(run: list[dict], cfg: Config) -> "RunEta | None":
-    """Original run_eta computation — retained for a future re-enable.
+    """Gated on a minimum |ΔSoC| (noise floor) and clamped to a physically
+    plausible envelope; returns None when the run can't yield a
+    trustworthy sample rather than a garbage value.
 
-    Not called while the ``run_eta`` gate is active (see its docstring and
-    the module docstring). Gated on a minimum |ΔSoC| (noise floor) and
-    clamped to a physically plausible envelope; returns None when the run
-    can't yield a trustworthy sample rather than a garbage value.
+    DISCHARGE runs subtract the modeled constant standby drain
+    (``cfg.idle_drain_w * duration_h``) from the DC side before computing
+    eta: a discharge run's raw ΔSoC bundles both conversion loss and idle
+    drain, and the planner already models idle drain separately via
+    ``idle_drain_w``, so leaving it in the eta fit would double-count it
+    (once via eta, once via ``idle_drain_w``). Returns None if the modeled
+    idle energy would consume the run's entire ΔSoC. CHARGE runs are
+    unaffected. Binning (``dc_power_w``) always uses the GROSS,
+    non-debiased DC energy — only the eta ratio's denominator changes.
     """
     if len(run) < 2:
         return None
@@ -316,7 +310,11 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> "RunEta | None":
         ac_delivered = ac_kwh
         if ac_delivered <= 0.0:
             return None
-        eta = ac_delivered / dc_kwh
+        idle_kwh = cfg.idle_drain_w * duration_h / 1000.0
+        dc_kwh_eff = dc_kwh - idle_kwh
+        if dc_kwh_eff <= 0.0:
+            return None
+        eta = ac_delivered / dc_kwh_eff
         direction = "discharge"
     if not (lo <= eta <= hi):
         return None

@@ -622,23 +622,20 @@ class DataRecorder:
         return [(str(ts), float(v)) for ts, v in raw]
 
     def read_efficiency_samples(self, since_iso: str | None = None) -> list[dict]:
-        """Return per-tick residual-power samples for the (currently gated-off)
-        efficiency-fitting pipeline.
+        """Return per-tick residual-power samples for the efficiency-fitting
+        pipeline (live again since 2026-07; see efficiency.py's module
+        docstring).
 
-        NOTE — no longer ground truth / no longer independent: ``load_w`` is
-        a COMPUTED house load (``pv + p1_w(meter) + batt_w − inverter_loss``,
-        since the meter/house-load refactor), not a measured sensor. That
-        means ``residual_w = load_w - p1_w - pv_w`` algebraically collapses
-        to ``batt_w - inverter_loss`` — tautological with the battery's own
-        signal rather than an independent AC cross-check, and inverter_loss
-        is the Anker's own estimate (0 while charging). This function still
-        requires ``load_w``, ``p1_w``, ``soc``, and ``batt_w`` to all be
-        non-NULL (rows missing any of these — pre-v6, or a dropped reading —
-        are skipped), but that filtering no longer buys independence.
-        Consumers are gated: ``efficiency.run_eta`` short-circuits to no-result
-        so this data is not used to fit a measured curve (see efficiency.py's
-        module docstring). Re-enable only once an independent AC house-load
-        measurement exists again.
+        NOTE — AC side is not independent, and that is acceptable: ``load_w``
+        is a COMPUTED house load (``pv + p1_w(meter) + batt_w − inverter_loss``,
+        since the meter/house-load refactor), so ``residual_w = load_w - p1_w
+        - pv_w`` algebraically collapses to ``batt_w - inverter_loss``. The
+        pipeline's independent ground truth is the DC side (ΔSoC × capacity,
+        the BMS coulomb counter) — the fitted per-bin η calibrates the
+        computed-AC ↔ measured-ΔSoC mapping, which is exactly what the
+        planner consumes as "load". This function still requires ``load_w``,
+        ``p1_w``, ``soc``, and ``batt_w`` to all be non-NULL (rows missing
+        any of these — pre-v6, or a dropped reading — are skipped).
 
         ``residual_w`` is computed as ``load_w - p1_w - pv_w`` (``pv_w`` NULL
         treated as 0, matching the derive/rollup convention elsewhere in this
