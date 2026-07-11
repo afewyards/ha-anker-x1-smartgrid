@@ -18,6 +18,8 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 
+from . import const
+
 _LOGGER = logging.getLogger(__name__)
 
 # Look-back window for the persons-home hour-of-week climatology (P8).
@@ -102,7 +104,7 @@ def project_persons_home(
     current_count: float | None,
     how_means: dict[int, float],
     hour_starts: list[datetime],
-    persistence_hours: int = 4,
+    persistence_hours: int = const.PERSONS_PERSISTENCE_H,
 ) -> dict[str, float | None]:
     """Per-hour persons-home projection keyed by UTC top-of-hour ISO string.
 

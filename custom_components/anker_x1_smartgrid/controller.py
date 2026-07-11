@@ -15,7 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, load_adapt, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
+from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret as regret_mod, remote_forecast, resolution, scheduler, soc_drift
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -1268,6 +1268,9 @@ class Controller:
         self._load_adapt_log = load_adapt.PredictionLog()
         self._load_adapt_ratio: float | None = None
         self._load_adapt_matched: int = 0
+        # ── Layer B occupancy corrector state (occupancy.py) ─────────────────────────
+        self._occ_table: occupancy.OccupancyTable | None = None
+        self._persons_home_now: int | None = None
         self._soc_drift_last_update: datetime | None = None
         self._soc_drift_last_soc_pct: float | None = None
         self._soc_drift_engaged: bool = False
@@ -1360,6 +1363,17 @@ class Controller:
         live-only (same pattern as estimated_tomorrow).
         """
         base = self.predictor
+        # Layer B: occupancy-deviation wrapper (OFF at fraction 0.0; skipped on the
+        # remote tier — the addon already conditions on per-hour projected occupancy).
+        if (
+            self.cfg.occ_adapt_fraction > 0.0
+            and self._occ_table is not None
+            and self.active_model_name != "remote"
+        ):
+            base = occupancy.OccupancyPredictor(
+                base, self._occ_table, self._persons_home_now, now,
+                self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
+            )
         now_h = now.replace(minute=0, second=0, microsecond=0)
         try:
             base_p50 = base.predict(
@@ -1419,6 +1433,7 @@ class Controller:
             self._profile_predictor = LoadPredictor.from_profile_samples(
                 samples, self.cfg.lookback_days, now
             )
+            self._occ_table = occupancy.build_table(rows)
             self._last_profile_refresh = now
         except Exception:
             _LOGGER.warning("refresh_profile failed; keeping existing profile", exc_info=True)
@@ -1580,6 +1595,7 @@ class Controller:
         _weather_entry = coordinator.get_forecast_for_hour(_wf_list, _now_hour)
         # Home-presence count for this tick (on-loop state reads).
         _persons_home_now = coordinator.count_persons_home(self._hass, self._data)
+        self._persons_home_now = _persons_home_now
         # Per-hour temperature map derived from the hourly weather forecast.
         # Keys are hour-start UTC datetimes; values are temp_forecast (float | None).
         # Passed to compute_decision so each forecast interval uses its own hourly
@@ -1648,7 +1664,8 @@ class Controller:
                         e["datetime"] for e in (_wf_list or []) if e.get("datetime") is not None
                     ]
                     _persons_by_ts = remote_forecast.project_persons_home(
-                        now, _persons_home_now, _ph_means, _ph_hour_starts
+                        now, _persons_home_now, _ph_means, _ph_hour_starts,
+                        persistence_hours=self.cfg.occ_persistence_h,
                     )
                 _payload = build_hours_payload(_wf_list, _persons_by_ts)
                 _fetched_map = await fetch_forecast(
@@ -2921,6 +2938,25 @@ class Controller:
             "state": state,
         }
 
+    def _occ_status_attrs(self, now: datetime) -> dict:
+        """Occupancy-corrector observability attrs (Layer B)."""
+        return {
+            "occ_state_now": self._persons_home_now,
+            "occ_expected_state": (
+                self._occ_table.climo_state.get(occupancy.band_of(now))
+                if self._occ_table is not None else None
+            ),
+            "occ_multiplier": round(
+                occupancy.multiplier(
+                    self._occ_table, self._persons_home_now, now, now,
+                    self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
+                ), 3,
+            ),
+            "occ_cells_ready": (
+                self._occ_table.cells_ready if self._occ_table is not None else 0
+            ),
+        }
+
     def _status(self, now, setpoint, deadline, reason, solar_charge: float = 0.0) -> dict:
         _regret = self.last_regret or {}
         _bt = self.backtest_result or {}
@@ -2941,6 +2977,7 @@ class Controller:
                 if self._load_adapt_ratio is not None else None
             ),
             "load_adapt_matched_hours": self._load_adapt_matched,
+            **self._occ_status_attrs(now),
             "regret_eur": _regret.get("regret_eur"),
             "over_buy_kwh": _regret.get("over_buy_kwh"),
             "under_buy_kwh": _regret.get("under_buy_kwh"),

@@ -82,6 +82,12 @@ class Config:
     load_adapt_fraction: float = const.DEFAULT_LOAD_ADAPT_FRACTION
     load_adapt_window_h: int = const.DEFAULT_LOAD_ADAPT_WINDOW_H
     load_adapt_fade_h: int = const.DEFAULT_LOAD_ADAPT_FADE_H
+    # Occupancy corrector (Layer B): fraction=0.0 disables (byte-identical).
+    occ_adapt_fraction: float = const.DEFAULT_OCC_ADAPT_FRACTION
+    occ_persistence_h: int = const.PERSONS_PERSISTENCE_H
+    # Current-hour blend + load-adapt partial-hour (live-only, default off).
+    current_hour_blend: bool = const.DEFAULT_CURRENT_HOUR_BLEND
+    load_adapt_partial_hour: bool = const.DEFAULT_LOAD_ADAPT_PARTIAL_HOUR
     # Ride-to-trough reserve (rev-2): anchor selector + cheap-relief band.
     reserve_anchor: str = const.DEFAULT_RESERVE_ANCHOR
     reserve_cheap_band: float = const.DEFAULT_RESERVE_CHEAP_BAND
