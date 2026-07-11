@@ -1,5 +1,5 @@
 """Occupancy corrector: binning, bands, table build."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from custom_components.anker_x1_smartgrid import occupancy
 
@@ -83,3 +83,77 @@ def test_build_table_coverage_rescale():
     mean, n = t.count_cells[(2, False, 1)]
     assert n == 20
     assert abs(mean - 500.0) < 1.0
+
+
+NOW = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)  # Wed 14:00 CEST → band 2, weekday
+
+
+def _table(count=None, binary=None, climo=None, ready=0):
+    return occupancy.OccupancyTable(count or {}, binary or {}, climo or {}, ready)
+
+
+def _full_table():
+    # band 2 weekday: away 300 W, 1p 500 W, 2p 600 W, all trusted; climo state 1
+    return _table(
+        count={(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25), (2, False, 2): (600.0, 25)},
+        binary={(2, False, 0): (300.0, 25), (2, False, 1): (550.0, 50)},
+        climo={(2, False): 1},
+    )
+
+
+def test_multiplier_neutral_cases():
+    t = _full_table()
+    assert occupancy.multiplier(None, 2, NOW, NOW, 4, 1.0) == 1.0        # no table
+    assert occupancy.multiplier(t, None, NOW, NOW, 4, 1.0) == 1.0        # no person entities
+    assert occupancy.multiplier(t, 2, NOW, NOW, 4, 0.0) == 1.0           # fraction off
+    assert occupancy.multiplier(t, 1, NOW, NOW, 4, 1.0) == 1.0           # matches climo
+
+
+def test_multiplier_deviation_count_level():
+    t = _full_table()
+    # 2 home vs climo 1 → 600/500 = 1.2 at fraction 1.0
+    assert abs(occupancy.multiplier(t, 2, NOW, NOW, 4, 1.0) - 1.2) < 1e-9
+    # fraction 0.5 → 1.1
+    assert abs(occupancy.multiplier(t, 2, NOW, NOW, 4, 0.5) - 1.1) < 1e-9
+    # away vs climo 1 → 300/500 = 0.6
+    assert abs(occupancy.multiplier(t, 0, NOW, NOW, 4, 1.0) - 0.6) < 1e-9
+
+
+def test_multiplier_persistence_cutoff():
+    t = _full_table()
+    within = NOW + timedelta(hours=3, minutes=59)
+    beyond = NOW + timedelta(hours=4)
+    assert occupancy.multiplier(t, 0, within, NOW, 4, 1.0) != 1.0
+    assert occupancy.multiplier(t, 0, beyond, NOW, 4, 1.0) == 1.0
+
+
+def test_multiplier_same_level_hierarchy_falls_back_to_binary():
+    # count cell for state 2 too thin (n=5) → BOTH sides resolve at binary level
+    t = _table(
+        count={(2, False, 2): (600.0, 5), (2, False, 1): (500.0, 25)},
+        binary={(2, False, 0): (300.0, 25), (2, False, 1): (550.0, 50)},
+        climo={(2, False): 1},
+    )
+    # 2 home vs climo 1: binary(1)/binary(1) = 1.0 — same binary side → neutral
+    assert occupancy.multiplier(t, 2, NOW, NOW, 4, 1.0) == 1.0
+    # away vs climo 1: binary 300/550
+    assert abs(occupancy.multiplier(t, 0, NOW, NOW, 4, 1.0) - 300.0 / 550.0) < 1e-9
+
+
+def test_multiplier_clamps():
+    t = _table(
+        count={(2, False, 0): (100.0, 25), (2, False, 1): (1000.0, 25)},
+        climo={(2, False): 1},
+    )
+    assert occupancy.multiplier(t, 0, NOW, NOW, 4, 1.0) == occupancy.MULT_MIN
+
+
+class _Base:
+    def predict(self, when, temp, fallback_w, *, quantile=0.5):
+        return 1000.0
+
+
+def test_occupancy_predictor_wraps_base():
+    p = occupancy.OccupancyPredictor(_Base(), _full_table(), 2, NOW, 4, 1.0)
+    assert abs(p.predict(NOW, 20.0, 250.0) - 1200.0) < 1e-6
+    assert abs(p.predict(NOW + timedelta(hours=5), 20.0, 250.0) - 1000.0) < 1e-6

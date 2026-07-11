@@ -91,3 +91,69 @@ def build_table(rows: list[dict]) -> OccupancyTable:
         1 for _, n in binary_cells.values() if n >= MIN_CELL_HOURS
     )
     return OccupancyTable(count_cells, binary_cells, climo_state, ready)
+
+
+def _trusted(cells: dict, key: tuple) -> tuple[float, int] | None:
+    c = cells.get(key)
+    return c if c is not None and c[1] >= MIN_CELL_HOURS else None
+
+
+def multiplier(
+    table: OccupancyTable | None,
+    occ_now: int | None,
+    when: datetime,
+    now: datetime,
+    persistence_h: int,
+    fraction: float,
+) -> float:
+    """Occupancy-deviation multiplier for a prediction at ``when``.
+
+    1.0 whenever: no table / no person entities / fraction off / beyond the
+    persistence window / occupancy matches climatology / cells too thin.
+    Numerator and denominator always resolve at the SAME hierarchy level
+    (count → binary → neutral) so a trusted mean is never divided by an
+    untrusted one.
+    """
+    if table is None or occ_now is None or fraction <= 0.0:
+        return 1.0
+    if when >= now + timedelta(hours=persistence_h):
+        return 1.0
+    band, weekend = band_of(when)
+    occ_state = min(STATE_MAX, max(0, int(occ_now)))
+    climo = table.climo_state.get((band, weekend))
+    if climo is None or occ_state == climo:
+        return 1.0
+    num = _trusted(table.count_cells, (band, weekend, occ_state))
+    den = _trusted(table.count_cells, (band, weekend, climo))
+    if num is None or den is None:
+        num = _trusted(table.binary_cells, (band, weekend, 1 if occ_state > 0 else 0))
+        den = _trusted(table.binary_cells, (band, weekend, 1 if climo > 0 else 0))
+    if num is None or den is None or den[0] <= 0.0:
+        return 1.0
+    m_eff = 1.0 + fraction * (num[0] / den[0] - 1.0)
+    return min(MULT_MAX, max(MULT_MIN, m_eff))
+
+
+class OccupancyPredictor:
+    """Duck-typed predictor wrapper: base × occupancy-deviation multiplier."""
+
+    def __init__(
+        self, base, table: OccupancyTable | None, occ_now: int | None,
+        now: datetime, persistence_h: int, fraction: float,
+    ) -> None:
+        self._base = base
+        self._table = table
+        self._occ_now = occ_now
+        self._now = now
+        self._persistence_h = int(persistence_h)
+        self._fraction = float(fraction)
+
+    def predict(
+        self, when: datetime, temp: float | None, fallback_w: float,
+        *, quantile: float = 0.5,
+    ) -> float:
+        base_w = self._base.predict(when, temp, fallback_w, quantile=quantile)
+        return base_w * multiplier(
+            self._table, self._occ_now, when, self._now,
+            self._persistence_h, self._fraction,
+        )
