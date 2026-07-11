@@ -151,6 +151,39 @@ def test_ratio_never_matches_current_hour_even_if_present_in_actuals():
     assert ratio == pytest.approx(1.3)
 
 
+# ── compute_ratio: partial-hour extension ───────────────────────────────
+def test_ratio_partial_hour_weighted_in():
+    # 3 completed hours predicted 1000 W, actual 1000 W each → ratio 1.0
+    log = _log_with({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    log.record(H, 1000.0)  # current-hour prediction also logged
+    actuals = _actuals({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    base, _ = load_adapt.compute_ratio(log, actuals, H, 5)
+    assert base == 1.0
+    # running hour at 2000 W for half the hour → weighted ratio > 1
+    ratio, matched = load_adapt.compute_ratio(
+        log, actuals, H, 5, partial=(2000.0, 0.5),
+    )
+    assert matched == 4
+    # (3×1000 + 2000×0.5) / (3×1000 + 1000×0.5) = 4000/3500
+    assert abs(ratio - 4000.0 / 3500.0) < 1e-9
+
+
+def test_ratio_partial_below_min_frac_ignored():
+    log = _log_with({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    log.record(H, 1000.0)
+    actuals = _actuals({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    r_with, m = load_adapt.compute_ratio(log, actuals, H, 5, partial=(2000.0, 0.2))
+    r_without, _ = load_adapt.compute_ratio(log, actuals, H, 5)
+    assert m == 3 and r_with == r_without
+
+
+def test_ratio_partial_without_logged_prediction_ignored():
+    log = _log_with({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    actuals = _actuals({1: 1000.0, 2: 1000.0, 3: 1000.0})
+    _, m = load_adapt.compute_ratio(log, actuals, H, 5, partial=(2000.0, 0.5))
+    assert m == 3  # no log entry for H → partial contributes nothing
+
+
 # ── AdaptivePredictor ──────────────────────────────────────────────────
 def test_wrapper_full_correction_at_lead_zero():
     base = _StubBase(400.0)

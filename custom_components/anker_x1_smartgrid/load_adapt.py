@@ -16,6 +16,7 @@ RATIO_MIN = 0.7
 RATIO_MAX = 1.5
 MIN_MATCHED_HOURS = 3
 LOG_MAX_ENTRIES = 48
+PARTIAL_MIN_FRAC = 0.25  # ≥15 observed minutes before the running hour counts
 
 
 class PredictionLog:
@@ -48,6 +49,8 @@ def compute_ratio(
     past_actuals: dict,
     now_h: datetime,
     window_h: int,
+    *,
+    partial: tuple[float, float] | None = None,
 ) -> tuple[float | None, int]:
     """Bounded actual/predicted energy ratio over the last ``window_h`` hours.
 
@@ -71,6 +74,13 @@ def compute_ratio(
     ``test_ratio_never_matches_current_hour_even_if_present_in_actuals``.
     Gap-truncated *past* hours are a smaller residual risk, self-correcting
     within ``window_h`` and bounded by the ``RATIO_MIN``/``RATIO_MAX`` clamp.
+    The running hour is now admissible ONLY via the explicit ``partial``
+    argument (rate-based, so the kWh under-read trap does not apply): pass
+    ``partial=(actual_rate_w, elapsed_frac)`` — the observed average power
+    so far this hour and the fraction of the hour elapsed — and it is
+    weighted in by ``elapsed_frac`` alongside the completed hours, provided
+    a prediction was logged for ``now_h`` and ``elapsed_frac`` clears
+    ``PARTIAL_MIN_FRAC``.
     """
     pred_sum = 0.0
     act_sum = 0.0
@@ -86,6 +96,19 @@ def compute_ratio(
         pred_sum += pred
         act_sum += float(actual)
         matched += 1
+    if partial is not None:
+        actual_rate_w, frac = partial
+        pred_now = log.get(now_h)
+        if (
+            pred_now is not None and pred_now > 0.0
+            and actual_rate_w >= 0.0 and frac >= PARTIAL_MIN_FRAC
+        ):
+            # Elapsed-fraction weighting: a half-observed hour carries half the
+            # evidence of a completed one. Rate (W) × frac keeps units consistent
+            # with the completed-hour energy sums.
+            pred_sum += pred_now * frac
+            act_sum += float(actual_rate_w) * frac
+            matched += 1
     if matched < MIN_MATCHED_HOURS or pred_sum <= 0.0:
         return None, matched
     return min(RATIO_MAX, max(RATIO_MIN, act_sum / pred_sum)), matched
