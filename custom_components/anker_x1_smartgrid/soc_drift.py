@@ -18,14 +18,17 @@ MAX_DRIFT_STEP_H = 0.25
 
 
 def expected_soc_delta_kwh(forecast_pv_w: float, forecast_load_w: float, dt_h: float,
-                           eta_charge: float, eta_discharge: float) -> float:
-    """DC SoC change a PASSIVE battery would make under the raw forecast (η-aware, reality basis)."""
+                           eta_charge: float, eta_discharge: float,
+                           idle_drain_w: float = 0.0) -> float:
+    """DC SoC change a PASSIVE battery would make under the raw forecast (η-aware, reality basis,
+    idle-drain-aware on the deficit branch so constant standby drain doesn't double-count as drift).
+    """
     if not (0.0 < dt_h <= MAX_DRIFT_STEP_H):
         return 0.0
     net_kwh = (forecast_pv_w - forecast_load_w) * dt_h / 1000.0  # AC, signed
     if net_kwh >= 0.0:
         return net_kwh * eta_charge          # surplus charges DC at η_c
-    return net_kwh / eta_discharge           # deficit discharges DC at /η_d (stays negative)
+    return net_kwh / eta_discharge - idle_drain_w * dt_h / 1000.0  # deficit + idle debit (stays negative)
 
 
 def measured_soc_delta_kwh(soc_now_pct: float, soc_prev_pct: float, capacity_kwh: float) -> float:

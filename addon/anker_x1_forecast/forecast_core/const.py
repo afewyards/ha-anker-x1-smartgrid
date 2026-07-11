@@ -22,6 +22,7 @@ CONF_BACKTEST_TEST_DAYS = "backtest_test_days"
 CONF_ROUND_TRIP_EFF = "round_trip_eff"
 
 CONF_CHARGE_MARGIN_EUR_PER_KWH = "charge_margin_eur_per_kwh"
+CONF_IDLE_DRAIN_W = "idle_drain_w"
 CONF_RESERVE_ANCHOR = "reserve_anchor"
 CONF_RESERVE_CHEAP_BAND = "reserve_cheap_band"
 CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
@@ -98,6 +99,11 @@ DEFAULT_BACKTEST_TEST_DAYS = 3
 DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip
 
 DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
+# Constant inverter/BMS standby DC drain taken from the battery while it
+# discharges (W). 0 disables (byte-identical / parity-safe). Wired into the
+# DP/oracle (_apply_solar_load), ride-out reserve, plan display and
+# drift-hedge expectation on their deficit branches.
+DEFAULT_IDLE_DRAIN_W = 0.0
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730

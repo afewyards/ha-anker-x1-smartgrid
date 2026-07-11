@@ -187,6 +187,24 @@ class TestRideOutReserveKwh:
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
         assert r == pytest.approx(1.0 + 0.5, abs=1e-6)  # floor + first-hour dip only
 
+    def test_idle_drain_raises_reserve(self):
+        # 4 deficit hours then recovery. idle_drain_w adds a constant DC draw on
+        # top of the AC-deficit drawdown for every deficit hour in the walk.
+        ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
+        deficit_hours = 4
+        r0 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=0.0))
+        r130 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=130.0))
+        expected_delta = 0.130 * deficit_hours
+        assert (r130 - r0) == pytest.approx(expected_delta, abs=1e-6)
+
+    def test_reserve_idle_zero_byte_identical(self):
+        # idle_drain_w=0.0 must reproduce the pre-change result byte-identically.
+        ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
+        cfg_default = self._cfg()
+        cfg_explicit_zero = self._cfg(idle_drain_w=0.0)
+        assert energy.ride_out_reserve_kwh(T0, ivs, cfg_default) == \
+            energy.ride_out_reserve_kwh(T0, ivs, cfg_explicit_zero)
+
 
 # ---------------------------------------------------------------------------
 # export_net_target_w

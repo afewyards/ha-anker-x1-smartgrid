@@ -59,7 +59,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 54
+    assert len(section_keys) == 55
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1476,3 +1476,49 @@ async def test_options_sensor_mode_ignores_static_fields(hass):
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+# ---------------------------------------------------------------------------
+# A0 — idle_drain_w (constant inverter/BMS standby DC drain, W)
+# ---------------------------------------------------------------------------
+
+def test_config_default_idle_drain_zero():
+    cfg = Config()
+    assert cfg.idle_drain_w == 0.0
+
+
+def test_idle_drain_w_config_from_dict_roundtrip():
+    cfg = Config.from_dict({"idle_drain_w": 130.0})
+    assert cfg.idle_drain_w == 130.0
+
+
+def test_idle_drain_w_config_absent_uses_default():
+    """from_dict with unrelated keys leaves idle_drain_w at default."""
+    cfg = Config.from_dict({"soc_target": 80.0})
+    assert cfg.idle_drain_w == const.DEFAULT_IDLE_DRAIN_W
+
+
+def test_idle_drain_w_option_accepted():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    keys = _flat_keys(schema_obj)
+    assert const.CONF_IDLE_DRAIN_W in keys
+    result = _validate_flat(schema_obj, {const.CONF_IDLE_DRAIN_W: 130.0})
+    assert result[const.CONF_IDLE_DRAIN_W] == 130.0
+
+
+def test_idle_drain_w_option_default():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    schema_keys = _flat_markers(schema_obj)
+    assert schema_keys[const.CONF_IDLE_DRAIN_W].default() == const.DEFAULT_IDLE_DRAIN_W
+
+
+def test_idle_drain_w_option_rejects_above_range():
+    """Schema must reject idle_drain_w > 500.0."""
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    schema_obj = _options_schema({})
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_IDLE_DRAIN_W: 501.0})

@@ -107,6 +107,9 @@ def _apply_solar_load(
                    this is 1:1 (no discharge eta) — the byte-identical parity
                    path. When eta_curve is supplied, load-driven discharge
                    bears eta_d: DC draw = AC deficit / eta_discharge(power).
+                   Either way, cfg.idle_drain_w (constant inverter-standby DC
+                   drain, default 0.0) is added as extra DC draw whenever the
+                   battery discharges to cover the deficit.
 
     Parameters
     ----------
@@ -126,12 +129,13 @@ def _apply_solar_load(
         eta = _eta_charge_at(net_kwh / dt_h * 1000.0, cfg, eta_curve)
         dc_solar = min(net_kwh, rate_kwh_slot) * eta
         return min(soc_kwh + dc_solar, target_kwh)
+    idle_dc = cfg.idle_drain_w * dt_h / 1000.0
     if eta_curve is None:
-        return soc_kwh + net_kwh  # discharge 1:1, no efficiency factor — PARITY PATH, do not change
+        return soc_kwh + net_kwh - idle_dc  # discharge 1:1, no efficiency factor — PARITY PATH, do not change
     ac_deficit = -net_kwh
     eta_d = _eta_discharge_at(ac_deficit / dt_h * 1000.0, cfg, eta_curve)
     dc_draw = ac_deficit / eta_d
-    return soc_kwh - dc_draw
+    return soc_kwh - dc_draw - idle_dc
 
 
 def _max_grid_dc(

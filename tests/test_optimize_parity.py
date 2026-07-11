@@ -895,6 +895,76 @@ class TestChargeMarginEurPerKwh:
 
 
 # ---------------------------------------------------------------------------
+# idle_drain_w: constant inverter-standby DC drain during battery discharge
+# ---------------------------------------------------------------------------
+
+
+class TestIdleDrainW:
+    """cfg.idle_drain_w models constant inverter-standby DC drain (~130 W live)
+    the battery pays whenever it discharges to cover a net AC deficit. Shared
+    physics in regret._apply_solar_load means one insertion gives DP<->oracle
+    parity by construction. Default 0.0 must be a byte-identical no-op.
+    """
+
+    def test_dp_oracle_parity_with_idle_drain(self):
+        """With idle_drain_w=130.0, optimize_grid and hindsight_optimal_grid
+        produce identical schedules/SoC trajectories on a matched input pair.
+
+        Reuses the low-PV/high-load scenario (DP must actively charge in the
+        cheapest overnight hours) so the idle-drain term is exercised on a
+        non-trivial discharge trajectory, not just a zero-discharge no-op.
+        """
+        cfg = make_cfg(idle_drain_w=130.0)
+        pv = [0.0] * 9 + [0.5] * 4 + [0.0] * 11
+        load = [1.0] * 24
+        price = [
+            0.30, 0.28, 0.25, 0.22, 0.20, 0.18,  # 00-05 cheapest
+            0.22, 0.28, 0.32, 0.35, 0.33, 0.31,  # 06-11
+            0.29, 0.27, 0.25, 0.28, 0.32, 0.35,  # 12-17
+            0.38, 0.40, 0.36, 0.32, 0.28, 0.25,  # 18-23 evening peak
+        ]
+        opt, hind = call_both(pv, load, price, soc_start=60.0, cfg=cfg)
+        assert sum(opt["schedule"]) > 0.0, "fixture sanity: DP must actually charge"
+        assert_parity(opt, hind, tol=1e-6, label="idle_drain_parity")
+
+    def test_idle_drain_lowers_passive_soc_trajectory(self):
+        """idle_drain_w > 0 must lower the passive SoC trajectory vs idle_drain_w=0.
+
+        Directly exercises _apply_solar_load's deficit branch: a fixed AC
+        deficit should draw MORE DC out of the battery when idle_drain_w > 0,
+        since the standby drain is an additional DC load stacked on top of the
+        AC-covering discharge.
+        """
+        from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
+
+        cfg_off = make_cfg(idle_drain_w=0.0)
+        cfg_on = make_cfg(idle_drain_w=130.0)
+        soc_start_kwh = 5.0
+        net_kwh = -1.0  # 1 kWh AC deficit -> discharge
+
+        soc_off = _apply_solar_load(soc_start_kwh, net_kwh, cfg_off, dt_h=1.0)
+        soc_on = _apply_solar_load(soc_start_kwh, net_kwh, cfg_on, dt_h=1.0)
+
+        assert soc_on < soc_off, (
+            f"idle_drain_w=130 should lower the resulting SoC vs idle_drain_w=0 "
+            f"(soc_on={soc_on}, soc_off={soc_off})"
+        )
+        # Exact expected delta: 130 W * 1 h / 1000 = 0.13 kWh additional drain.
+        assert soc_off - soc_on == pytest.approx(0.13, abs=1e-9)
+
+    def test_idle_drain_default_zero_is_byte_identical_noop(self):
+        """Default idle_drain_w=0.0 must be a byte-identical no-op (x - 0.0 == x)."""
+        from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
+
+        cfg = make_cfg()  # idle_drain_w defaults to 0.0
+        soc_start_kwh = 5.0
+        net_kwh = -1.5
+
+        soc_with_default = _apply_solar_load(soc_start_kwh, net_kwh, cfg, dt_h=1.0)
+        assert soc_with_default == soc_start_kwh + net_kwh
+
+
+# ---------------------------------------------------------------------------
 # Oracle eta_curve threading smoke test (T8)
 # ---------------------------------------------------------------------------
 

@@ -34,6 +34,8 @@ class Config:
     backtest_test_days: int = const.DEFAULT_BACKTEST_TEST_DAYS
     round_trip_eff: float = const.DEFAULT_ROUND_TRIP_EFF
     charge_margin_eur_per_kwh: float = const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH
+    # Constant inverter/BMS standby DC drain (W); see const.DEFAULT_IDLE_DRAIN_W.
+    idle_drain_w: float = const.DEFAULT_IDLE_DRAIN_W
     ent_weather_forecast: str = const.DEFAULT_ENT_WEATHER_FORECAST
     retention_hourly_days: int = const.DEFAULT_RETENTION_HOURLY_DAYS
     addon_enabled: bool = const.DEFAULT_ADDON_ENABLED

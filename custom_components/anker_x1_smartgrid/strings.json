@@ -74,7 +74,8 @@
               "round_trip_eff": "Round-trip efficiency",
               "use_measured_eta": "Use measured efficiency",
               "charge_margin_eur_per_kwh": "Charge margin (€/kWh)",
-              "charge_trough_lookback_h": "Charge trough look-back (hours)"
+              "charge_trough_lookback_h": "Charge trough look-back (hours)",
+              "idle_drain_w": "Idle DC drain (W)"
             },
             "data_description": {
               "soc_floor": "Soft minimum state of charge the planner protects. The firmware enforces a hard 5% floor below this. Default 5.",
@@ -83,7 +84,8 @@
               "round_trip_eff": "Charge+discharge round-trip efficiency (0.5–1.0) used to value stored energy. Default 0.85.",
               "use_measured_eta": "Derive the efficiency curve from recorded charge sessions instead of the static values above. Default off.",
               "charge_margin_eur_per_kwh": "Minimum saving a grid charge must clear before it is scheduled; stops overnight micro-charges. Default 0.",
-              "charge_trough_lookback_h": "Hours of past prices the cheap-charge band remembers, so hours after the trough are not judged cheap. 0 disables. Default 8."
+              "charge_trough_lookback_h": "Hours of past prices the cheap-charge band remembers, so hours after the trough are not judged cheap. 0 disables. Default 8.",
+              "idle_drain_w": "Constant inverter/BMS standby drain taken from the battery while it discharges (W). 0 disables."
             }
           },
           "export": {

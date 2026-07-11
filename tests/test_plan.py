@@ -95,6 +95,62 @@ def test_soc_discharges_on_deficit():
     assert out[0]["charge_w"] == 0.0
 
 
+def test_idle_drain_sags_projected_soc():
+    """idle_drain_w (constant inverter-standby DC drain) applies only on passive-
+    discharge (deficit) slots — sags soc_sim below the idle_drain_w=0 baseline by
+    the idle term (130 W * 1 h / 1000 = 0.13 kWh -> 1.3% of a 10 kWh battery).
+    Charge and export-only slots are unaffected (idle drain is not paid there)."""
+    base_kwargs = dict(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
+                        max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    cfg0 = Config(**base_kwargs, idle_drain_w=0.0)
+    cfg_idle = Config(**base_kwargs, idle_drain_w=130.0)
+    deadline = BASE + timedelta(hours=1)
+
+    # Deficit slot: load > pv, no grid, no export -> passive-discharge branch.
+    slots = _slots(1)
+    deficit_intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
+    out0 = plan.build_plan_horizon(slots, deficit_intervals, [], 50.0, deadline, cfg0)
+    out_idle = plan.build_plan_horizon(slots, deficit_intervals, [], 50.0, deadline, cfg_idle)
+    assert out0[0]["mode"] == "idle"
+    assert out0[0]["soc"] == 40.0
+    assert out_idle[0]["soc"] == 38.7
+
+    # Grid-charge slot: idle drain must NOT apply.
+    selected = [BASE]
+    out0_c = plan.build_plan_horizon(slots, deficit_intervals, selected, 50.0, deadline, cfg0)
+    out_idle_c = plan.build_plan_horizon(slots, deficit_intervals, selected, 50.0, deadline, cfg_idle)
+    assert out0_c[0]["mode"] == "grid"
+    assert out0_c[0]["soc"] == out_idle_c[0]["soc"]
+
+    # Export-only slot (pv == load: no deficit branch taken, export applied separately):
+    # idle drain must NOT apply.
+    export_intervals = [ForecastInterval(BASE, pv_w=500.0, load_w=500.0, dt_h=1.0)]
+    out0_e = plan.build_plan_horizon(
+        slots, export_intervals, [], 50.0, deadline, cfg0,
+        export_request_by_hour={BASE: 1000.0},
+    )
+    out_idle_e = plan.build_plan_horizon(
+        slots, export_intervals, [], 50.0, deadline, cfg_idle,
+        export_request_by_hour={BASE: 1000.0},
+    )
+    assert out0_e[0]["mode"] == "idle"
+    assert out0_e[0]["soc"] == out_idle_e[0]["soc"]
+
+
+def test_plan_idle_zero_parity():
+    """idle_drain_w=0.0 reproduces the pre-idle-drain deficit-slot SoC math exactly
+    (regression guard: same scenario/expected values as test_soc_discharges_on_deficit,
+    with idle_drain_w explicit)."""
+    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
+                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=0.5, idle_drain_w=0.0)
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
+    out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=1), cfg)
+    assert out[0]["mode"] == "idle"
+    assert out[0]["soc"] == 30.0
+    assert out[0]["charge_w"] == 0.0
+
+
 def test_soc_discharge_clamped_at_firmware_floor():
     """Deficit night (load > pv, no charge, no export): the projected-SoC sim sags to
     the firmware hard floor (5%), NOT the soft cfg.soc_floor planning margin — nothing

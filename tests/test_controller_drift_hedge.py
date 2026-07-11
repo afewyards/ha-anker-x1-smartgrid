@@ -772,3 +772,74 @@ async def test_post_restart_first_tick_gated(monkeypatch):
     assert ctrl._soc_drift_last_export_kwh_dc == pytest.approx(0.0)
     # After the gated tick, intervals are now cached — next tick can step
     assert ctrl._soc_drift_last_intervals is not None
+
+
+# ---------------------------------------------------------------------------
+# 13. Idle drain flows into expected_soc_delta_kwh at the controller callsite
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_idle_drain_passed_to_expected_soc_delta(monkeypatch):
+    """The controller callsite must pass cfg.idle_drain_w into expected_soc_delta_kwh."""
+    hass = _StubHass()
+    cfg = _drift_cfg(idle_drain_w=130.0)
+    ctrl, _, _ = _make_ctrl(hass, cfg=cfg)
+
+    ivs = [ForecastInterval(BASE, 0.0, 600.0, 2.0)]
+
+    captured: dict = {}
+    real_fn = ctrl_mod.soc_drift.expected_soc_delta_kwh
+
+    def _spy(*args, **kwargs):
+        captured["idle_drain_w"] = kwargs.get("idle_drain_w")
+        return real_fn(*args, **kwargs)
+
+    monkeypatch.setattr(ctrl_mod.soc_drift, "expected_soc_delta_kwh", _spy)
+
+    # Tick 1: seed anchor
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    _seed_inputs(hass, soc="60.0", now=BASE)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    # Tick 2: the drift step actually runs — spy must have captured idle_drain_w.
+    t2 = BASE + timedelta(minutes=5)
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: t2)
+    _seed_inputs(hass, soc="60.0", now=t2)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    assert captured.get("idle_drain_w") == pytest.approx(130.0)
+
+
+@pytest.mark.asyncio
+async def test_idle_drain_absorbs_standby_debit_from_drift(monkeypatch):
+    """With cfg.idle_drain_w matching the real standby drain, a SoC drop that includes
+    that constant drain must NOT register as forecast drift (no double-compensation
+    with whatever else already models idle drain, e.g. the DP physics).
+    """
+    hass = _StubHass()
+    cfg = _drift_cfg(idle_drain_w=130.0)
+    ctrl, _, _ = _make_ctrl(hass, cfg=cfg)
+
+    # Forecast: pv=0, load=600 W. Real drain includes unmodeled 130 W idle standby → 730 W total.
+    ivs = [ForecastInterval(BASE, 0.0, 600.0, 2.0)]
+
+    # Tick 1: seed anchor
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    _seed_inputs(hass, soc="60.0", now=BASE)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    # Tick 2, 15 minutes later (dt_h=0.25): SoC drops by the FULL 730 W drain rate
+    # (600 W forecast load + 130 W unmodeled idle standby), not just the 600 W forecast.
+    # drain_kwh = 730 * 0.25 / 1000 = 0.1825 kWh -> 1.825% on a 10 kWh battery.
+    t2 = BASE + timedelta(minutes=15)
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: t2)
+    _seed_inputs(hass, soc="58.175", now=t2)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    # Idle-modeled expectation matches the real drain exactly -> no spurious drift.
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=0.005)

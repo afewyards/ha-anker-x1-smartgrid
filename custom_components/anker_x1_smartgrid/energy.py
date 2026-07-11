@@ -75,6 +75,9 @@ def ride_out_reserve_kwh(
     * ``eta_curve``, when given, supplies power-dependent ``eta_charge(w)`` /
       ``eta_discharge(w)`` (duck-typed; no ``efficiency`` import here to avoid a
       cycle). ``eta_curve=None`` reproduces the static scalar walk byte-identically.
+    * ``cfg.idle_drain_w`` (default ``0.0``): constant DC standby drain added to
+      every deficit hour's drawdown (inverter/BMS idle load the AC deficit
+      signal doesn't see). ``0.0`` reproduces the walk byte-identically.
     """
     cap_kwh = cfg.capacity_kwh
     floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
@@ -102,7 +105,7 @@ def ride_out_reserve_kwh(
         deficit_w = max(0.0, iv.load_w - iv.pv_w)
         if deficit_w > 0.0:
             _eta_d = eta_d if eta_curve is None else eta_curve.eta_discharge(deficit_w)
-            draw = deficit_w / _eta_d * iv.dt_h / 1000.0
+            draw = deficit_w / _eta_d * iv.dt_h / 1000.0 + cfg.idle_drain_w * iv.dt_h / 1000.0
             debit_cum += draw
             signed_cum -= draw
             if signed_cum < trough_signed:

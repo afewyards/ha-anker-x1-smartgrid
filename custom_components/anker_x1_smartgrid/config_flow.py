@@ -171,6 +171,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_USE_MEASURED_ETA,
         const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
         const.CONF_CHARGE_TROUGH_LOOKBACK_H,
+        const.CONF_IDLE_DRAIN_W,
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
@@ -354,6 +355,10 @@ def _options_fields(defaults: dict, services=None) -> dict:
                 const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
                 default=defaults.get(const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH),
             ): cv.positive_float,
+            vol.Optional(
+                const.CONF_IDLE_DRAIN_W,
+                default=defaults.get(const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0)),
             vol.Optional(
                 const.CONF_RESERVE_ANCHOR,
                 default=defaults.get(const.CONF_RESERVE_ANCHOR, const.DEFAULT_RESERVE_ANCHOR),

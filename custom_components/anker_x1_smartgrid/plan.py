@@ -225,6 +225,12 @@ def build_plan_horizon(
             # max_charge_w is used as an approximate discharge cap by design (no separate max_discharge_w config).
             _eta_d = eta_discharge if eta_curve is None else eta_curve.eta_discharge(self_discharge_w)
             soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * dt_h / cap_wh * 100.0
+            if self_discharge_w > 0:
+                # Constant inverter-standby DC drain (cfg.idle_drain_w, ~130 W live) paid
+                # whenever the battery passively discharges to cover a net AC deficit.
+                # DC-side term: NOT divided by eta_discharge. Not paid on charge/export
+                # slots (self_discharge_w is 0 there). idle_drain_w=0.0 default -> no-op.
+                soc_sim -= cfg.idle_drain_w * dt_h / 1000.0 / cfg.capacity_kwh * 100.0
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
             soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * dt_h / cap_wh * 100.0

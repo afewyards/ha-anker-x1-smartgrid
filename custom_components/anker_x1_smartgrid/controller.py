@@ -1979,6 +1979,7 @@ class Controller:
                 _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
                 _expected_dc = soc_drift.expected_soc_delta_kwh(
                     _fc_pv_w, _fc_load_w, _dt_h, self.cfg.eta_charge, _eta_d,
+                    idle_drain_w=self.cfg.idle_drain_w,
                 )
                 _measured_dc = soc_drift.measured_soc_delta_kwh(
                     _soc_now, self._soc_drift_last_soc_pct, self.cfg.capacity_kwh,

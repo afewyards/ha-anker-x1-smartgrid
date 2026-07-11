@@ -18,6 +18,24 @@ def test_expected_zero_on_anomalous_dt():
     assert soc_drift.expected_soc_delta_kwh(1000.0, 0.0, 0.0, 0.92, 0.92) == 0.0
     assert soc_drift.expected_soc_delta_kwh(1000.0, 0.0, 5.0, 0.92, 0.92) == 0.0  # > MAX
 
+def test_expected_delta_subtracts_idle_on_deficit():
+    # deficit -1000W over 0.1h = -0.1 kWh AC → ÷0.92 DC, minus idle drain (130W over 0.1h)
+    v = soc_drift.expected_soc_delta_kwh(0.0, 1000.0, 0.1, 0.92, 0.92, idle_drain_w=130.0)
+    assert round(v, 6) == round(-0.1 / 0.92 - 130.0 * 0.1 / 1000.0, 6)
+
+def test_expected_delta_idle_default_zero_parity():
+    # Omitting idle_drain_w must reproduce the pre-idle-drain values exactly (byte-identical).
+    v_no_kwarg = soc_drift.expected_soc_delta_kwh(0.0, 1000.0, 0.1, 0.92, 0.92)
+    v_explicit_zero = soc_drift.expected_soc_delta_kwh(0.0, 1000.0, 0.1, 0.92, 0.92, idle_drain_w=0.0)
+    assert v_no_kwarg == v_explicit_zero == -0.1 / 0.92
+
+def test_expected_delta_surplus_branch_unaffected_by_idle():
+    # Surplus (charge) branch must ignore idle_drain_w entirely.
+    v_with_idle = soc_drift.expected_soc_delta_kwh(1000.0, 0.0, 0.1, 0.92, 0.92, idle_drain_w=130.0)
+    v_without_idle = soc_drift.expected_soc_delta_kwh(1000.0, 0.0, 0.1, 0.92, 0.92)
+    assert v_with_idle == v_without_idle
+    assert round(v_with_idle, 6) == round(0.1 * 0.92, 6)
+
 # ── measured (DC from % SoC) ──
 def test_measured_delta_from_soc_pct():
     assert soc_drift.measured_soc_delta_kwh(60.0, 55.0, 10.0) == 0.5
