@@ -61,7 +61,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from . import const
-from .dp_common import soc_bins
+from .dp_common import select_end_state, soc_bins
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -864,63 +864,17 @@ def optimize_grid(
     # ------------------------------------------------------------------
     # Select best end state
     # ------------------------------------------------------------------
-    if terminal_mode == "water_value":
-        # Price end-SoC by the trough water value instead of forcing the reserve.
-        # The per-transition floor constraint already guarantees every reachable
-        # end state has SoC >= floor, so survival-floor unreachability is NOT
-        # flagged here (it is handled in the shield path, Task C2a). Only the
-        # all-pruned pathological case below sets infeasible.
-        v = water_value if water_value is not None else 0.0
-        # Scan from the firmware floor (widened): sub-soft-floor end states are
-        # now reachable (transition clamp sags to firmware_floor_kwh, not
-        # floor_kwh).  The credit anchor stays at floor_kwh (soft margin) below
-        # so those sub-margin states simply earn zero credit, not a penalty.
-        floor_b = to_bin(firmware_floor_kwh)
-        target_b = to_bin(target_kwh)
-        best_score = INF
-        best_end_b = -1
-        for end_b in range(floor_b, target_b + 1):
-            if dp[end_b] == INF:
-                continue
-            credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-            score = dp[end_b] - credit
-            if score < best_score:
-                best_score = score
-                best_end_b = end_b
-        # Fallback: soc_start > soc_target means [floor_b, target_b] states are
-        # unreachable via charging. Scan the full [floor_b, n_states) range to
-        # find the lowest net-cost reachable state (still keeping infeasible=False,
-        # because the survival floor is satisfied — battery is above target).
-        if best_end_b == -1:
-            best_score = INF
-            for end_b in range(floor_b, n_states):
-                if dp[end_b] == INF:
-                    continue
-                credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-                score = dp[end_b] - credit
-                if score < best_score:
-                    best_score = score
-                    best_end_b = end_b
-        best_cost = dp[best_end_b] if best_end_b != -1 else INF
-        infeasible = False
-    else:
-        # Reserve mode (default) — UNCHANGED from the original implementation.
-        reserve_b = to_bin(target_kwh)
-        best_cost = INF
-        best_end_b = -1
-        for end_b in range(reserve_b, n_states):
-            if dp[end_b] < best_cost:
-                best_cost = dp[end_b]
-                best_end_b = end_b
-
-        infeasible = best_end_b == -1
-        if infeasible:
-            # Reserve unreachable: return best achievable end state.
-            for end_b in range(n_states - 1, -1, -1):
-                if dp[end_b] < INF:
-                    best_end_b = end_b
-                    best_cost = dp[end_b]
-                    break
+    best_end_b, best_cost, infeasible = select_end_state(
+        dp,
+        terminal_mode=terminal_mode,
+        water_value=water_value,
+        firmware_floor_kwh=firmware_floor_kwh,
+        floor_kwh=floor_kwh,
+        target_kwh=target_kwh,
+        to_bin=to_bin,
+        from_bin=from_bin,
+        n_states=n_states,
+    )
 
     if best_end_b == -1:
         # All paths blocked by floor (extremely pathological input).

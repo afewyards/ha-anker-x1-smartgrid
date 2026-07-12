@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import const
-from .dp_common import soc_bins
+from .dp_common import select_end_state, soc_bins
 from .models import Config
 
 # Discretisation resolution for the SoC DP (kWh per bin).
@@ -586,60 +586,20 @@ def hindsight_optimal_grid(
         parent.append(par_h)
         dp = dp_next
 
-    # Select minimum-cost end state per terminal_mode.
-    if terminal_mode == "water_value":
-        v = water_value if water_value is not None else 0.0
-        # Scan from the firmware floor (widened): sub-soft-floor end states are
-        # now reachable (transition clamp sags to firmware_floor_kwh, not
-        # floor_kwh).  The credit anchor stays at floor_kwh (soft margin) below
-        # so those sub-margin states simply earn zero credit, not a penalty.
-        # MUST mirror optimize.optimize_grid byte-for-byte (parity-critical
-        # pair) — see TestExportOnParity.test_two_peaks_water_value_mode.
-        floor_b = to_bin(firmware_floor_kwh)
-        target_b = to_bin(target_kwh)
-        best_score = INF
-        best_end_b = -1
-        for end_b in range(floor_b, target_b + 1):
-            if dp[end_b] == INF:
-                continue
-            credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-            score = dp[end_b] - credit
-            if score < best_score:
-                best_score = score
-                best_end_b = end_b
-        # M2 fix: if no state in [floor_b, target_b] is reachable (soc_start > target),
-        # fall back to the lowest net-cost reachable state in [floor_b, n_states);
-        # survival floor still guaranteed, so NOT infeasible.
-        if best_end_b == -1:
-            best_score = INF
-            for end_b in range(floor_b, n_states):
-                if dp[end_b] == INF:
-                    continue
-                credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-                score = dp[end_b] - credit
-                if score < best_score:
-                    best_score = score
-                    best_end_b = end_b
-        best_cost = dp[best_end_b] if best_end_b != -1 else INF
-        infeasible = False
-    else:
-        # reserve mode (default) — select minimum-cost end state with SoC >= soc_target.
-        reserve_b = to_bin(target_kwh)
-        best_cost = INF
-        best_end_b = -1
-        for end_b in range(reserve_b, n_states):
-            if dp[end_b] < best_cost:
-                best_cost = dp[end_b]
-                best_end_b = end_b
-
-        infeasible = best_end_b == -1
-        if infeasible:
-            # Reserve unreachable: return best achievable end state.
-            for end_b in range(n_states - 1, -1, -1):
-                if dp[end_b] < INF:
-                    best_end_b = end_b
-                    best_cost = dp[end_b]
-                    break
+    # Select minimum-cost end state per terminal_mode.  MUST mirror
+    # optimize.optimize_grid byte-for-byte (parity-critical pair) — see
+    # TestExportOnParity.test_two_peaks_water_value_mode.
+    best_end_b, best_cost, infeasible = select_end_state(
+        dp,
+        terminal_mode=terminal_mode,
+        water_value=water_value,
+        firmware_floor_kwh=firmware_floor_kwh,
+        floor_kwh=floor_kwh,
+        target_kwh=target_kwh,
+        to_bin=to_bin,
+        from_bin=from_bin,
+        n_states=n_states,
+    )
 
     if best_end_b == -1:
         # All paths blocked by floor (extremely pathological input).
