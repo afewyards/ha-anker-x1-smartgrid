@@ -1562,6 +1562,47 @@ class Controller:
         except Exception:  # noqa: BLE001 - never break the loop on training error
             pass
 
+    async def _safe_release(
+        self,
+        now: datetime,
+        context: str = "",
+        *,
+        release: bool = True,
+        reset_export: bool = True,
+        reset_before_release: bool = False,
+    ) -> None:
+        """Best-effort inverter release + export dwell-state reset.
+
+        Consolidates the try/``release_to_self()``/log-error +
+        ``ExportState(engaged=False, state_since=now)`` reset pattern repeated
+        across the tick/failsafe/export-executor paths. ``context`` becomes the
+        error-log message on a release failure, so each call site keeps its
+        original diagnostic text.
+
+        ``release``/``reset_export`` let a call site express a release-only or
+        reset-only variant (some sites reset export state without ever having
+        engaged the actuator; others release without touching export state
+        directly — e.g. a local ``_new_export_state`` var is unified into
+        ``self.export_state`` later by the caller). The export-state reset is
+        itself gated on ``self.export_state.engaged`` (mirrors every original
+        call site) so a no-op reset never bumps ``state_since``.
+
+        ``reset_before_release`` mirrors the one call site (export-disabled
+        path) whose original code reset ``self.export_state`` BEFORE
+        attempting the release rather than after — order matters there since
+        ``release_to_self()`` awaits, and a concurrent reader (e.g. a sensor)
+        could observe ``export_state`` mid-release.
+        """
+        if reset_export and reset_before_release and self.export_state.engaged:
+            self.export_state = ExportState(engaged=False, state_since=now)
+        if release:
+            try:
+                await self._actuator.release_to_self()
+            except Exception:  # noqa: BLE001 — best-effort release must never raise
+                _LOGGER.error(context, exc_info=True)
+        if reset_export and not reset_before_release and self.export_state.engaged:
+            self.export_state = ExportState(engaged=False, state_since=now)
+
     async def tick(self) -> dict:
         # Re-entrancy guard (review 1.2): the 60s timer fires regardless of the
         # previous tick; a slow retrain tick must not overlap and race the actuator.
@@ -1574,12 +1615,7 @@ class Controller:
             except Exception:  # noqa: BLE001 — whole-tick failsafe (review 1.1)
                 _LOGGER.exception("tick failed; releasing to self-consumption")
                 now = dt_util.utcnow()
-                try:
-                    await self._actuator.release_to_self()
-                except Exception:  # noqa: BLE001
-                    _LOGGER.error("release_to_self failed in tick failsafe", exc_info=True)
-                if self.export_state.engaged:
-                    self.export_state = ExportState(engaged=False, state_since=now)
+                await self._safe_release(now, "release_to_self failed in tick failsafe")
                 self.plan = PlanState(ControllerState.PASSIVE, now, ())
                 status = self._status(now, 0.0, None, "failsafe")
                 status["state"] = "failsafe"
@@ -1706,14 +1742,10 @@ class Controller:
                 _first_tick
                 and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
             )
-            if _was_engaged:
-                try:
-                    await self._actuator.release_to_self()
-                except Exception:
-                    _LOGGER.error("Actuator release_to_self failed (disabled path)", exc_info=True)
             # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
-            if self.export_state.engaged:
-                self.export_state = ExportState(engaged=False, state_since=now)
+            await self._safe_release(
+                now, "Actuator release_to_self failed (disabled path)", release=_was_engaged,
+            )
             # Save the previous plan for state-machine continuity in the shadow compute,
             # then reset to PASSIVE so no committed slots are carried forward.
             _prev_plan = self.plan
@@ -1888,12 +1920,7 @@ class Controller:
 
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
-            try:
-                await self._actuator.release_to_self()
-            except Exception:
-                _LOGGER.error("Actuator release_to_self failed (failsafe path)", exc_info=True)
-            if self.export_state.engaged:
-                self.export_state = ExportState(engaged=False, state_since=now)
+            await self._safe_release(now, "Actuator release_to_self failed (failsafe path)")
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
             return self._status(now, 0.0, None, "failsafe")
 
@@ -2152,15 +2179,14 @@ class Controller:
                 setpoint = 0.0
             # Mutual exclusion: export executor is skipped entirely while force-charging.
             # Release export state so we transition cleanly after force-charge ends.
-            if self.export_state.engaged:
-                self.export_state = ExportState(engaged=False, state_since=now)
+            await self._safe_release(now, release=False)
         else:
             setpoint = 0.0
             if self.plan.state is ControllerState.FORCING:
-                try:
-                    await self._actuator.release_to_self()
-                except Exception:
-                    _LOGGER.error("Actuator release_to_self failed (FORCING→PASSIVE transition)", exc_info=True)
+                await self._safe_release(
+                    now, "Actuator release_to_self failed (FORCING→PASSIVE transition)",
+                    reset_export=False,
+                )
 
             # ── C3: live export executor ──────────────────────────────────────
             # Only fires when export is enabled and an export price is available.
@@ -2308,47 +2334,38 @@ class Controller:
                             # disengaged state and best-effort release so the next
                             # tick starts from self-consumption (mirror FORCING L1409).
                             _new_export_state = ExportState(engaged=False, state_since=now)
-                            try:
-                                await self._actuator.release_to_self()
-                            except Exception:
-                                _LOGGER.error(
-                                    "Actuator release_to_self failed (engage_export except)",
-                                    exc_info=True,
-                                )
+                            await self._safe_release(
+                                now,
+                                "Actuator release_to_self failed (engage_export except)",
+                                reset_export=False,
+                            )
                     else:
                         # Surplus too small to quantize to a valid step — release.
                         _new_export_state = ExportState(engaged=False, state_since=now)
                         if self.export_state.engaged:
-                            try:
-                                await self._actuator.release_to_self()
-                            except Exception:
-                                _LOGGER.error(
-                                    "Actuator release_to_self failed (C3 zero-rate path)",
-                                    exc_info=True,
-                                )
+                            await self._safe_release(
+                                now,
+                                "Actuator release_to_self failed (C3 zero-rate path)",
+                                reset_export=False,
+                            )
                 else:
                     # Gate fail or surplus below lo-eps: release if currently engaged.
                     if self.export_state.engaged:
-                        try:
-                            await self._actuator.release_to_self()
-                        except Exception:
-                            _LOGGER.error(
-                                "Actuator release_to_self failed (C3 disengage path)",
-                                exc_info=True,
-                            )
+                        await self._safe_release(
+                            now,
+                            "Actuator release_to_self failed (C3 disengage path)",
+                            reset_export=False,
+                        )
 
                 self.export_state = _new_export_state
             else:
                 # Export disabled or no export price: release if engaged.
                 if self.export_state.engaged:
-                    self.export_state = ExportState(engaged=False, state_since=now)
-                    try:
-                        await self._actuator.release_to_self()
-                    except Exception:
-                        _LOGGER.error(
-                            "Actuator release_to_self failed (export disabled path)",
-                            exc_info=True,
-                        )
+                    await self._safe_release(
+                        now,
+                        "Actuator release_to_self failed (export disabled path)",
+                        reset_before_release=True,
+                    )
 
         self.plan = new_plan
         await self._persist()
