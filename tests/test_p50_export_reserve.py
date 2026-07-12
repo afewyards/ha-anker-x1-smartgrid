@@ -180,7 +180,13 @@ def test_reserve_is_p50_and_display_is_p50_only(monkeypatch):
         display_q.append(kw.get("quantile"))
         return real_display(*a, **kw)
 
-    monkeypatch.setattr(controller, "build_intervals", spy_build)
+    # f9c68a3 moved _build_reserve_by_hour (and compute_decision) into decision.py;
+    # its call to build_intervals now resolves against decision.py's own globals, so
+    # patching the controller re-export was a silent no-op (same pattern as C2's
+    # comment in tests/test_controller_dp.py).
+    import custom_components.anker_x1_smartgrid.decision as decision_mod
+
+    monkeypatch.setattr(decision_mod, "build_intervals", spy_build)
     monkeypatch.setattr(controller.plan_mod, "build_display_intervals", spy_display)
 
     predictor = LoadPredictor.from_model(_SpreadModel())
