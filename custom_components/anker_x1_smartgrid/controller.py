@@ -632,11 +632,11 @@ def _build_reserve_by_hour(
     if not intervals_reserve or not slots:
         return {}
 
-    now_h = now.replace(minute=0, second=0, microsecond=0)
+    now_h = resolution.hour_floor(now)
     # Build interval lookup: hour → ForecastInterval (first one wins)
     iv_by_hour: dict[datetime, object] = {}
     for iv in intervals_reserve:
-        h = iv.start.replace(minute=0, second=0, microsecond=0)
+        h = resolution.hour_floor(iv.start)
         if h not in iv_by_hour:
             iv_by_hour[h] = iv
 
@@ -644,7 +644,7 @@ def _build_reserve_by_hour(
     seen: set[datetime] = set()
     horizon_hours: list[datetime] = []
     for slot in sorted(slots, key=lambda s: s.start):
-        h = slot.start.replace(minute=0, second=0, microsecond=0)
+        h = resolution.hour_floor(slot.start)
         if h >= now_h and h not in seen:
             seen.add(h)
             horizon_hours.append(h)
@@ -704,7 +704,7 @@ def _build_reserve_by_hour(
             # Find where the real (+ already-synthetic) intervals end.
             last_iv = suffix[-1]
             suffix_end = last_iv.start + timedelta(hours=last_iv.dt_h)
-            syn_start = suffix_end.replace(minute=0, second=0, microsecond=0)
+            syn_start = resolution.hour_floor(suffix_end)
             if suffix_end > syn_start:
                 syn_start += timedelta(hours=1)
             suffix = list(suffix) + _synthetic_night_rows(
@@ -823,7 +823,7 @@ def compute_decision(
     regret.  Ignored when ``_out`` is None.
     """
     deadline = scheduler.compute_deadline(inputs.now, sunset, slots, cfg)
-    now_h = inputs.now.replace(minute=0, second=0, microsecond=0)
+    now_h = resolution.hour_floor(inputs.now)
     if slot_minutes is None:
         slot_minutes = resolution.resolve_slot_minutes(slots, cfg.slot_resolution)
     dt_h = slot_minutes / 60.0
@@ -836,7 +836,7 @@ def compute_decision(
     # The optimization horizon is the FULL forecast, not [now, trough]: tomorrow's
     # evening peak (best export hour) sits past the trough and must be in-window.
     _last_slot = max((s.start for s in slots), default=now_h)
-    horizon_edge = _last_slot.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    horizon_edge = resolution.hour_floor(_last_slot) + timedelta(hours=1)
     terminal_mode = "water_value"
     water_value: float | None = optimize_mod.compute_water_value(trough_price, cfg)
 
@@ -871,7 +871,7 @@ def compute_decision(
     if sun_times is not None and _wv_curve:
         _rsv_temp = {
             start: (
-                temp_by_hour.get(start.replace(minute=0, second=0, microsecond=0), cur_temp)
+                temp_by_hour.get(resolution.hour_floor(start), cur_temp)
                 if temp_by_hour else cur_temp
             )
             for start, _ in _wv_curve
@@ -912,7 +912,7 @@ def compute_decision(
             + timedelta(days=1)
         )
         if intervals and _iv_horizon <= _midnight_next:
-            _syn_start = _iv_horizon.replace(minute=0, second=0, microsecond=0)
+            _syn_start = resolution.hour_floor(_iv_horizon)
             # If the real interval ends mid-hour, advance to the next full hour.
             if _iv_horizon > _syn_start:
                 _syn_start += timedelta(hours=1)
@@ -994,7 +994,7 @@ def compute_decision(
     _reserve_stride = timedelta(minutes=slot_minutes)
     _reserve_list = [
         _reserve_by_hour.get(
-            (_slot_now_h + i * _reserve_stride).replace(minute=0, second=0, microsecond=0),
+            resolution.hour_floor(_slot_now_h + i * _reserve_stride),
             _floor_kwh,
         )
         for i in range(_win_len)
@@ -1345,7 +1345,7 @@ class Controller:
         change) and filtered to hours strictly before now_h so the forward
         projection is untouched. Returns {} on error (past slots stay empty).
         """
-        now_h = now.replace(minute=0, second=0, microsecond=0)
+        now_h = resolution.hour_floor(now)
         if self._past_actuals_hour == now_h and self._past_actuals_cache is not None:
             return self._past_actuals_cache
         try:
@@ -1382,7 +1382,7 @@ class Controller:
                 base, self._occ_table, self._persons_home_now, now,
                 self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
             )
-        now_h = now.replace(minute=0, second=0, microsecond=0)
+        now_h = resolution.hour_floor(now)
         try:
             base_p50 = base.predict(
                 now_h, cur_temp, const.DEFAULT_FALLBACK_LOAD_W, quantile=0.5,
@@ -1646,7 +1646,7 @@ class Controller:
             if _fetched:
                 self._weather_forecast = _fetched
         _wf_list = self._weather_forecast
-        _now_hour = now.replace(minute=0, second=0, microsecond=0)
+        _now_hour = resolution.hour_floor(now)
         _weather_entry = coordinator.get_forecast_for_hour(_wf_list, _now_hour)
         # Home-presence count for this tick (on-loop state reads).
         _persons_home_now = coordinator.count_persons_home(self._hass, self._data)
@@ -1656,7 +1656,7 @@ class Controller:
         # Passed to compute_decision so each forecast interval uses its own hourly
         # temperature rather than the flat current-temperature scalar.
         _temp_by_hour: dict[datetime, float | None] = {
-            e["datetime"].replace(minute=0, second=0, microsecond=0): e.get("temp_forecast")
+            resolution.hour_floor(e["datetime"]): e.get("temp_forecast")
             for e in (_wf_list or [])
             if e.get("datetime") is not None
         }
@@ -2078,17 +2078,15 @@ class Controller:
             if _hedge > 0.0:
                 # Front-load the debit to the cheapest forward clock-hour (the trough)
                 # so any over-buy lands at the cheapest tariff.
-                _now_h = now.replace(minute=0, second=0, microsecond=0)
+                _now_h = resolution.hour_floor(now)
                 _hedge_deadline = scheduler.compute_deadline(now, sunset, slots, self.cfg)
                 _fwd = [
                     s for s in slots
-                    if s.start.replace(minute=0, second=0, microsecond=0) >= _now_h
+                    if resolution.hour_floor(s.start) >= _now_h
                     and s.start <= _hedge_deadline
                 ]
                 _trough_h = (
-                    min(_fwd, key=lambda s: s.price).start.replace(
-                        minute=0, second=0, microsecond=0
-                    )
+                    resolution.hour_floor(min(_fwd, key=lambda s: s.price).start)
                     if _fwd else _now_h
                 )
                 hedge_drain_by_hour = {_trough_h: _hedge}
