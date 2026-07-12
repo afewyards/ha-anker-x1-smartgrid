@@ -84,6 +84,17 @@ def test_floor_to_slot_15_buckets():
     assert res.floor_to_slot(dt, 15) == dt.replace(minute=30, second=0, microsecond=0)
 
 
+def test_hour_floor_equals_floor_to_slot_60():
+    dt = datetime(2026, 8, 1, 10, 37, 42, tzinfo=UTC)
+    assert res.hour_floor(dt) == res.floor_to_slot(dt, 60) == dt.replace(minute=0, second=0, microsecond=0)
+
+
+def test_hour_floor_non_utc_tz():
+    tz = timezone(timedelta(hours=2))
+    dt = datetime(2026, 8, 1, 10, 37, 42, tzinfo=tz)
+    assert res.hour_floor(dt) == dt.replace(minute=0, second=0, microsecond=0)
+
+
 def test_resample_forward_fills_coarse_into_fine():
     base = datetime(2026, 8, 1, tzinfo=UTC)
     s = [PriceSlot(base, 0.10), PriceSlot(base + timedelta(hours=1), 0.20)]

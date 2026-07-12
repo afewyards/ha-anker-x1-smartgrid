@@ -6,15 +6,7 @@ from datetime import datetime
 from . import const
 from .models import Config, ForecastInterval, PriceSlot
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
-
-
-def _hour(dt: datetime) -> datetime:
-    return dt.replace(minute=0, second=0, microsecond=0)
-
-
-def _slot(dt: datetime, slot_minutes: int = 60) -> datetime:
-    minute = (dt.minute // slot_minutes) * slot_minutes
-    return dt.replace(minute=minute, second=0, microsecond=0)
+from .resolution import floor_to_slot, hour_floor
 
 
 def build_display_intervals(
@@ -35,28 +27,28 @@ def build_display_intervals(
     e.g. overnight); load_w = predictor.predict(slot, h_temp, fallback_w, quantile=quantile)
     where h_temp is looked up from temp_by_hour (per-hour forecast, HOUR-floored — the temp
     forecast is intrinsically hourly) falling back to cur_temp.  dt_h = slot_minutes / 60.0.
-    Slots before _slot(now, slot_minutes) are omitted (left null in the horizon; the card
+    Slots before floor_to_slot(now, slot_minutes) are omitted (left null in the horizon; the card
     clips them).  At slot_minutes=60 this reduces byte-identically to the legacy hourly build.
     """
     if not slots:
         return []
     pv_by_slot: dict[datetime, float] = {}
     for start, watts in pv_curve:
-        h = _slot(start, slot_minutes)
+        h = floor_to_slot(start, slot_minutes)
         pv_by_slot[h] = pv_by_slot.get(h, 0.0) + watts
-    now_h = _slot(now, slot_minutes)
+    now_h = floor_to_slot(now, slot_minutes)
     dt_h = slot_minutes / 60.0
     out: list[ForecastInterval] = []
     seen: set[datetime] = set()
     for slot in sorted(slots, key=lambda s: s.start):
-        h = _slot(slot.start, slot_minutes)
+        h = floor_to_slot(slot.start, slot_minutes)
         if h < now_h or h in seen:
             continue
         seen.add(h)
         # D1: temp forecast is per-hour — keep the temp lookup HOUR-floored even
         # though the PV/dedup grid is per-slot (else 3-of-4 quarters fall back to
         # cur_temp instead of the actual hourly-forecast temp).
-        h_temp = temp_by_hour.get(_hour(slot.start), cur_temp) if temp_by_hour else cur_temp
+        h_temp = temp_by_hour.get(hour_floor(slot.start), cur_temp) if temp_by_hour else cur_temp
         out.append(
             ForecastInterval(
                 h, pv_by_slot.get(h, 0.0),
@@ -136,20 +128,20 @@ def build_plan_horizon(
     """
     if not slots:
         return []
-    iv_by_hour = {_hour(iv.start): iv for iv in intervals}
-    selected_set = {_hour(s) for s in selected}
-    req_by_hour = {_hour(k): v for k, v in (grid_request_by_hour or {}).items()}
-    exp_by_hour = {_hour(k): v for k, v in (export_request_by_hour or {}).items()}
-    rsv_by_hour = {_hour(k): v for k, v in (reserve_by_hour or {}).items()}
-    ceil_by_hour = {_hour(k): v for k, v in (ceiling_by_hour or {}).items()}
-    hedge_by_hour = {_hour(k): v for k, v in (hedge_drain_by_hour or {}).items()}
+    iv_by_hour = {hour_floor(iv.start): iv for iv in intervals}
+    selected_set = {hour_floor(s) for s in selected}
+    req_by_hour = {hour_floor(k): v for k, v in (grid_request_by_hour or {}).items()}
+    exp_by_hour = {hour_floor(k): v for k, v in (export_request_by_hour or {}).items()}
+    rsv_by_hour = {hour_floor(k): v for k, v in (reserve_by_hour or {}).items()}
+    ceil_by_hour = {hour_floor(k): v for k, v in (ceiling_by_hour or {}).items()}
+    hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
     cap_wh = cfg.capacity_kwh * 1000.0
     eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
     eta_discharge = min(cfg.round_trip_eff / cfg.eta_charge, 1.0) if cfg.eta_charge > 1e-9 else 1.0
     soc_sim = soc
     out: list[dict] = []
     for slot in sorted(slots, key=lambda s: s.start):
-        hour = _hour(slot.start)
+        hour = hour_floor(slot.start)
         act = past_actuals_by_hour.get(hour) if past_actuals_by_hour else None
         if act is not None:
             # Past slot: emit recorded actuals verbatim and DO NOT advance soc_sim,

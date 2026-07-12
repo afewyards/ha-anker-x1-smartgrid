@@ -28,10 +28,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .dataquality import house_load_w
-
-
-def _hour(dt: datetime) -> datetime:
-    return dt.replace(minute=0, second=0, microsecond=0)
+from .resolution import hour_floor
 
 
 def _mean(vals: list[float]) -> float | None:
@@ -80,7 +77,7 @@ def aggregate_past_actuals(rows: list[dict]) -> dict[datetime, dict]:
             ts = datetime.fromisoformat(str(ts_raw))
         except (ValueError, TypeError):
             continue
-        buckets.setdefault(_hour(ts), []).append(row)
+        buckets.setdefault(hour_floor(ts), []).append(row)
 
     out: dict[datetime, dict] = {}
     for hour, group in buckets.items():

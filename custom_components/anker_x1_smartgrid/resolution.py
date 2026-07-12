@@ -72,6 +72,16 @@ def floor_to_slot(dt: datetime, slot_minutes: int) -> datetime:
     return dt.replace(minute=minute, second=0, microsecond=0)
 
 
+def hour_floor(dt: datetime) -> datetime:
+    """Canonical hour-floor: ``floor_to_slot(dt, 60)``.
+
+    Named separately from ``floor_to_slot`` to make the intended grid explicit
+    at call sites that always want the top-of-hour (vs. an arbitrary sub-hour
+    slot grid).
+    """
+    return floor_to_slot(dt, 60)
+
+
 def price_at(
     slots: list[PriceSlot], at: datetime, slot_minutes: int
 ) -> float | None:
