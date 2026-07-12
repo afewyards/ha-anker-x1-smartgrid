@@ -92,9 +92,6 @@ class EfficiencyCurve:
         self._fc = fallback_charge
         self._fd = fallback_discharge
 
-    def _bin_index(self, power_w: float) -> int:
-        return bin_index(power_w)
-
     def eta_charge(self, dc_power_w: float) -> float:
         return self._charge[bin_index(dc_power_w)].eta
 

@@ -2,7 +2,7 @@ import math
 from datetime import datetime, timedelta
 
 from custom_components.anker_x1_smartgrid.models import Config
-from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, segment_episodes, run_eta
+from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, bin_index, segment_episodes, run_eta
 
 # NOTE: run_eta (and, transitively, EfficiencyCurve.build) is live — see
 # efficiency.py's module docstring. Since the meter/house-load refactor,
@@ -39,10 +39,9 @@ def test_static_curve_guards_zero_eta_charge():
 
 
 def test_bin_boundaries_are_half_open():
-    c = EfficiencyCurve.static(Config())
-    assert c._bin_index(399.9) == 0
-    assert c._bin_index(400.0) == 1
-    assert c._bin_index(4000.0) == 5
+    assert bin_index(399.9) == 0
+    assert bin_index(400.0) == 1
+    assert bin_index(4000.0) == 5
 
 
 def test_as_attributes_has_full_table():
