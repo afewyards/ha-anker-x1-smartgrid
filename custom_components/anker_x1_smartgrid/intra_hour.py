@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from .resolution import hour_floor
+
 MIN_COVERAGE_S = 600.0   # ≥10 observed minutes before the blend engages
 MAX_STEP_S = 300.0       # ticks further apart than this break integration
 
@@ -27,7 +29,7 @@ class HourAccumulator:
         self._last_ts: datetime | None = None
 
     def add(self, ts: datetime, load_w: float | None) -> None:
-        hour = ts.replace(minute=0, second=0, microsecond=0)
+        hour = hour_floor(ts)
         if self.hour != hour:
             self.hour = hour
             self.kwh = 0.0

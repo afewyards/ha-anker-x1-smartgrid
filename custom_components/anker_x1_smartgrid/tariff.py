@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from .models import Config, PriceSlot
 from .resolution import _ALLOWED as _RESOLUTION_STEPS  # (15, 30, 60)
+from .resolution import hour_floor
 
 
 def _parse_hhmm(value: str) -> int:
@@ -115,7 +116,7 @@ def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
     step_min = _resolution_minutes(ranges) if use_offpeak else 60
 
     now_local = now.astimezone(tz)
-    start_local = now_local.replace(minute=0, second=0, microsecond=0)
+    start_local = hour_floor(now_local)
     end_date = now_local.date() + timedelta(days=2)
     end_local = datetime(end_date.year, end_date.month, end_date.day, 0, 0, tzinfo=tz)
     start_utc = start_local.astimezone(timezone.utc)

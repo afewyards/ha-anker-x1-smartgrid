@@ -19,6 +19,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 from . import const
+from .resolution import hour_floor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def build_hours_payload(
             dt = dt.replace(tzinfo=timezone.utc)
         else:
             dt = dt.astimezone(timezone.utc)
-        top_of_hour = dt.replace(minute=0, second=0, microsecond=0)
+        top_of_hour = hour_floor(dt)
         top_iso = top_of_hour.isoformat()
         payload.append({
             "ts": top_iso,
@@ -115,7 +116,7 @@ def project_persons_home(
     cutoff = now + timedelta(hours=persistence_hours)
     out: dict[str, float | None] = {}
     for hs in hour_starts:
-        top = (hs.replace(tzinfo=timezone.utc) if hs.tzinfo is None else hs.astimezone(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+        top = hour_floor(hs.replace(tzinfo=timezone.utc) if hs.tzinfo is None else hs.astimezone(timezone.utc))
         key_iso = top.isoformat()
         if current_count is None:
             out[key_iso] = None
@@ -137,7 +138,7 @@ def _parse_ts(ts_str: str) -> datetime | None:
             dt = dt.replace(tzinfo=timezone.utc)
         else:
             dt = dt.astimezone(timezone.utc)
-        return dt.replace(minute=0, second=0, microsecond=0)
+        return hour_floor(dt)
     except (ValueError, TypeError):
         return None
 
@@ -299,9 +300,9 @@ class RemoteForecastPredictor:
         """
         # Round down to the hour in UTC — matches how _parse_ts built the map keys.
         if when.tzinfo is None:
-            hour_key = when.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+            hour_key = hour_floor(when.replace(tzinfo=timezone.utc))
         else:
-            hour_key = when.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            hour_key = hour_floor(when.astimezone(timezone.utc))
 
         entry = self._map.get(hour_key)
         if entry is None:

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import const
 from .models import PriceSlot
+from .resolution import hour_floor
 
 
 def _parse_dt(value: str) -> datetime | None:
@@ -248,7 +249,7 @@ def build_two_day_pv_curve(
         # abuts today's last curve point (if any) with neither gap nor overlap.
         # NOTE: the snap and stride both assume step_h=1.0 (the only value callers pass).
         gap_start = max(today_sunset, now)
-        fill = gap_start.replace(minute=0, second=0, microsecond=0)
+        fill = hour_floor(gap_start)
         if fill < gap_start:
             fill += timedelta(hours=1)
         while fill < tomorrow_sunrise:
