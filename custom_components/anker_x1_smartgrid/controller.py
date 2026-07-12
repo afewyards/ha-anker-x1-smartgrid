@@ -712,6 +712,115 @@ class Controller:
                 hedge_drain_by_hour = {_trough_h: _hedge}
         return hedge_drain_by_hour
 
+    async def _maybe_refresh_models(self, now: datetime) -> None:
+        """Refresh the load profile (~hourly) and retrain (~cfg.retrain_hours).
+
+        Identical cadence logic shared by the disabled/shadow and live tick
+        paths (Task C5) — keeps the predictor warming even while disabled.
+        """
+        if (
+            self._last_profile_refresh is None
+            or (now - self._last_profile_refresh) >= timedelta(hours=1)
+        ):
+            await self.refresh_profile()
+        if self._last_retrain is None or (now - self._last_retrain) >= timedelta(
+            hours=self.cfg.retrain_hours
+        ):
+            await self.retrain(now)
+            self._last_retrain = now
+
+    async def _run_compute_decision(
+        self,
+        plan: PlanState,
+        predictor,
+        inputs: PlantInputs,
+        slots: list[PriceSlot],
+        pv_remaining: float,
+        sunset: datetime,
+        cur_temp: float | None,
+        tomorrow_total: float | None,
+        sun_times,
+        today_arrays,
+        tomorrow_arrays,
+        today_watts,
+        tomorrow_watts,
+        *,
+        export_price: float | None,
+        export_price_matches_import: bool,
+        temp_by_hour: dict,
+        slot_minutes: int | None,
+        dp_out: dict,
+        shadow: bool = False,
+        estimated_tomorrow=None,
+        past_actuals_by_hour: dict | None = None,
+        hedge_drain_by_hour: dict | None = None,
+    ):
+        """Shared executor-job invocation of ``compute_decision`` (Task C5).
+
+        ``shadow=True`` mirrors the disabled-path call site exactly: sets
+        ``_shadow_dp=True`` and omits the live-only kwargs (estimated_tomorrow /
+        past_actuals_by_hour / hedge_drain_by_hour — these already default to
+        None in ``compute_decision``, so omitting == passing None). The guard
+        (whether to call at all) and the try/except around the shadow call
+        stay at that call site, not here — they differ from the live path and
+        are not safe to fold in without changing failure behaviour.
+        """
+        kwargs = dict(
+            today_watts=today_watts,
+            tomorrow_watts=tomorrow_watts,
+            export_price=export_price,
+            _out=dp_out,
+            export_price_matches_import=export_price_matches_import,
+            temp_by_hour=temp_by_hour,
+            slot_minutes=slot_minutes,
+            eta_curve=self._planner_curve(),
+        )
+        if shadow:
+            kwargs["_shadow_dp"] = True
+        else:
+            kwargs["estimated_tomorrow"] = estimated_tomorrow
+            kwargs["past_actuals_by_hour"] = past_actuals_by_hour
+            kwargs["hedge_drain_by_hour"] = hedge_drain_by_hour
+        return await self._hass.async_add_executor_job(
+            functools.partial(
+                compute_decision,
+                plan, inputs, slots, pv_remaining, sunset,
+                predictor, cur_temp, self.cfg,
+                tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
+                **kwargs,
+            )
+        )
+
+    def _publish_fictive_plan(self, slots, dp_out: dict, soc: float, deadline: datetime | None) -> None:
+        """Build + publish the DP's proposed horizon as ``last_status["fictive_plan"]``,
+        or clear the key when the DP produced nothing (Task C5).
+
+        Shared build-and-publish core for the shadow (disabled) and live
+        (enabled) tick paths — identical ``build_plan_horizon`` call and dict
+        schema. The extra ``deadline``/``soc`` not-None guard the shadow path
+        applies before calling this stays at that call site (the live path
+        has no such guard and none is needed here, since the caller only
+        invokes this when ``dp_out["dp_selected"]`` is meaningful).
+        """
+        if dp_out.get("dp_selected") is None:
+            self.last_status.pop("fictive_plan", None)
+            return
+        _fictive_h = plan_mod.build_plan_horizon(
+            slots,
+            dp_out["intervals"],
+            dp_out["dp_selected"],
+            soc,
+            deadline,
+            self.cfg,
+            grid_request_by_hour=dp_out.get("grid_request"),
+            eta_curve=self._planner_curve(),
+        )
+        self.last_status["fictive_plan"] = {
+            "horizon": _fictive_h,
+            "deadline": deadline.isoformat() if deadline else None,
+            "planned_grid_hours": sum(1 for e in _fictive_h if e["mode"] == "grid"),
+        }
+
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
         _first_tick = self._first_tick_after_start
@@ -880,22 +989,15 @@ class Controller:
             _shadow_dp_out: dict = {}
             if inputs is not None and slots and sunset is not None and pv_remaining is not None:
                 try:
-                    shadow_plan, _, shadow_deadline, _, _shadow_hm, _ = await self._hass.async_add_executor_job(
-                        functools.partial(
-                            compute_decision,
-                            _prev_plan, inputs, slots, pv_remaining, sunset,
-                            self.predictor, cur_temp, self.cfg,
-                            tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
-                            today_watts=today_watts,
-                            tomorrow_watts=tomorrow_watts,
-                            export_price=_shadow_export_price,
-                            _out=_shadow_dp_out,
-                            _shadow_dp=True,
-                            export_price_matches_import=_shadow_export_matches_import,
-                            temp_by_hour=_temp_by_hour,
-                            slot_minutes=_slot_minutes,
-                            eta_curve=self._planner_curve(),
-                        )
+                    shadow_plan, _, shadow_deadline, _, _shadow_hm, _ = await self._run_compute_decision(
+                        _prev_plan, self.predictor, inputs, slots, pv_remaining, sunset, cur_temp,
+                        tomorrow_total, sun_times, today_arrays, tomorrow_arrays, today_watts, tomorrow_watts,
+                        export_price=_shadow_export_price,
+                        export_price_matches_import=_shadow_export_matches_import,
+                        temp_by_hour=_temp_by_hour,
+                        slot_minutes=_slot_minutes,
+                        dp_out=_shadow_dp_out,
+                        shadow=True,
                     )
                 except Exception:
                     _LOGGER.warning("Shadow compute_decision failed (disabled path)", exc_info=True)
@@ -908,16 +1010,7 @@ class Controller:
 
             # Keep the predictor warming while disabled so the SoC/load curve
             # sharpens as collected data accumulates (same cadence as enabled).
-            if (
-                self._last_profile_refresh is None
-                or (now - self._last_profile_refresh) >= timedelta(hours=1)
-            ):
-                await self.refresh_profile()
-            if self._last_retrain is None or (now - self._last_retrain) >= timedelta(
-                hours=self.cfg.retrain_hours
-            ):
-                await self.retrain(now)
-                self._last_retrain = now
+            await self._maybe_refresh_models(now)
 
             # Stash decision snapshot for persistence by the recorder writer (A3).
             if inputs is not None:
@@ -981,21 +1074,7 @@ class Controller:
                 and shadow_deadline is not None
                 and inputs is not None
             ):
-                _fictive_h = plan_mod.build_plan_horizon(
-                    slots,
-                    _shadow_dp_out["intervals"],
-                    _shadow_dp_out["dp_selected"],
-                    inputs.soc,
-                    shadow_deadline,
-                    self.cfg,
-                    grid_request_by_hour=_shadow_dp_out.get("grid_request"),
-                    eta_curve=self._planner_curve(),
-                )
-                self.last_status["fictive_plan"] = {
-                    "horizon": _fictive_h,
-                    "deadline": shadow_deadline.isoformat(),
-                    "planned_grid_hours": sum(1 for e in _fictive_h if e["mode"] == "grid"),
-                }
+                self._publish_fictive_plan(slots, _shadow_dp_out, inputs.soc, shadow_deadline)
             else:
                 # DP did not run or failed — remove any stale fictive_plan key.
                 self.last_status.pop("fictive_plan", None)
@@ -1034,18 +1113,8 @@ class Controller:
 
         await self._snapshot_prices_on_rollover(now, slots)
 
-        # FIX C1 — refresh load profile on first tick and roughly hourly.
-        _refresh_needed = (
-            self._last_profile_refresh is None
-            or (now - self._last_profile_refresh) >= timedelta(hours=1)
-        )
-        if _refresh_needed:
-            await self.refresh_profile()
-
-        # periodic retrain
-        if self._last_retrain is None or (now - self._last_retrain) >= timedelta(hours=self.cfg.retrain_hours):
-            await self.retrain(now)
-            self._last_retrain = now
+        # FIX C1 — refresh load profile on first tick and roughly hourly; periodic retrain.
+        await self._maybe_refresh_models(now)
 
         # Read temp the same way the recorder does (attribute, not state text).
         _temp_ent = self._data.get(const.CONF_ENT_TEMP)
@@ -1087,24 +1156,17 @@ class Controller:
         # Default None = byte-identical to pre-hedge (parity preserved at soc_hedge_fraction=0.0).
         hedge_drain_by_hour = self._apply_drift_hedge(now, inputs, slots, sunset)
 
-        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._hass.async_add_executor_job(
-            functools.partial(
-                compute_decision,
-                self.plan, inputs, slots, pv_remaining, sunset,
-                _plan_predictor, cur_temp, self.cfg,
-                tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
-                today_watts=today_watts,
-                tomorrow_watts=tomorrow_watts,
-                export_price=_export_price,
-                _out=_dp_out,
-                export_price_matches_import=_export_matches_import,
-                estimated_tomorrow=_estimated_tomorrow,
-                temp_by_hour=_temp_by_hour,
-                past_actuals_by_hour=past_actuals,
-                hedge_drain_by_hour=hedge_drain_by_hour,
-                slot_minutes=_slot_minutes,
-                eta_curve=self._planner_curve(),
-            )
+        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._run_compute_decision(
+            self.plan, _plan_predictor, inputs, slots, pv_remaining, sunset, cur_temp,
+            tomorrow_total, sun_times, today_arrays, tomorrow_arrays, today_watts, tomorrow_watts,
+            export_price=_export_price,
+            export_price_matches_import=_export_matches_import,
+            temp_by_hour=_temp_by_hour,
+            slot_minutes=_slot_minutes,
+            dp_out=_dp_out,
+            estimated_tomorrow=_estimated_tomorrow,
+            past_actuals_by_hour=past_actuals,
+            hedge_drain_by_hour=hedge_drain_by_hour,
         )
         # Cache P50 intervals for next tick's drift accumulator step (only when hedging
         # is enabled; off→on toggle leaves it None so the H1 gate fires on the first
@@ -1449,31 +1511,9 @@ class Controller:
             "planned_grid_hours": sum(1 for e in horizon if e["mode"] == "grid"),
         }
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
-        # shadow mode is legible on the dashboard (T0.6a).  The fictive horizon is
-        # always built via build_plan_horizon — identical per-entry schema to "plan".
-        if _dp_out.get("dp_selected") is not None:
-            # DP ran successfully — publish live DP's plan (T0.6a).
-            # Published only when the DP succeeded; absent (key removed) otherwise so
-            # consumers never see stale data.
-            _fictive_h = plan_mod.build_plan_horizon(
-                slots,
-                _dp_out["intervals"],
-                _dp_out["dp_selected"],
-                inputs.soc,
-                deadline,
-                self.cfg,
-                grid_request_by_hour=_dp_out.get("grid_request"),
-                eta_curve=self._planner_curve(),
-            )
-            self.last_status["fictive_plan"] = {
-                "horizon": _fictive_h,
-                "deadline": deadline.isoformat() if deadline else None,
-                "planned_grid_hours": sum(1 for e in _fictive_h if e["mode"] == "grid"),
-            }
-        else:
-            # DP failed — remove stale key to prevent consumers from reading an
-            # outdated fictive plan from a previous tick.
-            self.last_status.pop("fictive_plan", None)
+        # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
+        # with the shadow path via _publish_fictive_plan (Task C5).
+        self._publish_fictive_plan(slots, _dp_out, inputs.soc, deadline)
         return result
 
     def _write_decision_sync(self, snapshot: dict) -> None:
