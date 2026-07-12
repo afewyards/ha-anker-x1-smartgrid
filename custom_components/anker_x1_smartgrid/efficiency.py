@@ -28,7 +28,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from statistics import median
+from statistics import fmean, median
 
 from . import const
 from .models import Config
@@ -276,6 +276,11 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     idle energy would consume the run's entire ΔSoC. CHARGE runs are
     unaffected. Binning (``dc_power_w``) always uses the GROSS,
     non-debiased DC energy — only the eta ratio's denominator changes.
+
+    Also gated on instrumentation agreement: the ΔSoC-derived DC power must
+    stay within ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the run's mean
+    ``|batt_w|`` (both directions), so integer-SoC quantization noise on
+    short runs can't silently inflate ΔSoC-derived power into a higher bin.
     """
     if len(run) < 2:
         return None
@@ -290,6 +295,12 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     if dc_kwh <= 0.0:
         return None
     dc_power_w = dc_kwh * 1000.0 / duration_h
+    mean_abs_batt_w = fmean(abs(r["batt_w"]) for r in run)
+    if mean_abs_batt_w <= 0.0:
+        return None
+    agreement = dc_power_w / mean_abs_batt_w
+    if not (1.0 / const.EFFICIENCY_POWER_AGREEMENT_MAX <= agreement <= const.EFFICIENCY_POWER_AGREEMENT_MAX):
+        return None
     ac_wh = 0.0
     for a, b in itertools.pairwise(run):
         dt_h = (_parse_ts(b["ts"]) - _parse_ts(a["ts"])).total_seconds() / 3600.0

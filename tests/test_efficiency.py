@@ -130,7 +130,7 @@ def test_run_eta_returns_valid_run_for_charge_and_discharge():
     assert math.isclose(r.eta, 0.6 / 0.65, rel_tol=1e-9)
 
     discharge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000} for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 12000, "residual_w": 9000} for i in range(4)
     ]
     r2 = run_eta(discharge_run, cfg)
     assert r2 is not None
@@ -167,9 +167,10 @@ def test_discharge_eta_subtracts_idle_drain():
     cfg = Config(capacity_kwh=10.0, idle_drain_w=135.0)
     t0 = datetime(2026, 7, 11, 0, 0, 0)
     resid_w = 208.333333  # 4h * resid_w/1000 ~= 0.8333 kWh AC delivered
+    batt_w = 375.0  # matches the ΔSoC-implied gross DC power (1.5 kWh / 4h)
     run = [
-        {"ts": t0.isoformat(), "soc": 65.0, "batt_w": resid_w, "residual_w": resid_w},
-        {"ts": (t0 + timedelta(hours=4)).isoformat(), "soc": 50.0, "batt_w": resid_w, "residual_w": resid_w},
+        {"ts": t0.isoformat(), "soc": 65.0, "batt_w": batt_w, "residual_w": resid_w},
+        {"ts": (t0 + timedelta(hours=4)).isoformat(), "soc": 50.0, "batt_w": batt_w, "residual_w": resid_w},
     ]
     r = run_eta(run, cfg)
     assert r is not None
@@ -191,7 +192,7 @@ def test_idle_zero_matches_b1():
     """
     cfg = Config(capacity_kwh=10.0, idle_drain_w=0.0)
     discharge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000} for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 12000, "residual_w": 9000} for i in range(4)
     ]
     r = run_eta(discharge_run, cfg)
     assert r is not None
@@ -314,3 +315,48 @@ def test_low_power_discharge_bin_promotes():
     assert math.isclose(bottom.dc_kwh, 12 * 1.54, rel_tol=1e-6)
     assert math.isclose(bottom.eta, 0.87, rel_tol=1e-9)
     assert bottom.eta == bottom.measured  # median, not the static fallback
+
+
+def _agreement_run(batt_w: float, residual_w: float | None = None, n: int = 5, step_s: int = 240):
+    # ΔSoC 5% over (n-1)*step_s: 0.5 kWh gross -> dc_power_w = 1875 at defaults.
+    t0 = datetime(2026, 7, 1, 0, 0, 0)
+    return [
+        {
+            "ts": (t0 + timedelta(seconds=step_s * i)).isoformat(),
+            "soc": 80.0 - 5.0 * i / (n - 1),
+            "batt_w": batt_w,
+            "residual_w": batt_w if residual_w is None else residual_w,
+        }
+        for i in range(n)
+    ]
+
+
+def test_agreement_gate_rejects_dsoc_batt_disagreement():
+    # dc_power 1875 W vs mean |batt_w| 1200 W -> ratio 1.56 > 1.25 -> discarded.
+    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    assert run_eta(_agreement_run(1200.0), cfg) is None
+
+
+def test_agreement_gate_keeps_agreeing_run():
+    # ratio 1875/1600 = 1.17 <= 1.25 -> kept; eta = 1600*0.2667/0.5 ~= 0.853.
+    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    r = run_eta(_agreement_run(1600.0), cfg)
+    assert r is not None and r.direction == "discharge"
+    assert math.isclose(r.eta, 1600.0 * (960 / 3600) / 500.0, rel_tol=1e-6)
+
+
+def test_agreement_gate_boundary_inclusive():
+    # ratio exactly 1875/1500 = 1.25 -> kept (<=); eta = 0.8, inside envelope.
+    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    assert run_eta(_agreement_run(1500.0), cfg) is not None
+
+
+def test_agreement_gate_applies_to_charge_direction():
+    # Rising SoC; residual (-1875 W) gives ac_absorbed 0.5 kWh -> eta 1.0,
+    # INSIDE the envelope, so only the new gate can reject it: dc_power
+    # 1875 W vs |batt_w| 1200 W -> ratio 1.56 -> discarded.
+    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    run = _agreement_run(-1200.0, residual_w=-1875.0)
+    for i, row in enumerate(run):
+        row["soc"] = 60.0 + 5.0 * i / (len(run) - 1)
+    assert run_eta(run, cfg) is None
