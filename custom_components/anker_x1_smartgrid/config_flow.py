@@ -220,266 +220,187 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+# --- data-driven field tables ----------------------------------------------
+# Each table backs a mechanical loop in _options_fields() below. A field
+# lives in exactly one table, EXCEPT a handful with bespoke suggested_value
+# logic (forecast service, Anker device, live PV-power sensors) which stay
+# hand-written in _options_fields itself.
+#
+# capacity_kwh is intentionally absent from every table: it is ALWAYS-DERIVED
+# from the Anker nominal-capacity sensor (see _schema above +
+# anker_resolver.resolve_anker_config), so a manually-set value here would be
+# silently overwritten on the next resolution — an inert field (review
+# finding 4.1).
+
+# "Plain" tunables: vol.Optional(key, default=defaults.get(key, DEFAULT)) with
+# a single validator. (conf_key, default_const, validator).
+_TUNABLES: list[tuple[str, object, object]] = [
+    (const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR, vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0))),
+    (const.CONF_ADDON_ENABLED, const.DEFAULT_ADDON_ENABLED, cv.boolean),
+    (const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL, cv.string),
+    (const.CONF_ADDON_TIMEOUT, const.DEFAULT_ADDON_TIMEOUT, vol.All(vol.Coerce(int), vol.Range(min=1, max=60))),
+    (const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET, vol.All(vol.Coerce(float), vol.Range(min=10.0, max=100.0))),
+    (const.CONF_ETA_CHARGE, const.DEFAULT_ETA_CHARGE, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
+    (const.CONF_ROUND_TRIP_EFF, const.DEFAULT_ROUND_TRIP_EFF, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
+    (const.CONF_USE_MEASURED_ETA, const.DEFAULT_USE_MEASURED_ETA, cv.boolean),
+    (const.CONF_USE_LEARNED_MODEL, const.DEFAULT_USE_LEARNED_MODEL, cv.boolean),
+    (const.CONF_MIN_TRAIN_SAMPLES, const.DEFAULT_MIN_TRAIN_SAMPLES, cv.positive_int),
+    (const.CONF_RETENTION_DAYS, const.DEFAULT_RETENTION_DAYS, cv.positive_int),
+    (const.CONF_RETENTION_HOURLY_DAYS, const.DEFAULT_RETENTION_HOURLY_DAYS, cv.positive_int),
+    (const.CONF_ENABLE_EXPORT, const.DEFAULT_ENABLE_EXPORT, cv.boolean),
+    (
+        const.CONF_GRID_EXPORT_LIMIT_W,
+        const.DEFAULT_GRID_EXPORT_LIMIT_W,
+        # Sane ceiling added here (review LOW, deliberate): previously
+        # min-only. 20000W comfortably covers a 3-phase 32A grid connection,
+        # well above the X1's own 6000W device ceiling (SETPOINT_MAX_W).
+        vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
+    ),
+    (const.CONF_EXPORT_FEE_EUR_PER_KWH, const.DEFAULT_EXPORT_FEE_EUR_PER_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5))),
+    (const.CONF_CYCLE_COST_EUR_PER_KWH, const.DEFAULT_CYCLE_COST_EUR_PER_KWH, cv.positive_float),
+    (const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH, cv.positive_float),
+    (const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0))),
+    (const.CONF_RESERVE_CHEAP_BAND, const.DEFAULT_RESERVE_CHEAP_BAND, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_EXPORT_DWELL_MIN, const.DEFAULT_EXPORT_DWELL_MIN, cv.positive_int),
+    (const.CONF_EXPORT_EPS_LO_KWH, const.DEFAULT_EXPORT_EPS_LO_KWH, cv.positive_float),
+    (const.CONF_EXPORT_EPS_HI_KWH, const.DEFAULT_EXPORT_EPS_HI_KWH, cv.positive_float),
+    (const.CONF_EXPORT_PEAK_BAND_FRAC, const.DEFAULT_EXPORT_PEAK_BAND_FRAC, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_EXPORT_PEAK_LOOKBACK_H, const.DEFAULT_EXPORT_PEAK_LOOKBACK_H, vol.All(vol.Coerce(int), vol.Range(min=0, max=12))),
+    (const.CONF_EXPORT_MIN_BLOCK_KWH, const.DEFAULT_EXPORT_MIN_BLOCK_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0))),
+    (const.CONF_EXPORT_LOAD_COMP_FACTOR, const.DEFAULT_EXPORT_LOAD_COMP_FACTOR, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_CHARGE_TROUGH_LOOKBACK_H, const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H, vol.All(vol.Coerce(int), vol.Range(min=0, max=12))),
+    (const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
+    (const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
+    (const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS, cv.string),
+    (const.CONF_STATIC_PRICE_EXPORT, const.DEFAULT_STATIC_PRICE_EXPORT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
+    (const.CONF_PRICE_HISTORY_DAYS, const.DEFAULT_PRICE_HISTORY_DAYS, vol.All(vol.Coerce(int), vol.Range(min=2, max=30))),
+    (const.CONF_PRICE_BLEND_WEIGHT_TODAY, const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT, const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH, const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5))),
+    (const.CONF_SOC_HEDGE_FRACTION, const.DEFAULT_SOC_HEDGE_FRACTION, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_SOC_DRIFT_DEADBAND_KWH, const.DEFAULT_SOC_DRIFT_DEADBAND_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5.0))),
+    (const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H, const.DEFAULT_SOC_DRIFT_DECAY_HALFLIFE_H, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=48.0))),
+    (const.CONF_LOAD_ADAPT_FRACTION, const.DEFAULT_LOAD_ADAPT_FRACTION, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (const.CONF_LOAD_ADAPT_WINDOW_H, const.DEFAULT_LOAD_ADAPT_WINDOW_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=12))),
+    (const.CONF_LOAD_ADAPT_FADE_H, const.DEFAULT_LOAD_ADAPT_FADE_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=24))),
+]
+
+# Multi-select entity pickers whose suggested_value is simply
+# defaults.get(key, []). (conf_key, domain).
+_ENTITY_LIST_PICKERS: list[tuple[str, str]] = [
+    (const.CONF_ENT_PV_TODAY, "sensor"),
+    (const.CONF_ENT_PV_TOMORROW, "sensor"),
+    (const.CONF_ENT_PV_PEAK_TODAY, "sensor"),
+    (const.CONF_ENT_PV_PEAK_TOMORROW, "sensor"),
+    (const.CONF_PERSON_ENTITIES, "person"),
+]
+
+# Single, clearable entity pickers: suggested_value is defaults.get(key) or
+# None, and "" must still validate (see _ClearableEntitySelector).
+# (conf_key, domain).
+# NOTE: no device_class filter on ent_price — €/kWh tariff sensors (e.g. the
+# Zonneplan default) typically carry no device_class, so a "monetary" filter
+# here would hide them from the picker (Task 16).
+_CLEARABLE_ENTITY_PICKERS: list[tuple[str, str]] = [
+    (const.CONF_ENT_WEATHER_FORECAST, "weather"),
+    (const.CONF_ENT_PRICE, "sensor"),
+    (const.CONF_ENT_EXPORT_PRICE, "sensor"),
+]
+
+# Select-dropdown groups: (conf_key, default_const, options). Same
+# default-value pattern as _TUNABLES, but wired to a fixed option list
+# instead of a plain validator. Keyed by name for readability at the
+# call site; iteration uses .values() only.
+_SELECT_GROUPS: dict[str, tuple[str, object, list[SelectOptionDict]]] = {
+    "slot_resolution": (
+        const.CONF_SLOT_RESOLUTION,
+        const.DEFAULT_SLOT_RESOLUTION,
+        [
+            SelectOptionDict(value="auto", label="Auto-detect"),
+            SelectOptionDict(value="15", label="15 minutes"),
+            SelectOptionDict(value="30", label="30 minutes"),
+            SelectOptionDict(value="60", label="60 minutes"),
+        ],
+    ),
+    "reserve_anchor": (
+        const.CONF_RESERVE_ANCHOR,
+        const.DEFAULT_RESERVE_ANCHOR,
+        [
+            SelectOptionDict(value=const.RESERVE_ANCHOR_TROUGH, label="ride-to-trough (self-scaling)"),
+            SelectOptionDict(value=const.RESERVE_ANCHOR_LEGACY, label="legacy (debit-to-trough + price-prior)"),
+        ],
+    ),
+    "price_mode": (
+        const.CONF_PRICE_MODE,
+        const.DEFAULT_PRICE_MODE,
+        [
+            SelectOptionDict(value=const.PRICE_MODE_SENSOR, label="Dynamic price sensor"),
+            SelectOptionDict(value=const.PRICE_MODE_STATIC, label="Static tariff (flat / HP-HC)"),
+        ],
+    ),
+}
+
+
 def _options_fields(defaults: dict, services=None) -> dict:
     """Flat {vol marker: validator} map of every options-flow field.
 
-    Extensible: add new optional keys here AND to OPTIONS_SECTIONS.
+    Extensible: add new optional keys here AND to OPTIONS_SECTIONS. Most
+    fields are table-driven (_TUNABLES / _ENTITY_LIST_PICKERS /
+    _CLEARABLE_ENTITY_PICKERS / _SELECT_GROUPS above); a few with bespoke
+    suggested_value logic (forecast service, Anker device, live PV-power
+    sensors) stay hand-written here.
     `services` lists (entry_id, title, domain) tuples from forecast_sources.
     """
     service_options = _forecast_service_options(services)
     stored_services = _stored_forecast_services(defaults, services)
-    return {
-            vol.Optional(
-                const.CONF_FORECAST_SERVICE,
-                description={"suggested_value": stored_services},
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=service_options,
-                    mode=SelectSelectorMode.DROPDOWN,
-                    multiple=True,
-                )
-            ),
-            vol.Optional(
-                const.CONF_ANKER_DEVICE,
-                description={"suggested_value": defaults.get(const.CONF_ANKER_DEVICE)},
-            ): DeviceSelector(DeviceSelectorConfig(integration=const.ANKER_X1_DOMAIN)),
-            vol.Optional(
-                const.CONF_SOC_FLOOR,
-                default=defaults.get(const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR),
-            ): vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0)),
-            vol.Optional(
-                const.CONF_ADDON_ENABLED,
-                default=defaults.get(const.CONF_ADDON_ENABLED, const.DEFAULT_ADDON_ENABLED),
-            ): cv.boolean,
-            vol.Optional(
-                const.CONF_ADDON_URL,
-                default=defaults.get(const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL),
-            ): cv.string,
-            vol.Optional(
-                const.CONF_ADDON_TIMEOUT,
-                default=defaults.get(const.CONF_ADDON_TIMEOUT, const.DEFAULT_ADDON_TIMEOUT),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
-            vol.Optional(
-                const.CONF_SLOT_RESOLUTION,
-                default=defaults.get(const.CONF_SLOT_RESOLUTION, const.DEFAULT_SLOT_RESOLUTION),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value="auto", label="Auto-detect"),
-                        SelectOptionDict(value="15", label="15 minutes"),
-                        SelectOptionDict(value="30", label="30 minutes"),
-                        SelectOptionDict(value="60", label="60 minutes"),
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            # --- entity pickers ---
-            vol.Optional(
-                const.CONF_ENT_PV_TODAY,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PV_TODAY, [])},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
-            vol.Optional(
-                const.CONF_ENT_PV_TOMORROW,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PV_TOMORROW, [])},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
-            vol.Optional(
-                const.CONF_ENT_PV_PEAK_TODAY,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PV_PEAK_TODAY, [])},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
-            vol.Optional(
-                const.CONF_ENT_PV_PEAK_TOMORROW,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PV_PEAK_TOMORROW, [])},
-            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
-            # Live PV-power sensors (W), summed at read time — distinct from the
-            # ent_pv_today/tomorrow *forecast* (kWh) lists above. Supports the
-            # legacy single entity-id string (normalized to a one-element list
-            # for display) alongside the new multi-sensor list (99a7b53).
-            # suggested_value is None (not []) when unconfigured so the
-            # DEFAULT_ENTITIES soft-role fallback (resolve_pv_power_entities)
-            # stays in effect on save-through — an explicit [] would persist as
-            # "configured to nothing" rather than "unconfigured", though both
-            # currently resolve identically at runtime.
-            vol.Optional(
-                const.CONF_ENT_PV_POWER,
-                description={
-                    "suggested_value": const.normalize_pv_power_entities(
-                        defaults.get(const.CONF_ENT_PV_POWER)
-                    ) or None
-                },
-            ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
-            vol.Optional(
-                const.CONF_ENT_WEATHER_FORECAST,
-                description={"suggested_value": defaults.get(const.CONF_ENT_WEATHER_FORECAST) or None},
-            ): _ClearableEntitySelector(EntitySelectorConfig(domain="weather")),
-            # NOTE: no device_class filter — €/kWh tariff sensors (e.g. the
-            # Zonneplan default) typically carry no device_class, so a
-            # "monetary" filter here hides them from the picker (Task 16).
-            vol.Optional(
-                const.CONF_ENT_PRICE,
-                description={"suggested_value": defaults.get(const.CONF_ENT_PRICE) or None},
-            ): _ClearableEntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
-                const.CONF_ENT_EXPORT_PRICE,
-                description={"suggested_value": defaults.get(const.CONF_ENT_EXPORT_PRICE) or None},
-            ): _ClearableEntitySelector(EntitySelectorConfig(domain="sensor")),
-            # --- tunables promoted from install-only to editable ---
-            # capacity_kwh intentionally omitted: it is ALWAYS-DERIVED from the Anker
-            # nominal-capacity sensor (see _schema above + anker_resolver.resolve_anker_config),
-            # so a manually-set value here would be silently overwritten on the next
-            # resolution — an inert field (review finding 4.1).
-            vol.Optional(const.CONF_SOC_TARGET, default=defaults.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET)): vol.All(vol.Coerce(float), vol.Range(min=10.0, max=100.0)),
-            vol.Optional(const.CONF_ETA_CHARGE, default=defaults.get(const.CONF_ETA_CHARGE, const.DEFAULT_ETA_CHARGE)): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
-            vol.Optional(const.CONF_ROUND_TRIP_EFF, default=defaults.get(const.CONF_ROUND_TRIP_EFF, const.DEFAULT_ROUND_TRIP_EFF)): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
-            vol.Optional(const.CONF_USE_MEASURED_ETA, default=defaults.get(const.CONF_USE_MEASURED_ETA, const.DEFAULT_USE_MEASURED_ETA)): cv.boolean,
-            vol.Optional(const.CONF_USE_LEARNED_MODEL, default=defaults.get(const.CONF_USE_LEARNED_MODEL, const.DEFAULT_USE_LEARNED_MODEL)): cv.boolean,
-            vol.Optional(const.CONF_MIN_TRAIN_SAMPLES, default=defaults.get(const.CONF_MIN_TRAIN_SAMPLES, const.DEFAULT_MIN_TRAIN_SAMPLES)): cv.positive_int,
-            vol.Optional(const.CONF_RETENTION_DAYS, default=defaults.get(const.CONF_RETENTION_DAYS, const.DEFAULT_RETENTION_DAYS)): cv.positive_int,
-            vol.Optional(const.CONF_RETENTION_HOURLY_DAYS, default=defaults.get(const.CONF_RETENTION_HOURLY_DAYS, const.DEFAULT_RETENTION_HOURLY_DAYS)): cv.positive_int,
-            vol.Optional(
-                const.CONF_ENABLE_EXPORT,
-                default=defaults.get(const.CONF_ENABLE_EXPORT, const.DEFAULT_ENABLE_EXPORT),
-            ): cv.boolean,
-            vol.Optional(
-                const.CONF_GRID_EXPORT_LIMIT_W,
-                default=defaults.get(const.CONF_GRID_EXPORT_LIMIT_W, const.DEFAULT_GRID_EXPORT_LIMIT_W),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0)),
-            vol.Optional(
-                const.CONF_EXPORT_FEE_EUR_PER_KWH,
-                default=defaults.get(const.CONF_EXPORT_FEE_EUR_PER_KWH, const.DEFAULT_EXPORT_FEE_EUR_PER_KWH),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
-            vol.Optional(
-                const.CONF_CYCLE_COST_EUR_PER_KWH,
-                default=defaults.get(const.CONF_CYCLE_COST_EUR_PER_KWH, const.DEFAULT_CYCLE_COST_EUR_PER_KWH),
-            ): cv.positive_float,
-            vol.Optional(
-                const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
-                default=defaults.get(const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH),
-            ): cv.positive_float,
-            vol.Optional(
-                const.CONF_IDLE_DRAIN_W,
-                default=defaults.get(const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0)),
-            vol.Optional(
-                const.CONF_RESERVE_ANCHOR,
-                default=defaults.get(const.CONF_RESERVE_ANCHOR, const.DEFAULT_RESERVE_ANCHOR),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value=const.RESERVE_ANCHOR_TROUGH, label="ride-to-trough (self-scaling)"),
-                        SelectOptionDict(value=const.RESERVE_ANCHOR_LEGACY, label="legacy (debit-to-trough + price-prior)"),
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                const.CONF_RESERVE_CHEAP_BAND,
-                default=defaults.get(const.CONF_RESERVE_CHEAP_BAND, const.DEFAULT_RESERVE_CHEAP_BAND),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_EXPORT_DWELL_MIN,
-                default=defaults.get(const.CONF_EXPORT_DWELL_MIN, const.DEFAULT_EXPORT_DWELL_MIN),
-            ): cv.positive_int,
-            vol.Optional(
-                const.CONF_EXPORT_EPS_LO_KWH,
-                default=defaults.get(const.CONF_EXPORT_EPS_LO_KWH, const.DEFAULT_EXPORT_EPS_LO_KWH),
-            ): cv.positive_float,
-            vol.Optional(
-                const.CONF_EXPORT_EPS_HI_KWH,
-                default=defaults.get(const.CONF_EXPORT_EPS_HI_KWH, const.DEFAULT_EXPORT_EPS_HI_KWH),
-            ): cv.positive_float,
-            vol.Optional(
-                const.CONF_EXPORT_PEAK_BAND_FRAC,
-                default=defaults.get(const.CONF_EXPORT_PEAK_BAND_FRAC, const.DEFAULT_EXPORT_PEAK_BAND_FRAC),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_EXPORT_PEAK_LOOKBACK_H,
-                default=defaults.get(const.CONF_EXPORT_PEAK_LOOKBACK_H, const.DEFAULT_EXPORT_PEAK_LOOKBACK_H),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
-            vol.Optional(
-                const.CONF_EXPORT_MIN_BLOCK_KWH,
-                default=defaults.get(const.CONF_EXPORT_MIN_BLOCK_KWH, const.DEFAULT_EXPORT_MIN_BLOCK_KWH),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0)),
-            vol.Optional(
-                const.CONF_EXPORT_LOAD_COMP_FACTOR,
-                default=defaults.get(const.CONF_EXPORT_LOAD_COMP_FACTOR, const.DEFAULT_EXPORT_LOAD_COMP_FACTOR),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_CHARGE_TROUGH_LOOKBACK_H,
-                default=defaults.get(const.CONF_CHARGE_TROUGH_LOOKBACK_H, const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
-            vol.Optional(
-                const.CONF_PRICE_MODE,
-                default=defaults.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value=const.PRICE_MODE_SENSOR, label="Dynamic price sensor"),
-                        SelectOptionDict(value=const.PRICE_MODE_STATIC, label="Static tariff (flat / HP-HC)"),
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Optional(
-                const.CONF_STATIC_PRICE_IMPORT,
-                default=defaults.get(const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
-            vol.Optional(
-                const.CONF_STATIC_PRICE_OFFPEAK,
-                default=defaults.get(const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
-            vol.Optional(
-                const.CONF_STATIC_OFFPEAK_HOURS,
-                default=defaults.get(const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS),
-            ): cv.string,
-            vol.Optional(
-                const.CONF_STATIC_PRICE_EXPORT,
-                default=defaults.get(const.CONF_STATIC_PRICE_EXPORT, const.DEFAULT_STATIC_PRICE_EXPORT),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
-            vol.Optional(
-                const.CONF_PRICE_HISTORY_DAYS,
-                default=defaults.get(const.CONF_PRICE_HISTORY_DAYS, const.DEFAULT_PRICE_HISTORY_DAYS),
-            ): vol.All(vol.Coerce(int), vol.Range(min=2, max=30)),
-            vol.Optional(
-                const.CONF_PRICE_BLEND_WEIGHT_TODAY,
-                default=defaults.get(const.CONF_PRICE_BLEND_WEIGHT_TODAY, const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT,
-                default=defaults.get(const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT, const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH,
-                default=defaults.get(const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH, const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
-            vol.Optional(
-                const.CONF_SOC_HEDGE_FRACTION,
-                default=defaults.get(const.CONF_SOC_HEDGE_FRACTION, const.DEFAULT_SOC_HEDGE_FRACTION),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_SOC_DRIFT_DEADBAND_KWH,
-                default=defaults.get(const.CONF_SOC_DRIFT_DEADBAND_KWH, const.DEFAULT_SOC_DRIFT_DEADBAND_KWH),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5.0)),
-            vol.Optional(
-                const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
-                default=defaults.get(const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H, const.DEFAULT_SOC_DRIFT_DECAY_HALFLIFE_H),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=48.0)),
-            vol.Optional(
-                const.CONF_LOAD_ADAPT_FRACTION,
-                default=defaults.get(const.CONF_LOAD_ADAPT_FRACTION, const.DEFAULT_LOAD_ADAPT_FRACTION),
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-            vol.Optional(
-                const.CONF_LOAD_ADAPT_WINDOW_H,
-                default=defaults.get(const.CONF_LOAD_ADAPT_WINDOW_H, const.DEFAULT_LOAD_ADAPT_WINDOW_H),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
-            vol.Optional(
-                const.CONF_LOAD_ADAPT_FADE_H,
-                default=defaults.get(const.CONF_LOAD_ADAPT_FADE_H, const.DEFAULT_LOAD_ADAPT_FADE_H),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=24)),
-            vol.Optional(
-                const.CONF_PERSON_ENTITIES,
-                description={"suggested_value": defaults.get(const.CONF_PERSON_ENTITIES, [])},
-            ): EntitySelector(EntitySelectorConfig(domain="person", multiple=True)),
+    fields: dict = {
+        vol.Optional(
+            const.CONF_FORECAST_SERVICE,
+            description={"suggested_value": stored_services},
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=service_options,
+                mode=SelectSelectorMode.DROPDOWN,
+                multiple=True,
+            )
+        ),
+        vol.Optional(
+            const.CONF_ANKER_DEVICE,
+            description={"suggested_value": defaults.get(const.CONF_ANKER_DEVICE)},
+        ): DeviceSelector(DeviceSelectorConfig(integration=const.ANKER_X1_DOMAIN)),
+        # Live PV-power sensors (W), summed at read time — distinct from the
+        # ent_pv_today/tomorrow *forecast* (kWh) lists above. Supports the
+        # legacy single entity-id string (normalized to a one-element list
+        # for display) alongside the new multi-sensor list (99a7b53).
+        # suggested_value is None (not []) when unconfigured so the
+        # DEFAULT_ENTITIES soft-role fallback (resolve_pv_power_entities)
+        # stays in effect on save-through — an explicit [] would persist as
+        # "configured to nothing" rather than "unconfigured", though both
+        # currently resolve identically at runtime.
+        vol.Optional(
+            const.CONF_ENT_PV_POWER,
+            description={
+                "suggested_value": const.normalize_pv_power_entities(
+                    defaults.get(const.CONF_ENT_PV_POWER)
+                ) or None
+            },
+        ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
     }
+    for key, default, validator in _TUNABLES:
+        fields[vol.Optional(key, default=defaults.get(key, default))] = validator
+    for key, domain in _ENTITY_LIST_PICKERS:
+        fields[
+            vol.Optional(key, description={"suggested_value": defaults.get(key, [])})
+        ] = EntitySelector(EntitySelectorConfig(domain=domain, multiple=True))
+    for key, domain in _CLEARABLE_ENTITY_PICKERS:
+        fields[
+            vol.Optional(key, description={"suggested_value": defaults.get(key) or None})
+        ] = _ClearableEntitySelector(EntitySelectorConfig(domain=domain))
+    for key, default, options in _SELECT_GROUPS.values():
+        fields[vol.Optional(key, default=defaults.get(key, default))] = SelectSelector(
+            SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
+        )
+    return fields
 
 
 def _options_schema(defaults: dict, services=None) -> vol.Schema:
