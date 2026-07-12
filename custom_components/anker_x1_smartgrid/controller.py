@@ -578,6 +578,101 @@ class Controller:
                 status["state"] = "failsafe"
                 return status
 
+    def _apply_drift_hedge(self, now, inputs, slots, sunset) -> dict | None:
+        # ── SoC drift-hedge (LIVE/enabled path; whole block gated OFF unless fraction>0) ──
+        # Default None = byte-identical to pre-hedge (parity preserved at soc_hedge_fraction=0.0).
+        hedge_drain_by_hour: dict[datetime, float] | None = None
+        if self.cfg.soc_hedge_fraction > 0.0:
+            _today_key = dt_util.as_local(now).date().isoformat()
+            _prev_day = self._soc_drift_day
+            self._soc_drift_kwh, self._soc_drift_day = soc_drift.reset_if_new_day(
+                self._soc_drift_kwh, self._soc_drift_day, _today_key,
+            )
+            _new_day = self._soc_drift_day != _prev_day
+            # "Real rollover" = day changed AND we had a previous day (not first-ever tick).
+            # On first-ever start _prev_day is None; no step to gate, anchor should be written.
+            _real_rollover = _new_day and _prev_day is not None
+            if _real_rollover:
+                # No step spans the day reset — clear the SoC anchor.
+                self._soc_drift_last_soc_pct = None
+            _dt_h = (
+                (now - self._soc_drift_last_update).total_seconds() / 3600.0
+                if self._soc_drift_last_update is not None else 0.0
+            )
+            _soc_now = inputs.soc
+            _gated = (
+                not (0.0 < _dt_h <= soc_drift.MAX_DRIFT_STEP_H)
+                or self._soc_drift_last_soc_pct is None
+                or self._soc_drift_last_intervals is None
+                or _soc_now >= self.cfg.soc_target - 1.0
+                or _soc_now <= self.cfg.soc_floor + 1.0
+            )
+            if not _gated:
+                # _gated guards _soc_drift_last_soc_pct is None and _soc_drift_last_intervals is None;
+                # assert for Pyright narrowing (runtime: impossible to fail here).
+                assert self._soc_drift_last_soc_pct is not None
+                assert self._soc_drift_last_intervals is not None
+                # Use the P50 intervals cached from the PREVIOUS tick's DP run.
+                # Intervals change at most hourly; stale-by-one-tick is functionally identical.
+                _fc_pv_w, _fc_load_w = soc_drift.forecast_rate_at(
+                    self._soc_drift_last_intervals, now
+                )
+                # Curve-derived discharge eta at the forecast deficit power (only used
+                # by expected_soc_delta_kwh on the deficit branch); static scalar when
+                # the flag is off (_eta_d_at's own gate) — byte-identical parity.
+                _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
+                _expected_dc = soc_drift.expected_soc_delta_kwh(
+                    _fc_pv_w, _fc_load_w, _dt_h, self.cfg.eta_charge, _eta_d,
+                    idle_drain_w=self.cfg.idle_drain_w,
+                )
+                _measured_dc = soc_drift.measured_soc_delta_kwh(
+                    _soc_now, self._soc_drift_last_soc_pct, self.cfg.capacity_kwh,
+                )
+                _tick_h = const.TICK_SECONDS / 3600.0
+                # Duration-scale the export add-back: _last_export_kwh_dc is sized over
+                # TICK_SECONDS but this step integrates _dt_h (may differ on missed ticks).
+                _export_dc_step = (
+                    self._soc_drift_last_export_kwh_dc * _dt_h / _tick_h
+                    if _tick_h > 0 else 0.0
+                )
+                self._soc_drift_kwh = soc_drift.accumulate(
+                    self._soc_drift_kwh,
+                    soc_drift.per_step_drift_kwh(_expected_dc, _measured_dc, _export_dc_step),
+                    dt_h=_dt_h, halflife_h=self.cfg.soc_drift_decay_halflife_h,
+                )
+                self._soc_drift_kwh = soc_drift.cap_accumulator(
+                    self._soc_drift_kwh, self.cfg.capacity_kwh,
+                )
+            # Consume the export field; C3 re-sets it if THIS tick fires an export.
+            self._soc_drift_last_export_kwh_dc = 0.0
+            # On a REAL rollover (prev day known → today) leave anchor None so the very
+            # next step cannot span midnight.  On fresh start or normal ticks, record now.
+            if not _real_rollover:
+                self._soc_drift_last_soc_pct = _soc_now
+            self._soc_drift_last_update = now
+            # State is flushed by the single end-of-tick _persist() call (line ~1738).
+            _drift, self._soc_drift_engaged = soc_drift.drift_kwh(
+                self._soc_drift_kwh, self.cfg.soc_drift_deadband_kwh,
+                0.5 * self.cfg.soc_drift_deadband_kwh, self._soc_drift_engaged,
+            )
+            _hedge = self.cfg.soc_hedge_fraction * _drift
+            if _hedge > 0.0:
+                # Front-load the debit to the cheapest forward clock-hour (the trough)
+                # so any over-buy lands at the cheapest tariff.
+                _now_h = resolution.hour_floor(now)
+                _hedge_deadline = scheduler.compute_deadline(now, sunset, slots, self.cfg)
+                _fwd = [
+                    s for s in slots
+                    if resolution.hour_floor(s.start) >= _now_h
+                    and s.start <= _hedge_deadline
+                ]
+                _trough_h = (
+                    resolution.hour_floor(min(_fwd, key=lambda s: s.price).start)
+                    if _fwd else _now_h
+                )
+                hedge_drain_by_hour = {_trough_h: _hedge}
+        return hedge_drain_by_hour
+
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
         _first_tick = self._first_tick_after_start
@@ -951,96 +1046,7 @@ class Controller:
 
         # ── SoC drift-hedge (LIVE/enabled path; whole block gated OFF unless fraction>0) ──
         # Default None = byte-identical to pre-hedge (parity preserved at soc_hedge_fraction=0.0).
-        hedge_drain_by_hour: dict[datetime, float] | None = None
-        if self.cfg.soc_hedge_fraction > 0.0:
-            _today_key = dt_util.as_local(now).date().isoformat()
-            _prev_day = self._soc_drift_day
-            self._soc_drift_kwh, self._soc_drift_day = soc_drift.reset_if_new_day(
-                self._soc_drift_kwh, self._soc_drift_day, _today_key,
-            )
-            _new_day = self._soc_drift_day != _prev_day
-            # "Real rollover" = day changed AND we had a previous day (not first-ever tick).
-            # On first-ever start _prev_day is None; no step to gate, anchor should be written.
-            _real_rollover = _new_day and _prev_day is not None
-            if _real_rollover:
-                # No step spans the day reset — clear the SoC anchor.
-                self._soc_drift_last_soc_pct = None
-            _dt_h = (
-                (now - self._soc_drift_last_update).total_seconds() / 3600.0
-                if self._soc_drift_last_update is not None else 0.0
-            )
-            _soc_now = inputs.soc
-            _gated = (
-                not (0.0 < _dt_h <= soc_drift.MAX_DRIFT_STEP_H)
-                or self._soc_drift_last_soc_pct is None
-                or self._soc_drift_last_intervals is None
-                or _soc_now >= self.cfg.soc_target - 1.0
-                or _soc_now <= self.cfg.soc_floor + 1.0
-            )
-            if not _gated:
-                # _gated guards _soc_drift_last_soc_pct is None and _soc_drift_last_intervals is None;
-                # assert for Pyright narrowing (runtime: impossible to fail here).
-                assert self._soc_drift_last_soc_pct is not None
-                assert self._soc_drift_last_intervals is not None
-                # Use the P50 intervals cached from the PREVIOUS tick's DP run.
-                # Intervals change at most hourly; stale-by-one-tick is functionally identical.
-                _fc_pv_w, _fc_load_w = soc_drift.forecast_rate_at(
-                    self._soc_drift_last_intervals, now
-                )
-                # Curve-derived discharge eta at the forecast deficit power (only used
-                # by expected_soc_delta_kwh on the deficit branch); static scalar when
-                # the flag is off (_eta_d_at's own gate) — byte-identical parity.
-                _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
-                _expected_dc = soc_drift.expected_soc_delta_kwh(
-                    _fc_pv_w, _fc_load_w, _dt_h, self.cfg.eta_charge, _eta_d,
-                    idle_drain_w=self.cfg.idle_drain_w,
-                )
-                _measured_dc = soc_drift.measured_soc_delta_kwh(
-                    _soc_now, self._soc_drift_last_soc_pct, self.cfg.capacity_kwh,
-                )
-                _tick_h = const.TICK_SECONDS / 3600.0
-                # Duration-scale the export add-back: _last_export_kwh_dc is sized over
-                # TICK_SECONDS but this step integrates _dt_h (may differ on missed ticks).
-                _export_dc_step = (
-                    self._soc_drift_last_export_kwh_dc * _dt_h / _tick_h
-                    if _tick_h > 0 else 0.0
-                )
-                self._soc_drift_kwh = soc_drift.accumulate(
-                    self._soc_drift_kwh,
-                    soc_drift.per_step_drift_kwh(_expected_dc, _measured_dc, _export_dc_step),
-                    dt_h=_dt_h, halflife_h=self.cfg.soc_drift_decay_halflife_h,
-                )
-                self._soc_drift_kwh = soc_drift.cap_accumulator(
-                    self._soc_drift_kwh, self.cfg.capacity_kwh,
-                )
-            # Consume the export field; C3 re-sets it if THIS tick fires an export.
-            self._soc_drift_last_export_kwh_dc = 0.0
-            # On a REAL rollover (prev day known → today) leave anchor None so the very
-            # next step cannot span midnight.  On fresh start or normal ticks, record now.
-            if not _real_rollover:
-                self._soc_drift_last_soc_pct = _soc_now
-            self._soc_drift_last_update = now
-            # State is flushed by the single end-of-tick _persist() call (line ~1738).
-            _drift, self._soc_drift_engaged = soc_drift.drift_kwh(
-                self._soc_drift_kwh, self.cfg.soc_drift_deadband_kwh,
-                0.5 * self.cfg.soc_drift_deadband_kwh, self._soc_drift_engaged,
-            )
-            _hedge = self.cfg.soc_hedge_fraction * _drift
-            if _hedge > 0.0:
-                # Front-load the debit to the cheapest forward clock-hour (the trough)
-                # so any over-buy lands at the cheapest tariff.
-                _now_h = resolution.hour_floor(now)
-                _hedge_deadline = scheduler.compute_deadline(now, sunset, slots, self.cfg)
-                _fwd = [
-                    s for s in slots
-                    if resolution.hour_floor(s.start) >= _now_h
-                    and s.start <= _hedge_deadline
-                ]
-                _trough_h = (
-                    resolution.hour_floor(min(_fwd, key=lambda s: s.price).start)
-                    if _fwd else _now_h
-                )
-                hedge_drain_by_hour = {_trough_h: _hedge}
+        hedge_drain_by_hour = self._apply_drift_hedge(now, inputs, slots, sunset)
 
         new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._hass.async_add_executor_job(
             functools.partial(
