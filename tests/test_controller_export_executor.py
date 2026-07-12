@@ -13,7 +13,6 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1035,7 +1034,7 @@ class TestExecutorReserveAnchoredToSolarPickup:
         (that path in _build_reserve_by_hour bypasses this direct comparison)."""
         from datetime import datetime, timedelta, timezone
         from custom_components.anker_x1_smartgrid import controller as c, energy
-        from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
+        from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
         cur = datetime(2026, 7, 1, 16, 0, tzinfo=timezone.utc)
         cfg = Config(capacity_kwh=10.0, soc_floor=10.0, eta_charge=1.0,
                      round_trip_eff=1.0, reserve_cheap_band=0.20, reserve_anchor="trough")

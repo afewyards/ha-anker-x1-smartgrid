@@ -10,7 +10,6 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,10 +18,7 @@ from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
-    ControllerState,
     ExportState,
-    PlanState,
-    PriceSlot,
 )
 from custom_components.anker_x1_smartgrid.optimize import export_pnl_eur
 
@@ -292,7 +288,6 @@ class TestExportPnlEur:
         """eta_discharge < 1 reduces revenue (AC price scaled to DC basis)."""
         # round_trip_eff=0.85, eta_charge=0.95 → eta_discharge ≈ 0.8947
         cfg = _make_export_cfg(round_trip_eff=0.85, eta_charge=0.95)
-        import math
         eta_d = 0.85 / 0.95
 
         result = export_pnl_eur(

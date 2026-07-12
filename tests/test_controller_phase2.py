@@ -2,7 +2,6 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
 from custom_components.anker_x1_smartgrid import controller, forecast, const
-from custom_components.anker_x1_smartgrid.loadmodel import BucketedLoadModel
 
 
 # ---------------------------------------------------------------------------

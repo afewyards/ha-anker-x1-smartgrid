@@ -12,7 +12,6 @@ Tests:
 """
 from datetime import datetime, timezone, timedelta
 
-import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config, ExportState
 from custom_components.anker_x1_smartgrid import scheduler

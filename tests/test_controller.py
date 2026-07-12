@@ -1,6 +1,5 @@
 from datetime import datetime, timezone, timedelta
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
 from custom_components.anker_x1_smartgrid import controller, const, forecast
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
@@ -241,7 +240,7 @@ async def test_tick_disabled_after_restart_while_engaged_releases_once():
     assert sum(1 for c in act.calls if c[0] == "release_to_self") == 1
 
     act.calls.clear()
-    r2 = await ctrl.tick()
+    await ctrl.tick()
     assert not any(c[0] == "release_to_self" for c in act.calls)
 
 
@@ -251,7 +250,6 @@ async def test_tick_disabled_persists_disengaged_so_next_restart_no_release():
     restart-while-disabled does NOT re-fire release (no repeated manual clobber)."""
     from custom_components.anker_x1_smartgrid.models import ExportState
     hass = _StubHass()
-    store = ctrl_store = None
     # Capture what the controller persisted.
     saved = {}
     class _CaptureStore:
@@ -673,7 +671,6 @@ async def test_record_sample_export_price_none_when_entity_empty_string():
 async def test_tick_ok_without_conf_ent_temp():
     """tick() must not raise KeyError when CONF_ENT_TEMP is absent from config."""
     hass = _StubHass()
-    data_overrides = {const.CONF_ENT_TEMP: None}  # None signals no temp entity
     # We need to actually remove the key to test the .get() guard
     ctrl, _ = _make_controller(hass)
     del ctrl._data[const.CONF_ENT_TEMP]  # simulate old config entry missing the key
@@ -1912,7 +1909,6 @@ async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_p
     house_load_mean/house_load_kwh_sum both end up NULL for the rolled-up hour, so
     featureset.hourly_load_w(row) returns None and refresh_profile skips the row.
     """
-    from custom_components.anker_x1_smartgrid import forecast as forecast_mod
     from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 
     hass = _StubHass()

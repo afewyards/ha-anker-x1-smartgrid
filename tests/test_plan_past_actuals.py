@@ -15,7 +15,6 @@ def _cfg():
 
 def test_past_slot_uses_actuals_and_leaves_forward_soc_unchanged():
     cfg = _cfg()
-    now_h = datetime(2026, 6, 29, 10, tzinfo=timezone.utc)
     slots = [_slot(8), _slot(9), _slot(10), _slot(11)]
     # Forward intervals only for now_h onward (mirrors build_display_intervals).
     intervals = [

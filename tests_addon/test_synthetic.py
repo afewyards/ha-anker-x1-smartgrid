@@ -1,6 +1,4 @@
 """Self-tests for the _synthetic helpers."""
-import pytest
-from datetime import timezone
 from tests_addon._synthetic import make_hourly_rows, make_samples_hourly_db
 from forecast_core.recorder import DataRecorder
 from forecast_core import featureset

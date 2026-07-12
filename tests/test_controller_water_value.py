@@ -1,11 +1,10 @@
 # tests/test_controller_water_value.py
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PlanState, PlantInputs, PriceSlot,
+    Config, PlanState, PlantInputs, PriceSlot,
 )
 
 

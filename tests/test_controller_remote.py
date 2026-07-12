@@ -10,7 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import dataclasses
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -18,7 +17,6 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
-from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
     build_hours_payload,

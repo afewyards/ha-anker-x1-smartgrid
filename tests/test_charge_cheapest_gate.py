@@ -15,7 +15,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import pytest
 
 from custom_components.anker_x1_smartgrid.const import DEFAULT_CHARGE_WINDOW_PRICE_BAND
 from custom_components.anker_x1_smartgrid.models import Config

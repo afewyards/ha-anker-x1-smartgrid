@@ -14,7 +14,6 @@ is_ready always returns False, which is the "not-ready" gate we want to verify.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests_addon._synthetic import make_samples_hourly_db
 from trainer import TrainState, train_once

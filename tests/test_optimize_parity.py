@@ -28,7 +28,6 @@ from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid, solar_reservation_ceiling
 from custom_components.anker_x1_smartgrid.regret import (
     DayData,
-    _BIN_KWH,
     hindsight_optimal_grid,
 )
 

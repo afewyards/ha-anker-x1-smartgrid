@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from custom_components.anker_x1_smartgrid import energy, parsers, scheduler
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor, build_intervals

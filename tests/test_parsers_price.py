@@ -1,4 +1,3 @@
-from datetime import timezone
 from custom_components.anker_x1_smartgrid import parsers
 
 

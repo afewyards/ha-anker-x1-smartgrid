@@ -1,7 +1,6 @@
 """C3: the curtailed-solar credit must not subsidize grid purchases (solar-first accounting)."""
 import pytest
 
-from custom_components.anker_x1_smartgrid import optimize as optimize_mod
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid, effective_export_price
 

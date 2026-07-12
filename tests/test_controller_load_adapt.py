@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from custom_components.anker_x1_smartgrid import load_adapt
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.load_adapt import AdaptivePredictor, PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config

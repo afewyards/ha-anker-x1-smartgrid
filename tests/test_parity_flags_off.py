@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.intra_hour import CurrentHourBlendPredictor, HourAccumulator
-from custom_components.anker_x1_smartgrid.load_adapt import AdaptivePredictor, PredictionLog
+from custom_components.anker_x1_smartgrid.load_adapt import PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.occupancy import OccupancyPredictor
 

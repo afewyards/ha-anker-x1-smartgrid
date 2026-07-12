@@ -364,7 +364,6 @@ def _make_hourly_rows(n_days: int, base_load_w: float = 800.0, temp_c: float = 1
     for d in range(n_days):
         for h in range(24):
             ts = base + timedelta(days=d, hours=h)
-            phase = h / 24 * 2 * _math.pi
             rows.append({
                 "hour_ts": ts.isoformat(),
                 "house_load_mean": base_load_w + h * 5.0,  # slight hour-to-hour variation

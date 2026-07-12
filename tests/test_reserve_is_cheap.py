@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import pytest
-from custom_components.anker_x1_smartgrid import controller as ctrl, energy
+from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
 
 NOW = datetime(2026, 7, 1, 16, 0, tzinfo=timezone.utc)

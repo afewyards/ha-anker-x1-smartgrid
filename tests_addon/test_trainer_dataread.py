@@ -7,7 +7,6 @@ from __future__ import annotations
 import os
 import sqlite3
 
-import pytest
 
 from tests_addon._synthetic import make_hourly_rows, make_samples_hourly_db
 from trainer import _MIN_TRAIN_ROWS, load_rows
