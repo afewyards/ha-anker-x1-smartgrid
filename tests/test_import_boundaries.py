@@ -40,6 +40,7 @@ HA_FREE_MODULES = [
     "export_filter",
     "energy",
     "decision",
+    "dp_common",
 ]
 
 # Invariant 2: leaf modules that must not import upward into controller,

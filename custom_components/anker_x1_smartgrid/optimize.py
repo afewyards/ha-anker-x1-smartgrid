@@ -61,6 +61,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from . import const
+from .dp_common import soc_bins
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -648,16 +649,7 @@ def optimize_grid(
             _soc_b = _soc_after_b
 
     bin_kwh = _BIN_KWH
-    n_states = round(cap_kwh / bin_kwh) + 1
-
-    # Local binning utilities — same formula as the closures in
-    # regret.hindsight_optimal_grid; defined here because they capture
-    # n_states/bin_kwh from this scope.
-    def to_bin(soc: float) -> int:
-        return max(0, min(n_states - 1, round(soc / bin_kwh)))
-
-    def from_bin(b: int) -> float:
-        return b * bin_kwh
+    n_states, to_bin, from_bin = soc_bins(cap_kwh)
 
     INF = float("inf")
 

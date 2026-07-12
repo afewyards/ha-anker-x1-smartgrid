@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import const
+from .dp_common import soc_bins
 from .models import Config
 
 # Discretisation resolution for the SoC DP (kWh per bin).
@@ -432,13 +433,7 @@ def hindsight_optimal_grid(
         peak_from = []
 
     bin_kwh = _BIN_KWH
-    n_states = round(cap_kwh / bin_kwh) + 1
-
-    def to_bin(soc: float) -> int:
-        return max(0, min(n_states - 1, round(soc / bin_kwh)))
-
-    def from_bin(b: int) -> float:
-        return b * bin_kwh
+    n_states, to_bin, from_bin = soc_bins(cap_kwh)
 
     INF = float("inf")
 
