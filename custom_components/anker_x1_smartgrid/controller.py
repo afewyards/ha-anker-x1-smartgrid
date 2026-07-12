@@ -14,7 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret_job, remote_forecast, resolution, scheduler, snapshot, soc_drift
+from . import const, coordinator, energy, executor, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret_job, remote_forecast, resolution, scheduler, snapshot, soc_drift
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -558,47 +558,6 @@ class Controller:
         except Exception:  # noqa: BLE001 - never break the loop on training error
             pass
 
-    async def _safe_release(
-        self,
-        now: datetime,
-        context: str = "",
-        *,
-        release: bool = True,
-        reset_export: bool = True,
-        reset_before_release: bool = False,
-    ) -> None:
-        """Best-effort inverter release + export dwell-state reset.
-
-        Consolidates the try/``release_to_self()``/log-error +
-        ``ExportState(engaged=False, state_since=now)`` reset pattern repeated
-        across the tick/failsafe/export-executor paths. ``context`` becomes the
-        error-log message on a release failure, so each call site keeps its
-        original diagnostic text.
-
-        ``release``/``reset_export`` let a call site express a release-only or
-        reset-only variant (some sites reset export state without ever having
-        engaged the actuator; others release without touching export state
-        directly — e.g. a local ``_new_export_state`` var is unified into
-        ``self.export_state`` later by the caller). The export-state reset is
-        itself gated on ``self.export_state.engaged`` (mirrors every original
-        call site) so a no-op reset never bumps ``state_since``.
-
-        ``reset_before_release`` mirrors the one call site (export-disabled
-        path) whose original code reset ``self.export_state`` BEFORE
-        attempting the release rather than after — order matters there since
-        ``release_to_self()`` awaits, and a concurrent reader (e.g. a sensor)
-        could observe ``export_state`` mid-release.
-        """
-        if reset_export and reset_before_release and self.export_state.engaged:
-            self.export_state = ExportState(engaged=False, state_since=now)
-        if release:
-            try:
-                await self._actuator.release_to_self()
-            except Exception:  # noqa: BLE001 — best-effort release must never raise
-                _LOGGER.error(context, exc_info=True)
-        if reset_export and not reset_before_release and self.export_state.engaged:
-            self.export_state = ExportState(engaged=False, state_since=now)
-
     async def tick(self) -> dict:
         # Re-entrancy guard (review 1.2): the 60s timer fires regardless of the
         # previous tick; a slow retrain tick must not overlap and race the actuator.
@@ -611,7 +570,7 @@ class Controller:
             except Exception:  # noqa: BLE001 — whole-tick failsafe (review 1.1)
                 _LOGGER.exception("tick failed; releasing to self-consumption")
                 now = dt_util.utcnow()
-                await self._safe_release(now, "release_to_self failed in tick failsafe")
+                await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
                 self.plan = PlanState(ControllerState.PASSIVE, now, ())
                 status = self._status(now, 0.0, None, "failsafe")
                 status["state"] = "failsafe"
@@ -943,8 +902,8 @@ class Controller:
                 and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
             )
             # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
-            await self._safe_release(
-                now, "Actuator release_to_self failed (disabled path)", release=_was_engaged,
+            await executor.safe_release(
+                self, now, "Actuator release_to_self failed (disabled path)", release=_was_engaged,
             )
             # Save the previous plan for state-machine continuity in the shadow compute,
             # then reset to PASSIVE so no committed slots are carried forward.
@@ -1090,7 +1049,7 @@ class Controller:
 
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
-            await self._safe_release(now, "Actuator release_to_self failed (failsafe path)")
+            await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
             return self._status(now, 0.0, None, "failsafe")
 
@@ -1225,209 +1184,17 @@ class Controller:
         # failsafe ticks return before this point: accepted spec limitation.
         self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
 
-        _engage_failed = False
-        if new_plan.state is ControllerState.FORCING:
-            setpoint = guard.command_setpoint(
-                self.cfg.max_charge_w, self._actuator.last_setpoint_w, self.cfg,
-            )
-            try:
-                await self._actuator.engage_and_charge(setpoint)
-            except Exception:
-                # Publish truth for THIS tick without a hardware release or plan
-                # reset: the inverter never engaged, so setpoint 0 + PASSIVE is
-                # honest; self.plan stays FORCING so the next tick retries.
-                _LOGGER.error("Actuator engage_and_charge failed (FORCING path); publishing passive/0", exc_info=True)
-                _engage_failed = True
-                setpoint = 0.0
-            # Mutual exclusion: export executor is skipped entirely while force-charging.
-            # Release export state so we transition cleanly after force-charge ends.
-            await self._safe_release(now, release=False)
-        else:
-            setpoint = 0.0
-            if self.plan.state is ControllerState.FORCING:
-                await self._safe_release(
-                    now, "Actuator release_to_self failed (FORCING→PASSIVE transition)",
-                    reset_export=False,
-                )
-
-            # ── C3: live export executor ──────────────────────────────────────
-            # Only fires when export is enabled and an export price is available.
-            # A1 = NET-EXPORT: setpoint is export_rate directly (inverter serves
-            # house load first, exports the remainder); no house_load_now term.
-            if self.cfg.enable_export and _export_price is not None and _export_price > 0.0:
-                # Compute ride-out reserve and battery surplus above it.
-                # _ivs_reserve is the TWO-DAY reserve interval list from compute_decision
-                # (6th return element).  Trough-anchored: ride_out_reserve_kwh walks
-                # forward to the deepest signed-trajectory point, matching the DP floor.
-                # rev-2: under the trough anchor, hour-align now + thread the SAME
-                # cheap-relief map as the plan so the live export floor matches the
-                # planned floor at this hour. Legacy anchor keeps the raw `now` and
-                # no map → byte-identical rollback behavior (unchanged from pre-rev-2).
-                if self.cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH:
-                    _cur_h_reserve = resolution.floor_to_slot(now, _slot_minutes)
-                    _reserve_is_cheap = _build_is_cheap_by_hour(slots, self.cfg, _slot_minutes)
-                else:
-                    _cur_h_reserve = now
-                    _reserve_is_cheap = None
-                _reserve = energy.ride_out_reserve_kwh(
-                    _cur_h_reserve, _ivs_reserve, self.cfg, is_cheap=_reserve_is_cheap,
-                    slot_minutes=_slot_minutes, eta_curve=self._planner_curve(),
-                )
-                _surplus = energy.export_surplus_kwh(inputs.soc, _reserve, self.cfg)
-
-                # Economic hurdle: does exporting now beat holding for later use?
-                _keep_value = optimize_mod.compute_water_value(
-                    # Use trough price as keep_value proxy (reuse existing helper).
-                    # find_next_trough returns (dt, price); price is in €/kWh.
-                    scheduler.find_next_trough(now, slots, self.cfg)[1],
-                    self.cfg,
-                )
-                # Economic decision (which hours, how much) = the DP's committed plan.
-                # Read the committed export RATE (W) for the current clock-hour; plan
-                # membership is the hurdle gate.  No committed rate ⇒ no export (strictly
-                # safer than the old ungated surplus-dump).  Real-time adaptation = the
-                # live surplus clamp below + inverter net-export (house served first).
-                # export_request is keyed on the slot grid (see _dp_select_slots);
-                # slot-floor `now` so the lookup names the actual current slot.
-                _cur_h = resolution.floor_to_slot(now, _slot_minutes)
-                _committed_export = _dp_out.get("export_request") or {}
-                _hurdle = _cur_h in _committed_export
-
-                # Decide next export dwell/hysteresis state.
-                _new_export_state = scheduler.decide_export_state(
-                    self.export_state,
-                    surplus_kwh=_surplus,
-                    hurdle_clears=_hurdle,
-                    now=now,
-                    cfg=self.cfg,
-                )
-
-                if _new_export_state.engaged:
-                    # NET target: drain the live surplus-above-reserve decisively
-                    # over cfg.export_drain_window_h (default 0.0 → one tick → at the
-                    # export cap, stopping at the live reserve on the final tick).
-                    # _hurdle gates WHETHER to export (DP plan membership); committed
-                    # rate no longer throttles HOW FAST.
-                    _net_target_w = energy.export_net_target_w(
-                        _surplus, self.cfg, eta_curve=self._planner_curve(),
-                    )
-                    # GROSS setpoint must cover house load (firmware serves house
-                    # first, exports the remainder).  Bounded only by SETPOINT_MAX_W
-                    # via discharge_cap_w (max_export_w already capped net_target).
-                    # Only compensate with a FRESH read (A: fix for a safety
-                    # regression) — a stale cached value (pv/batt sensor blip this
-                    # tick, soc+meter still live so no failsafe) must not inflate
-                    # the gross setpoint beyond the reserve-aware target;
-                    # under-compensating (0.0) is the safe direction here.
-                    _load_comp_w = (
-                        self.cfg.export_load_comp_factor * _house_load_now_w
-                        if self._house_load_fresh else 0.0
-                    )
-                    _gross_w = _net_target_w + _load_comp_w
-                    _export_sp = guard.command_setpoint(
-                        -_gross_w,
-                        self._actuator.last_setpoint_w,
-                        self.cfg,
-                        discharge_cap_w=const.SETPOINT_MAX_W,
-                    )
-                    # command_setpoint returns positive value for discharge; engage_export
-                    # validates > 0, so a sign error here fails loudly (safety-net).
-                    if _export_sp > 0:
-                        try:
-                            await self._actuator.engage_export(_export_sp)
-                            _export_setpoint_w = _export_sp
-                            # R1: MEASURED export, not the commanded setpoint.
-                            # _metered_export_w is the battery-sourced portion of
-                            # the live grid export — min(meter export, battery
-                            # discharge) — read directly from the meter + battery
-                            # power sensors this tick.  Mirrors the daily-regret
-                            # battery-sourced export rule (F3/actual_export_w
-                            # above): PV-spill export is out of scope, only the
-                            # energy actually drawn from the battery counts.
-                            # Drives PnL + record; independent of the gross
-                            # setpoint (which may be inflated by load_comp/
-                            # quantization and does not reflect what was
-                            # actually metered).
-                            _batt_w_now = coordinator.read_float(
-                                self._hass, self._data[const.CONF_ENT_BATTERY_POWER]
-                            )
-                            _metered_export_w = min(
-                                max(0.0, -inputs.meter_w),
-                                max(0.0, _batt_w_now if _batt_w_now is not None else 0.0),
-                            )
-                            _export_kwh = (
-                                _metered_export_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
-                            )
-                            _reserve_kwh_val = _reserve
-                            _surplus_kwh_val = _surplus
-                            # E3: accumulate realized PnL for this export interval.
-                            # Price at the effective (post-fee) rate so PnL matches
-                            # the DP's objective (gross − export_fee).
-                            # PnL uses the DC-stored basis export_pnl_eur expects:
-                            # convert AC metered export to DC drawn (AC / eta_discharge)
-                            # so revenue = AC * price (the helper's eta_discharge cancels
-                            # — no spurious second factor); cost/opportunity scale on DC
-                            # energy actually dispatched. _export_kwh (recorded AC) is
-                            # now the measured value above, not a setpoint estimate.
-                            _eta_d = self._eta_d_at(_metered_export_w)
-                            _export_kwh_dc = (
-                                _export_kwh / _eta_d if _eta_d > 1e-9 else _export_kwh
-                            )
-                            # Retain for the NEXT tick's drift add-back (duration-scaled).
-                            # The drift step re-zeros this field at its start; C3 re-sets
-                            # it here only when an export actually fired this tick.
-                            # Restart-gap caveat: if the process restarts between C3 and the
-                            # next tick's end-of-tick _persist(), this value is lost and the
-                            # add-back for that export window is skipped — self-correcting
-                            # (one missed add-back → slight over-count in accumulator for
-                            # one step). Do NOT add an extra _persist() here; that risks
-                            # double-counting if C3 fires multiple times per tick.
-                            self._soc_drift_last_export_kwh_dc = _export_kwh_dc
-                            _eff_export_price = optimize_mod.effective_export_price(
-                                _export_price, self.cfg
-                            )
-                            _tick_pnl = optimize_mod.export_pnl_eur(
-                                _export_kwh_dc, _eff_export_price, _keep_value, self.cfg
-                            )
-                            self.today_export_pnl_eur += _tick_pnl
-                        except Exception:
-                            _LOGGER.error("Actuator engage_export failed (C3 path)", exc_info=True)
-                            # Engage failed → do NOT report engaged. Force a clean
-                            # disengaged state and best-effort release so the next
-                            # tick starts from self-consumption (mirror FORCING L1409).
-                            _new_export_state = ExportState(engaged=False, state_since=now)
-                            await self._safe_release(
-                                now,
-                                "Actuator release_to_self failed (engage_export except)",
-                                reset_export=False,
-                            )
-                    else:
-                        # Surplus too small to quantize to a valid step — release.
-                        _new_export_state = ExportState(engaged=False, state_since=now)
-                        if self.export_state.engaged:
-                            await self._safe_release(
-                                now,
-                                "Actuator release_to_self failed (C3 zero-rate path)",
-                                reset_export=False,
-                            )
-                else:
-                    # Gate fail or surplus below lo-eps: release if currently engaged.
-                    if self.export_state.engaged:
-                        await self._safe_release(
-                            now,
-                            "Actuator release_to_self failed (C3 disengage path)",
-                            reset_export=False,
-                        )
-
-                self.export_state = _new_export_state
-            else:
-                # Export disabled or no export price: release if engaged.
-                if self.export_state.engaged:
-                    await self._safe_release(
-                        now,
-                        "Actuator release_to_self failed (export disabled path)",
-                        reset_before_release=True,
-                    )
+        # FORCING charge actuation + C3 live export executor (Task E2: moved
+        # verbatim to executor.py — mutually-exclusive branches, self ->
+        # controller). Reads the OLD self.plan for the FORCING->PASSIVE
+        # transition check; self.plan is reassigned to new_plan below.
+        (
+            setpoint, _engage_failed, _export_setpoint_w, _export_kwh,
+            _reserve_kwh_val, _surplus_kwh_val,
+        ) = await executor.run_forcing_and_export(
+            self, now, new_plan, inputs, slots, _dp_out, _ivs_reserve,
+            _slot_minutes, _export_price, _house_load_now_w,
+        )
 
         self.plan = new_plan
         await self._persist()
