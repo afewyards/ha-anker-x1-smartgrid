@@ -5,11 +5,23 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import ExportState
-from tests.test_controller_export_executor import _StubHass, _make_controller
+from tests.helpers import StubHass as _StubHass
+from tests.test_controller_export_executor import _make_controller
+
+# _make_controller stays imported from test_controller_export_executor (not
+# tests.helpers.make_controller): it returns a (ctrl, act, store) 3-tuple
+# built from export-specific Config overrides (_make_export_cfg), which
+# tests.helpers.make_controller's 2-tuple/plain-Config signature doesn't
+# match — see the same precedent in commit 0d4068a.
 
 
 class _StubActuator:
-    """Minimal actuator stub exposing release_calls/engaged for failsafe assertions."""
+    """Minimal actuator stub exposing release_calls/engaged for failsafe assertions.
+
+    Genuinely differs from tests.helpers.StubActuator (which tracks a
+    `calls` list instead of a release_calls counter) — this file's overlap/
+    failsafe assertions need the counter, so it stays local rather than
+    being replaced."""
 
     def __init__(self):
         self.engaged: bool = False

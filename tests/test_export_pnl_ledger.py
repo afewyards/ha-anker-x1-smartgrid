@@ -21,6 +21,12 @@ from custom_components.anker_x1_smartgrid.models import (
     ExportState,
 )
 from custom_components.anker_x1_smartgrid.optimize import export_pnl_eur
+from tests.helpers import (
+    CapturingStore as _StubStore,
+    StubActuator as _StubActuator,
+    StubHass as _StubHass,
+    StubRecorder as _StubRecorder,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,122 +37,15 @@ BASE = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
-# Helpers: stubs reused from test_controller_export_executor pattern
+# Helpers: StubActuator/StubStore(->CapturingStore)/StubRecorder/StubHass
+# imported from tests.helpers above (aliased to the local names used
+# throughout this module) — this file's variants were behaviorally
+# equivalent (the local _StubStore's capture-last-save behavior matches
+# CapturingStore; _StubRecorder's read_decisions was an always-empty stub
+# never exercised by production code, so swapping to the real filtering
+# implementation is a no-op here). _StubHass and _make_controller are
+# imported by tests/test_cash_ledger.py — kept re-exportable by name.
 # ---------------------------------------------------------------------------
-
-
-class _StubActuator:
-    def __init__(self):
-        self.calls: list[tuple] = []
-        self.last_setpoint_w: float = 0.0
-        self.engaged: bool = False
-
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_and_charge", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def engage_export(self, setpoint_w: float) -> None:
-        if setpoint_w <= 0:
-            raise ValueError(f"export-only: setpoint must be > 0, got {setpoint_w}")
-        self.calls.append(("engage_export", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def release_to_self(self) -> None:
-        self.calls.append(("release_to_self",))
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-
-
-class _StubStore:
-    def __init__(self):
-        self.saved: dict = {}
-
-    async def async_save(self, data: dict) -> None:
-        self.saved = data
-
-
-class _StubRecorder:
-    def __init__(self):
-        self.rows: list[dict] = []
-        self.decision_rows: list[dict] = {}
-        self.daily_regret_rows: dict[str, dict] = {}
-
-    def append(self, row: dict) -> None:
-        self.rows.append(row)
-
-    def append_decision(self, **kwargs) -> None:
-        self.decision_rows[kwargs.get("ts", "")] = kwargs
-
-    def purge_older_than(self, ts, days) -> None:
-        pass
-
-    def purge_decisions_older_than(self, cutoff_iso) -> int:
-        return 0
-
-    def rollup_hours(self, now_iso) -> int:
-        return 0
-
-    def purge_hourly_older_than(self, cutoff_iso) -> int:
-        return 0
-
-    def wal_checkpoint(self) -> None:
-        pass
-
-    def read_load_samples(self, since_iso=None):
-        return []
-
-    def read_decisions(self, since_iso, until_iso=None):
-        return []
-
-    def read_feature_rows(self, since_iso=None):
-        return []
-
-    def read_hourly_rows(self):
-        return []
-
-    def upsert_daily_regret(self, **kwargs) -> None:
-        self.daily_regret_rows[kwargs["day"]] = kwargs
-
-    def read_latest_daily_regret(self):
-        if not self.daily_regret_rows:
-            return None
-        latest_day = max(self.daily_regret_rows.keys())
-        return self.daily_regret_rows[latest_day]
-
-    def read_daily_regret_range(self, since_day, until_day=None):
-        rows = [v for k, v in self.daily_regret_rows.items() if k >= since_day]
-        if until_day is not None:
-            rows = [r for r in rows if r["day"] < until_day]
-        return sorted(rows, key=lambda r: r["day"])
-
-
-class _StubHass:
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
 
 
 def _make_export_cfg(**overrides) -> Config:

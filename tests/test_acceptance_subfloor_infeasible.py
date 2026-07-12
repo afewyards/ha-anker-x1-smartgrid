@@ -31,6 +31,12 @@ from custom_components.anker_x1_smartgrid.models import (
     PriceSlot,
 )
 from custom_components.anker_x1_smartgrid.optimize import build_charge_mask, optimize_grid
+from tests.helpers import (
+    StubActuator as _StubActuator,
+    StubHass as _StubHass,
+    StubRecorder as _StubRecorder,
+    StubStore as _StubStore,
+)
 
 # ---------------------------------------------------------------------------
 # Shared constants / helpers
@@ -172,100 +178,9 @@ class TestSubFloorStartInfeasible:
 # ---------------------------------------------------------------------------
 # Minimal stubs for Controller.tick() tests (no HA runtime needed)
 # ---------------------------------------------------------------------------
-
-class _StubActuator:
-    def __init__(self):
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-    async def release_to_self(self) -> None:
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-
-
-class _StubStore:
-    async def async_save(self, data) -> None:
-        pass
-
-
-class _StubRecorder:
-    def __init__(self):
-        self.rows: list = []
-        self.decision_rows: list = []
-        self.daily_regret_rows: dict = {}
-
-    def append(self, row):
-        self.rows.append(row)
-
-    def append_decision(self, **kwargs):
-        self.decision_rows.append(kwargs)
-
-    def purge_older_than(self, ts, days):
-        pass
-
-    def purge_decisions_older_than(self, cutoff_iso):
-        return 0
-
-    def rollup_hours(self, now_iso):
-        return 0
-
-    def purge_hourly_older_than(self, cutoff_iso):
-        return 0
-
-    def wal_checkpoint(self) -> None:
-        pass
-
-    def read_load_samples(self, since_iso=None):
-        return []
-
-    def read_decisions(self, since_iso, until_iso=None):
-        return []
-
-    def read_feature_rows(self, since_iso=None):
-        return []
-
-    def read_hourly_rows(self):
-        return []
-
-    def upsert_daily_regret(self, **kwargs):
-        day = kwargs["day"]
-        self.daily_regret_rows[day] = kwargs
-
-    def read_latest_daily_regret(self):
-        return None
-
-    def read_daily_regret_range(self, since_day, until_day=None):
-        return []
-
-
-class _StubHass:
-    """Minimal hass stub seeded with price + SoC states for tick()."""
-
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
+# StubActuator/StubStore/StubRecorder/StubHass imported from tests.helpers
+# above (aliased to the local names used throughout this module) — this
+# file's variants were plain/byte-identical subsets of the shared doubles.
 
 
 def _make_floor_controller(hass, *, soc_pct: float = 5.0):

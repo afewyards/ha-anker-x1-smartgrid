@@ -1,7 +1,7 @@
 """Unit tests for controller status sensors."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 
@@ -9,7 +9,11 @@ from homeassistant.components.sensor import SensorStateClass
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
-from custom_components.anker_x1_smartgrid.controller import Controller
+from tests.helpers import (
+    BASE,
+    StubHass as _StubHass,
+    make_controller as _make_controller,
+)
 
 
 def test_export_setpoint_sensor_reads_key():
@@ -276,132 +280,12 @@ async def test_house_load_sensor_subscribes_to_all_pv_entities_in_list(monkeypat
 # ---------------------------------------------------------------------------
 # T16: controller tick() publishes the computed house load into last_status
 # ---------------------------------------------------------------------------
-
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
-
-
-class _StubActuator:
-    last_setpoint_w = 0.0
-    engaged: bool = False
-
-    async def engage_and_charge(self, w):
-        pass
-
-    async def release_to_self(self):
-        pass
-
-
-class _StubStore:
-    async def async_save(self, data):
-        pass
-
-
-class _StubRecorder:
-    """Minimal recorder stub — returns empty data on all read paths."""
-
-    def append(self, row):
-        pass
-
-    def append_decision(self, **kwargs):
-        pass
-
-    def purge_older_than(self, ts, days):
-        pass
-
-    def purge_decisions_older_than(self, cutoff):
-        pass
-
-    def rollup_hours(self, now_iso):
-        return 0
-
-    def purge_hourly_older_than(self, cutoff):
-        return 0
-
-    def wal_checkpoint(self) -> None:
-        pass
-
-    def read_load_samples(self, since_iso=None):
-        return []
-
-    def read_persons_home_samples(self, since_iso=None):
-        return []
-
-    def read_feature_rows(self, since_iso=None):
-        return []
-
-    def read_hourly_rows(self, since_iso=None):
-        return []
-
-    def upsert_daily_regret(self, **kwargs):
-        pass
-
-    def read_latest_daily_regret(self):
-        return None
-
-    def read_daily_regret_range(self, *a, **kw):
-        return []
-
-    def read_decisions(self, *a, **kw):
-        return []
-
-
-class _StubHass:
-    """Minimal hass stub with a state registry."""
-
-    def __init__(self):
-        self._states = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
-
-
-def _make_controller(hass):
-    """Build a Controller with minimal data config (meter-power topology)."""
-    data = {
-        const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_METER_POWER: "sensor.meter_power",
-        const.CONF_ENT_PRICE: "sensor.price",
-        const.CONF_ENT_PV_TODAY: [],
-        const.CONF_ENT_PV_TOMORROW: [],
-        const.CONF_ENT_SUN: "sun.sun",
-        const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
-        const.CONF_ENT_PV_POWER: "sensor.pv_power",
-        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
-        const.CONF_ENT_SETPOINT: "number.setpoint",
-        const.CONF_ENT_ENGAGE: "switch.engage",
-        const.CONF_ENT_WORKMODE: "select.workmode",
-        const.CONF_ENT_IRRADIANCE: "sensor.irradiance",
-        const.CONF_ENT_TEMP: "weather.home",
-    }
-    act = _StubActuator()
-    rec = _StubRecorder()
-    ctrl = Controller(
-        hass=hass,
-        data=data,
-        recorder=rec,
-        actuator=act,
-        store=_StubStore(),
-    )
-    return ctrl, act
+# StubActuator/StubStore/StubRecorder/StubHass/make_controller/BASE imported
+# from tests.helpers above — this file's local variants were plain/
+# byte-identical duplicates. _seed_valid_inputs stays local below: it
+# genuinely differs from helpers.seed_valid_inputs (meter_power="100.0" vs
+# "0.0", and it seeds sensor.inverter_loss which the shared helper omits) —
+# both values are baked into this file's house-load-arithmetic assertions.
 
 
 def _seed_valid_inputs(hass, *, soc="20.0"):
