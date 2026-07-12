@@ -44,13 +44,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    # ADVISORY for now (continue-on-error): pre-commit lints whole touched files, and
-    # several long-lived files still carry pre-existing ruff/format debt, so any push
-    # touching them would go red — and a red lint would also block the release gate,
-    # which triggers on this workflow's overall conclusion. Flip this to blocking
-    # after the post-refactor lint-debt sweep (planned after Phase E in
-    # docs/superpowers/plans/2026-07-12-refactor-audit-execution.md).
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -88,9 +81,9 @@ jobs:
 
       # Diff-scoped exactly like local usage (pre-commit run --from-ref/--to-ref), reusing
       # .pre-commit-config.yaml's pinned ruff/pyright revs — no hand-pinned duplicate
-      # versions in this job. Repo-wide ruff/pyright runs fail today on 635 pre-existing
-      # errors (legacy debt); pre-commit only ever gated changed files locally, so CI now
-      # matches that contract instead of a stricter, previously-untested one.
+      # versions in this job. Matches the local pre-commit contract (gates changed
+      # files, same as a dev's pre-commit hook) rather than a stricter, separately
+      # maintained repo-wide invocation.
       - name: pre-commit (diff-scoped)
         if: steps.range.outputs.from != ''
         run: pre-commit run --from-ref "${{ steps.range.outputs.from }}" --to-ref "${{ steps.range.outputs.to }}" --show-diff-on-failure
