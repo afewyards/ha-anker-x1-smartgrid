@@ -281,6 +281,11 @@ class X1PlanSensor(_Base):
             "slot_minutes": self._controller.last_status.get("slot_minutes"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),
+            # Layer B occupancy corrector observability (controller._occ_status_attrs).
+            "occ_state_now": self._controller.last_status.get("occ_state_now"),
+            "occ_expected_state": self._controller.last_status.get("occ_expected_state"),
+            "occ_multiplier": self._controller.last_status.get("occ_multiplier"),
+            "occ_cells_ready": self._controller.last_status.get("occ_cells_ready"),
             # T18: measured efficiency curve bin table + gate flag, for
             # dashboard/diagnostic observability only.
             "efficiency_curve": self._controller.last_status.get("efficiency_curve"),

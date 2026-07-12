@@ -2955,7 +2955,12 @@ class Controller:
     def _occ_status_attrs(self, now: datetime) -> dict:
         """Occupancy-corrector observability attrs (Layer B)."""
         return {
-            "occ_state_now": self._persons_home_now,
+            # Clamped to the same state bin multiplier() uses (0..STATE_MAX), so
+            # occ_state_now and occ_expected_state are directly comparable.
+            "occ_state_now": (
+                min(occupancy.STATE_MAX, max(0, int(self._persons_home_now)))
+                if self._persons_home_now is not None else None
+            ),
             "occ_expected_state": (
                 self._occ_table.climo_state.get(occupancy.band_of(now))
                 if self._occ_table is not None else None
