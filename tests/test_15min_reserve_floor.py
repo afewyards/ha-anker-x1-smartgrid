@@ -86,7 +86,7 @@ def _run(slot_minutes: int) -> dict:
     slots = _slots(30)
 
     with patch(
-        "custom_components.anker_x1_smartgrid.controller._build_reserve_by_hour",
+        "custom_components.anker_x1_smartgrid.decision._build_reserve_by_hour",
         return_value={HOUR18: _DISTINCT_RESERVE_KWH},
     ), patch(
         "custom_components.anker_x1_smartgrid.optimize.optimize_grid",

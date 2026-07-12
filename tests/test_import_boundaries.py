@@ -31,7 +31,6 @@ PACKAGE_DOTTED = "custom_components.anker_x1_smartgrid"
 
 # Invariant 1: modules (by stem, under custom_components/anker_x1_smartgrid/)
 # that must never import homeassistant, directly or transitively-in-source.
-# NOTE: Task C2 will add 'decision' to this list once it exists.
 HA_FREE_MODULES = [
     "optimize",
     "regret",
@@ -40,15 +39,16 @@ HA_FREE_MODULES = [
     "efficiency",
     "export_filter",
     "energy",
+    "decision",
 ]
 
 # Invariant 2: leaf modules that must not import upward into controller,
 # coordinator, or the package itself (whose __init__.py imports controller).
-# NOTE: Task C2 will add 'decision' to this list once it exists.
 LEAF_MODULES = [
     "const",
     "models",
     "resolution",
+    "decision",
 ]
 FORBIDDEN_LEAF_TARGETS = {"controller", "coordinator"}
 

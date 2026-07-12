@@ -639,13 +639,17 @@ def test_price_prior_gate_respects_reserve_anchor(monkeypatch):
     """Gate (compute_decision L790-800): _apply_price_prior runs ONLY under the legacy
     anchor.  Spy the module global + drive the REAL compute_decision via _call for
     IDENTICAL inputs — NOT called for trough, CALLED for legacy."""
-    import custom_components.anker_x1_smartgrid.controller as ctrl_mod
+    # Task C2: _apply_price_prior now lives in decision.py; compute_decision's
+    # internal call resolves against decision.py's own globals, so the spy
+    # must patch it there (patching the controller.py re-export would be a
+    # silent no-op on the moved function's call site).
+    import custom_components.anker_x1_smartgrid.decision as decision_mod
     calls = {"n": 0}
-    real_prior = ctrl_mod._apply_price_prior
+    real_prior = decision_mod._apply_price_prior
     def _spy(*a, **k):
         calls["n"] += 1
         return real_prior(*a, **k)
-    monkeypatch.setattr(ctrl_mod, "_apply_price_prior", _spy)
+    monkeypatch.setattr(decision_mod, "_apply_price_prior", _spy)
 
     calls["n"] = 0
     _call(_cfg(reserve_anchor="trough"), soc=20.0)
