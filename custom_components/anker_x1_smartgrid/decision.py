@@ -317,7 +317,7 @@ def _dp_select_slots(
     # path with a non-hour-aligned deadline, e.g. sunset-buffer = 14:30).
     # Dropping to None would silently revert to the firmware floor for the
     # extra hour — the per-hour reserve floor must always be enforced.
-    _floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
+    _floor_kwh = cfg.floor_kwh
     if reserve_by_hour is not None:
         padded_reserve = (
             reserve_by_hour + [_floor_kwh] * max(0, window_len - len(reserve_by_hour))
@@ -981,7 +981,7 @@ def compute_decision(
     # `inputs.now` sits outside the hour's first slot); `_dp_window` re-derives
     # the slot-floored anchor from `inputs.now` directly, matching
     # `_dp_select_slots` exactly so no real slot ever falls back to the floor.
-    _floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
+    _floor_kwh = cfg.floor_kwh
     _slot_now_h, _, _win_len = _dp_window(inputs.now, horizon_edge, slot_minutes)
     _reserve_stride = timedelta(minutes=slot_minutes)
     _reserve_list = [

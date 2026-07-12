@@ -287,7 +287,7 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> "RunEta | None":
     duration_h = (_parse_ts(run[-1]["ts"]) - t0).total_seconds() / 3600.0
     if duration_h <= 0.0:
         return None
-    dc_kwh = abs(dsoc_pct) / 100.0 * cfg.capacity_kwh
+    dc_kwh = cfg.pct_to_kwh(abs(dsoc_pct))
     if dc_kwh <= 0.0:
         return None
     dc_power_w = dc_kwh * 1000.0 / duration_h
