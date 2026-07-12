@@ -1,12 +1,13 @@
 """Controller wiring: current-hour blend + partial-hour load-adapt flags."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.intra_hour import CurrentHourBlendPredictor, HourAccumulator
 from custom_components.anker_x1_smartgrid.load_adapt import PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 
-NOW = datetime(2026, 6, 3, 12, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 3, 12, 30, tzinfo=UTC)
 NOW_H = NOW.replace(minute=0)
 
 _BASE_P50_W = 400.0

@@ -3,6 +3,7 @@
 Tests CONF_ keys, DEFAULT_ values, Config dataclass fields, and from_dict roundtrip.
 Hysteresis release band is DERIVED (0.5 × deadband) — not a config field.
 """
+
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 
@@ -24,7 +25,5 @@ def test_const_defaults():
 
 
 def test_from_dict_roundtrip():
-    c = Config.from_dict({"soc_hedge_fraction": 0.5, "soc_drift_deadband_kwh": 0.4,
-                          "soc_drift_decay_halflife_h": 6.0})
-    assert (c.soc_hedge_fraction, c.soc_drift_deadband_kwh, c.soc_drift_decay_halflife_h) \
-        == (0.5, 0.4, 6.0)
+    c = Config.from_dict({"soc_hedge_fraction": 0.5, "soc_drift_deadband_kwh": 0.4, "soc_drift_decay_halflife_h": 6.0})
+    assert (c.soc_hedge_fraction, c.soc_drift_deadband_kwh, c.soc_drift_decay_halflife_h) == (0.5, 0.4, 6.0)

@@ -1,4 +1,5 @@
 """Pure scheduling logic: deadline, peak detection, slot selection, state machine."""
+
 from __future__ import annotations
 
 import math
@@ -10,9 +11,7 @@ from .models import Config, ControllerState, ExportState, ForecastInterval, Plan
 from .regret import _eta_charge_at, _eta_discharge_at
 
 
-def detect_evening_peak(
-    now: datetime, slots: list[PriceSlot], cfg: Config
-) -> datetime | None:
+def detect_evening_peak(now: datetime, slots: list[PriceSlot], cfg: Config) -> datetime | None:
     """First rising slot after peak_after_hour whose price >= median * peak_k."""
     future = [s for s in slots if s.start >= now]
     if len(future) < 2:
@@ -28,9 +27,7 @@ def detect_evening_peak(
     return None
 
 
-def compute_deadline(
-    now: datetime, sunset: datetime, slots: list[PriceSlot], cfg: Config
-) -> datetime:
+def compute_deadline(now: datetime, sunset: datetime, slots: list[PriceSlot], cfg: Config) -> datetime:
     """min(sunset-buffer, peak) clamped to [now+min_dwell, sunset-buffer]."""
     hard = sunset - timedelta(minutes=cfg.deadline_buffer_min)
     peak = detect_evening_peak(now, slots, cfg)
@@ -79,9 +76,7 @@ def _percentile(values: list[float], pct: float) -> float:
     return s[f] + (s[c] - s[f]) * (k - f)
 
 
-def find_next_trough(
-    now: datetime, slots: list[PriceSlot], cfg: Config
-) -> tuple[datetime, float]:
+def find_next_trough(now: datetime, slots: list[PriceSlot], cfg: Config) -> tuple[datetime, float]:
     """Next local price minimum that defines the optimization horizon.
 
     Scans a fixed ``trough_lookahead_h`` window of forward prices, finds the
@@ -191,9 +186,7 @@ def decide_state(
         return PlanState(ControllerState.PASSIVE, now, ())
 
     dwell_elapsed = (now - plan.state_since) >= timedelta(minutes=cfg.min_dwell_min)
-    now_selected = _slot_start(now, slot_minutes) in {
-        _slot_start(s, slot_minutes) for s in selected_slots
-    }
+    now_selected = _slot_start(now, slot_minutes) in {_slot_start(s, slot_minutes) for s in selected_slots}
 
     if plan.state is ControllerState.FORCING:
         # 2. Within dwell -> stay.

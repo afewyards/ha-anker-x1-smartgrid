@@ -51,6 +51,7 @@ Design decisions (recorded here to avoid future guessing):
     as hourly columns — see _kwh_sum_pass). Sign conventions match
     dataquality.py: p1_w import-positive, batt_w discharge-positive.
 """
+
 from __future__ import annotations
 
 import math
@@ -62,15 +63,15 @@ from .dataquality import house_load_w as _house_load_w
 # "house_load" is a derived feature (not a raw column name); all others are
 # raw column names in the samples table.
 _ROLLUP_FEATURES: tuple[str, ...] = (
-    "house_load",    # Derived: p1_w + batt_w + pv_w (pv NULL→0); ML target
-    "pv_w",          # PV AC output (NULL at night → excluded from stats)
-    "soc",           # Battery state of charge
-    "irradiance",    # Live irradiance sensor (not forecast)
-    "temp",          # Live ambient temperature
-    "temp_forecast", # Forecast temperature aligned to the hour
-    "cloud_cover",   # Forecast cloud cover
-    "humidity",      # Forecast humidity
-    "wind_speed",    # Forecast wind speed
+    "house_load",  # Derived: p1_w + batt_w + pv_w (pv NULL→0); ML target
+    "pv_w",  # PV AC output (NULL at night → excluded from stats)
+    "soc",  # Battery state of charge
+    "irradiance",  # Live irradiance sensor (not forecast)
+    "temp",  # Live ambient temperature
+    "temp_forecast",  # Forecast temperature aligned to the hour
+    "cloud_cover",  # Forecast cloud cover
+    "humidity",  # Forecast humidity
+    "wind_speed",  # Forecast wind speed
     "persons_home",  # Count of person.* entities in state 'home' (v8)
 )
 

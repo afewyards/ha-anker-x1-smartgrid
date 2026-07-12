@@ -16,9 +16,10 @@ Pre-fix guard (line 195-199, controller.py)::
 Post-fix: pad with the firmware floor value (``cfg.soc_floor / 100 * capacity_kwh``)
 instead of dropping to ``None``, so the per-hour export floor is always enforced.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -35,8 +36,8 @@ from custom_components.anker_x1_smartgrid.models import (
 #   • compute_decision _win_len  = floor(14:00 − 10:00) = 4 → _reserve_list has 4 elements
 #   • _dp_select_slots window_len = ceil(14:30 → 15:00) − 10:00 = 5
 # → len(4) < window_len(5) → pre-fix drops to None
-NOW = datetime(2026, 6, 26, 10, 0, tzinfo=timezone.utc)
-DEADLINE = datetime(2026, 6, 26, 14, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 26, 10, 0, tzinfo=UTC)
+DEADLINE = datetime(2026, 6, 26, 14, 30, tzinfo=UTC)
 
 
 def _cfg(**kw) -> Config:
@@ -47,10 +48,12 @@ def _spy_factory(captured: dict):
     """Return an optimize_grid side-effect that records reserve_by_hour and returns
     a minimal valid response (zero-charge schedule of the correct length).
     """
+
     def _side_effect(*args, **kwargs):
         captured["reserve_by_hour"] = kwargs.get("reserve_by_hour")
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         return {"schedule": [0.0] * wl, "kwh": 0.0, "eur": 0.0}
+
     return _side_effect
 
 
@@ -74,19 +77,17 @@ def test_n1_short_reserve_list_is_padded_not_dropped():
     # 6 price slots spanning [10:00, 15:00] — window_len=5 uses hours 10..14
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
     # 6 intervals with zero PV and 500 W load
-    intervals = [
-        ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)
-    ]
+    intervals = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)]
 
     with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=spy):
         ctrl._dp_select_slots(
             inputs=inputs,
             slots=slots,
-            deadline=DEADLINE,           # 14:30 → ceil → window_len=5
+            deadline=DEADLINE,  # 14:30 → ceil → window_len=5
             ceiling=0.30,
             cfg=cfg,
             export_price=None,
-            reserve_by_hour=reserve_4,   # 4 elements → was silently dropped
+            reserve_by_hour=reserve_4,  # 4 elements → was silently dropped
             intervals=intervals,
         )
 
@@ -97,17 +98,11 @@ def test_n1_short_reserve_list_is_padded_not_dropped():
         "BUG N1: reserve_by_hour was dropped to None because len(4) < window_len(5). "
         "Must be PADDED to window_len instead of silently reverting to the firmware floor."
     )
-    assert len(rbh) == 5, (
-        f"Expected 5-element list (window_len) after padding; got len={len(rbh)}"
-    )
+    assert len(rbh) == 5, f"Expected 5-element list (window_len) after padding; got len={len(rbh)}"
     # The original 4 elements must be preserved unchanged
-    assert list(rbh[:4]) == reserve_4, (
-        f"First 4 elements must be preserved; got {list(rbh[:4])}"
-    )
+    assert list(rbh[:4]) == reserve_4, f"First 4 elements must be preserved; got {list(rbh[:4])}"
     # The 5th (padded) element must be exactly the firmware floor
-    assert rbh[4] == pytest.approx(floor_kwh), (
-        f"Padded element must equal firmware floor {floor_kwh} kWh; got {rbh[4]}"
-    )
+    assert rbh[4] == pytest.approx(floor_kwh), f"Padded element must equal firmware floor {floor_kwh} kWh; got {rbh[4]}"
 
 
 def test_n1_exact_length_reserve_list_is_not_changed():
@@ -123,9 +118,7 @@ def test_n1_exact_length_reserve_list_is_not_changed():
 
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
-    intervals = [
-        ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)
-    ]
+    intervals = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)]
 
     with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=spy):
         ctrl._dp_select_slots(
@@ -135,7 +128,7 @@ def test_n1_exact_length_reserve_list_is_not_changed():
             ceiling=0.30,
             cfg=cfg,
             export_price=None,
-            reserve_by_hour=reserve_5,   # exactly window_len elements → no padding needed
+            reserve_by_hour=reserve_5,  # exactly window_len elements → no padding needed
             intervals=intervals,
         )
 
@@ -153,9 +146,7 @@ def test_n1_none_reserve_stays_none():
     cfg = _cfg()
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.20) for i in range(6)]
-    intervals = [
-        ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)
-    ]
+    intervals = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(6)]
 
     with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=spy):
         ctrl._dp_select_slots(
@@ -165,7 +156,7 @@ def test_n1_none_reserve_stays_none():
             ceiling=0.30,
             cfg=cfg,
             export_price=None,
-            reserve_by_hour=None,   # no reserve → must stay None
+            reserve_by_hour=None,  # no reserve → must stay None
             intervals=intervals,
         )
 

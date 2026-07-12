@@ -27,6 +27,7 @@ build_chargeable — builds the chargeable mask: True iff price <= ceiling.
                  Uses a simple per-test ceiling rather than the full
                  charge_price_ceiling() helper to keep tests self-contained.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -40,17 +41,17 @@ from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _cfg(**overrides) -> Config:
     """10 kWh pack, floor=5% (0.5 kWh), target=97% (9.7 kWh), eta=1.0 for
     round-number arithmetic.  soc_floor=5 matches the post-econ-only default."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=5.0,         # firmware floor = 0.5 kWh
-        soc_target=97.0,       # 9.7 kWh
-        max_charge_w=6000.0,   # 6 kWh/h
-        eta_charge=1.0,        # AC == DC for readable test arithmetic
+        soc_floor=5.0,  # firmware floor = 0.5 kWh
+        soc_target=97.0,  # 9.7 kWh
+        max_charge_w=6000.0,  # 6 kWh/h
+        eta_charge=1.0,  # AC == DC for readable test arithmetic
         round_trip_eff=1.0,
-
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -108,17 +109,18 @@ def _chargeable(price: list[float], ceiling: float) -> list[bool]:
 #   → total_grid = 6.5 - 3 + 2 = 5.5 kWh (split across h0, h1 ≤ 6 kWh/h each).
 # ---------------------------------------------------------------------------
 
+
 class TestTroughBeforePeakFloorSafe:
     """Scenario 1: cheap trough precedes expensive peak → DP pre-charges to floor-safe."""
 
     N = 8
-    LOAD_KWH_H = 1.0           # constant 1 kWh/h load
+    LOAD_KWH_H = 1.0  # constant 1 kWh/h load
     TROUGH_PRICE = 0.10
     PEAK_PRICE = 0.32
-    CEILING = 0.20              # gate threshold: trough clears, peak doesn't
-    SOC_START_PCT = 30.0        # 3.0 kWh
-    FLOOR_KWH = 0.5             # 5% of 10 kWh
-    N_PEAK = 6                  # hours h2-h7 are expensive (no charging)
+    CEILING = 0.20  # gate threshold: trough clears, peak doesn't
+    SOC_START_PCT = 30.0  # 3.0 kWh
+    FLOOR_KWH = 0.5  # 5% of 10 kWh
+    N_PEAK = 6  # hours h2-h7 are expensive (no charging)
 
     def _run(self) -> tuple[dict, Config, list[float], list[float]]:
         cfg = _cfg()
@@ -127,7 +129,9 @@ class TestTroughBeforePeakFloorSafe:
         load = [self.LOAD_KWH_H] * self.N
         chargeable = _chargeable(price, self.CEILING)
         result = optimize_grid(
-            pv, load, price,
+            pv,
+            load,
+            price,
             soc_start=self.SOC_START_PCT,
             cfg=cfg,
             window_start_h=0,
@@ -157,9 +161,7 @@ class TestTroughBeforePeakFloorSafe:
         result, cfg, traj, _ = self._run()
         floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
         for h, soc in enumerate(traj):
-            assert soc >= floor_kwh - 1e-6, (
-                f"Floor breach at h={h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
-            )
+            assert soc >= floor_kwh - 1e-6, f"Floor breach at h={h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
 
     def test_charge_only_in_trough_hours(self):
         """Grid charging is confined to the cheap trough hours (h0, h1).
@@ -183,7 +185,7 @@ class TestTroughBeforePeakFloorSafe:
         """
         result, cfg, _, _ = self._run()
         schedule = result["schedule"]
-        trough_charge = sum(schedule[:2])   # h0 + h1
+        trough_charge = sum(schedule[:2])  # h0 + h1
         floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
         soc_start_kwh = self.SOC_START_PCT / 100.0 * cfg.capacity_kwh
         usable_headroom = soc_start_kwh - floor_kwh
@@ -205,9 +207,7 @@ class TestTroughBeforePeakFloorSafe:
         result, cfg, traj, _ = self._run()
         target_kwh = cfg.soc_target / 100.0 * cfg.capacity_kwh
         for h, soc in enumerate(traj):
-            assert soc <= target_kwh + 1e-6, (
-                f"SoC exceeded target at h={h}: {soc:.4f} kWh > {target_kwh} kWh"
-            )
+            assert soc <= target_kwh + 1e-6, f"SoC exceeded target at h={h}: {soc:.4f} kWh > {target_kwh} kWh"
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +228,14 @@ class TestTroughBeforePeakFloorSafe:
 # correctly does not prevent it by charging at peak prices).
 # ---------------------------------------------------------------------------
 
+
 class TestFlatExpensiveRidesFloor:
     """Scenario 2: flat-expensive, no-sun → zero DP schedule (econ-only holds)."""
 
     N = 8
     EXPENSIVE_PRICE = 0.32
     CEILING = 0.20
-    SOC_START_PCT = 20.0        # 2.0 kWh
+    SOC_START_PCT = 20.0  # 2.0 kWh
     LOAD_KWH_H = 0.5
 
     def _run(self) -> tuple[dict, Config]:
@@ -242,9 +243,11 @@ class TestFlatExpensiveRidesFloor:
         price = [self.EXPENSIVE_PRICE] * self.N
         pv = [0.0] * self.N
         load = [self.LOAD_KWH_H] * self.N
-        chargeable = _chargeable(price, self.CEILING)   # all False
+        chargeable = _chargeable(price, self.CEILING)  # all False
         result = optimize_grid(
-            pv, load, price,
+            pv,
+            load,
+            price,
             soc_start=self.SOC_START_PCT,
             cfg=cfg,
             window_start_h=0,
@@ -260,9 +263,7 @@ class TestFlatExpensiveRidesFloor:
         """Sanity: ceiling=0.20 < expensive_price=0.32 → every hour blocked."""
         price = [self.EXPENSIVE_PRICE] * self.N
         mask = _chargeable(price, self.CEILING)
-        assert all(not c for c in mask), (
-            f"Expected all-False chargeable mask for flat-expensive window, got {mask}"
-        )
+        assert all(not c for c in mask), f"Expected all-False chargeable mask for flat-expensive window, got {mask}"
 
     def test_zero_grid_schedule_no_over_buy(self):
         """Flat-expensive window → zero grid schedule (econ-only: no force-charge).
@@ -274,9 +275,9 @@ class TestFlatExpensiveRidesFloor:
         assert sum(result["schedule"]) == pytest.approx(0.0, abs=1e-6), (
             f"Expected zero schedule (econ-only), got {result['schedule']}"
         )
-        assert all(
-            s == pytest.approx(0.0, abs=1e-6) for s in result["schedule"]
-        ), f"Non-zero entry in schedule: {result['schedule']}"
+        assert all(s == pytest.approx(0.0, abs=1e-6) for s in result["schedule"]), (
+            f"Non-zero entry in schedule: {result['schedule']}"
+        )
 
     def test_no_fill_full_into_peak_behavior(self):
         """Explicitly assert the 'fill full into peak' anti-pattern is absent.
@@ -298,8 +299,7 @@ class TestFlatExpensiveRidesFloor:
         result, cfg = self._run()
         # No active grid CHARGE into the expensive peak (the over-buy anti-pattern).
         assert sum(result["schedule"]) == pytest.approx(0.0, abs=1e-6), (
-            f"DP charged into expensive peak hours (fill-full over-buy!): "
-            f"{result['schedule']}"
+            f"DP charged into expensive peak hours (fill-full over-buy!): {result['schedule']}"
         )
         # kwh == only the unavoidable below-floor direct grid->load import (M1),
         # independently recomputed from the zero-schedule SoC trajectory.
@@ -335,7 +335,9 @@ class TestFlatExpensiveRidesFloor:
         load = [self.LOAD_KWH_H] * self.N
         chargeable = _chargeable(price, self.CEILING)
         result_reserve = optimize_grid(
-            pv, load, price,
+            pv,
+            load,
+            price,
             soc_start=self.SOC_START_PCT,
             cfg=cfg,
             window_start_h=0,
@@ -352,8 +354,7 @@ class TestFlatExpensiveRidesFloor:
         # Even when infeasible, the returned schedule must still be zero
         # (no charge happens into expensive hours).
         assert sum(result_reserve["schedule"]) == pytest.approx(0.0, abs=1e-6), (
-            "Infeasible result should still return zero schedule (no over-buy), "
-            f"got {result_reserve['schedule']}"
+            f"Infeasible result should still return zero schedule (no over-buy), got {result_reserve['schedule']}"
         )
 
 
@@ -372,6 +373,7 @@ class TestFlatExpensiveRidesFloor:
 #   surplus = max(0, 6.5 - 6.0) = 0.5 kWh.
 # ---------------------------------------------------------------------------
 
+
 class TestReserveAndSurplusAfterPreCharge:
     """export_surplus_kwh consistent with DP pre-charge outcome."""
 
@@ -383,9 +385,7 @@ class TestReserveAndSurplusAfterPreCharge:
         # soc=65% → 6.5 kWh
         # reserve=6.0 kWh (from test above)
         surplus = energy.export_surplus_kwh(65.0, 6.0, cfg)
-        assert surplus == pytest.approx(0.5, abs=1e-6), (
-            f"Expected 0.5 kWh surplus above reserve, got {surplus:.4f}"
-        )
+        assert surplus == pytest.approx(0.5, abs=1e-6), f"Expected 0.5 kWh surplus above reserve, got {surplus:.4f}"
 
     def test_no_surplus_when_soc_exactly_covers_reserve(self):
         """soc kWh == reserve kWh → surplus = 0 (nothing to export safely)."""
@@ -409,6 +409,4 @@ class TestReserveAndSurplusAfterPreCharge:
         cfg = _cfg()
         # SoC=20% → 2.0 kWh; reserve=4.0 kWh (above soc) → surplus=0
         surplus = energy.export_surplus_kwh(20.0, 4.0, cfg)
-        assert surplus == pytest.approx(0.0, abs=1e-6), (
-            f"Expected zero surplus when soc < reserve, got {surplus:.4f}"
-        )
+        assert surplus == pytest.approx(0.0, abs=1e-6), f"Expected zero surplus when soc < reserve, got {surplus:.4f}"

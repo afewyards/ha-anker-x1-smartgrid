@@ -17,6 +17,7 @@ keeps this module free of a module-level dependency on regret.py, which now
 depends on this module — a top-level import in both directions would be a
 circular import.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -179,9 +180,7 @@ def export_leg_precompute(
         # Max DC kWh per hour that can be exported through the inverter.
         # max_export_w is the AC-side export rate cap; DC discharged = AC / eta_d.
         max_export_ac_h = cfg.max_export_w / 1000.0 * dt_h
-        max_export_dc_h: float = (
-            max_export_ac_h / eta_d if eta_d > 1e-9 else max_export_ac_h
-        )
+        max_export_dc_h: float = max_export_ac_h / eta_d if eta_d > 1e-9 else max_export_ac_h
         # Combined AC grid export cap (battery + solar spill must not exceed
         # this) — the tighter of the inverter export rating and the grid
         # connection limit.

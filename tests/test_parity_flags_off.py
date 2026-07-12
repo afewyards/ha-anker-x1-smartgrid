@@ -1,5 +1,6 @@
 """All new flags at defaults → predictor chain identical to pre-feature main."""
-from datetime import datetime, timezone
+
+from datetime import datetime, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.intra_hour import CurrentHourBlendPredictor, HourAccumulator
@@ -7,7 +8,7 @@ from custom_components.anker_x1_smartgrid.load_adapt import PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.occupancy import OccupancyPredictor
 
-NOW = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 
 
 class _StubPredictor:

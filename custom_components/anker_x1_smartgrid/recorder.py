@@ -1,11 +1,12 @@
 """SQLite append-only feature log for training/analysis."""
+
 from __future__ import annotations
 
 import json
 import sqlite3
 import threading
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from .const import TICK_SECONDS
 from .dataquality import house_load_w as _house_load_w
@@ -15,11 +16,27 @@ _COLUMNS = [
     # p1_w: grid import/export power, sourced from the Anker meter_total_power
     # sensor (was: sum of the p1_l1/l2/l3 phase sensors). p1_l1/l2/l3 are now
     # legacy per-phase columns, written NULL (kept for schema/history compat).
-    "ts", "hour", "weekday", "soc", "pv_w", "batt_w", "p1_w",
-    "p1_l1", "p1_l2", "p1_l3", "import_price", "export_price",
-    "temp", "irradiance", "state", "setpoint_w",
+    "ts",
+    "hour",
+    "weekday",
+    "soc",
+    "pv_w",
+    "batt_w",
+    "p1_w",
+    "p1_l1",
+    "p1_l2",
+    "p1_l3",
+    "import_price",
+    "export_price",
+    "temp",
+    "irradiance",
+    "state",
+    "setpoint_w",
     # Weather-forecast columns added in v3 migration (nullable, aligned to clock-hour).
-    "temp_forecast", "cloud_cover", "humidity", "wind_speed",
+    "temp_forecast",
+    "cloud_cover",
+    "humidity",
+    "wind_speed",
     # load_w: computed house load each tick = pv + meter (p1_w) + batt − inverter
     # loss (v6 migration, nullable). NULL = pre-v6 row; rollup/training use ONLY
     # non-null rows.
@@ -69,10 +86,18 @@ _SCHEMA_DECISIONS = (
 )
 
 _DECISIONS_COLUMNS = [
-    "ts", "active", "start_soc", "deadline",
-    "committed_hours", "horizon_mode", "pv_today_forecast_kwh",
-    "pv_tomorrow_forecast_kwh", "predicted_load_json", "price_window_json",
-    "setpoint_w", "state",
+    "ts",
+    "active",
+    "start_soc",
+    "deadline",
+    "committed_hours",
+    "horizon_mode",
+    "pv_today_forecast_kwh",
+    "pv_tomorrow_forecast_kwh",
+    "predicted_load_json",
+    "price_window_json",
+    "setpoint_w",
+    "state",
 ]
 
 _SCHEMA_SAMPLES_HOURLY = (
@@ -130,18 +155,62 @@ _SCHEMA_SAMPLES_HOURLY = (
 # Stable: Phase 2 featureset may reference these names positionally.
 _HOURLY_COLUMNS: list[str] = [
     "hour_ts",
-    "house_load_mean", "house_load_max", "house_load_min", "house_load_std", "house_load_count",
-    "pv_w_mean", "pv_w_max", "pv_w_min", "pv_w_std", "pv_w_count",
-    "soc_mean", "soc_max", "soc_min", "soc_std", "soc_count",
-    "irradiance_mean", "irradiance_max", "irradiance_min", "irradiance_std", "irradiance_count",
-    "temp_mean", "temp_max", "temp_min", "temp_std", "temp_count",
-    "temp_forecast_mean", "temp_forecast_max", "temp_forecast_min", "temp_forecast_std", "temp_forecast_count",
-    "cloud_cover_mean", "cloud_cover_max", "cloud_cover_min", "cloud_cover_std", "cloud_cover_count",
-    "humidity_mean", "humidity_max", "humidity_min", "humidity_std", "humidity_count",
-    "wind_speed_mean", "wind_speed_max", "wind_speed_min", "wind_speed_std", "wind_speed_count",
-    "persons_home_mean", "persons_home_max", "persons_home_min", "persons_home_std", "persons_home_count",
-    "grid_import_kwh_sum", "grid_export_kwh_sum", "house_load_kwh_sum",
-    "pv_kwh_sum", "batt_charge_kwh_sum", "batt_discharge_kwh_sum",
+    "house_load_mean",
+    "house_load_max",
+    "house_load_min",
+    "house_load_std",
+    "house_load_count",
+    "pv_w_mean",
+    "pv_w_max",
+    "pv_w_min",
+    "pv_w_std",
+    "pv_w_count",
+    "soc_mean",
+    "soc_max",
+    "soc_min",
+    "soc_std",
+    "soc_count",
+    "irradiance_mean",
+    "irradiance_max",
+    "irradiance_min",
+    "irradiance_std",
+    "irradiance_count",
+    "temp_mean",
+    "temp_max",
+    "temp_min",
+    "temp_std",
+    "temp_count",
+    "temp_forecast_mean",
+    "temp_forecast_max",
+    "temp_forecast_min",
+    "temp_forecast_std",
+    "temp_forecast_count",
+    "cloud_cover_mean",
+    "cloud_cover_max",
+    "cloud_cover_min",
+    "cloud_cover_std",
+    "cloud_cover_count",
+    "humidity_mean",
+    "humidity_max",
+    "humidity_min",
+    "humidity_std",
+    "humidity_count",
+    "wind_speed_mean",
+    "wind_speed_max",
+    "wind_speed_min",
+    "wind_speed_std",
+    "wind_speed_count",
+    "persons_home_mean",
+    "persons_home_max",
+    "persons_home_min",
+    "persons_home_std",
+    "persons_home_count",
+    "grid_import_kwh_sum",
+    "grid_export_kwh_sum",
+    "house_load_kwh_sum",
+    "pv_kwh_sum",
+    "batt_charge_kwh_sum",
+    "batt_discharge_kwh_sum",
 ]
 
 _SCHEMA_DAILY_REGRET = (
@@ -152,9 +221,18 @@ _SCHEMA_DAILY_REGRET = (
 )
 
 _DAILY_REGRET_COLUMNS = [
-    "day", "regret_eur", "over_buy_kwh", "over_buy_eur",
-    "under_buy_kwh", "cost_regret_eur", "optimal_kwh", "optimal_eur",
-    "realized_kwh", "realized_eur", "infeasible", "computed_ts",
+    "day",
+    "regret_eur",
+    "over_buy_kwh",
+    "over_buy_eur",
+    "under_buy_kwh",
+    "cost_regret_eur",
+    "optimal_kwh",
+    "optimal_eur",
+    "realized_kwh",
+    "realized_eur",
+    "infeasible",
+    "computed_ts",
     # dp_regret_eur added in v5 migration (ALTER TABLE); NULL for pre-v5 rows.
     "dp_regret_eur",
 ]
@@ -190,8 +268,8 @@ def _normalize_utc_iso(ts_raw):
     except (ValueError, TypeError):
         return ts_raw
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat()
 
 
 class DataRecorder:
@@ -226,9 +304,7 @@ class DataRecorder:
             # Each step sets its OWN literal version number — do NOT use
             # _VERSION_TARGET here so future steps (v2, v3, …) can't be skipped.
             self._conn.execute(_SCHEMA_DECISIONS)
-            self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_decisions_ts ON decisions(ts)"
-            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_ts ON decisions(ts)")
             self._conn.execute("PRAGMA user_version = 1")
 
         if version < 2:
@@ -243,10 +319,7 @@ class DataRecorder:
             # Guard each ALTER against pre-existing columns so a crash between
             # ALTERs (before user_version was bumped) is recoverable — SQLite
             # ALTER ADD COLUMN has no IF NOT EXISTS equivalent.
-            existing = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples)")
-            }
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
             for name, col_def in (
                 ("temp_forecast", "temp_forecast REAL"),
                 ("cloud_cover", "cloud_cover REAL"),
@@ -273,21 +346,11 @@ class DataRecorder:
             # since the column is only needed when the table exists).  Then
             # guard with PRAGMA table_info so a crash between the ALTER and the
             # version bump is safely retried (crash-idempotent step).
-            _tables = {
-                row[0]
-                for row in self._conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
+            _tables = {row[0] for row in self._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if "daily_regret" in _tables:
-                existing = {
-                    row[1]
-                    for row in self._conn.execute("PRAGMA table_info(daily_regret)")
-                }
+                existing = {row[1] for row in self._conn.execute("PRAGMA table_info(daily_regret)")}
                 if "dp_regret_eur" not in existing:
-                    self._conn.execute(
-                        "ALTER TABLE daily_regret ADD COLUMN dp_regret_eur REAL"
-                    )
+                    self._conn.execute("ALTER TABLE daily_regret ADD COLUMN dp_regret_eur REAL")
             self._conn.execute("PRAGMA user_version = 5")
 
         if version < 6:
@@ -300,10 +363,7 @@ class DataRecorder:
             # contaminating the ML target with the overcounted derived values.
             # Guard with PRAGMA table_info so a crash between the ALTER and the
             # user_version bump is safely retried (crash-idempotent step).
-            existing = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples)")
-            }
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
             if "load_w" not in existing:
                 self._conn.execute("ALTER TABLE samples ADD COLUMN load_w REAL")
             self._conn.execute("PRAGMA user_version = 6")
@@ -316,15 +376,12 @@ class DataRecorder:
             # Guard each ALTER with PRAGMA table_info so a crash between ALTERs
             # (before user_version=7 is written) is safely retried — SQLite
             # ALTER ADD COLUMN has no IF NOT EXISTS equivalent.
-            existing = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples)")
-            }
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
             for name, col_def in (
                 ("export_setpoint_w", "export_setpoint_w REAL"),
-                ("export_kwh",        "export_kwh REAL"),
-                ("reserve_kwh",       "reserve_kwh REAL"),
-                ("surplus_kwh",       "surplus_kwh REAL"),
+                ("export_kwh", "export_kwh REAL"),
+                ("reserve_kwh", "reserve_kwh REAL"),
+                ("surplus_kwh", "surplus_kwh REAL"),
             ):
                 if name not in existing:
                     self._conn.execute(f"ALTER TABLE samples ADD COLUMN {col_def}")
@@ -338,28 +395,20 @@ class DataRecorder:
             # SQLite ALTER ADD COLUMN has no IF NOT EXISTS equivalent. samples_hourly
             # is guaranteed to exist here (created at the v3→v4 step for any DB that
             # reaches this ladder position).
-            existing = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples)")
-            }
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
             if "persons_home" not in existing:
                 self._conn.execute("ALTER TABLE samples ADD COLUMN persons_home REAL")
 
-            existing_hourly = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples_hourly)")
-            }
+            existing_hourly = {row[1] for row in self._conn.execute("PRAGMA table_info(samples_hourly)")}
             for name, col_def in (
-                ("persons_home_mean",  "persons_home_mean REAL"),
-                ("persons_home_max",   "persons_home_max REAL"),
-                ("persons_home_min",   "persons_home_min REAL"),
-                ("persons_home_std",   "persons_home_std REAL"),
+                ("persons_home_mean", "persons_home_mean REAL"),
+                ("persons_home_max", "persons_home_max REAL"),
+                ("persons_home_min", "persons_home_min REAL"),
+                ("persons_home_std", "persons_home_std REAL"),
                 ("persons_home_count", "persons_home_count INTEGER"),
             ):
                 if name not in existing_hourly:
-                    self._conn.execute(
-                        f"ALTER TABLE samples_hourly ADD COLUMN {col_def}"
-                    )
+                    self._conn.execute(f"ALTER TABLE samples_hourly ADD COLUMN {col_def}")
             self._conn.execute("PRAGMA user_version = 8")
 
         if version < 9:
@@ -369,16 +418,13 @@ class DataRecorder:
             # each ALTER with PRAGMA table_info so a crash between ALTERs
             # (before user_version=9 is written) is safely retried — SQLite
             # ALTER ADD COLUMN has no IF NOT EXISTS equivalent.
-            existing = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples)")
-            }
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
             for name, col_def in (
-                ("grid_import_kwh",    "grid_import_kwh REAL"),
-                ("grid_export_kwh",    "grid_export_kwh REAL"),
-                ("house_load_kwh",     "house_load_kwh REAL"),
-                ("pv_kwh",             "pv_kwh REAL"),
-                ("batt_charge_kwh",    "batt_charge_kwh REAL"),
+                ("grid_import_kwh", "grid_import_kwh REAL"),
+                ("grid_export_kwh", "grid_export_kwh REAL"),
+                ("house_load_kwh", "house_load_kwh REAL"),
+                ("pv_kwh", "pv_kwh REAL"),
+                ("batt_charge_kwh", "batt_charge_kwh REAL"),
                 ("batt_discharge_kwh", "batt_discharge_kwh REAL"),
             ):
                 if name not in existing:
@@ -395,22 +441,17 @@ class DataRecorder:
             # retried — SQLite ALTER ADD COLUMN has no IF NOT EXISTS
             # equivalent. samples_hourly is guaranteed to exist here (created
             # at the v3→v4 step for any DB that reaches this ladder position).
-            existing_hourly = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(samples_hourly)")
-            }
+            existing_hourly = {row[1] for row in self._conn.execute("PRAGMA table_info(samples_hourly)")}
             for name, col_def in (
-                ("grid_import_kwh_sum",    "grid_import_kwh_sum REAL"),
-                ("grid_export_kwh_sum",    "grid_export_kwh_sum REAL"),
-                ("house_load_kwh_sum",     "house_load_kwh_sum REAL"),
-                ("pv_kwh_sum",             "pv_kwh_sum REAL"),
-                ("batt_charge_kwh_sum",    "batt_charge_kwh_sum REAL"),
+                ("grid_import_kwh_sum", "grid_import_kwh_sum REAL"),
+                ("grid_export_kwh_sum", "grid_export_kwh_sum REAL"),
+                ("house_load_kwh_sum", "house_load_kwh_sum REAL"),
+                ("pv_kwh_sum", "pv_kwh_sum REAL"),
+                ("batt_charge_kwh_sum", "batt_charge_kwh_sum REAL"),
                 ("batt_discharge_kwh_sum", "batt_discharge_kwh_sum REAL"),
             ):
                 if name not in existing_hourly:
-                    self._conn.execute(
-                        f"ALTER TABLE samples_hourly ADD COLUMN {col_def}"
-                    )
+                    self._conn.execute(f"ALTER TABLE samples_hourly ADD COLUMN {col_def}")
             # Backfill existing hourly rows with the tier-2 approximation for
             # house_load/pv (direct from the already-stored _mean columns).
             # Grid import/export and battery charge/discharge need per-tick
@@ -444,9 +485,7 @@ class DataRecorder:
             row = {**row, "ts": _normalize_utc_iso(row.get("ts"))}
             row = {**row, **self._energy_deltas(row)}
             values = [row.get(col) for col in _COLUMNS]
-            self._conn.execute(
-                f"INSERT INTO samples ({cols}) VALUES ({placeholders})", values
-            )
+            self._conn.execute(f"INSERT INTO samples ({cols}) VALUES ({placeholders})", values)
             self._conn.commit()
 
     def _energy_deltas(self, row: dict) -> dict:
@@ -466,10 +505,7 @@ class DataRecorder:
                 self._last_sample_ts = ts
             if last is None:
                 return dict(_ENERGY_NULLS)
-            dt_h = (
-                min(max((ts - last).total_seconds(), 0.0), _ENERGY_MAX_DT_S)
-                / 3600.0
-            )
+            dt_h = min(max((ts - last).total_seconds(), 0.0), _ENERGY_MAX_DT_S) / 3600.0
 
             def _kwh(w: float | None) -> float | None:
                 return None if w is None else w / 1000.0 * dt_h
@@ -486,15 +522,13 @@ class DataRecorder:
                 "batt_charge_kwh": _kwh(None if batt is None else max(0.0, -batt)),
                 "batt_discharge_kwh": _kwh(None if batt is None else max(0.0, batt)),
             }
-        except Exception:  # noqa: BLE001 — isolation is the contract here
+        except Exception:
             return dict(_ENERGY_NULLS)
 
     def purge_older_than(self, now_iso: str, retention_days: int) -> int:
         cutoff = (datetime.fromisoformat(now_iso) - timedelta(days=retention_days)).isoformat()
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM samples WHERE ts < ? OR ts IS NULL", (cutoff,)
-            )
+            cur = self._conn.execute("DELETE FROM samples WHERE ts < ? OR ts IS NULL", (cutoff,))
             self._conn.commit()
             return cur.rowcount
 
@@ -536,17 +570,13 @@ class DataRecorder:
         cols = ",".join(_DECISIONS_COLUMNS)
         placeholders = ",".join("?" for _ in _DECISIONS_COLUMNS)
         with self._lock:
-            self._conn.execute(
-                f"INSERT INTO decisions ({cols}) VALUES ({placeholders})", values
-            )
+            self._conn.execute(f"INSERT INTO decisions ({cols}) VALUES ({placeholders})", values)
             self._conn.commit()
 
     def purge_decisions_older_than(self, cutoff_iso: str) -> int:
         """Delete decision rows with ts < cutoff_iso.  Returns deleted count."""
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM decisions WHERE ts < ?", (cutoff_iso,)
-            )
+            cur = self._conn.execute("DELETE FROM decisions WHERE ts < ?", (cutoff_iso,))
             self._conn.commit()
             return cur.rowcount
 
@@ -554,9 +584,7 @@ class DataRecorder:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
 
-    def read_load_samples(
-        self, since_iso: str | None = None
-    ) -> list[tuple[str, float]]:
+    def read_load_samples(self, since_iso: str | None = None) -> list[tuple[str, float]]:
         """Return (ts, house_load_w) rows ordered by ts ascending.
 
         House-load value uses the same precedence as
@@ -596,9 +624,7 @@ class DataRecorder:
                 result.append((ts, val))
         return result
 
-    def read_persons_home_samples(
-        self, since_iso: str | None = None
-    ) -> list[tuple[str, float]]:
+    def read_persons_home_samples(self, since_iso: str | None = None) -> list[tuple[str, float]]:
         """Return (ts, persons_home) for rows with a non-null persons_home.
 
         Mirrors read_load_samples: optional ts>=since window, NULL-filtered in
@@ -607,16 +633,12 @@ class DataRecorder:
         with self._lock:
             if since_iso is not None:
                 cur = self._conn.execute(
-                    "SELECT ts, persons_home FROM samples "
-                    "WHERE persons_home IS NOT NULL AND ts >= ? "
-                    "ORDER BY ts ASC",
+                    "SELECT ts, persons_home FROM samples WHERE persons_home IS NOT NULL AND ts >= ? ORDER BY ts ASC",
                     (since_iso,),
                 )
             else:
                 cur = self._conn.execute(
-                    "SELECT ts, persons_home FROM samples "
-                    "WHERE persons_home IS NOT NULL "
-                    "ORDER BY ts ASC"
+                    "SELECT ts, persons_home FROM samples WHERE persons_home IS NOT NULL ORDER BY ts ASC"
                 )
             raw = cur.fetchall()
         return [(str(ts), float(v)) for ts, v in raw]
@@ -643,10 +665,7 @@ class DataRecorder:
 
         Optionally filtered to ts >= since_iso.  Ordered by ts ascending.
         """
-        where = (
-            "load_w IS NOT NULL AND p1_w IS NOT NULL "
-            "AND soc IS NOT NULL AND batt_w IS NOT NULL"
-        )
+        where = "load_w IS NOT NULL AND p1_w IS NOT NULL AND soc IS NOT NULL AND batt_w IS NOT NULL"
         with self._lock:
             if since_iso is not None:
                 cur = self._conn.execute(
@@ -656,18 +675,19 @@ class DataRecorder:
                 )
             else:
                 cur = self._conn.execute(
-                    "SELECT ts, soc, batt_w, p1_w, pv_w, load_w FROM samples "
-                    f"WHERE {where} ORDER BY ts ASC"
+                    f"SELECT ts, soc, batt_w, p1_w, pv_w, load_w FROM samples WHERE {where} ORDER BY ts ASC"
                 )
             raw = cur.fetchall()
         out: list[dict] = []
         for ts, soc, batt_w, p1_w, pv_w, load_w in raw:
-            out.append({
-                "ts": ts,
-                "soc": float(soc),
-                "batt_w": float(batt_w),
-                "residual_w": float(load_w) - float(p1_w) - float(pv_w or 0.0),
-            })
+            out.append(
+                {
+                    "ts": ts,
+                    "soc": float(soc),
+                    "batt_w": float(batt_w),
+                    "residual_w": float(load_w) - float(p1_w) - float(pv_w or 0.0),
+                }
+            )
         return out
 
     def read_feature_rows(self, since_iso: str | None = None) -> list[dict]:
@@ -678,9 +698,7 @@ class DataRecorder:
             if since_iso is None:
                 cur.execute("SELECT * FROM samples ORDER BY ts ASC")
             else:
-                cur.execute(
-                    "SELECT * FROM samples WHERE ts >= ? ORDER BY ts ASC", (since_iso,)
-                )
+                cur.execute("SELECT * FROM samples WHERE ts >= ? ORDER BY ts ASC", (since_iso,))
             return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
@@ -715,15 +733,10 @@ class DataRecorder:
             # the bounded watermark read resumes (no perpetual full-scan). append()
             # has no clock reference, so a future RAW ts cannot be rejected there —
             # this is the correct home.
-            self._conn.execute(
-                "DELETE FROM samples_hourly WHERE hour_ts >= ?", (current_hour_iso,)
-            )
+            self._conn.execute("DELETE FROM samples_hourly WHERE hour_ts >= ?", (current_hour_iso,))
 
             # Hours already present in samples_hourly — used to skip work on re-run.
-            existing_hours = {
-                row[0]
-                for row in self._conn.execute("SELECT hour_ts FROM samples_hourly")
-            }
+            existing_hours = {row[0] for row in self._conn.execute("SELECT hour_ts FROM samples_hourly")}
 
             # Bounded read: only scan raw rows newer than the latest already-rolled hour
             # (samples_hourly watermark), instead of re-reading all completed-hour history
@@ -735,9 +748,7 @@ class DataRecorder:
             cur = self._conn.cursor()
             cur.row_factory = sqlite3.Row  # per-cursor: never mutates the connection
             if watermark_hour:
-                watermark_hour_end = (
-                    datetime.fromisoformat(str(watermark_hour)) + timedelta(hours=1)
-                ).isoformat()
+                watermark_hour_end = (datetime.fromisoformat(str(watermark_hour)) + timedelta(hours=1)).isoformat()
             else:
                 watermark_hour_end = None
             # Use the bounded read ONLY when the watermark is strictly before the
@@ -808,9 +819,7 @@ class DataRecorder:
             Number of rows deleted.
         """
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM samples_hourly WHERE hour_ts < ?", (cutoff_iso,)
-            )
+            cur = self._conn.execute("DELETE FROM samples_hourly WHERE hour_ts < ?", (cutoff_iso,))
             self._conn.commit()
             return cur.rowcount
 
@@ -867,9 +876,21 @@ class DataRecorder:
         with self._lock:
             self._conn.execute(
                 f"INSERT OR REPLACE INTO daily_regret ({cols}) VALUES ({placeholders})",
-                (day, regret_eur, over_buy_kwh, over_buy_eur,
-                 under_buy_kwh, cost_regret_eur, optimal_kwh, optimal_eur,
-                 realized_kwh, realized_eur, infeasible, computed_ts, dp_regret_eur),
+                (
+                    day,
+                    regret_eur,
+                    over_buy_kwh,
+                    over_buy_eur,
+                    under_buy_kwh,
+                    cost_regret_eur,
+                    optimal_kwh,
+                    optimal_eur,
+                    realized_kwh,
+                    realized_eur,
+                    infeasible,
+                    computed_ts,
+                    dp_regret_eur,
+                ),
             )
             self._conn.commit()
 
@@ -878,14 +899,10 @@ class DataRecorder:
         with self._lock:
             cur = self._conn.cursor()
             cur.row_factory = sqlite3.Row  # per-cursor: never mutates the connection
-            row = cur.execute(
-                "SELECT * FROM daily_regret ORDER BY day DESC LIMIT 1"
-            ).fetchone()
+            row = cur.execute("SELECT * FROM daily_regret ORDER BY day DESC LIMIT 1").fetchone()
             return dict(row) if row else None
 
-    def read_daily_regret_range(
-        self, since_day: str, until_day: str | None = None
-    ) -> list[dict]:
+    def read_daily_regret_range(self, since_day: str, until_day: str | None = None) -> list[dict]:
         """Return daily_regret rows in [since_day, until_day) ordered by day ASC."""
         with self._lock:
             cur = self._conn.cursor()
@@ -910,7 +927,7 @@ class DataRecorder:
         try:
             with self._lock:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:  # noqa: BLE001 — isolation is the contract; never raise into the tick
+        except Exception:
             pass
 
     def close(self) -> None:

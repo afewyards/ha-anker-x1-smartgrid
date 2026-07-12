@@ -4,6 +4,7 @@ The addon vendors byte-identical copies of 8 integration modules via
 addon/anker_x1_forecast/sync_core.sh. Any hand-edit or un-synced source edit fails
 here. Supersedes the recorder-only gate (test_recorder_vendored_parity.py).
 """
+
 import hashlib
 from pathlib import Path
 

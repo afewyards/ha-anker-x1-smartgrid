@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 import pytest
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
 from custom_components.anker_x1_smartgrid import controller, const, forecast
@@ -14,7 +14,7 @@ from tests.helpers import (
     seed_valid_inputs as _seed_valid_inputs,
 )
 
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -26,6 +26,7 @@ BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 # FIX 3 — tick() level tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_tick_failsafe_missing_soc():
@@ -62,6 +63,7 @@ async def test_tick_disabled_after_restart_while_engaged_releases_once():
     fresh actuator.engaged=False) → ONE release on the first disabled tick, then
     hands-off within the same run (no clobber of a later manual mode)."""
     from custom_components.anker_x1_smartgrid.models import ExportState
+
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     ctrl.enabled = False
@@ -82,18 +84,22 @@ async def test_tick_disabled_persists_disengaged_so_next_restart_no_release():
     """The first-tick release must PERSIST disengaged/PASSIVE state, so a SECOND
     restart-while-disabled does NOT re-fire release (no repeated manual clobber)."""
     from custom_components.anker_x1_smartgrid.models import ExportState
+
     hass = _StubHass()
     # Capture what the controller persisted.
     saved = {}
+
     class _CaptureStore:
-        async def async_save(self, data): saved.update(data)
+        async def async_save(self, data):
+            saved.update(data)
+
     ctrl, act = _make_controller(hass)
     ctrl._store = _CaptureStore()
     ctrl.enabled = False
     ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
     act.engaged = False
     await ctrl.tick()
-    assert saved.get("export_state", {}).get("engaged") is False   # persisted disengaged
+    assert saved.get("export_state", {}).get("engaged") is False  # persisted disengaged
 
     # Simulate a SECOND restart: fresh controller, restore the persisted (disengaged) state.
     ctrl2, act2 = _make_controller(_StubHass())
@@ -112,9 +118,11 @@ async def test_weather_forecast_fetched_once_per_hour(monkeypatch):
     ctrl, act = _make_controller(hass)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     calls = {"n": 0}
+
     async def _fake(hass_, data_):
         calls["n"] += 1
         return []
+
     monkeypatch.setattr(controller.coordinator, "read_hourly_weather_forecast", _fake)
     await ctrl.tick()
     await ctrl.tick()
@@ -146,15 +154,20 @@ def _slots(prices):
 
 
 def test_decision_forces_when_deficit_and_cheap_now():
-    cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0,
-                 min_dwell_min=0, max_charge_w=6000.0)
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, eta_charge=1.0, min_dwell_min=0, max_charge_w=6000.0)
     inputs = PlantInputs(soc=20.0, meter_w=0.0, now=BASE)
     slots = _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40])
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
     new_plan, setpoint, deadline, _horizon, _, _ = controller.compute_decision(
-        plan, inputs, slots, pv_remaining=0.0, sunset=sunset,
-        predictor=forecast.LoadPredictor.from_profile({}), cur_temp=None, cfg=cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=0.0,
+        sunset=sunset,
+        predictor=forecast.LoadPredictor.from_profile({}),
+        cur_temp=None,
+        cfg=cfg,
     )
     # DP selects the cheap slot → FORCING still correct.
     assert new_plan.state is ControllerState.FORCING
@@ -169,8 +182,14 @@ def test_decision_passive_when_solar_covers():
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
     new_plan, setpoint, _, _horizon, _, _ = controller.compute_decision(
-        plan, inputs, slots, pv_remaining=20.0, sunset=sunset,
-        predictor=forecast.LoadPredictor.from_profile({}), cur_temp=None, cfg=cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=20.0,
+        sunset=sunset,
+        predictor=forecast.LoadPredictor.from_profile({}),
+        cur_temp=None,
+        cfg=cfg,
     )
     assert new_plan.state is ControllerState.PASSIVE
     assert setpoint == 0.0
@@ -183,8 +202,14 @@ def test_decision_passive_high_soc():
     sunset = BASE + timedelta(hours=8)
     plan = PlanState.initial(BASE - timedelta(hours=1))
     new_plan, setpoint, _, _horizon, _, _ = controller.compute_decision(
-        plan, inputs, slots, pv_remaining=0.0, sunset=sunset,
-        predictor=forecast.LoadPredictor.from_profile({}), cur_temp=None, cfg=cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=0.0,
+        sunset=sunset,
+        predictor=forecast.LoadPredictor.from_profile({}),
+        cur_temp=None,
+        cfg=cfg,
     )
     assert new_plan.state is ControllerState.PASSIVE
     assert setpoint == 0.0
@@ -231,6 +256,7 @@ async def test_tick_ok_records_none_when_entities_absent():
 # FIX C1 — rolling load profile wired into controller
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_refresh_profile_populates_profile():
     """After refresh_profile, controller.profile is non-empty and predict_load_w uses it."""
@@ -246,7 +272,7 @@ async def test_refresh_profile_populates_profile():
     # never age out of the rolling lookback window — hardcoded calendar dates
     # rot as real time advances.
     ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
         hour=10, minute=0, second=0, microsecond=0
     )  # weekday: Mon=0..Sun=6
@@ -286,7 +312,7 @@ async def test_refresh_profile_predictor_returns_p80_for_spread_distribution():
     # P80=820 (pos=0.8*9=7.2 → 800+0.2*100). Quantiles sort the values, so the
     # date↔value pairing is irrelevant. kwh_sum = W / 1000 so hourly_load_w
     # round-trips back to the same W value (full-coverage hour, no count rescale).
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     weekdays = []
     d = now.replace(hour=8, minute=0, second=0, microsecond=0)
     while len(weekdays) < 10:
@@ -295,8 +321,7 @@ async def test_refresh_profile_predictor_returns_p80_for_spread_distribution():
         d -= timedelta(days=1)
     load_values = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0]
     ctrl._recorder._hourly_rows = [
-        {"hour_ts": wd.isoformat(), "house_load_kwh_sum": w / 1000.0}
-        for wd, w in zip(weekdays, load_values)
+        {"hour_ts": wd.isoformat(), "house_load_kwh_sum": w / 1000.0} for wd, w in zip(weekdays, load_values)
     ]
 
     # Lookback wide enough to cover all 10 weekdays (~2 calendar weeks)
@@ -324,10 +349,8 @@ async def test_refresh_profile_row_without_kwh_sum_falls_back_to_house_load_mean
     ctrl, _ = _make_controller(hass)
     ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
 
-    now = datetime.now(timezone.utc)
-    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
-        hour=10, minute=0, second=0, microsecond=0
-    )
+    now = datetime.now(UTC)
+    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(hour=10, minute=0, second=0, microsecond=0)
     ctrl._recorder._hourly_rows = [
         # No house_load_kwh_sum key at all -> hourly_load_w must use house_load_mean.
         {"hour_ts": last_sunday.isoformat(), "house_load_mean": 650.0},
@@ -352,10 +375,8 @@ async def test_refresh_profile_skips_rows_where_hourly_load_w_returns_none():
     ctrl, _ = _make_controller(hass)
     ctrl.cfg = dataclasses.replace(ctrl.cfg, lookback_days=30)
 
-    now = datetime.now(timezone.utc)
-    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(
-        hour=10, minute=0, second=0, microsecond=0
-    )
+    now = datetime.now(UTC)
+    last_sunday = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(hour=10, minute=0, second=0, microsecond=0)
     last_monday = last_sunday + timedelta(days=1)
     last_monday = last_monday.replace(hour=11)
     ctrl._recorder._hourly_rows = [
@@ -384,7 +405,7 @@ async def test_tick_triggers_profile_refresh():
 
     # Seed recent hourly-energy rows (relative to now, not hardcoded dates) so they
     # stay inside the lookback window (now - lookback_days) as real time advances.
-    recent = datetime.now(timezone.utc)
+    recent = datetime.now(UTC)
     ctrl._recorder._hourly_rows = [
         {"hour_ts": (recent - timedelta(hours=2)).isoformat(), "house_load_kwh_sum": 0.9},
         {"hour_ts": (recent - timedelta(hours=1)).isoformat(), "house_load_kwh_sum": 0.75},
@@ -400,14 +421,18 @@ async def test_tick_triggers_profile_refresh():
 # FIX M4 — all-PV-unavailable triggers tick() failsafe
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_failsafe_when_all_pv_unavailable():
     """tick() returns failsafe when all PV-today sensors are unavailable."""
     hass = _StubHass()
     # Use two PV today entities, both unavailable
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv1", "sensor.pv2"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv1", "sensor.pv2"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     hass.set_state("sensor.pv1", "unavailable")
     hass.set_state("sensor.pv2", "unavailable")
@@ -421,9 +446,12 @@ async def test_tick_failsafe_when_all_pv_unavailable():
 async def test_tick_ok_when_pv_genuinely_zero():
     """tick() does NOT trigger failsafe when PV reads 0.0 (night-time)."""
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv1"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv1"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     hass.set_state("sensor.pv1", "0.0")
 
@@ -434,6 +462,7 @@ async def test_tick_ok_when_pv_genuinely_zero():
 # ---------------------------------------------------------------------------
 # E1 — export_price records the REAL feed-in tariff (not import price)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_record_sample_stores_real_export_price_from_entity():
@@ -452,9 +481,7 @@ async def test_record_sample_stores_real_export_price_from_entity():
     row = ctrl._recorder.rows[-1]
     import_price = row.get("import_price")
     export_price = row.get("export_price")
-    assert export_price == pytest.approx(0.03), (
-        f"export_price should be 0.03 (real feed-in), got {export_price}"
-    )
+    assert export_price == pytest.approx(0.03), f"export_price should be 0.03 (real feed-in), got {export_price}"
     assert export_price != import_price, (
         f"export_price must NOT equal import_price {import_price}; the placeholder bug is not fixed"
     )
@@ -500,6 +527,7 @@ async def test_record_sample_export_price_none_when_entity_empty_string():
 # FIX CONF_ENT_TEMP — missing key does not KeyError
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_ok_without_conf_ent_temp():
     """tick() must not raise KeyError when CONF_ENT_TEMP is absent from config."""
@@ -519,28 +547,37 @@ async def test_tick_ok_without_conf_ent_temp():
 # Task 4 — two-day display forecast wired into controller horizon
 # ---------------------------------------------------------------------------
 
+
 def test_compute_decision_horizon_spans_two_days_when_sun_times_present():
     from datetime import datetime, timezone, timedelta
     from custom_components.anker_x1_smartgrid.controller import compute_decision
     from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot
     from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     inputs = PlantInputs(50.0, 0.0, now)
     # 30 hourly slots from now → into tomorrow afternoon
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
-    sunset = datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc)
+    sunset = datetime(2026, 6, 20, 20, 0, tzinfo=UTC)
     sun_times = (
         sunset,
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),
     )
     predictor = LoadPredictor.from_profile({})  # fallback predictor
     plan0 = PlanState.initial(now)
 
     _, _, _, horizon, _, _ = compute_decision(
-        plan0, inputs, slots, 1.0, sunset, predictor, 15.0, Config(),
-        tomorrow_total=6.0, sun_times=sun_times,
+        plan0,
+        inputs,
+        slots,
+        1.0,
+        sunset,
+        predictor,
+        15.0,
+        Config(),
+        tomorrow_total=6.0,
+        sun_times=sun_times,
     )
     future = [e for e in horizon if e["start"] >= now.isoformat()]
     # load_w predicted for every future hour (incl. tomorrow), not just up to deadline
@@ -553,25 +590,27 @@ def test_compute_decision_horizon_spans_two_days_when_sun_times_present():
 # Per-array peaked PV curve — Component 3 tests
 # ---------------------------------------------------------------------------
 
+
 def test_compute_decision_display_horizon_shoulder_lift_with_arrays():
     """Display horizon via compute_decision with E/W tomorrow_arrays shows shoulder lift."""
-    now = datetime(2026, 6, 20, 23, 0, tzinfo=timezone.utc)  # night
+    now = datetime(2026, 6, 20, 23, 0, tzinfo=UTC)  # night
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
     # 30 slots — covers tomorrow daytime
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sunset = now + timedelta(hours=1)  # minimal today window → deadline ≈ now + 1h
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),   # today_sunset (past)
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),    # tomorrow_sunrise
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),   # tomorrow_sunset
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),  # today_sunset (past)
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),  # tomorrow_sunrise
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),  # tomorrow_sunset
     )
-    early_peak = datetime(2026, 6, 21, 9, 0, tzinfo=timezone.utc)
-    late_peak = datetime(2026, 6, 21, 17, 0, tzinfo=timezone.utc)
-    mid_hour = datetime(2026, 6, 21, 13, 0, tzinfo=timezone.utc)
+    early_peak = datetime(2026, 6, 21, 9, 0, tzinfo=UTC)
+    late_peak = datetime(2026, 6, 21, 17, 0, tzinfo=UTC)
+    mid_hour = datetime(2026, 6, 21, 13, 0, tzinfo=UTC)
 
     plan0 = PlanState.initial(now - timedelta(hours=1))
-    cfg = Config(capacity_kwh=10.0, soc_target=97.0, eta_charge=1.0,
-                 max_charge_w=5000.0, min_dwell_min=0, deadline_buffer_min=0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_target=97.0, eta_charge=1.0, max_charge_w=5000.0, min_dwell_min=0, deadline_buffer_min=0
+    )
     predictor = forecast.LoadPredictor.from_profile({})
 
     ew_arrays = [(3.0, early_peak), (3.0, late_peak)]
@@ -579,9 +618,16 @@ def test_compute_decision_display_horizon_shoulder_lift_with_arrays():
 
     def _decide(tomorrow_arrays):
         _, _, _, horizon, _, _ = controller.compute_decision(
-            plan0, inputs, slots, pv_remaining=0.0, sunset=sunset,
-            predictor=predictor, cur_temp=None, cfg=cfg,
-            sun_times=sun_times, tomorrow_arrays=tomorrow_arrays,
+            plan0,
+            inputs,
+            slots,
+            pv_remaining=0.0,
+            sunset=sunset,
+            predictor=predictor,
+            cur_temp=None,
+            cfg=cfg,
+            sun_times=sun_times,
+            tomorrow_arrays=tomorrow_arrays,
         )
         return horizon
 
@@ -622,14 +668,13 @@ def test_compute_decision_display_horizon_shoulder_lift_with_arrays():
 
     # Energy conservation: sum of pv_w ≈ 6 kWh = 6000 Wh (tomorrow only, no today PV)
     total_pv_wh = sum(e["pv_w"] for e in horizon_ew if e["pv_w"])
-    assert abs(total_pv_wh - 6000) < 300, (
-        f"Expected ~6000 Wh total PV energy, got {total_pv_wh:.1f} Wh"
-    )
+    assert abs(total_pv_wh - 6000) < 300, f"Expected ~6000 Wh total PV energy, got {total_pv_wh:.1f} Wh"
 
 
 # ---------------------------------------------------------------------------
 # Task 2 — persist enabled flag across restarts
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_persist_writes_wrapped_payload():
@@ -638,11 +683,20 @@ async def test_persist_writes_wrapped_payload():
     ctrl._store = _CapturingStore()
     await ctrl._persist()
     assert set(ctrl._store.saved.keys()) == {
-        "plan", "enabled", "export_state",
-        "today_export_pnl_eur", "export_pnl_day",
-        "today_charge_cost_eur", "today_export_revenue_eur", "total_net_eur",
-        "soc_drift_kwh", "soc_drift_day", "soc_drift_last_update",
-        "soc_drift_last_soc_pct", "soc_drift_engaged", "soc_drift_last_export_kwh_dc",
+        "plan",
+        "enabled",
+        "export_state",
+        "today_export_pnl_eur",
+        "export_pnl_day",
+        "today_charge_cost_eur",
+        "today_export_revenue_eur",
+        "total_net_eur",
+        "soc_drift_kwh",
+        "soc_drift_day",
+        "soc_drift_last_update",
+        "soc_drift_last_soc_pct",
+        "soc_drift_engaged",
+        "soc_drift_last_export_kwh_dc",
     }
     assert ctrl._store.saved["enabled"] is True
 
@@ -681,6 +735,7 @@ def test_restore_legacy_bare_plan_defaults_enabled_true():
 # field of a group must revert the WHOLE group to its __init__ defaults, not
 # just that one field (no partial hybrid restores within a group).
 # ---------------------------------------------------------------------------
+
 
 def test_restore_soc_drift_group_all_or_nothing_on_corrupt_first_field():
     hass = _StubHass()
@@ -808,6 +863,7 @@ def test_restore_export_state_group_isolated_from_other_groups():
 # Task 1 — record physical sample while disabled
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_disabled_records_sample(monkeypatch):
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
@@ -829,7 +885,7 @@ async def test_tick_disabled_records_sample(monkeypatch):
     # Task 3 (P80-survival-removal): deficit_kwh removed from recorder rows.
     assert "deficit_kwh" not in row
     assert row["soc"] == 5.0
-    assert row["pv_w"] == 1200.0      # from _seed_valid_inputs
+    assert row["pv_w"] == 1200.0  # from _seed_valid_inputs
     assert row["batt_w"] == -500.0
 
 
@@ -850,19 +906,22 @@ async def test_tick_disabled_no_inputs_skips_record():
 # Task 3 — disabled path refreshes predictor + publishes horizon
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_disabled_publishes_self_consumption_horizon():
     hass = _StubHass()
-    ctrl, _ = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-        const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
-    })
+    ctrl, _ = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+            const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
+        },
+    )
     _seed_valid_inputs(hass, soc="50.0")
     # read_sun_times needs next_rising too (sunrise tomorrow) + a tomorrow sunset
     rising_iso = (BASE + timedelta(hours=15)).isoformat()
     setting_iso = (BASE + timedelta(hours=3)).isoformat()
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": setting_iso, "next_rising": rising_iso})
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": setting_iso, "next_rising": rising_iso})
     hass.set_state("sensor.pv_today", "1.0")
     hass.set_state("sensor.pv_tomorrow", "6.0")
     ctrl.enabled = False
@@ -884,15 +943,17 @@ async def test_tick_disabled_forwards_temp_by_hour_to_display_horizon(monkeypatc
     enabled path (compute_decision, controller.py ~1099) — before the fix the kwarg
     was omitted entirely (not just empty)."""
     hass = _StubHass()
-    ctrl, _ = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-        const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
-    })
+    ctrl, _ = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+            const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
+        },
+    )
     _seed_valid_inputs(hass, soc="50.0")
     rising_iso = (BASE + timedelta(hours=15)).isoformat()
     setting_iso = (BASE + timedelta(hours=3)).isoformat()
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": setting_iso, "next_rising": rising_iso})
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": setting_iso, "next_rising": rising_iso})
     hass.set_state("sensor.pv_today", "1.0")
     hass.set_state("sensor.pv_tomorrow", "6.0")
     ctrl.enabled = False
@@ -924,8 +985,8 @@ async def test_tick_disabled_missing_forecast_skips_horizon_but_records():
     result = await ctrl.tick()
 
     assert result["reason"] == "disabled"
-    assert len(ctrl._recorder.rows) == 1            # still records
-    assert ctrl.last_status.get("plan") is None     # no horizon without sun_times
+    assert len(ctrl._recorder.rows) == 1  # still records
+    assert ctrl.last_status.get("plan") is None  # no horizon without sun_times
 
 
 @pytest.mark.asyncio
@@ -935,7 +996,7 @@ async def test_tick_disabled_refreshes_profile():
     _seed_valid_inputs(hass, soc="50.0")
     # Recent hourly-energy rows relative to now (see test_tick_triggers_profile_refresh):
     # hardcoded absolute dates rot past the lookback window over time.
-    recent = datetime.now(timezone.utc)
+    recent = datetime.now(UTC)
     ctrl._recorder._hourly_rows = [
         {"hour_ts": (recent - timedelta(hours=2)).isoformat(), "house_load_kwh_sum": 0.9},
         {"hour_ts": (recent - timedelta(hours=1)).isoformat(), "house_load_kwh_sum": 0.75},
@@ -952,30 +1013,33 @@ async def test_tick_disabled_refreshes_profile():
 async def test_tick_disabled_skips_horizon_when_pv_remaining_none():
     """When pv_remaining is None (all PV sensors unavailable), disabled tick must not publish a plan."""
     hass = _StubHass()
-    ctrl, _ = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-        const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
-    })
+    ctrl, _ = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+            const.CONF_ENT_PV_TOMORROW: ["sensor.pv_tomorrow"],
+        },
+    )
     _seed_valid_inputs(hass, soc="50.0")
     # Seed sun_times so the only missing piece is pv_remaining
     rising_iso = (BASE + timedelta(hours=15)).isoformat()
     setting_iso = (BASE + timedelta(hours=3)).isoformat()
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": setting_iso, "next_rising": rising_iso})
-    hass.set_state("sensor.pv_today", "unavailable")   # makes pv_remaining None
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": setting_iso, "next_rising": rising_iso})
+    hass.set_state("sensor.pv_today", "unavailable")  # makes pv_remaining None
     hass.set_state("sensor.pv_tomorrow", "6.0")
     ctrl.enabled = False
 
     result = await ctrl.tick()
 
     assert result["reason"] == "disabled"
-    assert len(ctrl._recorder.rows) == 1         # sample still recorded
+    assert len(ctrl._recorder.rows) == 1  # sample still recorded
     assert ctrl.last_status.get("plan") is None  # no horizon when pv_remaining is None
 
 
 # ---------------------------------------------------------------------------
 # Solar charge surfacing and identity tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_tick_ok_surfaces_solar_charge_kwh(monkeypatch):
@@ -993,9 +1057,12 @@ async def test_tick_ok_surfaces_solar_charge_kwh(monkeypatch):
     """
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, _ = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-    })
+    ctrl, _ = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     hass.set_state("sensor.pv_today", "5.0")  # 5 kWh remaining → partial solar coverage
 
@@ -1020,6 +1087,7 @@ async def test_tick_ok_surfaces_solar_charge_kwh(monkeypatch):
 # A1 — Shadow grid-charge decision in disabled path
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_disabled_shadow_records_sample(monkeypatch):
     """Disabled tick records a sample row with state='disabled' and setpoint=0.
@@ -1030,9 +1098,12 @@ async def test_tick_disabled_shadow_records_sample(monkeypatch):
     """
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     hass.set_state("sensor.pv_today", "1.0")  # small PV → real deficit remains
     ctrl.enabled = False
@@ -1045,7 +1116,7 @@ async def test_tick_disabled_shadow_records_sample(monkeypatch):
     assert row["state"] == "disabled"
     assert row["setpoint_w"] == 0.0
     # Task 3 (P80-survival-removal): deficit_kwh removed from recorder row.
-    assert "deficit_kwh" not in row, f"deficit_kwh must not appear in recorder rows after Task 3"
+    assert "deficit_kwh" not in row, "deficit_kwh must not appear in recorder rows after Task 3"
     # Actuator must stay released — no FORCING in disabled mode
     assert not any(c[0] == "engage_and_charge" for c in act.calls)
 
@@ -1062,21 +1133,22 @@ async def test_tick_enabled_populates_last_decision_and_behavior_unchanged(monke
     """
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     # Cheap now (hour 0 only) + expensive peak → ceiling > cheap → FORCING.
     # Single cheap slot ensures select_charge_slots picks BASE+0h (current hour),
     # so now_selected=True and decide_state enters FORCING.
     cheap_slots = [
-        {"datetime": (BASE + timedelta(hours=i)).isoformat(),
-         "electricity_price": int(0.05 * const.PRICE_SCALE)}
+        {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.05 * const.PRICE_SCALE)}
         for i in range(1)
     ]
     peak_slots = [
-        {"datetime": (BASE + timedelta(hours=i)).isoformat(),
-         "electricity_price": int(0.40 * const.PRICE_SCALE)}
+        {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.40 * const.PRICE_SCALE)}
         for i in range(1, 9)
     ]
     hass.set_state("sensor.price", "0.05", {"forecast": cheap_slots + peak_slots})
@@ -1109,14 +1181,18 @@ async def test_tick_enabled_populates_last_decision_and_behavior_unchanged(monke
 # A3b — per-tick decision write
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tick_disabled_calls_append_decision(monkeypatch):
     """Disabled tick with valid inputs calls recorder.append_decision once."""
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     hass.set_state("sensor.pv_today", "1.0")
     ctrl.enabled = False
@@ -1124,9 +1200,7 @@ async def test_tick_disabled_calls_append_decision(monkeypatch):
 
     await ctrl.tick()
 
-    assert len(ctrl._recorder.decision_rows) == 1, (
-        "Expected append_decision called once for disabled tick"
-    )
+    assert len(ctrl._recorder.decision_rows) == 1, "Expected append_decision called once for disabled tick"
     dr = ctrl._recorder.decision_rows[0]
     assert dr["ts"] == BASE.isoformat()
     assert dr["active"] is False
@@ -1143,19 +1217,20 @@ async def test_tick_enabled_calls_append_decision(monkeypatch):
     """
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_ENT_PV_TODAY: ["sensor.pv_today"],
+        },
+    )
     _seed_valid_inputs(hass, soc="20.0")
     # Single cheap slot at hour 0 → unambiguous current-hour selection → FORCING.
     cheap_slots = [
-        {"datetime": (BASE + timedelta(hours=i)).isoformat(),
-         "electricity_price": int(0.05 * const.PRICE_SCALE)}
+        {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.05 * const.PRICE_SCALE)}
         for i in range(1)
     ]
     peak_slots = [
-        {"datetime": (BASE + timedelta(hours=i)).isoformat(),
-         "electricity_price": int(0.40 * const.PRICE_SCALE)}
+        {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.40 * const.PRICE_SCALE)}
         for i in range(1, 9)
     ]
     hass.set_state("sensor.price", "0.05", {"forecast": cheap_slots + peak_slots})
@@ -1164,9 +1239,7 @@ async def test_tick_enabled_calls_append_decision(monkeypatch):
 
     await ctrl.tick()
 
-    assert len(ctrl._recorder.decision_rows) == 1, (
-        "Expected append_decision called once for enabled tick"
-    )
+    assert len(ctrl._recorder.decision_rows) == 1, "Expected append_decision called once for enabled tick"
     dr = ctrl._recorder.decision_rows[0]
     assert dr["active"] is True
     assert dr["ts"] == BASE.isoformat()
@@ -1182,26 +1255,34 @@ async def test_tick_no_inputs_skips_append_decision():
 
     await ctrl.tick()
 
-    assert ctrl._recorder.decision_rows == [], (
-        "append_decision must not be called when inputs are unavailable"
-    )
+    assert ctrl._recorder.decision_rows == [], "append_decision must not be called when inputs are unavailable"
 
 
-def _seed_regret_samples(ctrl, day: str, *, soc_start: float,
-                          load_w: float, batt_w: float, pv_w: float,
-                          import_price: float, state: str = "passive"):
+def _seed_regret_samples(
+    ctrl,
+    day: str,
+    *,
+    soc_start: float,
+    load_w: float,
+    batt_w: float,
+    pv_w: float,
+    import_price: float,
+    state: str = "passive",
+):
     """Seed 24 hourly samples (one per UTC hour) for the given local/UTC day."""
     for h in range(24):
-        ctrl._recorder.rows.append({
-            "ts": f"{day}T{h:02d}:00:00+00:00",
-            "soc": soc_start if h == 0 else soc_start,
-            "pv_w": pv_w,
-            "batt_w": batt_w,
-            "p1_w": load_w,
-            "import_price": import_price,
-            "state": state,
-            "setpoint_w": batt_w if state == "forcing" else 0.0,
-        })
+        ctrl._recorder.rows.append(
+            {
+                "ts": f"{day}T{h:02d}:00:00+00:00",
+                "soc": soc_start,
+                "pv_w": pv_w,
+                "batt_w": batt_w,
+                "p1_w": load_w,
+                "import_price": import_price,
+                "state": state,
+                "setpoint_w": batt_w if state == "forcing" else 0.0,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -1233,8 +1314,7 @@ async def test_daily_regret_job_under_buy_scenario(monkeypatch):
     # 24 samples: p1_w=500W load, batt_w=0 (not charging), pv=0, no forcing.
     # Battery starts at 50% and drains to floor (5%); forced floor-hit imports
     # then serve remaining load hours directly from grid.
-    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0,
-                         batt_w=0.0, pv_w=0.0, import_price=0.10)
+    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0, batt_w=0.0, pv_w=0.0, import_price=0.10)
 
     result = await ctrl.tick()
 
@@ -1244,8 +1324,7 @@ async def test_daily_regret_job_under_buy_scenario(monkeypatch):
     # Economic-only (A1): water_value oracle also chooses 0 deliberate charging at
     # uniform 0.10/kWh → under_buy_kwh=0 (no deliberate-charge shortfall).
     assert row["under_buy_kwh"] == 0.0, (
-        f"Expected under_buy_kwh=0 (optimal also does not pre-charge at uniform price), "
-        f"got {row['under_buy_kwh']}"
+        f"Expected under_buy_kwh=0 (optimal also does not pre-charge at uniform price), got {row['under_buy_kwh']}"
     )
     # last_status must expose regret_eur (from the daily job that ran this tick).
     assert "regret_eur" in result, "regret_eur must appear in tick() return value"
@@ -1267,17 +1346,31 @@ async def test_daily_regret_job_over_buy_scenario(monkeypatch):
     # Hours 1-23: idle (batt_w=0, p1_w=0, no load).
     # Starting SoC=95% (9.5 kWh).  Optimal only needs 0.2 kWh DC to reach target.
     # Realized pays for 2.0 kWh AC → over_buy_kwh should be positive.
-    ctrl._recorder.rows.append({
-        "ts": f"{yesterday}T00:00:00+00:00",
-        "soc": 95.0, "pv_w": 0.0, "batt_w": -2000.0, "p1_w": 2000.0,
-        "import_price": 0.10, "state": "forcing", "setpoint_w": -2000.0,
-    })
+    ctrl._recorder.rows.append(
+        {
+            "ts": f"{yesterday}T00:00:00+00:00",
+            "soc": 95.0,
+            "pv_w": 0.0,
+            "batt_w": -2000.0,
+            "p1_w": 2000.0,
+            "import_price": 0.10,
+            "state": "forcing",
+            "setpoint_w": -2000.0,
+        }
+    )
     for h in range(1, 24):
-        ctrl._recorder.rows.append({
-            "ts": f"{yesterday}T{h:02d}:00:00+00:00",
-            "soc": 97.0, "pv_w": 0.0, "batt_w": 0.0, "p1_w": 0.0,
-            "import_price": 0.10, "state": "passive", "setpoint_w": 0.0,
-        })
+        ctrl._recorder.rows.append(
+            {
+                "ts": f"{yesterday}T{h:02d}:00:00+00:00",
+                "soc": 97.0,
+                "pv_w": 0.0,
+                "batt_w": 0.0,
+                "p1_w": 0.0,
+                "import_price": 0.10,
+                "state": "passive",
+                "setpoint_w": 0.0,
+            }
+        )
 
     result = await ctrl.tick()
 
@@ -1286,8 +1379,7 @@ async def test_daily_regret_job_over_buy_scenario(monkeypatch):
     assert row.get("infeasible", 0) == 0
     assert isinstance(row["over_buy_kwh"], float)
     assert row["over_buy_kwh"] > 0.0, (
-        f"Expected over_buy_kwh > 0 (charged 2 kWh when ~0.2 kWh needed), "
-        f"got {row['over_buy_kwh']}"
+        f"Expected over_buy_kwh > 0 (charged 2 kWh when ~0.2 kWh needed), got {row['over_buy_kwh']}"
     )
     assert "regret_eur" in result
     assert result["regret_eur"] is not None
@@ -1317,8 +1409,7 @@ async def test_daily_regret_job_heavy_load_still_scored(monkeypatch):
     # 24 samples: very heavy load (5 kW), no charging, soc_start=50%.
     # Battery drains to floor quickly; remaining load served by forced floor-hit
     # imports at the spot rate.
-    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=5000.0,
-                         batt_w=0.0, pv_w=0.0, import_price=0.10)
+    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=5000.0, batt_w=0.0, pv_w=0.0, import_price=0.10)
 
     result = await ctrl.tick()
 
@@ -1351,11 +1442,18 @@ async def test_daily_regret_job_skips_sparse_day(monkeypatch):
 
     # Only 6 distinct hours of samples (< 12 threshold → skip).
     for h in range(6):
-        ctrl._recorder.rows.append({
-            "ts": f"{yesterday}T{h:02d}:00:00+00:00",
-            "soc": 50.0, "pv_w": 0.0, "batt_w": 0.0, "p1_w": 500.0,
-            "import_price": 0.10, "state": "passive", "setpoint_w": 0.0,
-        })
+        ctrl._recorder.rows.append(
+            {
+                "ts": f"{yesterday}T{h:02d}:00:00+00:00",
+                "soc": 50.0,
+                "pv_w": 0.0,
+                "batt_w": 0.0,
+                "p1_w": 500.0,
+                "import_price": 0.10,
+                "state": "passive",
+                "setpoint_w": 0.0,
+            }
+        )
 
     await ctrl.tick()
 
@@ -1380,15 +1478,13 @@ async def test_daily_regret_backfills_on_restart(monkeypatch):
     _seed_valid_inputs(hass, soc="60.0")
     # Do NOT set _last_regret_day — leave it None to simulate restart.
 
-    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0,
-                         batt_w=0.0, pv_w=0.0, import_price=0.10)
+    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0, batt_w=0.0, pv_w=0.0, import_price=0.10)
 
     await ctrl.tick()
 
     row = ctrl._recorder.daily_regret_rows.get(yesterday)
     assert row is not None, (
-        "Backfill must score yesterday on first tick after restart "
-        "(even without an explicit midnight transition)"
+        "Backfill must score yesterday on first tick after restart (even without an explicit midnight transition)"
     )
     assert row.get("infeasible", 0) == 0
     assert isinstance(row["regret_eur"], float)
@@ -1410,18 +1506,24 @@ async def test_daily_regret_backfills_gap_from_latest_scored(monkeypatch):
 
     # Pre-seed the DB with the last scored row (3 days before yesterday).
     ctrl._recorder.daily_regret_rows["2026-06-16"] = {
-        "day": "2026-06-16", "regret_eur": 0.05, "over_buy_kwh": 0.0,
-        "over_buy_eur": 0.0, "under_buy_kwh": 0.0, "cost_regret_eur": 0.0,
-        "optimal_kwh": 1.0, "optimal_eur": 0.10, "realized_kwh": 1.0,
-        "realized_eur": 0.15, "infeasible": 0,
+        "day": "2026-06-16",
+        "regret_eur": 0.05,
+        "over_buy_kwh": 0.0,
+        "over_buy_eur": 0.0,
+        "under_buy_kwh": 0.0,
+        "cost_regret_eur": 0.0,
+        "optimal_kwh": 1.0,
+        "optimal_eur": 0.10,
+        "realized_kwh": 1.0,
+        "realized_eur": 0.15,
+        "infeasible": 0,
         "computed_ts": "2026-06-17T00:01:00+00:00",
     }
     # _last_regret_day=None (startup) triggers backfill.
 
     # Seed 24 hourly samples for each gap day.
     for gap_day in ["2026-06-17", "2026-06-18", "2026-06-19"]:
-        _seed_regret_samples(ctrl, gap_day, soc_start=50.0, load_w=500.0,
-                             batt_w=0.0, pv_w=0.0, import_price=0.10)
+        _seed_regret_samples(ctrl, gap_day, soc_start=50.0, load_w=500.0, batt_w=0.0, pv_w=0.0, import_price=0.10)
 
     await ctrl.tick()
 
@@ -1435,6 +1537,7 @@ async def test_daily_regret_backfills_gap_from_latest_scored(monkeypatch):
 # ---------------------------------------------------------------------------
 # R2 — daily-regret path uses recorded load_w with derive fallback
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_daily_regret_uses_recorded_load_w_when_present(monkeypatch):
@@ -1455,13 +1558,19 @@ async def test_daily_regret_uses_recorded_load_w_when_present(monkeypatch):
     _seed_valid_inputs(hass_a, soc="60.0")
     ctrl_a._last_regret_day = yesterday
     for h in range(24):
-        ctrl_a._recorder.rows.append({
-            "ts": f"{yesterday}T{h:02d}:00:00+00:00",
-            "soc": 50.0, "pv_w": 0.0, "batt_w": 0.0,
-            "p1_w": 800.0,   # derive would give 800
-            "load_w": 300.0, # recorded value overrides derive
-            "import_price": 0.10, "state": "passive", "setpoint_w": 0.0,
-        })
+        ctrl_a._recorder.rows.append(
+            {
+                "ts": f"{yesterday}T{h:02d}:00:00+00:00",
+                "soc": 50.0,
+                "pv_w": 0.0,
+                "batt_w": 0.0,
+                "p1_w": 800.0,  # derive would give 800
+                "load_w": 300.0,  # recorded value overrides derive
+                "import_price": 0.10,
+                "state": "passive",
+                "setpoint_w": 0.0,
+            }
+        )
 
     # Controller B: samples carry no load_w, p1_w=300 (derive gives 300)
     hass_b = _StubHass()
@@ -1469,12 +1578,18 @@ async def test_daily_regret_uses_recorded_load_w_when_present(monkeypatch):
     _seed_valid_inputs(hass_b, soc="60.0")
     ctrl_b._last_regret_day = yesterday
     for h in range(24):
-        ctrl_b._recorder.rows.append({
-            "ts": f"{yesterday}T{h:02d}:00:00+00:00",
-            "soc": 50.0, "pv_w": 0.0, "batt_w": 0.0,
-            "p1_w": 300.0,   # derive gives 300 (no load_w key → fallback)
-            "import_price": 0.10, "state": "passive", "setpoint_w": 0.0,
-        })
+        ctrl_b._recorder.rows.append(
+            {
+                "ts": f"{yesterday}T{h:02d}:00:00+00:00",
+                "soc": 50.0,
+                "pv_w": 0.0,
+                "batt_w": 0.0,
+                "p1_w": 300.0,  # derive gives 300 (no load_w key → fallback)
+                "import_price": 0.10,
+                "state": "passive",
+                "setpoint_w": 0.0,
+            }
+        )
 
     await ctrl_a.tick()
     await ctrl_b.tick()
@@ -1507,8 +1622,7 @@ async def test_daily_regret_falls_back_to_derive_when_load_w_null(monkeypatch):
     ctrl._last_regret_day = yesterday
 
     # Seed with no load_w key at all (old-style rows).
-    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0,
-                         batt_w=0.0, pv_w=0.0, import_price=0.10)
+    _seed_regret_samples(ctrl, yesterday, soc_start=50.0, load_w=500.0, batt_w=0.0, pv_w=0.0, import_price=0.10)
 
     await ctrl.tick()
 
@@ -1551,22 +1665,20 @@ async def test_purge_block_purges_decisions(monkeypatch):
         const.CONF_ENT_IRRADIANCE: "sensor.irradiance",
         const.CONF_ENT_TEMP: "weather.home",
     }
-    ctrl = controller.Controller(hass=hass, data=data, recorder=rec,
-                                 actuator=_StubActuator(), store=_StubStore())
+    ctrl = controller.Controller(hass=hass, data=data, recorder=rec, actuator=_StubActuator(), store=_StubStore())
     _seed_valid_inputs(hass, soc="60.0")
 
     await ctrl.tick()
 
     assert len(purge_calls) == 1, (
-        f"purge_decisions_older_than must be called once in the 6-hourly block; "
-        f"got {len(purge_calls)} calls"
+        f"purge_decisions_older_than must be called once in the 6-hourly block; got {len(purge_calls)} calls"
     )
-
 
 
 # ---------------------------------------------------------------------------
 # P80 cushion vs P50 display — quantile-aware deficit (P4-T2)
 # ---------------------------------------------------------------------------
+
 
 class _StubHGBR(HGBRQuantileModel):
     """Stub HGBR that returns distinct load per quantile without needing a fitted model.
@@ -1597,17 +1709,20 @@ def test_compute_decision_display_uses_p50():
 
     hgbr_p80 = _StubHGBR({0.5: 200.0, 0.8: 1500.0})
     _, _, _, horizon_p80, _, _ = controller.compute_decision(
-        plan, inputs, slots, pv_remaining=5.0, sunset=sunset,
-        predictor=LoadPredictor.from_model(hgbr_p80), cur_temp=None,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=5.0,
+        sunset=sunset,
+        predictor=LoadPredictor.from_model(hgbr_p80),
+        cur_temp=None,
         cfg=Config(**base_cfg),
     )
 
     # Display horizon (build_plan_horizon receives P50 intervals) must carry P50 load (200 W).
     p80_run_loads = [e["load_w"] for e in horizon_p80 if e.get("load_w") is not None]
     assert p80_run_loads, "Expected at least one horizon entry with a load_w value"
-    assert all(w == 200.0 for w in p80_run_loads), (
-        f"Display horizon must use P50 load (200 W), got: {p80_run_loads}"
-    )
+    assert all(w == 200.0 for w in p80_run_loads), f"Display horizon must use P50 load (200 W), got: {p80_run_loads}"
 
 
 @pytest.mark.asyncio
@@ -1668,6 +1783,7 @@ async def test_tick_disabled_engaged_releases_once_then_stops():
 # T5 — controller computes load_w = pv + meter_w + batt - inverter_loss each tick
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_record_sample_computes_load_w_from_pv_meter_batt():
     """load_w is computed live each tick: pv + meter_w (signed net grid) + batt
@@ -1684,9 +1800,7 @@ async def test_record_sample_computes_load_w_from_pv_meter_batt():
     rec = ctrl._recorder
     assert len(rec.rows) >= 1, "expected at least one appended row"
     last_row = rec.rows[-1]
-    assert last_row["load_w"] == pytest.approx(210.0), (
-        f"Expected load_w=210.0, got {last_row.get('load_w')}"
-    )
+    assert last_row["load_w"] == pytest.approx(210.0), f"Expected load_w=210.0, got {last_row.get('load_w')}"
 
 
 @pytest.mark.asyncio
@@ -1706,9 +1820,7 @@ async def test_record_sample_stores_persons_home_count():
     rec = ctrl._recorder
     assert len(rec.rows) >= 1, "expected at least one appended row"
     last_row = rec.rows[-1]
-    assert last_row["persons_home"] == 2, (
-        f"Expected persons_home=2, got {last_row.get('persons_home')}"
-    )
+    assert last_row["persons_home"] == 2, f"Expected persons_home=2, got {last_row.get('persons_home')}"
 
 
 def test_compute_house_load_w_falls_back_to_cache_when_pv_unavailable():
@@ -1724,9 +1836,7 @@ def test_compute_house_load_w_falls_back_to_cache_when_pv_unavailable():
 
     result = ctrl._compute_house_load_w(inputs)
 
-    assert result == pytest.approx(0.0), (
-        f"Expected cached fallback 0.0 when pv unavailable, got {result}"
-    )
+    assert result == pytest.approx(0.0), f"Expected cached fallback 0.0 when pv unavailable, got {result}"
 
 
 @pytest.mark.asyncio
@@ -1766,9 +1876,7 @@ def test_compute_house_load_w_reuses_cache_across_calls_when_batt_unavailable():
 
     hass.set_state("sensor.battery_power", "unavailable")
     second = ctrl._compute_house_load_w(inputs)
-    assert second == pytest.approx(400.0), (
-        f"Expected cached load_w=400.0 reused when batt unavailable, got {second}"
-    )
+    assert second == pytest.approx(400.0), f"Expected cached load_w=400.0 reused when batt unavailable, got {second}"
 
 
 @pytest.mark.asyncio
@@ -1797,6 +1905,7 @@ async def test_record_sample_loss_defaults_to_zero_when_unavailable():
 # R5 — profile fallback: load_w-null rows build profile via derive fallback
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
     """Recorder rows with load_w=NULL but valid p1_w/batt_w/pv_w build a non-empty
@@ -1818,23 +1927,25 @@ async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
     real_rec = DataRecorder(str(tmp_path / "test.db"))
 
     # Use a recent date (2 days ago) so rows stay inside the 14-day lookback.
-    recent = (datetime.now(timezone.utc) - timedelta(days=2)).replace(
-        hour=10, minute=0, second=0, microsecond=0
-    )
+    recent = (datetime.now(UTC) - timedelta(days=2)).replace(hour=10, minute=0, second=0, microsecond=0)
 
     # Seed a full hour of rows (one per minute); no load_w.
     # p1_w=600, batt_w=100, pv_w=50 → derived load = 750W (not 400W).
     for i in range(60):
         ts = (recent + timedelta(minutes=i)).isoformat()
-        real_rec.append({
-            "ts": ts,
-            "p1_w": 600.0, "batt_w": 100.0, "pv_w": 50.0,
-            "load_w": None,  # explicit NULL → derive fallback must be used
-        })
+        real_rec.append(
+            {
+                "ts": ts,
+                "p1_w": 600.0,
+                "batt_w": 100.0,
+                "pv_w": 50.0,
+                "load_w": None,  # explicit NULL → derive fallback must be used
+            }
+        )
 
     # Roll the seeded hour up into samples_hourly (refresh_profile now reads
     # read_hourly_rows, not the raw per-tick samples table).
-    real_rec.rollup_hours(datetime.now(timezone.utc).isoformat())
+    real_rec.rollup_hours(datetime.now(UTC).isoformat())
 
     ctrl, _ = _make_controller(hass)
     ctrl._recorder = real_rec  # swap in real recorder
@@ -1846,15 +1957,12 @@ async def test_profile_built_from_derive_fallback_when_load_w_null(tmp_path):
 
     lookup_dt = recent  # same day-type + hour as seeded rows
     from custom_components.anker_x1_smartgrid import const as _const
-    learned = forecast_mod.predict_load_w(
-        ctrl.profile, lookup_dt, fallback_w=_const.DEFAULT_FALLBACK_LOAD_W
-    )
+
+    learned = forecast_mod.predict_load_w(ctrl.profile, lookup_dt, fallback_w=_const.DEFAULT_FALLBACK_LOAD_W)
     assert learned != _const.DEFAULT_FALLBACK_LOAD_W, (
         "Expected derived load value, not the 400W fallback — derive path must have built the profile"
     )
-    assert abs(learned - 750.0) < 1.0, (
-        f"Expected ~750W (600+100+50), got {learned}"
-    )
+    assert abs(learned - 750.0) < 1.0, f"Expected ~750W (600+100+50), got {learned}"
 
 
 @pytest.mark.asyncio
@@ -1871,21 +1979,22 @@ async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_p
     real_rec = DataRecorder(str(tmp_path / "test.db"))
 
     # Use a recent date so rows reach the SQL query (inside lookback window).
-    recent = (datetime.now(timezone.utc) - timedelta(days=2)).replace(
-        hour=10, minute=0, second=0, microsecond=0
-    )
+    recent = (datetime.now(UTC) - timedelta(days=2)).replace(hour=10, minute=0, second=0, microsecond=0)
     # Rows with no load value at all — neither load_w nor p1_w.
     for i in range(3):
         ts = (recent + timedelta(minutes=i * 10)).isoformat()
-        real_rec.append({
-            "ts": ts,
-            "batt_w": 100.0, "pv_w": 50.0,
-            # p1_w=None (omitted), load_w=None (omitted) → no valid house load
-        })
+        real_rec.append(
+            {
+                "ts": ts,
+                "batt_w": 100.0,
+                "pv_w": 50.0,
+                # p1_w=None (omitted), load_w=None (omitted) → no valid house load
+            }
+        )
 
     # Roll the seeded hour up into samples_hourly (refresh_profile now reads
     # read_hourly_rows, not the raw per-tick samples table).
-    real_rec.rollup_hours(datetime.now(timezone.utc).isoformat())
+    real_rec.rollup_hours(datetime.now(UTC).isoformat())
 
     ctrl, _ = _make_controller(hass)
     ctrl._recorder = real_rec  # swap in real recorder
@@ -1893,9 +2002,7 @@ async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_p
     await ctrl.refresh_profile()
 
     # Profile must be empty (no valid samples).
-    assert ctrl.profile == {}, (
-        f"Expected empty profile when all rows have null load_w and p1_w, got {ctrl.profile}"
-    )
+    assert ctrl.profile == {}, f"Expected empty profile when all rows have null load_w and p1_w, got {ctrl.profile}"
 
     # Tick must complete gracefully with an empty profile; predictor returns fallback.
     _seed_valid_inputs(hass)
@@ -1908,12 +2015,13 @@ async def test_profile_empty_when_both_load_w_and_p1_null_returns_fallback(tmp_p
 # T4 — Controller._resolve_slot_minutes (per-refresh detection + UTC-day latch)
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_slot_minutes_explicit_override_bypasses_latch(monkeypatch):
     """An explicit slot_resolution override hard-pins the value on every call
     and never touches the latch, even when the slots would auto-detect finer."""
     hass = _StubHass()
     ctrl, _ = _make_controller(hass, data_overrides={"slot_resolution": "30"})
-    now = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: now)
 
     # Hourly-spaced slots would auto-detect 60, but the override always wins.
@@ -1931,7 +2039,7 @@ def test_resolve_slot_minutes_auto_latches_finest_seen_today(monkeypatch):
     does not un-latch when a later read the same day is coarser."""
     hass = _StubHass()
     ctrl, _ = _make_controller(hass, data_overrides={"slot_resolution": const.SLOT_RESOLUTION_AUTO})
-    day1 = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+    day1 = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: day1)
 
     quarter_slots = [PriceSlot(day1 + timedelta(minutes=15 * i), 0.20) for i in range(4)]
@@ -1949,12 +2057,12 @@ def test_resolve_slot_minutes_day_rollover_resets_latch(monkeypatch):
     detection is honoured instead of sticking to yesterday's finest."""
     hass = _StubHass()
     ctrl, _ = _make_controller(hass, data_overrides={"slot_resolution": const.SLOT_RESOLUTION_AUTO})
-    day1 = datetime(2026, 8, 1, 23, 0, tzinfo=timezone.utc)
+    day1 = datetime(2026, 8, 1, 23, 0, tzinfo=UTC)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: day1)
     quarter_slots = [PriceSlot(day1 + timedelta(minutes=15 * i), 0.20) for i in range(4)]
     assert ctrl._resolve_slot_minutes(quarter_slots) == 15
 
-    day2 = datetime(2026, 8, 2, 0, 30, tzinfo=timezone.utc)
+    day2 = datetime(2026, 8, 2, 0, 30, tzinfo=UTC)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: day2)
     hourly_slots = [PriceSlot(day2 + timedelta(hours=i), 0.20) for i in range(4)]
     assert ctrl._resolve_slot_minutes(hourly_slots) == 60
@@ -1963,6 +2071,7 @@ def test_resolve_slot_minutes_day_rollover_resets_latch(monkeypatch):
 # ---------------------------------------------------------------------------
 # T16 — measured efficiency curve: build + cache + planner gate
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_efficiency_read_skipped_when_measured_eta_off():
@@ -1981,10 +2090,11 @@ async def test_efficiency_curve_built_only_when_measured_eta_on():
     and _planner_curve surfaces it."""
     from dataclasses import replace
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
+
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     await ctrl._refresh_efficiency_curve(BASE)
-    assert ctrl._eta_curve_built_at is None          # skipped
+    assert ctrl._eta_curve_built_at is None  # skipped
     assert ctrl._planner_curve() is None
     ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
     await ctrl._refresh_efficiency_curve(BASE)
@@ -1996,6 +2106,7 @@ async def test_efficiency_curve_built_only_when_measured_eta_on():
 @pytest.mark.asyncio
 async def test_refresh_efficiency_curve_is_cached_within_window():
     from dataclasses import replace
+
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
@@ -2014,11 +2125,14 @@ async def test_refresh_efficiency_curve_is_cached_within_window():
 @pytest.mark.asyncio
 async def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error():
     from dataclasses import replace
+
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
+
     def _boom(since_iso=None):
         raise RuntimeError("recorder unavailable")
+
     ctrl._recorder.read_efficiency_samples = _boom
     await ctrl._refresh_efficiency_curve(BASE)
     assert ctrl._eta_curve is not None
@@ -2028,6 +2142,7 @@ async def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error()
 # ---------------------------------------------------------------------------
 # T17 — measured efficiency curve threaded into the live executor/soc_drift/PnL
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_executor_runs_with_measured_eta_on(monkeypatch):
@@ -2045,9 +2160,7 @@ async def test_executor_runs_with_measured_eta_on(monkeypatch):
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 
     hass = _StubHass()
-    ctrl, act = _make_controller(
-        hass, data_overrides={const.CONF_ENT_EXPORT_PRICE: "sensor.export_price"}
-    )
+    ctrl, act = _make_controller(hass, data_overrides={const.CONF_ENT_EXPORT_PRICE: "sensor.export_price"})
     ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True, enable_export=True)
     curve = EfficiencyCurve.static(ctrl.cfg)
     ctrl._eta_curve = curve
@@ -2083,6 +2196,7 @@ async def test_executor_runs_with_measured_eta_on(monkeypatch):
 # T18 — measured efficiency curve: bin table exposed via last_status
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_status_exposes_efficiency_curve_table():
     """last_status must expose the efficiency curve bin table + the
@@ -2107,6 +2221,7 @@ async def test_learned_model_unavailable_warns_once(monkeypatch, caplog):
     """A4: use_learned_model=True + addon disabled + sklearn unavailable in-process
     is the silent bucketed-fallback case — warn ONCE, not every tick."""
     from dataclasses import replace
+
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     ctrl.cfg = replace(ctrl.cfg, use_learned_model=True, addon_enabled=False)

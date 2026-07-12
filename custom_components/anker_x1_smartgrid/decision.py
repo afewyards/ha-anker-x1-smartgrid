@@ -14,13 +14,24 @@ of ``_apply_price_prior``'s price-prior lookup, unchanged by this move.
 ``controller.py`` re-exports every name below (``from .decision import
 ...``) so existing call sites and test imports keep working unchanged.
 """
+
 from __future__ import annotations
 
 import logging
 import math
 from datetime import datetime, timedelta
 
-from . import const, energy, guard, optimize as optimize_mod, plan as plan_mod, pricing_store, regret as regret_mod, resolution, scheduler
+from . import (
+    const,
+    energy,
+    guard,
+    optimize as optimize_mod,
+    plan as plan_mod,
+    pricing_store,
+    regret as regret_mod,
+    resolution,
+    scheduler,
+)
 from .efficiency import EfficiencyCurve
 from .export_filter import apply_min_export_block
 from .forecast import build_intervals
@@ -33,6 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 # Values below this threshold are rounding / binning artefacts from the DP
 # discretisation (BIN_KWH ≈ 0.05 kWh) and are treated as zero charge.
 _DP_EPSILON_SCHEDULE_KWH = 0.01
+
 
 # NOTE: the regret.py oracle has NO charge band — optimize-vs-oracle parity runs
 # with chargeable=None — so this look-back is intentionally controller-only and is
@@ -61,30 +73,23 @@ def _trough_by_hour(
     """
     stride = timedelta(minutes=slot_minutes)
     slot_seconds = slot_minutes * 60
-    window_len = max(0, int(round((horizon_edge - now_h).total_seconds() / slot_seconds)))
+    window_len = max(0, round((horizon_edge - now_h).total_seconds() / slot_seconds))
     if window_len == 0:
         return {}
     price_by_h = resolution.resample_price_map(slots, slot_minutes)
     start_h = now_h - lookback_slots * stride
     grid_len = lookback_slots + window_len
-    prices_grid = [
-        price_by_h.get(start_h + k * stride, float("inf"))
-        for k in range(grid_len)
-    ]
+    prices_grid = [price_by_h.get(start_h + k * stride, float("inf")) for k in range(grid_len)]
     _base_day = start_h.date()
-    _day_index = [
-        ((start_h + k * stride).date() - _base_day).days
-        for k in range(grid_len)
-    ]
+    _day_index = [((start_h + k * stride).date() - _base_day).days for k in range(grid_len)]
     trough_grid = regret_mod.windowed_trough_prices(prices_grid, lookback_slots, day_index=_day_index)
-    return {
-        now_h + j * stride: trough_grid[lookback_slots + j]
-        for j in range(window_len)
-    }
+    return {now_h + j * stride: trough_grid[lookback_slots + j] for j in range(window_len)}
 
 
 def _dp_window(
-    now: datetime, deadline: datetime, slot_minutes: int,
+    now: datetime,
+    deadline: datetime,
+    slot_minutes: int,
 ) -> tuple[datetime, datetime, int]:
     """Single source of truth for the DP's slot-aligned window.
 
@@ -105,7 +110,7 @@ def _dp_window(
     now_h = resolution.floor_to_slot(now, slot_minutes)
     deadline_h = resolution.floor_to_slot(deadline, slot_minutes)
     deadline_ceil = deadline_h + stride if deadline > deadline_h else deadline_h
-    window_len = max(1, int(round((deadline_ceil - now_h).total_seconds() / slot_seconds)))
+    window_len = max(1, round((deadline_ceil - now_h).total_seconds() / slot_seconds))
     return now_h, deadline_ceil, window_len
 
 
@@ -128,7 +133,11 @@ def _dp_select_slots(
     dt_h: float = 1.0,
     eta_curve: EfficiencyCurve | None = None,
 ) -> tuple[
-    list[datetime], dict[datetime, float], bool, dict[datetime, float], float,
+    list[datetime],
+    dict[datetime, float],
+    bool,
+    dict[datetime, float],
+    float,
     dict[datetime, float],
 ]:
     """Run the DP optimizer and return charge-slot datetimes for this tick.
@@ -199,10 +208,7 @@ def _dp_select_slots(
     # None / empty dict → hedge_drain_kwh stays None → optimize_grid parity-safe.
     hedge_drain_kwh: list[float] | None = None
     if hedge_drain_by_hour:
-        hedge_drain_kwh = [
-            hedge_drain_by_hour.get(now_h + h * stride, 0.0)
-            for h in range(window_len)
-        ]
+        hedge_drain_kwh = [hedge_drain_by_hour.get(now_h + h * stride, 0.0) for h in range(window_len)]
 
     # Price lookup by clock-hour start
     price_by_h: dict[datetime, float] = resolution.resample_price_map(slots, slot_minutes)
@@ -215,7 +221,7 @@ def _dp_select_slots(
     # (5% hard floor); no P80 series is needed here.
     window_pv: list[float] = [0.0] * window_len
     window_load_reserve: list[float] = [0.0] * window_len
-    for iv in (intervals or []):
+    for iv in intervals or []:
         iv_end = iv.start + timedelta(hours=iv.dt_h)
         for h in range(window_len):
             bucket_start = now_h + h * stride
@@ -229,17 +235,12 @@ def _dp_select_slots(
             window_load_reserve[h] += iv.load_w * ov_h / 1000.0
 
     # Price array aligned to window buckets
-    window_price: list[float] = [
-        price_by_h.get(now_h + h * stride, 0.0)
-        for h in range(window_len)
-    ]
+    window_price: list[float] = [price_by_h.get(now_h + h * stride, 0.0) for h in range(window_len)]
 
     # Per-hour windowed-trough reference (look-back) for the cheap-charge band.
     _lookback_slots = round(cfg.charge_trough_lookback_h / dt_h)
     _trough_map = _trough_by_hour(slots, now_h, deadline_ceil, _lookback_slots, slot_minutes)
-    _trough_list = [
-        _trough_map.get(now_h + h * stride) for h in range(window_len)
-    ]
+    _trough_list = [_trough_map.get(now_h + h * stride) for h in range(window_len)]
 
     # Chargeability mask: ceiling AND the per-hour look-back trough band.
     # price_valid rejects 0.0-padded phantom-price hours (no real price data at
@@ -247,7 +248,8 @@ def _dp_select_slots(
     # trough band via the injected 0.0 pad.
     _price_valid = [(now_h + h * stride) in price_by_h for h in range(window_len)]
     chargeable = optimize_mod.build_charge_mask(
-        window_price, ceiling,
+        window_price,
+        ceiling,
         price_band=cfg.charge_window_price_band,
         trough=_trough_list,
         price_valid=_price_valid,
@@ -302,9 +304,7 @@ def _dp_select_slots(
         cur_import = window_price[0] if window_price else 0.0
         if cur_import > 1e-9:
             ratio = export_price / cur_import
-            window_export_price = [
-                optimize_mod.effective_export_price(p * ratio, cfg) for p in window_price
-            ]
+            window_export_price = [optimize_mod.effective_export_price(p * ratio, cfg) for p in window_price]
             feed_in = list(window_export_price)
         else:
             eff = optimize_mod.effective_export_price(export_price, cfg)
@@ -319,9 +319,7 @@ def _dp_select_slots(
     # extra hour — the per-hour reserve floor must always be enforced.
     _floor_kwh = cfg.floor_kwh
     if reserve_by_hour is not None:
-        padded_reserve = (
-            reserve_by_hour + [_floor_kwh] * max(0, window_len - len(reserve_by_hour))
-        )[:window_len]
+        padded_reserve = (reserve_by_hour + [_floor_kwh] * max(0, window_len - len(reserve_by_hour)))[:window_len]
     else:
         padded_reserve = None
 
@@ -331,9 +329,7 @@ def _dp_select_slots(
     # Uses the MEDIAN-load surplus (window_load_reserve, P50) so it reserves
     # room for the solar that REALISTICALLY arrives — not a conservative load
     # estimate (which would under-reserve and waste afternoon solar).
-    cycle_end_idx = optimize_mod.solar_cycle_end_idx(
-        now_h, window_len, sun_times, slot_minutes=slot_minutes
-    )
+    cycle_end_idx = optimize_mod.solar_cycle_end_idx(now_h, window_len, sun_times, slot_minutes=slot_minutes)
     grid_charge_ceiling = optimize_mod.solar_reservation_ceiling(
         window_pv, window_load_reserve, cfg, cycle_end_idx=cycle_end_idx, dt_h=dt_h
     )
@@ -363,7 +359,7 @@ def _dp_select_slots(
         export_price=window_export_price if export_price is not None else None,
         terminal_mode=terminal_mode,
         water_value=water_value,
-        reserve_by_hour=padded_reserve,            # UNCHANGED: export discharge floor
+        reserve_by_hour=padded_reserve,  # UNCHANGED: export discharge floor
         grid_charge_ceiling=grid_charge_ceiling,
         hedge_drain_kwh=hedge_drain_kwh,
         dt_h=dt_h,
@@ -401,11 +397,7 @@ def _dp_select_slots(
     # Convert per-hour schedule to selected slot datetimes.
     # Any hour with AC charge > epsilon is treated as a selected charging slot,
     # fed into decide_state identically to the heuristic-chosen slots.
-    selected: list[datetime] = [
-        now_h + h * stride
-        for h, kwh in enumerate(schedule)
-        if kwh > _DP_EPSILON_SCHEDULE_KWH
-    ]
+    selected: list[datetime] = [now_h + h * stride for h, kwh in enumerate(schedule) if kwh > _DP_EPSILON_SCHEDULE_KWH]
     grid_request: dict[datetime, float] = {
         now_h + h * stride: schedule[h] * 1000.0 / dt_h
         for h in range(len(schedule))
@@ -447,10 +439,7 @@ def _dp_select_slots(
         # Curve-derived at the export cap (a representative scalar reused across
         # every overlapping hour below, mirroring the pre-curve single-scalar
         # shape); static eta_discharge(cfg) when eta_curve is None (parity).
-        _eta_d = (
-            optimize_mod.eta_discharge(cfg) if eta_curve is None
-            else eta_curve.eta_discharge(cfg.max_export_w)
-        )
+        _eta_d = optimize_mod.eta_discharge(cfg) if eta_curve is None else eta_curve.eta_discharge(cfg.max_export_w)
         _cc = cfg.cycle_cost_eur_per_kwh
         for _h in _overlap:
             _C = grid_request.pop(_h)
@@ -460,15 +449,11 @@ def _dp_select_slots(
             _net = _E - _C
             # Per-hour effective export price for revenue adjustment
             _idx = round((_h - now_h).total_seconds() / slot_seconds)
-            _ep_h = (
-                window_export_price[_idx]
-                if 0 <= _idx < len(window_export_price)
-                else 0.0
-            )
+            _ep_h = window_export_price[_idx] if 0 <= _idx < len(window_export_price) else 0.0
             if _net > _net_eps_w:
                 # Export dominates: keep net export, remove grid-charge entirely
                 export_request[_h] = _net
-                _removed_kwh = (_E - _net) / 1000.0 * dt_h   # == C / 1000 * dt_h
+                _removed_kwh = (_E - _net) / 1000.0 * dt_h  # == C / 1000 * dt_h
             elif -_net > _net_eps_w:
                 # Charge dominates: keep net charge, remove export entirely
                 grid_request[_h] = -_net
@@ -486,8 +471,7 @@ def _dp_select_slots(
     # at soc_target, leaving room for the forecast solar surplus.
     cap = cfg.capacity_kwh if cfg.capacity_kwh > 1e-9 else 1.0
     ceiling_by_hour: dict[datetime, float] = {
-        now_h + h * stride: grid_charge_ceiling[h] / cap * 100.0
-        for h in range(window_len)
+        now_h + h * stride: grid_charge_ceiling[h] / cap * 100.0 for h in range(window_len)
     }
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour
 
@@ -522,15 +506,12 @@ def _build_is_cheap_by_hour(
     # NOT an unbounded suffix (a deep >24h-out / negative-price trough must not
     # suppress tomorrow's genuine morning relief).  No regret dependency.
     trough_ref = [
-        min(prices[k:min(k + const.RESERVE_WINDOW_MAX_H * (60 // slot_minutes), len(prices))])
+        min(prices[k : min(k + const.RESERVE_WINDOW_MAX_H * (60 // slot_minutes), len(prices))])
         for k in range(len(prices))
     ]
     band = cfg.reserve_cheap_band
     eps = const.RESERVE_CHEAP_BAND_EPS
-    return {
-        h: prices[k] <= trough_ref[k] + band * max(trough_ref[k], eps)
-        for k, h in enumerate(hours)
-    }
+    return {h: prices[k] <= trough_ref[k] + band * max(trough_ref[k], eps) for k, h in enumerate(hours)}
 
 
 def _next_synthetic_pickup(after: datetime) -> datetime:
@@ -541,7 +522,9 @@ def _next_synthetic_pickup(after: datetime) -> datetime:
     """
     pickup = after.replace(
         hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
-        minute=0, second=0, microsecond=0,
+        minute=0,
+        second=0,
+        microsecond=0,
     )
     if pickup <= after:
         pickup += timedelta(days=1)
@@ -564,9 +547,7 @@ def _synthetic_night_rows(
     rows: list[ForecastInterval] = []
     t = start
     while t < end:
-        load_w = (
-            load_w_by_hod.get(t.hour, fallback_w) if load_w_by_hod is not None else fallback_w
-        )
+        load_w = load_w_by_hod.get(t.hour, fallback_w) if load_w_by_hod is not None else fallback_w
         rows.append(ForecastInterval(t, 0.0, load_w, 1.0))
         t += timedelta(hours=1)
     return rows
@@ -670,11 +651,13 @@ def _build_reserve_by_hour(
             if not _has_solar:
                 continue
             synthetic_pickup = _next_synthetic_pickup(h)
-            syn_suffix = _synthetic_night_rows(
-                h, synthetic_pickup, load_by_hod, const.DEFAULT_FALLBACK_LOAD_W
-            )
+            syn_suffix = _synthetic_night_rows(h, synthetic_pickup, load_by_hod, const.DEFAULT_FALLBACK_LOAD_W)
             reserve_by_hour[h] = energy.ride_out_reserve_kwh(
-                h, syn_suffix, cfg, is_cheap=is_cheap, slot_minutes=slot_minutes,
+                h,
+                syn_suffix,
+                cfg,
+                is_cheap=is_cheap,
+                slot_minutes=slot_minutes,
                 eta_curve=eta_curve,
             )
             continue
@@ -704,7 +687,11 @@ def _build_reserve_by_hour(
             )
             next_opp = synthetic_pickup
         reserve_by_hour[h] = energy.ride_out_reserve_kwh(
-            h, suffix, cfg, is_cheap=is_cheap, slot_minutes=slot_minutes,
+            h,
+            suffix,
+            cfg,
+            is_cheap=is_cheap,
+            slot_minutes=slot_minutes,
             eta_curve=eta_curve,
         )
 
@@ -731,10 +718,8 @@ def _apply_price_prior(
     if estimated_tomorrow is None:
         return
     pickup = scheduler.find_next_solar_pickup(real_horizon_end, intervals_reserve)
-    est_slots = pricing_store.build_estimated_slots(
-        estimated_tomorrow, real_horizon_end, pickup
-    )
-    if not est_slots or pickup is None:   # narrows pickup to datetime below
+    est_slots = pricing_store.build_estimated_slots(estimated_tomorrow, real_horizon_end, pickup)
+    if not est_slots or pickup is None:  # narrows pickup to datetime below
         return
     # Resample-before-consume: `slots` may be a mixed 60+15-min payload during
     # rollout (near-term fine, far-term coarse — detect_slot_minutes is MIN-based
@@ -796,7 +781,9 @@ def compute_decision(
     slot_minutes: int | None = None,
     eta_curve: EfficiencyCurve | None = None,
 ) -> tuple[PlanState, float, datetime, list, str, list]:
-    """Pure wiring of energy + scheduler + guard. Returns (plan, setpoint, deadline, horizon, horizon_mode, intervals_reserve).
+    """Pure wiring of energy + scheduler + guard.
+
+    Returns (plan, setpoint, deadline, horizon, horizon_mode, intervals_reserve).
 
     The 6th element ``intervals_reserve`` is the two-day P50 ForecastInterval list
     anchored to tomorrow's PV ramp — used for reserve sizing in the C3 export executor.
@@ -841,9 +828,7 @@ def compute_decision(
         # This avoids the monotonic-rise bug in the quarter-sine synthesis.
         _wv_curve = build_pv_curve_from_watts(today_watts, tomorrow_watts, inputs.now, step_h=dt_h)
     elif sun_times is not None:
-        _wv_curve = build_two_day_pv_curve(
-            today_arrays, tomorrow_arrays, inputs.now, *sun_times
-        )
+        _wv_curve = build_two_day_pv_curve(today_arrays, tomorrow_arrays, inputs.now, *sun_times)
     elif today_arrays:
         _wv_curve = build_pv_curve_from_arrays(today_arrays, inputs.now, horizon_edge)
     else:
@@ -851,8 +836,15 @@ def compute_decision(
     # Full horizon: every future slot is in-window (no trough truncation).
     _wv_slots = [s for s in slots if now_h <= s.start < horizon_edge]
     intervals = plan_mod.build_display_intervals(
-        _wv_slots, inputs.now, _wv_curve, predictor, cur_temp, fallback_load,
-        quantile=0.5, temp_by_hour=temp_by_hour, slot_minutes=slot_minutes,
+        _wv_slots,
+        inputs.now,
+        _wv_curve,
+        predictor,
+        cur_temp,
+        fallback_load,
+        quantile=0.5,
+        temp_by_hour=temp_by_hour,
+        slot_minutes=slot_minutes,
     )
     # Two-day reserve intervals: extend P50 (expected) load coverage past the price
     # horizon to tomorrow's PV ramp, so the ride-out reserve reaches the next solar
@@ -862,14 +854,15 @@ def compute_decision(
     # Falls back to in-horizon P50 intervals when no two-day PV curve is available.
     if sun_times is not None and _wv_curve:
         _rsv_temp = {
-            start: (
-                temp_by_hour.get(resolution.hour_floor(start), cur_temp)
-                if temp_by_hour else cur_temp
-            )
+            start: (temp_by_hour.get(resolution.hour_floor(start), cur_temp) if temp_by_hour else cur_temp)
             for start, _ in _wv_curve
         }
         intervals_reserve = build_intervals(
-            _wv_curve, predictor, fallback_load, cfg, _rsv_temp,
+            _wv_curve,
+            predictor,
+            fallback_load,
+            cfg,
+            _rsv_temp,
             quantile=0.5,
         )
     else:
@@ -883,12 +876,7 @@ def compute_decision(
         intervals_reserve = list(intervals)
         _synthetic_pickup = _next_synthetic_pickup(now_h)
         # End of the last real interval (= start of the synthetic gap).
-        _iv_horizon = (
-            intervals[-1].start
-            + timedelta(hours=intervals[-1].dt_h)
-            if intervals
-            else now_h
-        )
+        _iv_horizon = intervals[-1].start + timedelta(hours=intervals[-1].dt_h) if intervals else now_h
         # Only extend when:
         #   (a) there are real P50 intervals (non-empty price window), AND
         #   (b) the real price horizon has NOT yet crossed midnight.
@@ -899,18 +887,13 @@ def compute_decision(
         # (e.g. 14:00→02:00 next day); the `<=` covers the common night-edge where
         # the horizon ends exactly at midnight (e.g. 22:00→00:00 with only
         # tonight's prices published).
-        _midnight_next = (
-            now_h.replace(hour=0, minute=0, second=0, microsecond=0)
-            + timedelta(days=1)
-        )
+        _midnight_next = now_h.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         if intervals and _iv_horizon <= _midnight_next:
             _syn_start = resolution.hour_floor(_iv_horizon)
             # If the real interval ends mid-hour, advance to the next full hour.
             if _iv_horizon > _syn_start:
                 _syn_start += timedelta(hours=1)
-            intervals_reserve.extend(
-                _synthetic_night_rows(_syn_start, _synthetic_pickup, None, fallback_load)
-            )
+            intervals_reserve.extend(_synthetic_night_rows(_syn_start, _synthetic_pickup, None, fallback_load))
 
     horizon_mode = "water-value"
 
@@ -943,11 +926,15 @@ def compute_decision(
     # the DP export floor (window-aligned list below).
     # rev-2 ride-to-trough: precompute the cheap-relief map ONCE, thread to the walk.
     _is_cheap = (
-        _build_is_cheap_by_hour(slots, cfg, slot_minutes)
-        if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH else None
+        _build_is_cheap_by_hour(slots, cfg, slot_minutes) if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH else None
     )
     _reserve_by_hour = _build_reserve_by_hour(
-        inputs.now, slots, intervals_reserve, cfg, is_cheap=_is_cheap, slot_minutes=slot_minutes,
+        inputs.now,
+        slots,
+        intervals_reserve,
+        cfg,
+        is_cheap=_is_cheap,
+        slot_minutes=slot_minutes,
         eta_curve=eta_curve,
     )
     # Plan B: upside-only reserve-raise from the persistence price prior.  Mutates
@@ -961,8 +948,13 @@ def compute_decision(
     # what completed the 100% pin — GATE it off; legacy anchor keeps it for rollback.
     if cfg.reserve_anchor != const.RESERVE_ANCHOR_TROUGH:
         _apply_price_prior(
-            _reserve_by_hour, estimated_tomorrow, slots, now_h, horizon_edge,
-            intervals_reserve, cfg,
+            _reserve_by_hour,
+            estimated_tomorrow,
+            slots,
+            now_h,
+            horizon_edge,
+            intervals_reserve,
+            cfg,
         )
     # Window-aligned per-SLOT reserve floor (DC kWh) for the DP export bound.
     #
@@ -995,11 +987,10 @@ def compute_decision(
     live_export_request: dict[datetime, float] | None = None
     live_ceiling_by_hour: dict[datetime, float] | None = None
     try:
-        (_dp_selected, _dp_request, _dp_infeasible, _dp_export_request,
-         _dp_export_rev, _dp_ceiling) = _dp_select_slots(
+        (_dp_selected, _dp_request, _dp_infeasible, _dp_export_request, _dp_export_rev, _dp_ceiling) = _dp_select_slots(
             inputs=inputs,
             slots=slots,
-            deadline=horizon_edge,        # window spans [now, trough] in new mode
+            deadline=horizon_edge,  # window spans [now, trough] in new mode
             ceiling=_ceiling,
             cfg=cfg,
             export_price=export_price,
@@ -1027,7 +1018,7 @@ def compute_decision(
             _out["intervals"] = intervals  # P50 intervals for horizon building
             _out["dp_infeasible"] = _dp_infeasible
             _out["export_revenue_eur"] = _dp_export_rev
-    except Exception:  # noqa: BLE001 — safety: never block actuation
+    except Exception:
         _LOGGER.warning(
             "DP optimizer path failed; falling back to PASSIVE (no charge slots selected)",
             exc_info=True,
@@ -1047,10 +1038,7 @@ def compute_decision(
         # Review 1.3: a commit belongs to ONE slot. A stale carry-over from the
         # previous slot must not seed the deadband compare (it bypassed the DP
         # price mask and forced full-rate charge at peak).
-        prev_cur_kwh = (
-            plan.committed_charge_kwh
-            if plan.committed_charge_slot == cur_h else 0.0
-        )
+        prev_cur_kwh = plan.committed_charge_kwh if plan.committed_charge_slot == cur_h else 0.0
         dp_cur_kwh = live_grid_request.get(cur_h, 0.0) / 1000.0 * dt_h
         if abs(dp_cur_kwh - prev_cur_kwh) <= cfg.end_soc_deadband:
             # Within deadband: keep the previous current-hour membership.
@@ -1082,17 +1070,16 @@ def compute_decision(
     # `inputs.now` directly so `cur_h` always names the actual current slot.
     cur_h = resolution.floor_to_slot(inputs.now, slot_minutes)
     _export_eps_w = _DP_EPSILON_SCHEDULE_KWH * 1000.0 / dt_h  # ε in W over the slot
-    if (
-        cur_h in selected
-        and live_export_request is not None
-        and live_export_request.get(cur_h, 0.0) > _export_eps_w
-    ):
+    if cur_h in selected and live_export_request is not None and live_export_request.get(cur_h, 0.0) > _export_eps_w:
         selected = [h for h in selected if h != cur_h]
         committed_cur_kwh = 0.0
 
     new_plan = scheduler.decide_state(
-        plan, soc=inputs.soc, now=inputs.now,
-        selected_slots=selected, cfg=cfg,
+        plan,
+        soc=inputs.soc,
+        now=inputs.now,
+        selected_slots=selected,
+        cfg=cfg,
         # Hard charge-stop at the solar-reservation ceiling for THIS hour: the
         # executor must stop at the ceiling (leaving room for forecast solar),
         # not at soc_target.  None on the heuristic-fallback path (no DP ceiling).
@@ -1104,14 +1091,16 @@ def compute_decision(
         # anti-fight guard's `cur_h` just above.
         charge_ceiling_soc=(
             live_ceiling_by_hour.get(resolution.floor_to_slot(inputs.now, slot_minutes))
-            if live_ceiling_by_hour else None
+            if live_ceiling_by_hour
+            else None
         ),
         slot_minutes=slot_minutes,
     )
     new_plan.committed_charge_kwh = committed_cur_kwh
     new_plan.committed_charge_slot = (
         resolution.floor_to_slot(inputs.now, slot_minutes)
-        if live_grid_request is not None else plan.committed_charge_slot
+        if live_grid_request is not None
+        else plan.committed_charge_slot
     )
 
     if new_plan.state is ControllerState.FORCING:
@@ -1121,15 +1110,21 @@ def compute_decision(
         setpoint = 0.0
     if sun_times is not None:
         # Synthesize per-array display lists so build_display_horizon always receives arrays.
-        disp_today = today_arrays if today_arrays else (
-            [(pv_remaining, None)] if pv_remaining else None
-        )
-        disp_tomorrow = tomorrow_arrays if tomorrow_arrays else (
-            [(tomorrow_total, None)] if tomorrow_total else None
-        )
+        disp_today = today_arrays if today_arrays else ([(pv_remaining, None)] if pv_remaining else None)
+        disp_tomorrow = tomorrow_arrays if tomorrow_arrays else ([(tomorrow_total, None)] if tomorrow_total else None)
         horizon = plan_mod.build_display_horizon(
-            slots, inputs.now, disp_today, disp_tomorrow, sun_times,
-            predictor, cur_temp, fallback_load, inputs.soc, selected, deadline, cfg,
+            slots,
+            inputs.now,
+            disp_today,
+            disp_tomorrow,
+            sun_times,
+            predictor,
+            cur_temp,
+            fallback_load,
+            inputs.soc,
+            selected,
+            deadline,
+            cfg,
             grid_request_by_hour=live_grid_request,
             export_request_by_hour=live_export_request,
             reserve_by_hour=_reserve_by_hour if _reserve_by_hour else None,
@@ -1143,7 +1138,12 @@ def compute_decision(
         )
     else:
         horizon = plan_mod.build_plan_horizon(
-            slots, intervals, selected, inputs.soc, deadline, cfg,
+            slots,
+            intervals,
+            selected,
+            inputs.soc,
+            deadline,
+            cfg,
             grid_request_by_hour=live_grid_request,
             export_request_by_hour=live_export_request,
             reserve_by_hour=_reserve_by_hour if _reserve_by_hour else None,

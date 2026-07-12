@@ -6,6 +6,7 @@ and an upside-only reserve-raise input (B4).  Estimated prices NEVER enter the r
 `slots` list or the DP price arrays — the only effect is a non-negative bump to the
 per-hour ride-out reserve, applied by controller._apply_price_prior.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
@@ -20,9 +21,8 @@ from .regret import windowed_peak_prices
 
 # ── B1: rolling realized-price store ──────────────────────────────────────────
 
-def prune_history(
-    history: dict[str, dict[str, float]], max_days: int
-) -> dict[str, dict[str, float]]:
+
+def prune_history(history: dict[str, dict[str, float]], max_days: int) -> dict[str, dict[str, float]]:
     """Ring buffer: keep only the `max_days` most-recent date-keyed entries."""
     if max_days <= 0 or len(history) <= max_days:
         return dict(history)
@@ -76,13 +76,12 @@ class PriceHistoryStore:
         existing = self._history.get(date_iso)
         if existing is not None and len(existing) >= len(hourly):
             return  # existing is at least as complete — skip overwrite
-        self._history = prune_history(
-            {**self._history, date_iso: hourly}, self._max_days
-        )
+        self._history = prune_history({**self._history, date_iso: hourly}, self._max_days)
         await self._store.async_save({"history": self._history})
 
 
 # ── B2: blended tomorrow estimate ─────────────────────────────────────────────
+
 
 def _most_recent_full_day(history: dict[str, dict[str, float]]) -> dict[str, float] | None:
     for d in sorted(history, reverse=True):
@@ -114,14 +113,12 @@ def blend_price_prior(
         return None
     same_wd = history.get((target_date - timedelta(days=7)).isoformat())
     if same_wd is not None and len(same_wd) >= 24:
-        return [
-            weight_today * today[str(h)] + (1.0 - weight_today) * same_wd[str(h)]
-            for h in range(24)
-        ]
+        return [weight_today * today[str(h)] + (1.0 - weight_today) * same_wd[str(h)] for h in range(24)]
     return [today[str(h)] for h in range(24)]
 
 
 # ── B3: estimated slots — SEPARATE list, bounded to the pre-solar window ──────
+
 
 def build_estimated_slots(
     estimated_tomorrow: list[float] | None,
@@ -134,11 +131,7 @@ def build_estimated_slots(
     already extend past tonight (real_horizon_end >= pickup).  These slots are passed
     ONLY to compute_anticipation_held_extra — NEVER merged into `slots`.
     """
-    if (
-        estimated_tomorrow is None
-        or tomorrow_solar_pickup is None
-        or real_horizon_end >= tomorrow_solar_pickup
-    ):
+    if estimated_tomorrow is None or tomorrow_solar_pickup is None or real_horizon_end >= tomorrow_solar_pickup:
         return []
     out: list[PriceSlot] = []
     h = real_horizon_end
@@ -149,6 +142,7 @@ def build_estimated_slots(
 
 
 # ── B4: upside-only held-extra (withhold tonight, hold for tomorrow morning) ──
+
 
 def compute_anticipation_held_extra(
     *,
@@ -186,9 +180,7 @@ def compute_anticipation_held_extra(
     dt_h_real = slot_minutes / 60.0
     haircut = cfg.anticipation_confidence_haircut
     margin = cfg.anticipation_margin_eur_per_kwh
-    est_morning = (1.0 - haircut) * max(
-        optimize.effective_export_price(s.price, cfg) for s in estimated_slots
-    )
+    est_morning = (1.0 - haircut) * max(optimize.effective_export_price(s.price, cfg) for s in estimated_slots)
     # Real export-effective prices over the horizon → peak band (mirrors optimize.py).
     horizon = [s for s in real_slots if now_h <= s.start < real_horizon_end]
     if not horizon:
@@ -206,17 +198,14 @@ def compute_anticipation_held_extra(
     band = cfg.export_peak_band_frac
     tonight = sorted(
         (
-            s for i, s in enumerate(horizon)
-            if s.start < tomorrow_solar_pickup
-            and eprices[i] >= peak_ref[i] * (1.0 - band) - 1e-9
+            s
+            for i, s in enumerate(horizon)
+            if s.start < tomorrow_solar_pickup and eprices[i] >= peak_ref[i] * (1.0 - band) - 1e-9
         ),
-        key=lambda s: s.price,   # cheapest export hour first
+        key=lambda s: s.price,  # cheapest export hour first
     )
     ac_cap_w = min(cfg.max_export_w, cfg.grid_export_limit_w)
-    eta_d = (
-        optimize.eta_discharge(cfg) if eta_curve is None
-        else eta_curve.eta_discharge(ac_cap_w)
-    )
+    eta_d = optimize.eta_discharge(cfg) if eta_curve is None else eta_curve.eta_discharge(ac_cap_w)
     ac_cap_kwh = ac_cap_w / 1000.0
     per_hour_dc = ac_cap_kwh / eta_d if eta_d > 1e-9 else 0.0
     per_slot_dc_real = per_hour_dc * dt_h_real

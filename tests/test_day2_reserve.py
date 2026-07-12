@@ -5,7 +5,8 @@ The horizon spans today+tomorrow PV with NO day+2 PV: for any hour past the last
 forecast sunset, scheduler.find_next_solar_pickup returns None, and the pre-fix
 reserve collapsed to max(floor, thin-evening-tail) == the firmware floor.
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -13,7 +14,7 @@ from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 
-D1 = datetime(2026, 6, 26, 18, 0, tzinfo=timezone.utc)  # day-1 evening 18:00 UTC
+D1 = datetime(2026, 6, 26, 18, 0, tzinfo=UTC)  # day-1 evening 18:00 UTC
 
 
 def _cfg(**kw) -> Config:
@@ -68,9 +69,13 @@ def test_acceptance_a_day2_export_is_reserve_bounded():
     """(a) Feeding the FIXED reserve to optimize_grid bounds the day-2 evening export;
     the firmware-floor-only plan (reserve=None) drains strictly more."""
     cfg = _cfg(
-        soc_target=97.0, max_charge_w=0.0, round_trip_eff=1.0,
-        cycle_cost_eur_per_kwh=0.04, export_fee_eur_per_kwh=0.0,
-        max_export_w=3000.0, grid_export_limit_w=3000.0,
+        soc_target=97.0,
+        max_charge_w=0.0,
+        round_trip_eff=1.0,
+        cycle_cost_eur_per_kwh=0.04,
+        export_fee_eur_per_kwh=0.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
     )
     rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg)
     n = 3  # window 17:00 d2 .. 19:00 d2
@@ -81,8 +86,13 @@ def test_acceptance_a_day2_export_is_reserve_bounded():
     price = [0.20] * n
     export_price = [0.60] * n  # rich export every hour
     common = dict(
-        soc_start=80.0, cfg=cfg, window_start_h=0, window_len=n,
-        export_price=export_price, terminal_mode="water_value", water_value=0.0,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=export_price,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
     res_floor = optimize_grid(pv, load, price, reserve_by_hour=None, **common)
     res_rsv = optimize_grid(pv, load, price, reserve_by_hour=reserve_list, **common)
@@ -96,9 +106,13 @@ def test_acceptance_b_solar_first_no_grid_charge_for_export():
     """(b) Solar fills the pack to soc_target by the evening export peak; with the
     raised reserve the DP funds the export from the solar-filled pack and grid_charge==0."""
     cfg = _cfg(
-        soc_target=97.0, max_charge_w=3000.0, round_trip_eff=1.0,
-        cycle_cost_eur_per_kwh=0.04, export_fee_eur_per_kwh=0.0,
-        max_export_w=3000.0, grid_export_limit_w=3000.0,
+        soc_target=97.0,
+        max_charge_w=3000.0,
+        round_trip_eff=1.0,
+        cycle_cost_eur_per_kwh=0.04,
+        export_fee_eur_per_kwh=0.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
     )
     n = 4  # hour0 cheap import, hours1-2 solar block, hour3 export peak
     pv = [0.0, 6000.0, 6000.0, 0.0]
@@ -107,12 +121,17 @@ def test_acceptance_b_solar_first_no_grid_charge_for_export():
     export_price = [0.0, 0.0, 0.0, 0.60]
     reserve_list = [2.0, 2.0, 2.0, 5.0]  # raised night-2 ride-out at the export hour
     common = dict(
-        soc_start=60.0, cfg=cfg, window_start_h=0, window_len=n,
-        export_price=export_price, terminal_mode="water_value", water_value=0.0,
+        soc_start=60.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=export_price,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
     res = optimize_grid(pv, load, price, reserve_by_hour=reserve_list, **common)
     assert sum(res["schedule"]) == pytest.approx(0.0, abs=1e-9)  # no grid buy to fund export
-    assert sum(res["export_schedule"]) > 0.0                     # still exports solar surplus
+    assert sum(res["export_schedule"]) > 0.0  # still exports solar surplus
 
 
 def test_acceptance_c_needed_grid_charge_concentrates_at_cheapest_hour():
@@ -124,8 +143,14 @@ def test_acceptance_c_needed_grid_charge_concentrates_at_cheapest_hour():
     load = [0.0] * n
     price = [0.40, 0.13, 0.40, 0.40]  # hour 1 clearly cheapest
     res = optimize_grid(
-        pv, load, price, soc_start=30.0, cfg=cfg,
-        window_start_h=0, window_len=n, terminal_mode="reserve",
+        pv,
+        load,
+        price,
+        soc_start=30.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        terminal_mode="reserve",
     )
     g = res["schedule"]
     assert g[1] == pytest.approx(5.0, abs=0.3)  # ~5 kWh buy at the cheapest hour

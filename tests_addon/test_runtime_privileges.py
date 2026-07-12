@@ -9,6 +9,7 @@ as `USER appuser` (uid 1000) for the whole lifetime, so read_options()
 defaults — options changed in the addon UI never took effect. See
 addon/anker_x1_forecast/Dockerfile and run.sh for the fix.
 """
+
 from __future__ import annotations
 
 import re

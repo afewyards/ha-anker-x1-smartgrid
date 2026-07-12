@@ -5,29 +5,74 @@ samples table and rollup_hours path). This is valid because read_hourly_rows()
 reads samples_hourly directly, and featureset/hgbr only consume samples_hourly
 rows.
 """
+
 from __future__ import annotations
 
 import math
 import random
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from forecast_core.recorder import DataRecorder
 
 _HOURLY_COLUMNS = [
     "hour_ts",
-    "house_load_mean", "house_load_max", "house_load_min", "house_load_std", "house_load_count",
-    "pv_w_mean", "pv_w_max", "pv_w_min", "pv_w_std", "pv_w_count",
-    "soc_mean", "soc_max", "soc_min", "soc_std", "soc_count",
-    "irradiance_mean", "irradiance_max", "irradiance_min", "irradiance_std", "irradiance_count",
-    "temp_mean", "temp_max", "temp_min", "temp_std", "temp_count",
-    "temp_forecast_mean", "temp_forecast_max", "temp_forecast_min", "temp_forecast_std", "temp_forecast_count",
-    "cloud_cover_mean", "cloud_cover_max", "cloud_cover_min", "cloud_cover_std", "cloud_cover_count",
-    "humidity_mean", "humidity_max", "humidity_min", "humidity_std", "humidity_count",
-    "wind_speed_mean", "wind_speed_max", "wind_speed_min", "wind_speed_std", "wind_speed_count",
-    "persons_home_mean", "persons_home_max", "persons_home_min", "persons_home_std", "persons_home_count",
-    "grid_import_kwh_sum", "grid_export_kwh_sum", "house_load_kwh_sum",
-    "pv_kwh_sum", "batt_charge_kwh_sum", "batt_discharge_kwh_sum",
+    "house_load_mean",
+    "house_load_max",
+    "house_load_min",
+    "house_load_std",
+    "house_load_count",
+    "pv_w_mean",
+    "pv_w_max",
+    "pv_w_min",
+    "pv_w_std",
+    "pv_w_count",
+    "soc_mean",
+    "soc_max",
+    "soc_min",
+    "soc_std",
+    "soc_count",
+    "irradiance_mean",
+    "irradiance_max",
+    "irradiance_min",
+    "irradiance_std",
+    "irradiance_count",
+    "temp_mean",
+    "temp_max",
+    "temp_min",
+    "temp_std",
+    "temp_count",
+    "temp_forecast_mean",
+    "temp_forecast_max",
+    "temp_forecast_min",
+    "temp_forecast_std",
+    "temp_forecast_count",
+    "cloud_cover_mean",
+    "cloud_cover_max",
+    "cloud_cover_min",
+    "cloud_cover_std",
+    "cloud_cover_count",
+    "humidity_mean",
+    "humidity_max",
+    "humidity_min",
+    "humidity_std",
+    "humidity_count",
+    "wind_speed_mean",
+    "wind_speed_max",
+    "wind_speed_min",
+    "wind_speed_std",
+    "wind_speed_count",
+    "persons_home_mean",
+    "persons_home_max",
+    "persons_home_min",
+    "persons_home_std",
+    "persons_home_count",
+    "grid_import_kwh_sum",
+    "grid_export_kwh_sum",
+    "house_load_kwh_sum",
+    "pv_kwh_sum",
+    "batt_charge_kwh_sum",
+    "batt_discharge_kwh_sum",
 ]
 
 
@@ -40,7 +85,7 @@ def make_hourly_rows(
 ) -> list[dict]:
     """Return days * 24 row dicts whose keys exactly match DataRecorder.read_hourly_rows()."""
     if start is None:
-        start = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+        start = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 
     rng = random.Random(seed)
     rows: list[dict] = []

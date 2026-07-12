@@ -1,8 +1,9 @@
 """Plan B (B1 wiring): Controller snapshots yesterday's realized prices once per
 local-day rollover, idempotently."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -14,6 +15,7 @@ class _RecordingPriceStore:
     def __init__(self):
         self.history = {}
         self.calls = []
+
     async def async_snapshot(self, date_iso, hourly):
         self.calls.append((date_iso, dict(hourly)))
         self.history[date_iso] = hourly
@@ -32,14 +34,15 @@ def _bare_controller(price_store):
 async def test_snapshot_fires_once_per_day_and_extracts_yesterday():
     ps = _RecordingPriceStore()
     c = _bare_controller(ps)
-    now = datetime(2026, 6, 26, 0, 30, tzinfo=timezone.utc)   # just after local midnight (UTC CI)
-    yday = datetime(2026, 6, 25, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 26, 0, 30, tzinfo=UTC)  # just after local midnight (UTC CI)
+    yday = datetime(2026, 6, 25, 0, 0, tzinfo=UTC)
     slots = [PriceSlot(yday + timedelta(hours=i), 0.10 + 0.01 * i) for i in range(24)]
 
     from unittest.mock import patch
+
     with patch("homeassistant.util.dt.as_local", side_effect=lambda d: d):
         await c._snapshot_prices_on_rollover(now, slots)
-        await c._snapshot_prices_on_rollover(now, slots)   # same day -> no second write
+        await c._snapshot_prices_on_rollover(now, slots)  # same day -> no second write
 
     assert len(ps.calls) == 1
     date_iso, hourly = ps.calls[0]
@@ -56,6 +59,4 @@ async def test_snapshot_fires_once_per_day_and_extracts_yesterday():
 async def test_snapshot_noop_without_price_store():
     c = _bare_controller(None)
     # Must not raise when price_store is absent.
-    await c._snapshot_prices_on_rollover(
-        datetime(2026, 6, 26, 0, 30, tzinfo=timezone.utc), []
-    )
+    await c._snapshot_prices_on_rollover(datetime(2026, 6, 26, 0, 30, tzinfo=UTC), [])

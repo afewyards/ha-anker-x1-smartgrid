@@ -16,10 +16,11 @@ Controller-level gating (``cfg.use_measured_eta`` decides whether
 ``EfficiencyCurve.build`` itself is a pure function of ``rows``/``cfg``/``now``
 and does not read that flag.
 """
+
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 from custom_components.anker_x1_smartgrid.models import Config
@@ -48,14 +49,16 @@ def _write_discharge_episode(rec: DataRecorder, t0: datetime, soc0: float) -> tu
     soc = soc0
     for i in range(_EPISODE_MINUTES + 1):
         ts = t0 + timedelta(minutes=i)
-        rec.append({
-            "ts": ts.isoformat(),
-            "soc": soc,
-            "batt_w": _BATT_W,
-            "p1_w": 0.0,
-            "pv_w": 0.0,
-            "load_w": _RESIDUAL_W,  # residual_w = load_w - p1_w - pv_w = load_w here
-        })
+        rec.append(
+            {
+                "ts": ts.isoformat(),
+                "soc": soc,
+                "batt_w": _BATT_W,
+                "p1_w": 0.0,
+                "pv_w": 0.0,
+                "load_w": _RESIDUAL_W,  # residual_w = load_w - p1_w - pv_w = load_w here
+            }
+        )
         soc -= _SOC_DROP_PCT_PER_MIN
     return t0 + timedelta(minutes=_EPISODE_MINUTES), soc
 
@@ -64,10 +67,16 @@ def _write_idle_break(rec: DataRecorder, ts: datetime, soc: float) -> None:
     """A batt_w=0 tick — segment_episodes() ends any run on an idle tick, so
     this is what keeps successive episodes from merging into one giant run.
     """
-    rec.append({
-        "ts": ts.isoformat(), "soc": soc, "batt_w": 0.0,
-        "p1_w": 0.0, "pv_w": 0.0, "load_w": 0.0,
-    })
+    rec.append(
+        {
+            "ts": ts.isoformat(),
+            "soc": soc,
+            "batt_w": 0.0,
+            "p1_w": 0.0,
+            "pv_w": 0.0,
+            "load_w": 0.0,
+        }
+    )
 
 
 def _make_cfg() -> Config:
@@ -88,7 +97,7 @@ def test_recorder_to_curve_promotes_low_power_discharge_bin(tmp_path):
     should be promoted to the measured median instead of the static fallback.
     """
     rec = DataRecorder(str(tmp_path / "efficiency_e2e.db"))
-    t = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
     soc = 80.0
     for _ in range(10):
         t, soc = _write_discharge_episode(rec, t, soc)
@@ -132,7 +141,7 @@ def test_recorder_to_curve_falls_back_when_insufficient_episodes(tmp_path):
     and EFFICIENCY_MIN_DC_KWH=2.0 -> the bin stays on the static fallback even
     though a real (if unconfident) median was computed from it."""
     rec = DataRecorder(str(tmp_path / "efficiency_e2e_sparse.db"))
-    t0 = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC)
     end_ts, _ = _write_discharge_episode(rec, t0, soc0=80.0)
 
     rows = rec.read_efficiency_samples()

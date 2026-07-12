@@ -19,9 +19,10 @@ Scenario provenance: each scenario below was empirically verified against the
 real DP before being written down here (not hand-waved) — see the case
 docstrings for the economic mechanism that makes the outcome unambiguous.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -66,7 +67,7 @@ def _make_cfg(**overrides) -> Config:
         export_fee_eur_per_kwh=0.02,
         export_eps_lo_kwh=0.2,
         export_eps_hi_kwh=0.4,
-        export_dwell_min=0,   # no dwell — state transitions are immediate
+        export_dwell_min=0,  # no dwell — state transitions are immediate
         min_dwell_min=0,
     )
     defaults.update(overrides)
@@ -94,7 +95,11 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
     }
     act = actuator or StubActuator()
     ctrl = Controller(
-        hass=hass, data=data, recorder=StubRecorder(), actuator=act, store=StubStore(),
+        hass=hass,
+        data=data,
+        recorder=StubRecorder(),
+        actuator=act,
+        store=StubStore(),
     )
     ctrl.cfg = _make_cfg(**(cfg_overrides or {}))
     return ctrl, act
@@ -103,15 +108,19 @@ def _make_controller(hass, actuator=None, cfg_overrides=None):
 def _seed_price_forecast(hass, now: datetime, prices: list[float]) -> None:
     """Seed sensor.price with a forecast attribute — the real coordinator-read path
     (coordinator.read_price_slots) parses this into PriceSlot objects for the DP."""
-    hass.set_state("sensor.price", str(prices[0]), {
-        "forecast": [
-            {
-                "datetime": (now + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(p * const.PRICE_SCALE),
-            }
-            for i, p in enumerate(prices)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        str(prices[0]),
+        {
+            "forecast": [
+                {
+                    "datetime": (now + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(p * const.PRICE_SCALE),
+                }
+                for i, p in enumerate(prices)
+            ]
+        },
+    )
 
 
 def _seed_common(hass, now: datetime, *, soc: str, export_price: str, sunset_h: float = 8.0) -> None:
@@ -147,7 +156,7 @@ class TestCheapHourGridCharge:
     writing this test (see module docstring).
     """
 
-    BASE = datetime(2026, 6, 25, 3, 0, tzinfo=timezone.utc)  # 03:00 UTC, cheap overnight hour
+    BASE = datetime(2026, 6, 25, 3, 0, tzinfo=UTC)  # 03:00 UTC, cheap overnight hour
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
@@ -164,8 +173,7 @@ class TestCheapHourGridCharge:
         await ctrl.tick()
 
         assert ctrl.plan.state is ControllerState.FORCING, (
-            f"real DP must select the current cheap hour for charging; "
-            f"got plan.state={ctrl.plan.state}"
+            f"real DP must select the current cheap hour for charging; got plan.state={ctrl.plan.state}"
         )
         charge_calls = [c for c in act.calls if c[0] == "engage_and_charge"]
         assert len(charge_calls) == 1, f"expected exactly one engage_and_charge call; calls={act.calls}"
@@ -177,9 +185,7 @@ class TestCheapHourGridCharge:
         assert abs(setpoint) <= ctrl.cfg.max_charge_w + 1e-6, (
             f"setpoint magnitude {abs(setpoint)} exceeds max_charge_w={ctrl.cfg.max_charge_w}"
         )
-        assert not any(c[0] == "engage_export" for c in act.calls), (
-            "FORCING must not also call engage_export"
-        )
+        assert not any(c[0] == "engage_export" for c in act.calls), "FORCING must not also call engage_export"
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +205,7 @@ class TestExportHour:
     empirically against the real DP before writing this test.
     """
 
-    BASE = datetime(2026, 6, 22, 14, 0, tzinfo=timezone.utc)  # 14:00 UTC, price peak
+    BASE = datetime(2026, 6, 22, 14, 0, tzinfo=UTC)  # 14:00 UTC, price peak
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
@@ -252,7 +258,7 @@ class TestPassiveHour:
     more expensive to sell into) ⇒ zero schedule ⇒ no actuator calls at all.
     """
 
-    BASE = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+    BASE = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
@@ -270,9 +276,7 @@ class TestPassiveHour:
         assert ctrl.plan.state is ControllerState.PASSIVE, (
             f"flat prices + comfortable SoC must stay PASSIVE; got {ctrl.plan.state}"
         )
-        assert act.calls == [], (
-            f"no arbitrage opportunity ⇒ no actuator engagement at all; calls={act.calls}"
-        )
+        assert act.calls == [], f"no arbitrage opportunity ⇒ no actuator engagement at all; calls={act.calls}"
         assert not ctrl.export_state.engaged, "export_state must not report engaged"
 
 
@@ -296,7 +300,7 @@ class TestAntiFightExportWinsOverStaleForcing:
     memory/executor-charge-export-fight-fixed.md.
     """
 
-    BASE = datetime(2026, 6, 22, 14, 0, tzinfo=timezone.utc)
+    BASE = datetime(2026, 6, 22, 14, 0, tzinfo=UTC)
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
@@ -326,20 +330,19 @@ class TestAntiFightExportWinsOverStaleForcing:
         )
 
         release_idx = next(
-            (i for i, c in enumerate(act.calls) if c[0] == "release_to_self"), None,
+            (i for i, c in enumerate(act.calls) if c[0] == "release_to_self"),
+            None,
         )
         export_idx = next(
-            (i for i, c in enumerate(act.calls) if c[0] == "engage_export"), None,
+            (i for i, c in enumerate(act.calls) if c[0] == "engage_export"),
+            None,
         )
         assert release_idx is not None, (
             f"stale FORCING must be released (FORCING→PASSIVE transition); calls={act.calls}"
         )
-        assert export_idx is not None, (
-            f"export must win this tick despite the stale FORCING residue; calls={act.calls}"
-        )
+        assert export_idx is not None, f"export must win this tick despite the stale FORCING residue; calls={act.calls}"
         assert release_idx < export_idx, (
-            f"the stale FORCING release must happen BEFORE the export engages "
-            f"(anti-fight ordering); calls={act.calls}"
+            f"the stale FORCING release must happen BEFORE the export engages (anti-fight ordering); calls={act.calls}"
         )
         export_setpoint = act.calls[export_idx][1]
         assert export_setpoint > 0.0, f"engage_export setpoint must be > 0; got {export_setpoint}"

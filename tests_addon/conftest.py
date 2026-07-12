@@ -6,6 +6,7 @@ Intentionally does NOT import pytest_homeassistant_custom_component — that plu
 corrupts sys.modules for late sklearn imports, which is why these tests live in
 tests_addon/ rather than tests/.
 """
+
 from __future__ import annotations
 
 import sys

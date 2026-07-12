@@ -3,6 +3,7 @@ tier-1/tier-2 kWh SUM pass.
 
 See docs/superpowers/plans/2026-07-06-rollup-kwh-sums.md for the design.
 """
+
 import sqlite3
 
 import pytest
@@ -11,8 +12,12 @@ from custom_components.anker_x1_smartgrid.recorder import DataRecorder, _VERSION
 from custom_components.anker_x1_smartgrid.rollup import aggregate_hour
 
 KWH_SUM_COLS = {
-    "grid_import_kwh_sum", "grid_export_kwh_sum", "house_load_kwh_sum",
-    "pv_kwh_sum", "batt_charge_kwh_sum", "batt_discharge_kwh_sum",
+    "grid_import_kwh_sum",
+    "grid_export_kwh_sum",
+    "house_load_kwh_sum",
+    "pv_kwh_sum",
+    "batt_charge_kwh_sum",
+    "batt_discharge_kwh_sum",
 }
 
 
@@ -27,12 +32,13 @@ def _hourly_columns(db_path):
 # v10 migration
 # ---------------------------------------------------------------------------
 
+
 def test_v10_fresh_db_has_kwh_sum_columns_and_version(tmp_path):
     db = str(tmp_path / "t.db")
     rec = DataRecorder(db)
     rec.close()
     assert _VERSION_TARGET == 10
-    assert KWH_SUM_COLS <= _hourly_columns(db)
+    assert _hourly_columns(db) >= KWH_SUM_COLS
     conn = sqlite3.connect(db)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
     conn.close()
@@ -61,10 +67,7 @@ def test_v10_migration_backfills_house_load_and_pv_from_mean(tmp_path):
     db = str(tmp_path / "t.db")
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA user_version = 9")
-    conn.execute(
-        "CREATE TABLE samples_hourly (hour_ts TEXT PRIMARY KEY, "
-        "house_load_mean REAL, pv_w_mean REAL)"
-    )
+    conn.execute("CREATE TABLE samples_hourly (hour_ts TEXT PRIMARY KEY, house_load_mean REAL, pv_w_mean REAL)")
     conn.execute(
         "INSERT INTO samples_hourly (hour_ts, house_load_mean, pv_w_mean) "
         "VALUES ('2026-07-01T10:00:00+00:00', 1500.0, 300.0)"
@@ -77,11 +80,7 @@ def test_v10_migration_backfills_house_load_and_pv_from_mean(tmp_path):
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
-    row = dict(
-        conn.execute(
-            "SELECT * FROM samples_hourly WHERE hour_ts = '2026-07-01T10:00:00+00:00'"
-        ).fetchone()
-    )
+    row = dict(conn.execute("SELECT * FROM samples_hourly WHERE hour_ts = '2026-07-01T10:00:00+00:00'").fetchone())
     conn.close()
     assert row["house_load_kwh_sum"] == pytest.approx(1.5)
     assert row["pv_kwh_sum"] == pytest.approx(0.3)
@@ -95,20 +94,27 @@ def test_v10_migration_backfills_house_load_and_pv_from_mean(tmp_path):
 # aggregate_hour() kWh SUM pass
 # ---------------------------------------------------------------------------
 
+
 def test_aggregate_hour_kwh_sums():
     """Tier 1: sum of per-tick *_kwh values when all ticks are non-NULL."""
     rows = [
         {
             "ts": "2026-07-06T10:00:00+00:00",
-            "grid_import_kwh": 0.02, "grid_export_kwh": 0.0,
-            "house_load_kwh": 0.01, "pv_kwh": 0.03,
-            "batt_charge_kwh": 0.0, "batt_discharge_kwh": 0.005,
+            "grid_import_kwh": 0.02,
+            "grid_export_kwh": 0.0,
+            "house_load_kwh": 0.01,
+            "pv_kwh": 0.03,
+            "batt_charge_kwh": 0.0,
+            "batt_discharge_kwh": 0.005,
         },
         {
             "ts": "2026-07-06T10:01:00+00:00",
-            "grid_import_kwh": 0.015, "grid_export_kwh": 0.0,
-            "house_load_kwh": 0.012, "pv_kwh": 0.028,
-            "batt_charge_kwh": 0.0, "batt_discharge_kwh": 0.004,
+            "grid_import_kwh": 0.015,
+            "grid_export_kwh": 0.0,
+            "house_load_kwh": 0.012,
+            "pv_kwh": 0.028,
+            "batt_charge_kwh": 0.0,
+            "batt_discharge_kwh": 0.004,
         },
     ]
     result = aggregate_hour(rows)
@@ -124,10 +130,8 @@ def test_aggregate_hour_kwh_sums_all_null_falls_back_to_mean():
     """Tier 2: every tick NULL for a *_kwh column (pre-v9 data) → mean_watts
     × 1h / 1000 approximation, reusing the already-computed stats."""
     rows = [
-        {"ts": "2026-07-06T10:00:00+00:00", "p1_w": 1000.0, "batt_w": 0.0,
-         "pv_w": 500.0, "load_w": 1500.0},
-        {"ts": "2026-07-06T10:30:00+00:00", "p1_w": 2000.0, "batt_w": 0.0,
-         "pv_w": 300.0, "load_w": 2000.0},
+        {"ts": "2026-07-06T10:00:00+00:00", "p1_w": 1000.0, "batt_w": 0.0, "pv_w": 500.0, "load_w": 1500.0},
+        {"ts": "2026-07-06T10:30:00+00:00", "p1_w": 2000.0, "batt_w": 0.0, "pv_w": 300.0, "load_w": 2000.0},
     ]
     # No *_kwh columns present at all → tier 2 for every column.
     result = aggregate_hour(rows)
@@ -151,10 +155,9 @@ def test_aggregate_hour_kwh_sums_partial_null_scales_by_coverage():
 
 def test_aggregate_hour_kwh_sums_sparse_coverage_no_undercount():
     """6 non-NULL ticks of 60 rows → scaled ×10, not ~90% undercount."""
-    rows = [{"ts": f"2026-07-06T10:{m:02d}:00+00:00",
-             "pv_kwh": (0.01 if m < 6 else None)} for m in range(60)]
+    rows = [{"ts": f"2026-07-06T10:{m:02d}:00+00:00", "pv_kwh": (0.01 if m < 6 else None)} for m in range(60)]
     result = aggregate_hour(rows)
-    assert result["pv_kwh_sum"] == pytest.approx(0.06 * 60 / 6)   # 0.6
+    assert result["pv_kwh_sum"] == pytest.approx(0.06 * 60 / 6)  # 0.6
 
 
 def test_aggregate_hour_grid_batt_kwh_sums_none_when_all_null():
@@ -177,8 +180,8 @@ def test_tier2_house_load_and_pv_keep_mean_over_1000():
         {"ts": "2026-07-06T10:01:00+00:00", "load_w": 300.0, "pv_w": 200.0},
     ]  # no *_kwh ticks → tier-2 path; house_load/pv unchanged
     r = aggregate_hour(rows)
-    assert r["house_load_kwh_sum"] == pytest.approx(0.3)   # 300 W mean / 1000
-    assert r["pv_kwh_sum"] == pytest.approx(0.2)           # 200 W mean / 1000
+    assert r["house_load_kwh_sum"] == pytest.approx(0.3)  # 300 W mean / 1000
+    assert r["pv_kwh_sum"] == pytest.approx(0.2)  # 200 W mean / 1000
 
 
 def test_aggregate_hour_kwh_sums_all_none_when_no_data():

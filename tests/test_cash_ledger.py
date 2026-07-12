@@ -7,9 +7,10 @@ Covers:
 - price_at: current-slot import price lookup (static-mode-safe path)
 - controller: per-tick accumulation, rollover, persistence (Tasks 2-3)
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -17,7 +18,7 @@ from custom_components.anker_x1_smartgrid.models import PriceSlot
 from custom_components.anker_x1_smartgrid.optimize import cash_flows_eur
 from custom_components.anker_x1_smartgrid.resolution import price_at
 
-BASE = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 25, 14, 0, tzinfo=UTC)
 
 TICK_H = 60.0 / 3600.0  # one 60s tick in hours
 
@@ -95,7 +96,7 @@ class TestPriceAt:
 
 
 from custom_components.anker_x1_smartgrid.models import PlantInputs
-from tests.test_export_pnl_ledger import (  # noqa: E402
+from tests.test_export_pnl_ledger import (
     _StubHass,
     _make_controller,
 )
@@ -108,9 +109,7 @@ def _ledger_ctrl():
     # const.DEFAULT_EXPORT_FEE_EUR_PER_KWH) would otherwise leak through and
     # break the "eff = raw" pass-through assumed by the cash-ledger tests
     # below. Zero it explicitly so effective_export_price(raw, cfg) == raw.
-    ctrl, _act, _store, _rec = _make_controller(
-        hass, cfg_overrides={"export_fee_eur_per_kwh": 0.0}
-    )
+    ctrl, _act, _store, _rec = _make_controller(hass, cfg_overrides={"export_fee_eur_per_kwh": 0.0})
     return ctrl, hass
 
 
@@ -138,9 +137,7 @@ class TestCashLedgerAccumulate:
     def test_missing_battery_reading_skips_both_legs(self):
         ctrl, hass = _ledger_ctrl()  # battery_power never set → read None
         inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)
-        ctrl._accumulate_cash_ledger(
-            BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, 0.25
-        )
+        ctrl._accumulate_cash_ledger(BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, 0.25)
         assert ctrl.today_charge_cost_eur == 0.0
         assert ctrl.today_export_revenue_eur == 0.0
         assert ctrl.total_net_eur == 0.0
@@ -170,9 +167,7 @@ class TestCashLedgerAccumulate:
         # price through effective_export_price (fee subtracted) before
         # pricing the credit leg — not the raw price directly.
         hass = _StubHass()
-        ctrl, _act, _store, _rec = _make_controller(
-            hass, cfg_overrides={"export_fee_eur_per_kwh": 0.02}
-        )
+        ctrl, _act, _store, _rec = _make_controller(hass, cfg_overrides={"export_fee_eur_per_kwh": 0.02})
         hass.set_state("sensor.battery_power", "1800.0")  # discharging
         inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)  # exporting
         ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, 0.25)
@@ -231,11 +226,13 @@ class TestCashLedgerPersistence:
 
     def test_restore_round_trip(self):
         ctrl, _hass = _ledger_ctrl()
-        ctrl.restore({
-            "today_charge_cost_eur": 0.11,
-            "today_export_revenue_eur": 0.22,
-            "total_net_eur": 3.33,
-        })
+        ctrl.restore(
+            {
+                "today_charge_cost_eur": 0.11,
+                "today_export_revenue_eur": 0.22,
+                "total_net_eur": 3.33,
+            }
+        )
         assert ctrl.today_charge_cost_eur == pytest.approx(0.11)
         assert ctrl.today_export_revenue_eur == pytest.approx(0.22)
         assert ctrl.total_net_eur == pytest.approx(3.33)

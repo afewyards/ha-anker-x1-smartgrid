@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+import itertools
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid import parsers
 
-NOW = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
-SUNSET = datetime(2026, 6, 20, 18, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+SUNSET = datetime(2026, 6, 20, 18, 0, tzinfo=UTC)
 
 
 def test_synth_conserves_energy():
@@ -31,11 +32,12 @@ def test_synth_interval_starts_increase():
     assert starts[0] == NOW
 
 
-TOM_SUNRISE = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
-TOM_SUNSET = datetime(2026, 6, 21, 18, 0, tzinfo=timezone.utc)
+TOM_SUNRISE = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
+TOM_SUNSET = datetime(2026, 6, 21, 18, 0, tzinfo=UTC)
 
 
 # ── A: Migrated build_two_day_pv_curve tests (scalar → single-element list) ──
+
 
 def test_two_day_curve_concatenates_and_conserves():
     curve = parsers.build_two_day_pv_curve(
@@ -50,9 +52,7 @@ def test_two_day_curve_concatenates_and_conserves():
 def test_two_day_curve_today_none_only_tomorrow():
     # today_arrays=None: no today PV, but overnight fill [SUNSET, TOM_SUNRISE) is
     # still emitted when a tomorrow segment exists (root-cause fix).
-    curve = parsers.build_two_day_pv_curve(
-        None, [(6.0, None)], NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0
-    )
+    curve = parsers.build_two_day_pv_curve(None, [(6.0, None)], NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0)
     overnight = [(t, w) for t, w in curve if t < TOM_SUNRISE]
     assert overnight, "overnight fill must be present even when today_arrays=None"
     assert all(w == 0.0 for _, w in overnight)
@@ -62,9 +62,7 @@ def test_two_day_curve_today_none_only_tomorrow():
 
 
 def test_two_day_curve_tomorrow_none_only_today():
-    curve = parsers.build_two_day_pv_curve(
-        [(2.0, None)], None, NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0
-    )
+    curve = parsers.build_two_day_pv_curve([(2.0, None)], None, NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0)
     assert curve and all(t < SUNSET for t, _ in curve)
     assert abs(sum(w for _, w in curve) - 2000.0) < 1.0
 
@@ -85,9 +83,9 @@ def test_two_day_curve_after_today_sunset_skips_today():
 # ── B: synth_pv_curve_peaked tests ──────────────────────────────────────────
 
 # Window used for many peaked tests: 10 hours, integer multiple of step_h
-PEAK_START = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
-PEAK_END = datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc)   # 10 h window
-PEAK_MID = datetime(2026, 6, 21, 11, 0, tzinfo=timezone.utc)   # midpoint (6+5)
+PEAK_START = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
+PEAK_END = datetime(2026, 6, 21, 16, 0, tzinfo=UTC)  # 10 h window
+PEAK_MID = datetime(2026, 6, 21, 11, 0, tzinfo=UTC)  # midpoint (6+5)
 
 
 def _total_wh(curve, step_h=1.0):
@@ -159,8 +157,8 @@ def test_peaked_legacy_parity_exact_integer_window():
     """synth_pv_curve_peaked(kwh, start, end, midpoint) == synth_pv_curve(kwh, start, end)
     per bucket for an integer-hour window."""
     kwh = 4.0
-    start = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 21, 16, 0, tzinfo=timezone.utc)  # exactly 10 h
+    start = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 21, 16, 0, tzinfo=UTC)  # exactly 10 h
     midpoint = start + (end - start) / 2
 
     peaked = parsers.synth_pv_curve_peaked(kwh, start, end, midpoint)
@@ -182,7 +180,7 @@ def test_peaked_legacy_parity_fractional_window():
     half-sine over n=ceil(window) virtual slots, while synth_pv_curve_peaked uses
     the actual window midpoint — so we do NOT assert per-bucket equality here."""
     kwh = 4.0
-    start = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
     end = start + timedelta(hours=10.5)
     midpoint = start + (end - start) / 2
 
@@ -206,8 +204,8 @@ def test_peaked_non_utc_peak_timezone():
     tz_plus2 = timezone(timedelta(hours=2))
     # 14:00+02:00 == 12:00 UTC — interior point of [06:00 UTC, 20:00 UTC]
     peak_local = datetime(2026, 6, 21, 14, 0, tzinfo=tz_plus2)
-    start = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
+    end = datetime(2026, 6, 21, 20, 0, tzinfo=UTC)
 
     curve = parsers.synth_pv_curve_peaked(5.0, start, end, peak_local)
     assert len(curve) > 0
@@ -236,7 +234,7 @@ def test_peaked_degenerate_peak_le_start_monotone_falling():
     curve = parsers.synth_pv_curve_peaked(5.0, PEAK_START, PEAK_END, peak_before)
     assert len(curve) > 1
     watts = [w for _, w in curve]
-    assert all(w1 >= w2 for w1, w2 in zip(watts, watts[1:]))
+    assert all(w1 >= w2 for w1, w2 in itertools.pairwise(watts))
 
 
 def test_peaked_degenerate_peak_ge_end_monotone_rising():
@@ -245,16 +243,16 @@ def test_peaked_degenerate_peak_ge_end_monotone_rising():
     curve = parsers.synth_pv_curve_peaked(5.0, PEAK_START, PEAK_END, peak_after)
     assert len(curve) > 1
     watts = [w for _, w in curve]
-    assert all(w1 <= w2 for w1, w2 in zip(watts, watts[1:]))
+    assert all(w1 <= w2 for w1, w2 in itertools.pairwise(watts))
 
 
 # ── C: build_pv_curve_from_arrays tests ─────────────────────────────────────
 
 # Shared window for array tests: 06:00-20:00 UTC (14 h, 14 buckets at step_h=1)
-ARR_START = datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc)
-ARR_END = datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc)
-PEAK_09 = datetime(2026, 6, 21, 9, 0, tzinfo=timezone.utc)
-PEAK_17 = datetime(2026, 6, 21, 17, 0, tzinfo=timezone.utc)
+ARR_START = datetime(2026, 6, 21, 6, 0, tzinfo=UTC)
+ARR_END = datetime(2026, 6, 21, 20, 0, tzinfo=UTC)
+PEAK_09 = datetime(2026, 6, 21, 9, 0, tzinfo=UTC)
+PEAK_17 = datetime(2026, 6, 21, 17, 0, tzinfo=UTC)
 
 
 def _count_above_half_max(curve):
@@ -316,20 +314,19 @@ def test_arrays_shared_grid_no_duplicate_timestamps():
 
 # ── Regression: negative-power bug in fall branch (fractional windows, frac in (0,0.5)) ──
 
+
 def test_peaked_no_negative_watts_fractional_window_interior_peak():
     """When window length has a fractional step_h part in (0, 0.5), the last bucket
     center lands past 'end', making (end-t)<0 → negative weight in the fall branch.
     All emitted watts must be >= 0, and energy must still be conserved."""
     start = PEAK_START  # 2026-06-21 06:00 UTC
     end = start + timedelta(hours=10.2)  # frac=0.2 ∈ (0, 0.5) → triggers bug
-    peak = start + timedelta(hours=5)    # interior peak
+    peak = start + timedelta(hours=5)  # interior peak
     kwh = 4.0
 
     curve = parsers.synth_pv_curve_peaked(kwh, start, end, peak)
 
-    assert all(w >= 0.0 for _, w in curve), (
-        f"negative watt in curve: {[(str(t), w) for t, w in curve if w < 0]}"
-    )
+    assert all(w >= 0.0 for _, w in curve), f"negative watt in curve: {[(str(t), w) for t, w in curve if w < 0]}"
     assert abs(_total_wh(curve) / 1000.0 - kwh) < 1e-9
 
 
@@ -337,19 +334,18 @@ def test_peaked_no_negative_watts_pure_falling_fractional_window():
     """Pure-falling lobe (peak <= start) over a short fractional window can also
     produce a past-end center in the fall branch → large negative.  All watts >= 0."""
     start = PEAK_START
-    end = start + timedelta(hours=3.2)   # frac=0.2 ∈ (0, 0.5)
-    peak = start - timedelta(hours=1)    # before start → clamped to start → pure fall
+    end = start + timedelta(hours=3.2)  # frac=0.2 ∈ (0, 0.5)
+    peak = start - timedelta(hours=1)  # before start → clamped to start → pure fall
     kwh = 2.0
 
     curve = parsers.synth_pv_curve_peaked(kwh, start, end, peak)
 
-    assert all(w >= 0.0 for _, w in curve), (
-        f"negative watt in curve: {[(str(t), w) for t, w in curve if w < 0]}"
-    )
+    assert all(w >= 0.0 for _, w in curve), f"negative watt in curve: {[(str(t), w) for t, w in curve if w < 0]}"
     assert abs(_total_wh(curve) / 1000.0 - kwh) < 1e-9
 
 
 # ── Plan A: overnight gap-fill (pv=0) between today's and tomorrow's segments ──
+
 
 def test_two_day_curve_fills_overnight_gap_with_zero_pv():
     curve = parsers.build_two_day_pv_curve(
@@ -374,14 +370,12 @@ def test_two_day_curve_fills_overnight_gap_with_zero_pv():
 
 
 def test_two_day_curve_gap_fill_snaps_nonhour_sunset_to_hour():
-    sunset = datetime(2026, 6, 20, 21, 43, tzinfo=timezone.utc)
-    sunrise = datetime(2026, 6, 21, 5, 0, tzinfo=timezone.utc)
-    sunset2 = datetime(2026, 6, 21, 21, 0, tzinfo=timezone.utc)
-    curve = parsers.build_two_day_pv_curve(
-        [(2.0, None)], [(6.0, None)], NOW, sunset, sunrise, sunset2, step_h=1.0
-    )
+    sunset = datetime(2026, 6, 20, 21, 43, tzinfo=UTC)
+    sunrise = datetime(2026, 6, 21, 5, 0, tzinfo=UTC)
+    sunset2 = datetime(2026, 6, 21, 21, 0, tzinfo=UTC)
+    curve = parsers.build_two_day_pv_curve([(2.0, None)], [(6.0, None)], NOW, sunset, sunrise, sunset2, step_h=1.0)
     pts = dict(curve)
-    first_fill = datetime(2026, 6, 20, 22, 0, tzinfo=timezone.utc)
+    first_fill = datetime(2026, 6, 20, 22, 0, tzinfo=UTC)
     # 21:43 snaps up to 22:00 for the first fill point (pv=0).
     assert pts.get(first_fill) == 0.0
     # No fill point lands inside the partial hour [21:43, 22:00).
@@ -389,10 +383,10 @@ def test_two_day_curve_gap_fill_snaps_nonhour_sunset_to_hour():
     # today's last REAL PV point is 21:00 (window [12:00, 21:43) → left-edge 12:00..21:00);
     # the 22:00 fill abuts it by exactly 1 h — no overlap, no gap.
     last_real = max(t for t, _ in curve if t < sunset)
-    assert last_real == datetime(2026, 6, 20, 21, 0, tzinfo=timezone.utc)
+    assert last_real == datetime(2026, 6, 20, 21, 0, tzinfo=UTC)
     assert first_fill - last_real == timedelta(hours=1)
     # Fill continues hourly up to 04:00 (< sunrise 05:00).
-    assert pts.get(datetime(2026, 6, 21, 4, 0, tzinfo=timezone.utc)) == 0.0
+    assert pts.get(datetime(2026, 6, 21, 4, 0, tzinfo=UTC)) == 0.0
 
 
 def test_two_day_curve_gap_fill_when_today_segment_empty():
@@ -409,16 +403,14 @@ def test_two_day_curve_gap_fill_when_today_segment_empty():
     assert overnight, "overnight gap must be filled even when today segment is empty"
     assert all(w == 0.0 for _, w in overnight)
     assert min(t for t, _ in curve) == after  # fill starts at `now` (19:00), not sunrise
-    assert pts.get(datetime(2026, 6, 21, 5, 0, tzinfo=timezone.utc)) == 0.0  # 05:00 < sunrise
+    assert pts.get(datetime(2026, 6, 21, 5, 0, tzinfo=UTC)) == 0.0  # 05:00 < sunrise
     assert TOM_SUNRISE in pts  # tomorrow's PV ramp still present
 
 
 def test_two_day_curve_no_gap_fill_when_tomorrow_arrays_empty():
     # tomorrow_arrays=[] (falsy) → NO overnight fill; today segment present but
     # fill gate requires a truthy tomorrow.  Curve contains only today's PV points.
-    curve = parsers.build_two_day_pv_curve(
-        [(2.0, None)], [], NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0
-    )
+    curve = parsers.build_two_day_pv_curve([(2.0, None)], [], NOW, SUNSET, TOM_SUNRISE, TOM_SUNSET, step_h=1.0)
     # With empty tomorrow, the curve is only today's PV (all points before SUNSET).
     assert curve and all(t < SUNSET for t, _ in curve)
     # No fill points in [SUNSET, TOM_SUNRISE) — the gap must be absent.

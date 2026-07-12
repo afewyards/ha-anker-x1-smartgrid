@@ -7,6 +7,7 @@ from custom_components.anker_x1_smartgrid import const
 # quantize_setpoint — charge (negative) tests (must remain passing)
 # ---------------------------------------------------------------------------
 
+
 def test_quantize_rounds_and_signs():
     cfg = Config()
     assert guard.quantize_setpoint(2350.0, cfg) == -2300.0  # floor to 100 grid magnitude
@@ -21,6 +22,7 @@ def test_quantize_clamps_to_min():
 # ---------------------------------------------------------------------------
 # quantize_setpoint — discharge (positive) tests
 # ---------------------------------------------------------------------------
+
 
 def test_quantize_positive_rounds():
     """Positive desired → positive quantized (discharge direction)."""
@@ -43,6 +45,7 @@ def test_quantize_positive_clamps_to_max():
 # ---------------------------------------------------------------------------
 # command_setpoint — charge (negative) tests (must remain passing)
 # ---------------------------------------------------------------------------
+
 
 def test_command_capped_by_max_charge_w_only():
     """Setpoint is capped only by max_charge_w, not per-phase import."""
@@ -86,6 +89,7 @@ def test_command_deadband_clamp_above_max():
 # ---------------------------------------------------------------------------
 # command_setpoint — discharge (positive) tests
 # ---------------------------------------------------------------------------
+
 
 def test_command_discharge_basic():
     """Positive desired discharge setpoint is quantized and returned positive."""
@@ -147,17 +151,13 @@ def test_command_mixed_sign_discharge_to_charge():
 def test_command_discharge_cap_override_allows_above_max_export_w():
     """discharge_cap_w overrides the max_export_w clamp on the gross export path."""
     cfg = Config(max_export_w=3000.0, deadband_w=300.0)
-    out = guard.command_setpoint(
-        -5000.0, prev_setpoint_w=0.0, cfg=cfg, discharge_cap_w=const.SETPOINT_MAX_W
-    )
+    out = guard.command_setpoint(-5000.0, prev_setpoint_w=0.0, cfg=cfg, discharge_cap_w=const.SETPOINT_MAX_W)
     assert out == 5000.0  # NOT clamped to max_export_w=3000
 
 
 def test_command_discharge_cap_override_still_clamps_setpoint_max():
     cfg = Config(max_export_w=3000.0, deadband_w=300.0)
-    out = guard.command_setpoint(
-        -9999.0, prev_setpoint_w=0.0, cfg=cfg, discharge_cap_w=const.SETPOINT_MAX_W
-    )
+    out = guard.command_setpoint(-9999.0, prev_setpoint_w=0.0, cfg=cfg, discharge_cap_w=const.SETPOINT_MAX_W)
     assert out == 6000.0  # SETPOINT_MAX_W ceiling
 
 

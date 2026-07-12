@@ -2,17 +2,19 @@
 
 Task 2 of Batch-1 safety fixes.
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 from custom_components.anker_x1_smartgrid.models import PlantInputs
 from tests.helpers import StubHass as _StubHass
 from tests.test_controller_export_executor import (
-    _make_controller, _patched_compute_decision,
+    _make_controller,
+    _patched_compute_decision,
 )
 
-PURGE_BASE = datetime(2026, 6, 25, 18, 0, tzinfo=timezone.utc)  # 18 % 6 == 0 → purge fires
+PURGE_BASE = datetime(2026, 6, 25, 18, 0, tzinfo=UTC)  # 18 % 6 == 0 → purge fires
 
 
 async def test_record_sample_is_async_and_appends_via_executor():
@@ -36,6 +38,7 @@ async def test_record_sample_is_async_and_appends_via_executor():
             rows.append(row)
 
     from custom_components.anker_x1_smartgrid.controller import Controller
+
     ctl = Controller.__new__(Controller)
     ctl._hass = _Hass()
     ctl._data = {
@@ -49,13 +52,13 @@ async def test_record_sample_is_async_and_appends_via_executor():
     # Controller.__new__ bypasses __init__, so the N2 house-load fallback cache
     # (normally seeded in __init__) must be set explicitly here.
     ctl._last_house_load_w = 0.0
-    now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 22, 10, 30, tzinfo=UTC)
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
 
     await ctl._record_sample(now, inputs, setpoint=0.0, state="passive", weather_entry=None)
 
-    assert rows and rows[0]["state"] == "passive"   # the write landed
-    assert "append" in executor_fns                 # routed off the event loop
+    assert rows and rows[0]["state"] == "passive"  # the write landed
+    assert "append" in executor_fns  # routed off the event loop
 
 
 class _ExecutorSpyHass(_StubHass):
@@ -81,24 +84,27 @@ def _seed_purge_scenario(hass):
     hass.set_state("sensor.irradiance", "0.0")
     hass.set_state("weather.home", "clear", {"temperature": 18.0})
     hass.set_state("sensor.export_price", "0.10")
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": (PURGE_BASE + timedelta(hours=4)).isoformat()})
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": (PURGE_BASE + timedelta(hours=4)).isoformat()})
     hour0 = PURGE_BASE.replace(minute=0, second=0, microsecond=0)
-    hass.set_state("sensor.price", "0.30", {
-        "forecast": [
-            {"datetime": (hour0 + timedelta(hours=i)).isoformat(),
-             "electricity_price": int(0.30 * const.PRICE_SCALE)}
-            for i in range(12)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.30",
+        {
+            "forecast": [
+                {
+                    "datetime": (hour0 + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.30 * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
 
 
 async def test_purges_run_via_executor(monkeypatch):
     """The 6-hourly purge_older_than + purge_decisions_older_than run off-loop."""
     monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: PURGE_BASE)
-    monkeypatch.setattr(
-        ctrl_mod, "compute_decision", _patched_compute_decision(export_request={})
-    )
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={}))
     hass = _ExecutorSpyHass()
     ctrl, _act, _store = _make_controller(hass)
     ctrl.enabled = True

@@ -1,4 +1,5 @@
 """C1b: per-hour ride-out reserve as the export discharge floor."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -11,9 +12,16 @@ from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 
 def _cfg(**kw: Any) -> Config:
     d: dict[str, Any] = dict(
-        capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0, max_charge_w=3000.0,
-        eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04,
-        export_fee_eur_per_kwh=0.0, max_export_w=3000.0, grid_export_limit_w=3000.0,
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+        cycle_cost_eur_per_kwh=0.04,
+        export_fee_eur_per_kwh=0.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
     )
     d.update(kw)
     return Config(**d)
@@ -33,9 +41,16 @@ def test_export_stops_at_reserve_floor_not_firmware_floor():
     # Reserve = 5 kWh (50%) every hour; firmware floor = 2 kWh (20%).
     reserve = [5.0] * n
     res = optimize_grid(
-        pv, load, price, soc_start=80.0, cfg=cfg,  # start 8 kWh
-        window_start_h=0, window_len=n,
-        export_price=export_price, terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=cfg,  # start 8 kWh
+        window_start_h=0,
+        window_len=n,
+        export_price=export_price,
+        terminal_mode="water_value",
+        water_value=0.0,
         reserve_by_hour=reserve,
     )
     # Exported DC = start(8) - reserve(5) = 3 kWh; SoC never drops below 5 kWh
@@ -54,9 +69,16 @@ def test_reserve_none_matches_firmware_floor():
     export_price[2] = 0.60
     export_price[3] = 0.60  # 3 kWh/h rate cap => two hours needed to export 6 kWh
     res = optimize_grid(
-        pv, load, price, soc_start=80.0, cfg=cfg,
-        window_start_h=0, window_len=n,
-        export_price=export_price, terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=export_price,
+        terminal_mode="water_value",
+        water_value=0.0,
         reserve_by_hour=None,
     )
     assert sum(res["export_schedule"]) == pytest.approx(6.0, abs=1e-6)
@@ -66,6 +88,12 @@ def test_reserve_length_mismatch_raises():
     cfg = _cfg()
     with pytest.raises(ValueError):
         optimize_grid(
-            [0.0] * 3, [0.0] * 3, [0.2] * 3, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=3, reserve_by_hour=[5.0, 5.0],  # len 2 != 3
+            [0.0] * 3,
+            [0.0] * 3,
+            [0.2] * 3,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=3,
+            reserve_by_hour=[5.0, 5.0],  # len 2 != 3
         )

@@ -7,6 +7,7 @@ at 60-min resolution (including a DST-transition day), and that regret.py's
 ``DayData``/``realized_grid_cost`` accept a 96-slot (15-min) day without a
 hardcoded length-24 rejection.
 """
+
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 from custom_components.anker_x1_smartgrid.regret import (
@@ -17,10 +18,18 @@ from custom_components.anker_x1_smartgrid.regret import (
 
 
 def _cfg():
-    return Config(capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0,
-                  max_charge_w=3000.0, eta_charge=1.0, max_export_w=3000.0,
-                  grid_export_limit_w=6000.0, enable_export=True,
-                  export_peak_band_frac=0.10, export_peak_lookback_h=0)
+    return Config(
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=6000.0,
+        enable_export=True,
+        export_peak_band_frac=0.10,
+        export_peak_lookback_h=0,
+    )
 
 
 def test_day_index_none_matches_legacy_24h_arithmetic():
@@ -29,10 +38,18 @@ def test_day_index_none_matches_legacy_24h_arithmetic():
     load = [0.2] * n
     price = [0.2 + 0.01 * (i % 5) for i in range(n)]
     legacy = [(0 + h) // 24 for h in range(n)]
-    a = optimize_grid(pv, load, price, soc_start=50.0, cfg=_cfg(),
-                       window_start_h=0, window_len=n, export_price=price)
-    b = optimize_grid(pv, load, price, soc_start=50.0, cfg=_cfg(),
-                       window_start_h=0, window_len=n, export_price=price, day_index=legacy)
+    a = optimize_grid(pv, load, price, soc_start=50.0, cfg=_cfg(), window_start_h=0, window_len=n, export_price=price)
+    b = optimize_grid(
+        pv,
+        load,
+        price,
+        soc_start=50.0,
+        cfg=_cfg(),
+        window_start_h=0,
+        window_len=n,
+        export_price=price,
+        day_index=legacy,
+    )
     assert a["export_schedule"] == b["export_schedule"]
 
 
@@ -43,9 +60,19 @@ def test_window_start_slot_and_slots_per_day_reproduce_split():
     load = [0.0] * n
     price = [0.30 if (40 + i) < 96 else 0.50 for i in range(n)]
     di = [(40 + i) // 96 for i in range(n)]
-    out = optimize_grid(pv, load, price, soc_start=80.0, cfg=_cfg(),
-                         window_start_h=40, window_len=n, slots_per_day=96,
-                         export_price=price, feed_in=price, day_index=di)
+    out = optimize_grid(
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=_cfg(),
+        window_start_h=40,
+        window_len=n,
+        slots_per_day=96,
+        export_price=price,
+        feed_in=price,
+        day_index=di,
+    )
     # day-1 slots (index>=56 in the window) get their own peak band, not day-0's.
     assert len(out["export_schedule"]) == n
 

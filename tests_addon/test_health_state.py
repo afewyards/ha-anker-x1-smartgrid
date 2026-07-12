@@ -3,11 +3,12 @@
 Deliberately imports ONLY health (and trainer for TrainState) — never server.py,
 never fastapi/uvicorn — so these tests run cleanly in the repo .venv.
 """
+
 from __future__ import annotations
 
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -21,11 +22,12 @@ _TZ_AMS = ZoneInfo("Europe/Amsterdam")
 # build_health_payload — READY state
 # ---------------------------------------------------------------------------
 
+
 def _ready_state() -> TrainState:
     return TrainState(
         ready=True,
         promoted=True,
-        last_trained=datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        last_trained=datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC),
         n_rows=500,
         metrics={"mae_p50": 42.1, "mae_p80": 55.3},
         model=object(),
@@ -46,8 +48,16 @@ def _dormant_state() -> TrainState:
 def test_build_health_payload_ready_all_keys_present():
     state = _ready_state()
     payload = build_health_payload(state, "1.4.0", "3.11.0 (default)")
-    expected_keys = {"ready", "promoted", "last_trained", "n_rows", "metrics",
-                     "sklearn_version", "python_version", "db_readable"}
+    expected_keys = {
+        "ready",
+        "promoted",
+        "last_trained",
+        "n_rows",
+        "metrics",
+        "sklearn_version",
+        "python_version",
+        "db_readable",
+    }
     assert set(payload.keys()) == expected_keys
 
 
@@ -77,6 +87,7 @@ def test_build_health_payload_last_trained_is_isoformat_string():
 # build_health_payload — DORMANT state
 # ---------------------------------------------------------------------------
 
+
 def test_build_health_payload_dormant_last_trained_is_none():
     state = _dormant_state()
     payload = build_health_payload(state, "1.4.0", "3.11.0")
@@ -100,10 +111,11 @@ def test_build_health_payload_dormant_ready_and_promoted_false():
 # build_health_payload — db_readable (H3b)
 # ---------------------------------------------------------------------------
 
+
 def test_health_payload_includes_db_readable():
     from types import SimpleNamespace
-    state = SimpleNamespace(ready=False, promoted=False, last_trained=None,
-                            n_rows=0, metrics=None)
+
+    state = SimpleNamespace(ready=False, promoted=False, last_trained=None, n_rows=0, metrics=None)
     payload = build_health_payload(state, "1.5.2", "3.12", db_readable=False)
     assert payload["db_readable"] is False
 
@@ -111,6 +123,7 @@ def test_health_payload_includes_db_readable():
 # ---------------------------------------------------------------------------
 # read_options
 # ---------------------------------------------------------------------------
+
 
 def test_read_options_returns_defaults_when_file_missing():
     opts = read_options(path="/nonexistent/path/options.json")
@@ -120,9 +133,7 @@ def test_read_options_returns_defaults_when_file_missing():
 
 def test_read_options_merges_written_file_over_defaults():
     custom = {"db_path": "/data/custom.db"}
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(custom, f)
         tmp_path = f.name
 
@@ -136,9 +147,7 @@ def test_read_options_merges_written_file_over_defaults():
 
 def test_read_options_custom_retrain_hour():
     custom = {"retrain_hour": 5}
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(custom, f)
         tmp_path = f.name
 
@@ -150,9 +159,7 @@ def test_read_options_custom_retrain_hour():
 
 
 def test_read_options_returns_defaults_on_malformed_json():
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write("{not valid")
         tmp_path = f.name
 
@@ -166,6 +173,7 @@ def test_read_options_returns_defaults_on_malformed_json():
 # ---------------------------------------------------------------------------
 # seconds_until_next_run
 # ---------------------------------------------------------------------------
+
 
 def _ams(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
     """Construct a tz-aware datetime in Europe/Amsterdam."""
@@ -200,7 +208,7 @@ def test_seconds_until_next_run_utc_input():
     # Supply a UTC datetime and confirm it works correctly.
     # 00:00 UTC on Jan 1 2024 = 01:00 Amsterdam (CET, UTC+1)
     # retrain_hour=3 → today at 03:00 AMS → 2h from 01:00 AMS
-    now_utc = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+    now_utc = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
     secs = seconds_until_next_run(now_utc, retrain_hour=3)
     expected = 2 * 3600
     assert abs(secs - expected) < 5, f"Expected ~{expected}s, got {secs}s"
@@ -218,22 +226,29 @@ def test_seconds_until_next_run_always_positive():
 # read_options — retrain_hour clamp/validate
 # ---------------------------------------------------------------------------
 
+
 def test_read_options_clamps_out_of_range_retrain_hour():
-    import json, tempfile
+    import json
+    import tempfile
     from pathlib import Path
+
     for bad, _ in [(27, 23), (-5, 0)]:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump({"retrain_hour": bad}, f); tmp = f.name
+            json.dump({"retrain_hour": bad}, f)
+            tmp = f.name
         opts = read_options(path=tmp)
         assert 0 <= opts["retrain_hour"] <= 23
         Path(tmp).unlink(missing_ok=True)
 
 
 def test_read_options_defaults_retrain_hour_on_nonint():
-    import json, tempfile
+    import json
+    import tempfile
     from pathlib import Path
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump({"retrain_hour": "3am"}, f); tmp = f.name
+        json.dump({"retrain_hour": "3am"}, f)
+        tmp = f.name
     opts = read_options(path=tmp)
-    assert opts["retrain_hour"] == 3      # falls back to default, never raises
+    assert opts["retrain_hour"] == 3  # falls back to default, never raises
     Path(tmp).unlink(missing_ok=True)

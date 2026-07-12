@@ -19,11 +19,12 @@ returns an empty/partial dict and the controller leaves the corresponding
 attribute untouched, matching the pre-extraction self-mutating behavior
 exactly.
 """
+
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, UTC
 
 from homeassistant.util import dt as dt_util
 
@@ -82,7 +83,7 @@ def run_daily_regret(
         # at the actual local midnight (ref_utc = dt_util.as_local → to_utc) for
         # tighter reads.  The current approach is correct but reads a wider window.
         year, month, dom = int(day[:4]), int(day[5:7]), int(day[8:10])
-        ref_utc = datetime(year, month, dom, tzinfo=timezone.utc)
+        ref_utc = datetime(year, month, dom, tzinfo=UTC)
         since_iso = (ref_utc - timedelta(hours=14)).isoformat()
         until_iso = (ref_utc + timedelta(hours=38)).isoformat()
 
@@ -174,7 +175,7 @@ def run_daily_regret(
 
             # Grid charge = battery charging current minus the solar surplus
             # that the battery could absorb without pulling from grid.
-            battery_charge_w = max(0.0, -batt_raw)       # >0 only when charging
+            battery_charge_w = max(0.0, -batt_raw)  # >0 only when charging
             solar_surplus_w = max(0.0, -(p1_raw + batt_raw))  # surplus to meter
             grid_charge_w = max(0.0, battery_charge_w - solar_surplus_w)
 
@@ -231,7 +232,9 @@ def run_daily_regret(
         if len(hours_with_data) < _spd // 2:
             _LOGGER.debug(
                 "Daily regret skipped for %s: only %d slots with data (< %d)",
-                day, len(hours_with_data), _spd // 2,
+                day,
+                len(hours_with_data),
+                _spd // 2,
             )
             return updates
 
@@ -253,7 +256,8 @@ def run_daily_regret(
 
         pv_kwh = tuple(
             _energy_kwh(
-                pv_kwh_delta_by_hour[h], _mean(pv_by_hour[h]) / 1000.0 * _dt_h,
+                pv_kwh_delta_by_hour[h],
+                _mean(pv_by_hour[h]) / 1000.0 * _dt_h,
             )
             for h in range(_spd)
         )
@@ -273,7 +277,8 @@ def run_daily_regret(
         # (grid_charge_w = max(0, battery_charge_w − solar_surplus_w)).
         realized_charge = [
             _energy_kwh(
-                charge_kwh_delta_by_hour[h], _mean(charge_by_hour[h]) / 1000.0 * _dt_h,
+                charge_kwh_delta_by_hour[h],
+                _mean(charge_by_hour[h]) / 1000.0 * _dt_h,
             )
             for h in range(_spd)
         ]
@@ -298,8 +303,7 @@ def run_daily_regret(
             ]
             # Mean feed-in price per slot; 0.0 for slots without export_price data.
             _export_price_tuple = tuple(
-                _mean(export_price_by_hour[h]) if export_price_by_hour[h] else 0.0
-                for h in range(_spd)
+                _mean(export_price_by_hour[h]) if export_price_by_hour[h] else 0.0 for h in range(_spd)
             )
 
         # Water-value terminal: value end-SoC by the realized day's trough so
@@ -314,10 +318,7 @@ def run_daily_regret(
         # uses when deciding to export.  None when export is disabled or data absent.
         eff_export: list[float] | None = None
         if _export_price_tuple is not None and cfg.enable_export:
-            eff_export = [
-                optimize_mod.effective_export_price(p, cfg)
-                for p in _export_price_tuple
-            ]
+            eff_export = [optimize_mod.effective_export_price(p, cfg) for p in _export_price_tuple]
 
         day_data = regret_mod.DayData(
             pv_kwh=pv_kwh,
@@ -326,8 +327,10 @@ def run_daily_regret(
             soc_start=soc_start,
         )
         optimal = regret_mod.hindsight_optimal_grid(
-            day_data, cfg,
-            terminal_mode=_terminal_mode, water_value=_water_value,
+            day_data,
+            cfg,
+            terminal_mode=_terminal_mode,
+            water_value=_water_value,
             export_price=eff_export,
             dt_h=_dt_h,
         )
@@ -357,17 +360,17 @@ def run_daily_regret(
                 )
                 _dp_export = _dp_result.get("export_schedule")
                 _dp_realized = regret_mod.realized_grid_cost(
-                    day_data, _dp_result["schedule"], cfg,
+                    day_data,
+                    _dp_result["schedule"],
+                    cfg,
                     realized_export_by_hour=_dp_export,
                     export_price=eff_export,
                     dt_h=_dt_h,
                 )
                 _dp_score = regret_mod.score_regret(_dp_realized, optimal)
                 dp_regret_eur = _dp_score["regret_eur"]
-            except Exception:  # noqa: BLE001 — shadow DP failure must not block heuristic regret
-                _LOGGER.debug(
-                    "Shadow DP regret computation failed for %s", day, exc_info=True
-                )
+            except Exception:
+                _LOGGER.debug("Shadow DP regret computation failed for %s", day, exc_info=True)
 
         # INFEASIBLE policy: upsert a marker row but leave metric fields NULL.
         if optimal.get("infeasible", False):
@@ -396,7 +399,9 @@ def run_daily_regret(
             return updates
 
         realized = regret_mod.realized_grid_cost(
-            day_data, realized_charge, cfg,
+            day_data,
+            realized_charge,
+            cfg,
             realized_export_by_hour=_realized_export_kwh,
             export_price=eff_export,
             dt_h=_dt_h,
@@ -425,9 +430,11 @@ def run_daily_regret(
             "under_buy_kwh": score["under_buy_kwh"],
         }
         _LOGGER.info(
-            "Daily regret for %s: regret_eur=%.4f over_buy_kwh=%.3f under_buy_kwh=%.3f"
-            " dp_regret_eur=%s",
-            day, score["regret_eur"], score["over_buy_kwh"], score["under_buy_kwh"],
+            "Daily regret for %s: regret_eur=%.4f over_buy_kwh=%.3f under_buy_kwh=%.3f dp_regret_eur=%s",
+            day,
+            score["regret_eur"],
+            score["over_buy_kwh"],
+            score["under_buy_kwh"],
             f"{dp_regret_eur:.4f}" if dp_regret_eur is not None else "n/a",
         )
 
@@ -440,15 +447,11 @@ def run_daily_regret(
             _valid = [
                 (r["dp_regret_eur"], r["regret_eur"])
                 for r in _rows_7d
-                if r.get("dp_regret_eur") is not None
-                and r.get("regret_eur") is not None
-                and not r.get("infeasible", 0)
+                if r.get("dp_regret_eur") is not None and r.get("regret_eur") is not None and not r.get("infeasible", 0)
             ]
             if _valid:
-                updates["last_dp_regret_7d"] = (
-                    sum(dp - h for dp, h in _valid) / len(_valid)
-                )
-        except Exception:  # noqa: BLE001 — 7d delta failure must not block regret logging
+                updates["last_dp_regret_7d"] = sum(dp - h for dp, h in _valid) / len(_valid)
+        except Exception:
             _LOGGER.debug("7d DP-vs-heuristic delta computation failed", exc_info=True)
 
     except Exception:
@@ -511,7 +514,11 @@ def backfill_regret(
             if day_str not in scored_set:
                 updates.update(
                     run_daily_regret(
-                        recorder, cfg, day_str, computed_ts, slot_minutes=slot_minutes,
+                        recorder,
+                        cfg,
+                        day_str,
+                        computed_ts,
+                        slot_minutes=slot_minutes,
                     )
                 )
             current += timedelta(days=1)

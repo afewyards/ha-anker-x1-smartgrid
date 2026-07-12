@@ -1,4 +1,5 @@
 """Tests for forecast_sources.py."""
+
 from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -93,6 +94,7 @@ async def test_list_forecast_services_excludes_disabled(hass):
 # Task 2A — FORECAST_SOURCE_MAP new shape + Solcast
 # ---------------------------------------------------------------------------
 
+
 def test_forecast_source_map_has_name():
     """Every domain in FORECAST_SOURCE_MAP must have a 'name' key."""
     for domain, info in forecast_sources.FORECAST_SOURCE_MAP.items():
@@ -126,6 +128,7 @@ async def test_list_forecast_services_includes_solcast(hass):
 # ---------------------------------------------------------------------------
 # ha_solcast_fusion (blended Solcast + Open-Meteo) — uses the shared keys
 # ---------------------------------------------------------------------------
+
 
 async def test_ha_solcast_fusion_derive_pv_entities(hass):
     """ha_solcast_fusion reuses the shared forecast_solar/open-meteo translation_keys."""

@@ -8,6 +8,7 @@ Test structure (TDD — written before implementation):
   - Revenue formula correctness vs. hand-computed expected value
   - No-op guard paths (min=0.0 and export_price=None)
 """
+
 from typing import Any
 
 import pytest
@@ -45,7 +46,7 @@ def test_single_sub_min_run_is_dropped():
     """A single-hour sub-threshold run (0.23 < 0.5) is zeroed out."""
     cfg = _cfg(export_min_block_kwh=0.5)
     export_ac = [0.0, 0.0, 0.23, 0.0]
-    prices    = [0.20, 0.20, 0.30, 0.20]
+    prices = [0.20, 0.20, 0.30, 0.20]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered == [0.0, 0.0, 0.0, 0.0]
     assert len(filtered) == len(export_ac)
@@ -57,7 +58,7 @@ def test_multi_hour_run_summing_above_min_kept_whole():
     cfg = _cfg(export_min_block_kwh=0.5)
     # 0.2 + 0.2 + 0.2 = 0.6 >= 0.5 → kept
     export_ac = [0.2, 0.2, 0.2]
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered == pytest.approx([0.2, 0.2, 0.2])
 
@@ -66,7 +67,7 @@ def test_run_exactly_at_threshold_kept():
     """Boundary condition: sum == min → KEPT (strictly-less-than drops)."""
     cfg = _cfg(export_min_block_kwh=0.5)
     export_ac = [0.25, 0.25]  # sum exactly == 0.5
-    prices    = [0.30, 0.30]
+    prices = [0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered == pytest.approx([0.25, 0.25])
 
@@ -76,7 +77,7 @@ def test_two_adjacent_runs_split_by_zero_hour_judged_independently():
     cfg = _cfg(export_min_block_kwh=0.5)
     # Run 1: h=0, total=0.6 → kept; zero gap at h=1; Run 2: h=2, total=0.3 → dropped
     export_ac = [0.6, 0.0, 0.3]
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered[0] == pytest.approx(0.6)
     assert filtered[1] == pytest.approx(0.0)
@@ -92,7 +93,7 @@ def test_in_progress_run_at_index_0_kept_even_if_sub_min():
     """Run containing exempt_index=0 is never dropped regardless of size."""
     cfg = _cfg(export_min_block_kwh=0.5)
     export_ac = [0.1, 0.0, 0.0]  # sub-min single-hour run at h=0
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=0)
     assert filtered[0] == pytest.approx(0.1)  # kept (in-progress)
 
@@ -101,7 +102,7 @@ def test_same_sub_min_run_dropped_when_not_exempt():
     """Identical sub-min run at h=0 is dropped when exempt_index points elsewhere."""
     cfg = _cfg(export_min_block_kwh=0.5)
     export_ac = [0.1, 0.0, 0.0]
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=5)
     assert filtered[0] == pytest.approx(0.0)  # dropped (future run)
 
@@ -122,14 +123,13 @@ def test_revenue_formula_correctness():
     cfg = _cfg(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04)
     # Run sums to 0.7 >= 0.5 → kept
     export_ac = [0.0, 0.3, 0.4]
-    prices    = [0.0, 0.30, 0.25]
+    prices = [0.0, 0.30, 0.25]
 
     _, net_rev = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
 
     eta_d = eta_discharge(cfg)  # == 1.0
     expected = sum(
-        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh
-        for h in range(len(export_ac))
+        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh for h in range(len(export_ac))
     )
     assert net_rev == pytest.approx(expected)
 
@@ -138,7 +138,7 @@ def test_revenue_zero_after_all_runs_dropped():
     """When all runs are dropped, returned revenue is 0.0."""
     cfg = _cfg(export_min_block_kwh=0.5)
     export_ac = [0.0, 0.23, 0.0]  # single sub-min run, not exempt
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     _, net_rev = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert net_rev == pytest.approx(0.0)
 
@@ -153,13 +153,12 @@ def test_min_zero_is_noop_values_identical():
     equals the full-schedule recompute (locks the documented no-op contract)."""
     cfg = _cfg(export_min_block_kwh=0.0)
     export_ac = [0.1, 0.0, 0.3, 0.0, 0.05]
-    prices    = [0.30] * 5
+    prices = [0.30] * 5
     filtered, rev = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered == pytest.approx(export_ac)
     eta_d = eta_discharge(cfg)
     expected_rev = sum(
-        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh
-        for h in range(len(export_ac))
+        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh for h in range(len(export_ac))
     )
     assert rev == pytest.approx(expected_rev)
 
@@ -168,7 +167,7 @@ def test_min_zero_returns_defensive_copy():
     """min=0.0 no-op still returns a copy, not the original list object."""
     cfg = _cfg(export_min_block_kwh=0.0)
     export_ac = [0.1, 0.2]
-    prices    = [0.30, 0.30]
+    prices = [0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered is not export_ac
 
@@ -187,7 +186,7 @@ def test_negative_min_kwh_is_noop():
     """Negative min_kwh behaves like 0 — no filtering applied."""
     cfg = _cfg(export_min_block_kwh=-1.0)
     export_ac = [0.1, 0.0, 0.05]
-    prices    = [0.30, 0.30, 0.30]
+    prices = [0.30, 0.30, 0.30]
     filtered, _ = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
     assert filtered == pytest.approx(export_ac)
 
@@ -322,15 +321,13 @@ def test_tail_trim_revenue_reflects_trimmed_zeros():
     # eta_d = 1.0 with these settings; revenue from trimmed schedule only
     eta_d = eta_discharge(cfg)
     expected_rev = sum(
-        filtered[h] * prices[h] - (filtered[h] / eta_d) * cfg.cycle_cost_eur_per_kwh
-        for h in range(len(filtered))
+        filtered[h] * prices[h] - (filtered[h] / eta_d) * cfg.cycle_cost_eur_per_kwh for h in range(len(filtered))
     )
     assert net_rev == pytest.approx(expected_rev)
     # Sanity: revenue must NOT include the trimmed 0.28 kWh slot
     # (i.e., gross contribution of slot 1 must be absent)
     full_rev = sum(
-        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh
-        for h in range(len(export_ac))
+        export_ac[h] * prices[h] - (export_ac[h] / eta_d) * cfg.cycle_cost_eur_per_kwh for h in range(len(export_ac))
     )
     assert net_rev < full_rev, "Trimmed revenue must be less than pre-trim full revenue"
 
@@ -407,7 +404,6 @@ def test_tail_trim_exempt_stops_lead_trim_preserving_slot_before_core():
     assert filtered == pytest.approx([0.0, 0.10, 0.60])
 
 
-
 # ---------------------------------------------------------------------------
 # eta_curve threading (Task 13) — optional curve param, None branch byte-identical
 # ---------------------------------------------------------------------------
@@ -433,8 +429,15 @@ def test_eta_curve_lower_discharge_eta_lowers_net_revenue():
     base = EfficiencyCurve.static(cfg)
     lowered = [
         BinStat(
-            b.lo_w, b.hi_w, "discharge", b.eta * 0.5, b.measured, b.n_runs,
-            b.dc_kwh, b.confident, b.fallback_reason,
+            b.lo_w,
+            b.hi_w,
+            "discharge",
+            b.eta * 0.5,
+            b.measured,
+            b.n_runs,
+            b.dc_kwh,
+            b.confident,
+            b.fallback_reason,
         )
         for b in base._discharge
     ]
@@ -443,9 +446,7 @@ def test_eta_curve_lower_discharge_eta_lowers_net_revenue():
     export_ac = [0.6, 0.0, 0.7]
     prices = [0.4, 0.4, 0.4]
     _, rev_static = apply_min_export_block(export_ac, prices, cfg, exempt_index=10)
-    _, rev_curve = apply_min_export_block(
-        export_ac, prices, cfg, exempt_index=10, eta_curve=curve
-    )
+    _, rev_curve = apply_min_export_block(export_ac, prices, cfg, exempt_index=10, eta_curve=curve)
     assert rev_curve < rev_static
 
 
@@ -463,8 +464,8 @@ def test_tail_trim_cores_scale_with_dt_h():
     ac = [0.0, 0.05, 0.15, 0.15, 0.15, 0.04]
     price = [0.30] * 6
     out, _ = apply_min_export_block(ac, price, cfg, exempt_index=0, dt_h=0.25)
-    assert out[1] == 0.0 and out[5] == 0.0      # lead/tail trimmed
-    assert out[2] == out[3] == out[4] == 0.15   # cores kept
+    assert out[1] == 0.0 and out[5] == 0.0  # lead/tail trimmed
+    assert out[2] == out[3] == out[4] == 0.15  # cores kept
     # regression: identical input at dt_h=1.0 keeps run whole (no core at 60-min)
     out_60min, _ = apply_min_export_block(ac, price, cfg, exempt_index=0)
     assert out_60min == pytest.approx([0.0, 0.05, 0.15, 0.15, 0.15, 0.04])

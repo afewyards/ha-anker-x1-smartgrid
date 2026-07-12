@@ -12,10 +12,11 @@ The controller-level low-SoC WARNING (Acceptance §7) is also asserted via
 
 Production code already behaves this way; this test locks the behaviour in.
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -42,7 +43,7 @@ from tests.helpers import (
 # Shared constants / helpers
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)  # 07:00 UTC
+BASE = datetime(2026, 6, 25, 7, 0, tzinfo=UTC)  # 07:00 UTC
 
 # A price far above any realistic ceiling (peak * round_trip_eff).
 # With round_trip_eff=0.85, even a peak of 0.70 gives ceiling ≈ 0.595.
@@ -54,18 +55,20 @@ _PREDICTOR = LoadPredictor.from_profile({})
 
 def _cfg(**overrides) -> Config:
     """Return a Config with sensible test defaults; keyword args override."""
-    return Config.from_dict({
-        "capacity_kwh": 10.0,
-        "soc_floor": 5.0,
-        "soc_target": 97.0,
-        "max_charge_w": 6000.0,
-        "eta_charge": 0.92,
-        "eps_hi_kwh": 0.4,
-        "eps_lo_kwh": 0.2,
-        "min_dwell_min": 0,
-        "round_trip_eff": 0.85,
-        **overrides,
-    })
+    return Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_floor": 5.0,
+            "soc_target": 97.0,
+            "max_charge_w": 6000.0,
+            "eta_charge": 0.92,
+            "eps_hi_kwh": 0.4,
+            "eps_lo_kwh": 0.2,
+            "min_dwell_min": 0,
+            "round_trip_eff": 0.85,
+            **overrides,
+        }
+    )
 
 
 def _slots(prices: list[float], base: datetime = BASE) -> list[PriceSlot]:
@@ -80,6 +83,7 @@ def _plan(state: ControllerState = ControllerState.PASSIVE, age_h: float = 2.0) 
 # Acceptance §7 — pure optimize_grid (no controller, no mocks)
 # ---------------------------------------------------------------------------
 
+
 class TestSubFloorStartInfeasible:
     """optimize_grid: soc_start < soc_floor, all-expensive window → infeasible."""
 
@@ -93,8 +97,8 @@ class TestSubFloorStartInfeasible:
         """
         cfg = _cfg(soc_floor=5.0)
         window_len = 9  # arbitrary multi-hour window
-        pv    = [0.0] * window_len
-        load  = [0.5] * window_len  # small load keeps it realistic
+        pv = [0.0] * window_len
+        load = [0.5] * window_len  # small load keeps it realistic
         price = [_ALL_EXPENSIVE_PRICE] * window_len
 
         # Ceiling = peak * round_trip_eff — all slots exceed this → all-False mask
@@ -103,8 +107,10 @@ class TestSubFloorStartInfeasible:
         assert not any(chargeable), "All slots must be masked (all-expensive sanity check)"
 
         result = optimize_grid(
-            pv, load, price,
-            soc_start=4.0,          # ← BELOW soc_floor=5%
+            pv,
+            load,
+            price,
+            soc_start=4.0,  # ← BELOW soc_floor=5%
             cfg=cfg,
             window_start_h=0,
             window_len=window_len,
@@ -113,8 +119,7 @@ class TestSubFloorStartInfeasible:
 
         # Must not raise (already asserted by reaching here without exception)
         assert result.get("infeasible") is True, (
-            f"Expected infeasible=True for sub-floor start with all-expensive prices, "
-            f"got result={result}"
+            f"Expected infeasible=True for sub-floor start with all-expensive prices, got result={result}"
         )
         schedule = result.get("schedule", [])
         assert all(s == pytest.approx(0.0) for s in schedule), (
@@ -125,8 +130,8 @@ class TestSubFloorStartInfeasible:
         """optimize_grid with soc_start below floor and peak unknown (all-False mask) must not raise."""
         cfg = _cfg(soc_floor=5.0)
         window_len = 4
-        pv    = [0.0] * window_len
-        load  = [0.3] * window_len
+        pv = [0.0] * window_len
+        load = [0.3] * window_len
         price = [_ALL_EXPENSIVE_PRICE] * window_len
         # ceiling=None → all-False (fail-closed semantics)
         chargeable = build_charge_mask(price, ceiling=None)
@@ -134,7 +139,9 @@ class TestSubFloorStartInfeasible:
 
         # Must complete without raising
         result = optimize_grid(
-            pv, load, price,
+            pv,
+            load,
+            price,
             soc_start=4.0,
             cfg=cfg,
             window_start_h=0,
@@ -151,15 +158,17 @@ class TestSubFloorStartInfeasible:
         """
         cfg = _cfg(soc_floor=5.0)
         window_len = 9
-        pv    = [0.0] * window_len
-        load  = [0.5] * window_len
+        pv = [0.0] * window_len
+        load = [0.5] * window_len
         price = [_ALL_EXPENSIVE_PRICE] * window_len
         ceiling = _ALL_EXPENSIVE_PRICE * cfg.round_trip_eff
         chargeable = build_charge_mask(price, ceiling)
 
         result = optimize_grid(
-            pv, load, price,
-            soc_start=5.0,          # exactly at floor
+            pv,
+            load,
+            price,
+            soc_start=5.0,  # exactly at floor
             cfg=cfg,
             window_start_h=0,
             window_len=window_len,
@@ -232,21 +241,26 @@ def _make_floor_controller(hass, *, soc_pct: float = 5.0):
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
     # All-expensive price: 0.90 €/kWh → all above ceiling → no charging worthy
-    hass.set_state("sensor.price", str(_ALL_EXPENSIVE_PRICE), {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(_ALL_EXPENSIVE_PRICE * const.PRICE_SCALE),
-            }
-            for i in range(9)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        str(_ALL_EXPENSIVE_PRICE),
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(_ALL_EXPENSIVE_PRICE * const.PRICE_SCALE),
+                }
+                for i in range(9)
+            ]
+        },
+    )
     return ctrl, act
 
 
 # ---------------------------------------------------------------------------
 # Acceptance §7 — controller-level WARNING: edge-triggered, enabled path only
 # ---------------------------------------------------------------------------
+
 
 class TestDrainedToFloorWarning:
     """Controller.tick() emits WARNING once when SoC first hits the floor (enabled path)."""
@@ -265,10 +279,7 @@ class TestDrainedToFloorWarning:
             await ctrl.tick()  # tick 1: transitions INTO drained-at-floor → warns
             await ctrl.tick()  # tick 2: already warned → suppressed
 
-        floor_warnings = [
-            r for r in caplog.records
-            if r.levelno == logging.WARNING and "firmware floor" in r.message
-        ]
+        floor_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "firmware floor" in r.message]
         assert len(floor_warnings) == 1, (
             f"Expected exactly 1 drained-to-floor WARNING across 2 ticks, "
             f"got {len(floor_warnings)}: {[r.message for r in floor_warnings]}"
@@ -294,10 +305,7 @@ class TestDrainedToFloorWarning:
             hass.set_state("sensor.soc", "5.0")
             await ctrl.tick()  # new entry → warns again
 
-        floor_warnings = [
-            r for r in caplog.records
-            if r.levelno == logging.WARNING and "firmware floor" in r.message
-        ]
+        floor_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "firmware floor" in r.message]
         assert len(floor_warnings) == 2, (
             f"Expected 2 drained-to-floor WARNINGs (one per episode), "
             f"got {len(floor_warnings)}: {[r.message for r in floor_warnings]}"
@@ -314,10 +322,7 @@ class TestDrainedToFloorWarning:
             await ctrl.tick()
             await ctrl.tick()
 
-        floor_warnings = [
-            r for r in caplog.records
-            if r.levelno == logging.WARNING and "firmware floor" in r.message
-        ]
+        floor_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "firmware floor" in r.message]
         assert len(floor_warnings) == 0, (
             f"Disabled path must NOT emit drained-to-floor WARNING, "
             f"got {len(floor_warnings)}: {[r.message for r in floor_warnings]}"
@@ -344,8 +349,14 @@ class TestDrainedToFloorWarning:
         _out: dict = {}
 
         new_plan, *_ = compute_decision(
-            _plan(), inputs, slots, 0.0, sunset,
-            _PREDICTOR, None, cfg,
+            _plan(),
+            inputs,
+            slots,
+            0.0,
+            sunset,
+            _PREDICTOR,
+            None,
+            cfg,
             _out=_out,
         )
 

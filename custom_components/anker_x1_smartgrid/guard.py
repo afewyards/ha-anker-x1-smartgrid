@@ -9,6 +9,7 @@ Sign convention (output / inverter setpoint):
   positive value  → discharge (≥ 0, ≤ SETPOINT_MAX_W = +6000 W)
   zero            → idle
 """
+
 from __future__ import annotations
 
 from . import const

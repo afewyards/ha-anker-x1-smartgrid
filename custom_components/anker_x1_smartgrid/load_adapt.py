@@ -7,6 +7,7 @@ wraps whatever tier ``_retrain_sync`` selected; applied ONLY to the live
 ``compute_decision`` call.  ``load_adapt_fraction=0.0`` disables entirely
 (the wrapper is never constructed — byte-identical planning).
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -99,10 +100,7 @@ def compute_ratio(
     if partial is not None:
         actual_rate_w, frac = partial
         pred_now = log.get(now_h)
-        if (
-            pred_now is not None and pred_now > 0.0
-            and actual_rate_w >= 0.0 and frac >= PARTIAL_MIN_FRAC
-        ):
+        if pred_now is not None and pred_now > 0.0 and actual_rate_w >= 0.0 and frac >= PARTIAL_MIN_FRAC:
             # Elapsed-fraction weighting: a half-observed hour carries half the
             # evidence of a completed one. Rate (W) × frac keeps units consistent
             # with the completed-hour energy sums.
@@ -121,7 +119,12 @@ class AdaptivePredictor:
     """
 
     def __init__(
-        self, base, ratio: float, now: datetime, fade_h: int, fraction: float,
+        self,
+        base,
+        ratio: float,
+        now: datetime,
+        fade_h: int,
+        fraction: float,
     ) -> None:
         self._base = base
         self._ratio = float(ratio)

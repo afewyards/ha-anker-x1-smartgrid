@@ -1,4 +1,5 @@
 """Static tariff config keys + Config field defaults."""
+
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 
@@ -27,13 +28,15 @@ def test_static_config_defaults():
 
 
 def test_static_config_from_dict_override():
-    cfg = Config.from_dict({
-        "price_mode": "static",
-        "static_price_import": 0.30,
-        "static_price_offpeak": 0.12,
-        "static_offpeak_hours": "01:00-06:00",
-        "static_price_export": 0.10,
-    })
+    cfg = Config.from_dict(
+        {
+            "price_mode": "static",
+            "static_price_import": 0.30,
+            "static_price_offpeak": 0.12,
+            "static_offpeak_hours": "01:00-06:00",
+            "static_price_export": 0.10,
+        }
+    )
     assert cfg.price_mode == "static"
     assert cfg.static_price_import == 0.30
     assert cfg.static_price_offpeak == 0.12

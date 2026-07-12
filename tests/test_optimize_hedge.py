@@ -9,6 +9,7 @@ Parity invariant: at hedge=None all results must be byte-identical to the
 pre-hedge invocation (test_optimize_parity.py covers the full oracle parity;
 here we just spot-check the noop contract).
 """
+
 import pytest
 
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
@@ -141,8 +142,6 @@ def test_eur_kwh_consistent_below_floor():
     independent ``_resim`` re-derivation within floating-point tolerance.
     """
     res = _args(soc_start=12.0, hedge_drain_kwh=[3.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    expected_eur, expected_kwh = _resim(
-        res["schedule"], hedge=[3.0, 0, 0, 0, 0, 0], **_fixture()
-    )
+    expected_eur, expected_kwh = _resim(res["schedule"], hedge=[3.0, 0, 0, 0, 0, 0], **_fixture())
     assert res["eur"] == pytest.approx(expected_eur, abs=1e-6)
     assert res["kwh"] == pytest.approx(expected_kwh, abs=1e-6)

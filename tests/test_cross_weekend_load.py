@@ -1,7 +1,8 @@
 """Q2: load model trained on one weekend-class must keep a per-hour shape for the
 unseen class via an opposite-weekend hour-of-day fallback, NOT collapse to the flat
 global mean / fallback."""
-from datetime import datetime, timezone
+
+from datetime import datetime, timezone, UTC
 
 import pytest
 
@@ -9,8 +10,8 @@ from custom_components.anker_x1_smartgrid import forecast as fc
 from custom_components.anker_x1_smartgrid.dataquality import FeatureRow
 from custom_components.anker_x1_smartgrid.loadmodel import BucketedLoadModel
 
-SAT = datetime(2026, 6, 27, 0, 0, tzinfo=timezone.utc)  # Saturday (is_weekend=True)
-_TS = datetime(2026, 6, 23, 0, 0, tzinfo=timezone.utc)  # dummy weekday timestamp
+SAT = datetime(2026, 6, 27, 0, 0, tzinfo=UTC)  # Saturday (is_weekend=True)
+_TS = datetime(2026, 6, 23, 0, 0, tzinfo=UTC)  # dummy weekday timestamp
 
 
 def _weekday_rows(per_hour: int) -> list[FeatureRow]:
@@ -18,9 +19,7 @@ def _weekday_rows(per_hour: int) -> list[FeatureRow]:
     rows: list[FeatureRow] = []
     for h in range(24):
         for k in range(per_hour):
-            rows.append(
-                FeatureRow(_TS.replace(hour=h), h, False, 100.0 + 10.0 * h + k, None)
-            )
+            rows.append(FeatureRow(_TS.replace(hour=h), h, False, 100.0 + 10.0 * h + k, None))
     return rows
 
 
@@ -42,7 +41,7 @@ def test_quantile_keeps_opposite_weekend_per_hour_shape():
     p18 = model.predict_load_w(SAT.replace(hour=18), None, fallback_w=999.0, quantile=0.8)
     # P80 from the opposite-weekend same-hour samples — varies by hour (shape kept).
     assert p05 != p18
-    assert p05 >= 100.0 + 10.0 * 5     # >= that hour's central, not a flat global P80
+    assert p05 >= 100.0 + 10.0 * 5  # >= that hour's central, not a flat global P80
     assert p18 >= 100.0 + 10.0 * 18
 
 
@@ -63,11 +62,11 @@ def test_load_predictor_profile_samples_p80_cross_weekend_shape():
     """
     # Weekday-only samples, 8 per hour (>= _MIN_QUANTILE_SAMPLES); hour h has a
     # distinct rising band (100 + 10*h + k) so per-hour P80 varies across hours.
-    NOW = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+    NOW = datetime(2026, 6, 26, 12, 0, tzinfo=UTC)
     samples = []
     for h in range(24):
         for k in range(8):
-            ts = datetime(2026, 6, 23, h, k * 5, tzinfo=timezone.utc)  # Monday
+            ts = datetime(2026, 6, 23, h, k * 5, tzinfo=UTC)  # Monday
             samples.append((ts.isoformat(), 100.0 + 10.0 * h + k))
 
     lp = fc.LoadPredictor.from_profile_samples(samples, lookback_days=14, now=NOW)
@@ -92,7 +91,7 @@ def test_load_predictor_profile_samples_p80_cross_weekend_shape():
     # (build a weekend-only predictor and confirm P80 comes from weekend samples)
     sat_samples = []
     for k in range(8):
-        ts = datetime(2026, 6, 21, 10, k * 5, tzinfo=timezone.utc)  # Sunday
+        ts = datetime(2026, 6, 21, 10, k * 5, tzinfo=UTC)  # Sunday
         sat_samples.append((ts.isoformat(), 200.0 + k))
     lp_wknd = fc.LoadPredictor.from_profile_samples(sat_samples, lookback_days=14, now=NOW)
     p80_wknd = lp_wknd.predict(SAT.replace(hour=10), temp=None, fallback_w=999.0, quantile=0.8)

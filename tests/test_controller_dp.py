@@ -5,9 +5,10 @@ Covers the DP path in ``compute_decision`` (DP always runs):
 - dp-on    → DP path taken, routes through decide_state / command_setpoint
 - fallback → DP raises → falls through to heuristic (no exception propagated)
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -27,25 +28,26 @@ from custom_components.anker_x1_smartgrid.models import (
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)  # 10:00 UTC, Mon
+BASE = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)  # 10:00 UTC, Mon
 
 _PREDICTOR = LoadPredictor.from_profile({})
 
 
 def _cfg(**overrides) -> Config:
     """Build a Config with sensible test defaults."""
-    return Config.from_dict({
-        "capacity_kwh": 10.0,
-        "soc_target": 97.0,
-        "eta_charge": 0.92,
-        "eps_hi_kwh": 0.4,
-        "eps_lo_kwh": 0.2,
-        "min_dwell_min": 0,
-        "max_charge_w": 6000.0,
-        "round_trip_eff": 0.85,
-
-        **overrides,
-    })
+    return Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_target": 97.0,
+            "eta_charge": 0.92,
+            "eps_hi_kwh": 0.4,
+            "eps_lo_kwh": 0.2,
+            "min_dwell_min": 0,
+            "max_charge_w": 6000.0,
+            "round_trip_eff": 0.85,
+            **overrides,
+        }
+    )
 
 
 def _slots(prices: list[float], base: datetime = BASE) -> list[PriceSlot]:
@@ -58,6 +60,7 @@ def _plan(state: ControllerState = ControllerState.PASSIVE, age_h: float = 2.0) 
 
 def _make_dp_mock(value_per_hour: float = 0.0):
     """Return a side_effect function for optimize_grid that produces correct window_len."""
+
     def _side_effect(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         return {
@@ -65,21 +68,25 @@ def _make_dp_mock(value_per_hour: float = 0.0):
             "kwh": value_per_hour * wl,
             "eur": 0.0,
         }
+
     return _side_effect
 
 
 def _make_dp_mock_first_hour(charge_kwh: float = 5.0):
     """Return a side_effect that puts all charge in hour 0 (current slot)."""
+
     def _side_effect(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         schedule = [charge_kwh] + [0.0] * (wl - 1)
         return {"schedule": schedule, "kwh": charge_kwh, "eur": charge_kwh * 0.05}
+
     return _side_effect
 
 
 # ---------------------------------------------------------------------------
 # Helper: call compute_decision with minimal valid inputs
 # ---------------------------------------------------------------------------
+
 
 def _call(
     cfg: Config,
@@ -100,8 +107,14 @@ def _call(
     inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=sunset_offset_h)
     return compute_decision(
-        plan, inputs, slots, pv_remaining, sunset,
-        _PREDICTOR, None, cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining,
+        sunset,
+        _PREDICTOR,
+        None,
+        cfg,
         export_price=export_price,
     )
 
@@ -110,11 +123,13 @@ def _call(
 # 1. DP path is taken (DP always runs)
 # ===========================================================================
 
+
 def test_flag_on_calls_optimize_grid():
     """With use_dp_optimizer=True, optimize_grid IS called."""
     cfg = _cfg()
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock(0.0)) as mock_dp:
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock(0.0)
+    ) as mock_dp:
         _call(cfg, soc=20.0)
     mock_dp.assert_called_once()
 
@@ -123,15 +138,16 @@ def test_flag_on_dp_schedule_selects_charging_hours():
     """Flag-on: DP puts charge in hour 0 (current slot) → selected=[BASE] → FORCING."""
     cfg = _cfg()
 
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock_first_hour(5.0)) as mock_dp:
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock_first_hour(5.0)
+    ) as mock_dp:
         new_plan, setpoint, _deadline, _horizon, _hm, _ = _call(cfg, soc=20.0)
 
     # optimize_grid was called
     mock_dp.assert_called_once()
     # Hour 0 (BASE) is selected → decide_state should FORCE
     assert new_plan.state is ControllerState.FORCING
-    assert setpoint < 0.0   # charging
+    assert setpoint < 0.0  # charging
 
 
 def test_flag_on_dp_zero_schedule_stays_passive():
@@ -142,8 +158,7 @@ def test_flag_on_dp_zero_schedule_stays_passive():
     """
     cfg = _cfg()
 
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock(0.0)):
+    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock(0.0)):
         # soc=96.5% near target → DP returns zero schedule → no slots selected
         new_plan, setpoint, _deadline, _horizon, _hm, _ = _call(cfg, soc=96.5)
 
@@ -164,8 +179,9 @@ def test_flag_on_passes_feed_in_to_dp():
     cfg = _cfg()
     EXPORT_PRICE = 0.08
 
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock(0.0)) as mock_dp:
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock(0.0)
+    ) as mock_dp:
         # export_price_matches_import defaults to False (differing entities)
         _call(cfg, soc=96.5, export_price=EXPORT_PRICE)
 
@@ -191,8 +207,9 @@ def test_flag_on_no_export_price_passes_none():
     """Flag-on: no export_price configured → feed_in=None passed to optimize_grid."""
     cfg = _cfg()
 
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock(0.0)) as mock_dp:
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock(0.0)
+    ) as mock_dp:
         _call(cfg, soc=96.5, export_price=None)
 
     call_kwargs = mock_dp.call_args.kwargs
@@ -204,8 +221,9 @@ def test_flag_on_passes_chargeable_mask():
     """Flag-on: price gate is forwarded to optimize_grid as chargeable mask."""
     cfg = _cfg()
 
-    with patch("custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-               side_effect=_make_dp_mock(0.0)) as mock_dp:
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid", side_effect=_make_dp_mock(0.0)
+    ) as mock_dp:
         _call(cfg, soc=96.5)
 
     call_kwargs = mock_dp.call_args.kwargs
@@ -218,6 +236,7 @@ def test_flag_on_passes_chargeable_mask():
 # ===========================================================================
 # 3. FALLBACK — DP exception → PASSIVE, no raise
 # ===========================================================================
+
 
 def test_dp_fallback_on_exception_does_not_raise():
     """When optimize_grid raises, compute_decision returns (not raises) a PASSIVE plan."""
@@ -290,8 +309,14 @@ def test_dp_infeasible_at_low_soc_records_infeasible_and_stays_passive():
     sunset = BASE + timedelta(hours=8.0)
     _out: dict = {}
     new_plan, *_ = compute_decision(
-        _plan(), inputs, slots, 0.0, sunset,
-        _PREDICTOR, None, cfg,
+        _plan(),
+        inputs,
+        slots,
+        0.0,
+        sunset,
+        _PREDICTOR,
+        None,
+        cfg,
         _out=_out,
     )
     assert new_plan.state is ControllerState.PASSIVE, (
@@ -307,6 +332,7 @@ def test_dp_infeasible_at_low_soc_records_infeasible_and_stays_passive():
 # ===========================================================================
 # D2 — export_request side-channel plumbing tests
 # ===========================================================================
+
 
 class TestExportRequestPlumbing:
     """Verify that compute_decision populates _out["export_request"] when the DP
@@ -333,18 +359,21 @@ class TestExportRequestPlumbing:
         sunset = BASE + timedelta(hours=8.0)
         _out: dict = {}
         compute_decision(
-            _plan(), inputs, slots, 0.0, sunset,
-            _PREDICTOR, None, cfg,
+            _plan(),
+            inputs,
+            slots,
+            0.0,
+            sunset,
+            _PREDICTOR,
+            None,
+            cfg,
             export_price=0.30,
             _out=_out,
         )
         assert "export_request" in _out, (
-            "DP ran successfully → _out must contain 'export_request' key; "
-            f"got keys: {list(_out.keys())}"
+            f"DP ran successfully → _out must contain 'export_request' key; got keys: {list(_out.keys())}"
         )
-        assert isinstance(_out["export_request"], dict), (
-            "export_request must be a dict (per-hour datetime→W mapping)"
-        )
+        assert isinstance(_out["export_request"], dict), "export_request must be a dict (per-hour datetime→W mapping)"
 
     def test_export_request_values_are_nonneg_watts(self):
         """All export_request values must be non-negative watts.
@@ -358,21 +387,26 @@ class TestExportRequestPlumbing:
         sunset = BASE + timedelta(hours=8.0)
         _out: dict = {}
         compute_decision(
-            _plan(), inputs, slots, 0.0, sunset,
-            _PREDICTOR, None, cfg,
+            _plan(),
+            inputs,
+            slots,
+            0.0,
+            sunset,
+            _PREDICTOR,
+            None,
+            cfg,
             export_price=0.35,
             _out=_out,
         )
         if "export_request" in _out:
             for dt, w in _out["export_request"].items():
-                assert w >= 0.0, (
-                    f"export_request[{dt}] = {w} is negative — must be non-negative watts"
-                )
+                assert w >= 0.0, f"export_request[{dt}] = {w} is negative — must be non-negative watts"
 
 
 # ---------------------------------------------------------------------------
 # Helper: call _dp_select_slots directly (Phase 2 wiring tests)
 # ---------------------------------------------------------------------------
+
 
 def _call_dp_select_slots(
     cfg: Config,
@@ -412,9 +446,11 @@ def _call_dp_select_slots(
 # Phase 2 — _dp_select_slots drives a single co-optimized optimize_grid call
 # ===========================================================================
 
+
 def test_dp_select_slots_calls_optimize_grid_with_export_and_builds_export_request(monkeypatch):
     """Phase 2: the controller drives a single optimize_grid call and reads export_schedule."""
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+
     captured = {}
 
     def _fake_optimize_grid(*args, **kwargs):
@@ -423,18 +459,28 @@ def test_dp_select_slots_calls_optimize_grid_with_export_and_builds_export_reque
         sched = [0.0] * wl
         exp = [0.0] * wl
         exp[0] = 3.0  # 3 kWh exported in the first window hour
-        return {"schedule": sched, "kwh": 0.0, "eur": 0.0,
-                "export_schedule": exp, "export_kwh": 3.0, "export_revenue_eur": 1.0}
+        return {
+            "schedule": sched,
+            "kwh": 0.0,
+            "eur": 0.0,
+            "export_schedule": exp,
+            "export_kwh": 3.0,
+            "export_revenue_eur": 1.0,
+        }
 
     monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _fake_optimize_grid)
     # plan_charge_and_export has been deleted (Task 10) — the greedy path no longer exists.
 
     cfg = _cfg()
-    selected, grid_request, infeasible, export_request, export_rev, _ceiling = _call_dp_select_slots(cfg, soc=80.0, export_price=0.30)
+    selected, grid_request, infeasible, export_request, export_rev, _ceiling = _call_dp_select_slots(
+        cfg, soc=80.0, export_price=0.30
+    )
 
     assert captured["export_price"] is not None, "optimize_grid must receive a per-hour export_price array"
     now_h = BASE.replace(minute=0, second=0, microsecond=0)
-    assert export_request.get(now_h) == pytest.approx(3000.0), f"export_request should be 3 kWh×1000=3000W, got {export_request}"
+    assert export_request.get(now_h) == pytest.approx(3000.0), (
+        f"export_request should be 3 kWh×1000=3000W, got {export_request}"
+    )
 
 
 @pytest.mark.asyncio
@@ -473,6 +519,7 @@ async def test_options_override_data_field(hass):
 # Helper: call compute_decision with _out side-channel (Phase 3 horizon tests)
 # ---------------------------------------------------------------------------
 
+
 def _call_compute_decision(
     cfg: Config,
     *,
@@ -496,8 +543,14 @@ def _call_compute_decision(
     inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=len(prices))
     return compute_decision(
-        _plan(), inputs, sl, 0.0, sunset,
-        _PREDICTOR, None, cfg,
+        _plan(),
+        inputs,
+        sl,
+        0.0,
+        sunset,
+        _PREDICTOR,
+        None,
+        cfg,
         export_price=export_price,
         export_price_matches_import=True,
         _out=out,
@@ -508,6 +561,7 @@ def _call_compute_decision(
 # ---------------------------------------------------------------------------
 # Hedge plumbing — T5a: hedge_drain_by_hour threaded into DP + display
 # ---------------------------------------------------------------------------
+
 
 def test_compute_decision_hedge_none_is_noop():
     """hedge_drain_by_hour=None produces byte-identical horizon SoC values."""
@@ -524,14 +578,14 @@ def test_compute_decision_hedge_lowers_projection():
     prices = [0.10, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40]
     now_h = BASE  # BASE is already hour-aligned (minute=0, second=0)
     base = _call_compute_decision(cfg, soc=50.0, prices=prices)
-    hed = _call_compute_decision(cfg, soc=50.0, prices=prices,
-                                  hedge_drain_by_hour={now_h: 1.5})
+    hed = _call_compute_decision(cfg, soc=50.0, prices=prices, hedge_drain_by_hour={now_h: 1.5})
     assert hed[3][-1]["soc"] <= base[3][-1]["soc"]
 
 
 # ===========================================================================
 # Phase 3 — de-truncation: DP window spans the full forecast horizon
 # ===========================================================================
+
 
 def test_full_horizon_schedules_export_into_peak_beyond_trough():
     """Phase 3: a peak past the next trough is inside the DP window → export scheduled there.
@@ -557,14 +611,17 @@ def test_full_horizon_schedules_export_into_peak_beyond_trough():
     assert len(prices) == 25
     out: dict = {}
     _new_plan, _setpoint, _deadline, _horizon, _hm, _ivs = _call_compute_decision(
-        cfg, soc=80.0, prices=prices, export_price=0.20, out=out,
+        cfg,
+        soc=80.0,
+        prices=prices,
+        export_price=0.20,
+        out=out,
     )
     peak_hour = BASE.replace(minute=0, second=0, microsecond=0) + timedelta(hours=20)
     # Under the old [now, trough+1h=BASE+8h] truncation the peak is invisible.
     # After the fix the full 25h window reveals it and export is scheduled there.
     assert peak_hour in out.get("export_request", {}), (
-        f"export_request must include the +20h peak (0.60 €/kWh); "
-        f"got {sorted(out.get('export_request', {}))}"
+        f"export_request must include the +20h peak (0.60 €/kWh); got {sorted(out.get('export_request', {}))}"
     )
 
 
@@ -572,22 +629,29 @@ def test_full_horizon_schedules_export_into_peak_beyond_trough():
 # Phase 4 — effective_export_price applied to per-hour DP export prices
 # ===========================================================================
 
+
 def test_dp_export_prices_are_fee_reduced(monkeypatch):
     """Phase 4: window_export_price passed to the DP is raw export price minus the fee."""
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+
     captured = {}
 
     def _fake(*args, **kwargs):
         captured["export_price"] = kwargs.get("export_price")
         wl = kwargs["window_len"]
-        return {"schedule": [0.0] * wl, "kwh": 0.0, "eur": 0.0,
-                "export_schedule": [0.0] * wl, "export_kwh": 0.0, "export_revenue_eur": 0.0}
+        return {
+            "schedule": [0.0] * wl,
+            "kwh": 0.0,
+            "eur": 0.0,
+            "export_schedule": [0.0] * wl,
+            "export_kwh": 0.0,
+            "export_revenue_eur": 0.0,
+        }
 
     monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _fake)
     cfg = _cfg(enable_export=True, export_fee_eur_per_kwh=0.02)
     # export entity == import entity → window_export_price == window_price − fee.
-    _call_dp_select_slots(cfg, soc=80.0, export_price=0.30, export_price_matches_import=True,
-                          prices=[0.30] * 12)
+    _call_dp_select_slots(cfg, soc=80.0, export_price=0.30, export_price_matches_import=True, prices=[0.30] * 12)
     assert captured["export_price"] is not None
     assert captured["export_price"][0] == pytest.approx(0.28), (
         f"expected 0.30 − 0.02 fee = 0.28, got {captured['export_price'][0]}"
@@ -597,6 +661,7 @@ def test_dp_export_prices_are_fee_reduced(monkeypatch):
 # ===========================================================================
 # H4 — per-hour temperature threading through compute_decision
 # ===========================================================================
+
 
 def test_compute_decision_threads_per_hour_temp_to_predictor():
     """temp_by_hour reaches the predictor for future hours (not a flat cur_temp)."""
@@ -615,25 +680,29 @@ def test_compute_decision_threads_per_hour_temp_to_predictor():
 
     # Build distinct per-hour temps (0.0, 2.0, 4.0, ... 22.0)
     temp_by_hour = {
-        (BASE + timedelta(hours=i)).replace(minute=0, second=0, microsecond=0): float(i * 2)
-        for i in range(12)
+        (BASE + timedelta(hours=i)).replace(minute=0, second=0, microsecond=0): float(i * 2) for i in range(12)
     }
 
     compute_decision(
-        _plan(), inputs, slots, 0.0, sunset,
-        _RecordingPredictor(), 99.0, cfg,
+        _plan(),
+        inputs,
+        slots,
+        0.0,
+        sunset,
+        _RecordingPredictor(),
+        99.0,
+        cfg,
         temp_by_hour=temp_by_hour,
     )
     # More than one distinct non-fallback temp observed → per-hour map is active.
     non_fallback = {t for t in seen_temps.values() if t != 99.0}
-    assert len(non_fallback) > 1, (
-        f"Expected multiple distinct per-hour temps, but saw: {sorted(non_fallback)}"
-    )
+    assert len(non_fallback) > 1, f"Expected multiple distinct per-hour temps, but saw: {sorted(non_fallback)}"
 
 
 # ===========================================================================
 # Ride-to-trough (rev-2) — price-prior GATE respects reserve_anchor
 # ===========================================================================
+
 
 def test_price_prior_gate_respects_reserve_anchor(monkeypatch):
     """Gate (compute_decision L790-800): _apply_price_prior runs ONLY under the legacy
@@ -644,11 +713,14 @@ def test_price_prior_gate_respects_reserve_anchor(monkeypatch):
     # must patch it there (patching the controller.py re-export would be a
     # silent no-op on the moved function's call site).
     import custom_components.anker_x1_smartgrid.decision as decision_mod
+
     calls = {"n": 0}
     real_prior = decision_mod._apply_price_prior
+
     def _spy(*a, **k):
         calls["n"] += 1
         return real_prior(*a, **k)
+
     monkeypatch.setattr(decision_mod, "_apply_price_prior", _spy)
 
     calls["n"] = 0

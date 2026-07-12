@@ -1,14 +1,17 @@
 """Layer A residual corrector: prediction log, ratio, adaptive wrapper."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
 from custom_components.anker_x1_smartgrid import load_adapt
 from custom_components.anker_x1_smartgrid.load_adapt import (
-    AdaptivePredictor, PredictionLog, compute_ratio,
+    AdaptivePredictor,
+    PredictionLog,
+    compute_ratio,
 )
 
-H = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)  # now_h
+H = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)  # now_h
 
 
 def _log_with(hours_back_to_w: dict[int, float]) -> PredictionLog:
@@ -24,6 +27,7 @@ def _actuals(hours_back_to_w: dict[int, float]) -> dict:
 
 class _StubBase:
     """Records calls; returns fixed base watts."""
+
     def __init__(self, base_w=400.0):
         self.base_w = base_w
         self.calls = []
@@ -54,7 +58,7 @@ def test_log_trims_oldest_past_max():
     for i in range(load_adapt.LOG_MAX_ENTRIES + 5):
         log.record(H + timedelta(hours=i), float(i))
     assert len(log) == load_adapt.LOG_MAX_ENTRIES
-    assert log.get(H) is None            # oldest trimmed
+    assert log.get(H) is None  # oldest trimmed
     assert log.get(H + timedelta(hours=5)) == 5.0
 
 
@@ -76,14 +80,14 @@ def test_ratio_clamped_up_and_down():
 
 
 def test_ratio_requires_min_matched_hours():
-    log = _log_with({1: 400.0})                       # only 1 matched
+    log = _log_with({1: 400.0})  # only 1 matched
     ratio, matched = compute_ratio(log, _actuals({1: 500.0}), H, 3)
     assert ratio is None
     assert matched == 1
 
 
 def test_ratio_skips_hours_missing_either_side():
-    log = _log_with({1: 400.0, 3: 400.0, 4: 400.0})           # hour-2 not logged
+    log = _log_with({1: 400.0, 3: 400.0, 4: 400.0})  # hour-2 not logged
     actuals = _actuals({1: 440.0, 2: 999.0, 3: 440.0, 4: 440.0})  # hour-2 unmatched
     ratio, matched = compute_ratio(log, actuals, H, 4)
     assert matched == 3
@@ -94,7 +98,7 @@ def test_ratio_skips_nonpositive_predictions_and_negative_actuals():
     log = _log_with({1: 0.0, 2: 400.0, 3: 400.0})
     actuals = _actuals({1: 500.0, 2: -5.0, 3: 440.0})
     ratio, matched = compute_ratio(log, actuals, H, 3)
-    assert ratio is None                              # only hour-3 matches
+    assert ratio is None  # only hour-3 matches
     assert matched == 1
 
 
@@ -104,8 +108,7 @@ def test_ratio_empty_inputs():
 
 def test_ratio_actuals_entry_without_load_w_key():
     log = _log_with({1: 400.0, 2: 400.0})
-    actuals = {H - timedelta(hours=1): {"soc": 50.0},
-               H - timedelta(hours=2): {"load_w": 440.0}}
+    actuals = {H - timedelta(hours=1): {"soc": 50.0}, H - timedelta(hours=2): {"load_w": 440.0}}
     ratio, matched = compute_ratio(log, actuals, H, 3)
     assert ratio is None
     assert matched == 1
@@ -114,10 +117,7 @@ def test_ratio_actuals_entry_without_load_w_key():
 def test_ratio_prefers_load_kwh_over_load_w():
     """load_kwh (true energy integral) wins even when load_w disagrees."""
     log = _log_with({1: 500.0, 2: 500.0, 3: 500.0})
-    actuals = {
-        H - timedelta(hours=b): {"load_kwh": 0.6, "load_w": 999.0}
-        for b in (1, 2, 3)
-    }
+    actuals = {H - timedelta(hours=b): {"load_kwh": 0.6, "load_w": 999.0} for b in (1, 2, 3)}
     ratio, matched = compute_ratio(log, actuals, H, window_h=3)
     assert matched == 3
     assert ratio == pytest.approx(1.2)  # (0.6*1000)/500, NOT 999/500
@@ -125,10 +125,7 @@ def test_ratio_prefers_load_kwh_over_load_w():
 
 def test_ratio_falls_back_to_load_w_when_load_kwh_none():
     log = _log_with({1: 400.0, 2: 400.0, 3: 400.0})
-    actuals = {
-        H - timedelta(hours=b): {"load_kwh": None, "load_w": 520.0}
-        for b in (1, 2, 3)
-    }
+    actuals = {H - timedelta(hours=b): {"load_kwh": None, "load_w": 520.0} for b in (1, 2, 3)}
     ratio, matched = compute_ratio(log, actuals, H, window_h=3)
     assert matched == 3
     assert ratio == pytest.approx(1.3)
@@ -147,7 +144,7 @@ def test_ratio_never_matches_current_hour_even_if_present_in_actuals():
     actuals = _actuals({1: 520.0, 2: 520.0, 3: 520.0})
     actuals[H] = {"load_kwh": 0.001, "load_w": 1.0}  # partial in-progress hour
     ratio, matched = compute_ratio(log, actuals, H, window_h=4)
-    assert matched == 3            # current hour (back=0) never counted
+    assert matched == 3  # current hour (back=0) never counted
     assert ratio == pytest.approx(1.3)
 
 
@@ -161,7 +158,11 @@ def test_ratio_partial_hour_weighted_in():
     assert base == 1.0
     # running hour at 2000 W for half the hour → weighted ratio > 1
     ratio, matched = load_adapt.compute_ratio(
-        log, actuals, H, 5, partial=(2000.0, 0.5),
+        log,
+        actuals,
+        H,
+        5,
+        partial=(2000.0, 0.5),
     )
     assert matched == 4
     # (3×1000 + 2000×0.5) / (3×1000 + 1000×0.5) = 4000/3500
@@ -237,11 +238,13 @@ def test_config_defaults_and_from_dict():
     assert cfg.load_adapt_window_h == 5
     assert cfg.load_adapt_fade_h == 8
 
-    cfg2 = Config.from_dict({
-        const.CONF_LOAD_ADAPT_FRACTION: 0.0,
-        const.CONF_LOAD_ADAPT_WINDOW_H: 4,
-        const.CONF_LOAD_ADAPT_FADE_H: 6,
-    })
+    cfg2 = Config.from_dict(
+        {
+            const.CONF_LOAD_ADAPT_FRACTION: 0.0,
+            const.CONF_LOAD_ADAPT_WINDOW_H: 4,
+            const.CONF_LOAD_ADAPT_FADE_H: 6,
+        }
+    )
     assert cfg2.load_adapt_fraction == 0.0
     assert cfg2.load_adapt_window_h == 4
     assert cfg2.load_adapt_fade_h == 6
@@ -249,6 +252,7 @@ def test_config_defaults_and_from_dict():
 
 def test_load_adapt_retuned_defaults():
     from custom_components.anker_x1_smartgrid import const
+
     assert const.DEFAULT_LOAD_ADAPT_WINDOW_H == 5
     assert load_adapt.MIN_MATCHED_HOURS == 3
     assert const.DEFAULT_LOAD_ADAPT_FRACTION == 0.7
@@ -256,14 +260,16 @@ def test_load_adapt_retuned_defaults():
 
 def test_min_matched_hours_gate_needs_three():
     """2 matched hours no longer produce a ratio (None); 3 do."""
-    now_h = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
+    now_h = datetime(2026, 7, 8, 12, tzinfo=UTC)
     log = PredictionLog()
     pa = {}
     for back in (1, 2):
         h = now_h - timedelta(hours=back)
-        log.record(h, 100.0); pa[h] = {"load_w": 120.0}
+        log.record(h, 100.0)
+        pa[h] = {"load_w": 120.0}
     assert compute_ratio(log, pa, now_h, window_h=5) == (None, 2)
     h3 = now_h - timedelta(hours=3)
-    log.record(h3, 100.0); pa[h3] = {"load_w": 120.0}
+    log.record(h3, 100.0)
+    pa[h3] = {"load_w": 120.0}
     ratio, matched = compute_ratio(log, pa, now_h, window_h=5)
     assert matched == 3 and ratio is not None

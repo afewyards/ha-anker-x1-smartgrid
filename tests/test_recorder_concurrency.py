@@ -35,12 +35,15 @@ def test_concurrent_append_and_read_is_thread_safe(tmp_path):
     def worker(tid: int) -> None:
         try:
             for i in range(n_iters):
-                rec.append({
-                    "ts": f"2026-06-20T12:{tid:02d}:{i:02d}+00:00",
-                    "soc": float(i), "state": "passive",
-                })
+                rec.append(
+                    {
+                        "ts": f"2026-06-20T12:{tid:02d}:{i:02d}+00:00",
+                        "soc": float(i),
+                        "state": "passive",
+                    }
+                )
                 rec.read_feature_rows()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]

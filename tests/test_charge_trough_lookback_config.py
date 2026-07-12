@@ -1,4 +1,5 @@
 """TDD: charge_trough_lookback_h config key + Config field."""
+
 from __future__ import annotations
 
 from custom_components.anker_x1_smartgrid import const

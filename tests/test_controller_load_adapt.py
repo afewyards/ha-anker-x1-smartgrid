@@ -1,5 +1,6 @@
 """Controller wiring for the Layer A residual corrector."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -7,7 +8,7 @@ from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.load_adapt import AdaptivePredictor, PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 
-NOW = datetime(2026, 7, 4, 12, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 4, 12, 30, tzinfo=UTC)
 NOW_H = NOW.replace(minute=0, second=0, microsecond=0)
 
 
@@ -42,14 +43,14 @@ def test_fraction_zero_returns_base_identity():
     for b in (1, 2, 3):
         ctl._load_adapt_log.record(NOW_H - timedelta(hours=b), 400.0)
     out = ctl._update_load_adapt(NOW, 20.0, _actuals({1: 520.0, 2: 520.0, 3: 520.0}))
-    assert out is ctl.predictor          # byte-identical guarantee
+    assert out is ctl.predictor  # byte-identical guarantee
 
 
 def test_no_ratio_returns_base_identity_and_records_current_hour():
     ctl = _make_ctl()
     out = ctl._update_load_adapt(NOW, 20.0, {})
-    assert out is ctl.predictor          # empty log → no ratio
-    assert ctl._load_adapt_log.get(NOW_H) == 400.0   # current hour logged
+    assert out is ctl.predictor  # empty log → no ratio
+    assert ctl._load_adapt_log.get(NOW_H) == 400.0  # current hour logged
     assert ctl._load_adapt_ratio is None
 
 
@@ -79,7 +80,8 @@ def test_base_predict_exception_degrades_gracefully():
     class _Boom:
         def predict(self, *a, **k):
             raise RuntimeError("boom")
+
     ctl = _make_ctl()
     ctl.predictor = _Boom()
     out = ctl._update_load_adapt(NOW, 20.0, {})
-    assert out is ctl.predictor          # never raises, returns base
+    assert out is ctl.predictor  # never raises, returns base

@@ -36,10 +36,11 @@ The following counts have been verified analytically:
     n_days=27 → 21 lag-complete local dates
     n_days=35 → 29 lag-complete local dates  (safe margin above 21)
 """
+
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -52,7 +53,7 @@ from custom_components.anker_x1_smartgrid import hgbr as hgbr_module
 from custom_components.anker_x1_smartgrid.featureset import build_feature_matrix, feature_names
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 
-UTC = timezone.utc
+UTC = UTC
 
 
 # ---------------------------------------------------------------------------
@@ -239,9 +240,7 @@ class TestFallback:
         """Fitting on zero rows leaves the model unfitted (no exception)."""
         model = HGBRQuantileModel().fit([])
         assert not model._fitted
-        assert model.predict_load_w(
-            datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC), 15.0, 400.0
-        ) == 400.0
+        assert model.predict_load_w(datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC), 15.0, 400.0) == 400.0
 
     def test_fit_too_few_rows_stays_unfitted(self) -> None:
         """Fitting on fewer than _MIN_TRAIN_ROWS (24) rows leaves the model unfitted.
@@ -467,9 +466,7 @@ class TestVectorAssembly:
         rows = _make_hourly_rows(30)
         model = HGBRQuantileModel().fit(rows)
         when = datetime(2025, 2, 9, 10, 0, 0, tzinfo=UTC)
-        vec = model._assemble_feature_vector(
-            when, temp=14.0, cloud_cover=60.0, humidity=82.0, wind_speed=4.5
-        )
+        vec = model._assemble_feature_vector(when, temp=14.0, cloud_cover=60.0, humidity=82.0, wind_speed=4.5)
         assert vec is not None
         names = feature_names()
         assert vec[names.index("cloud_cover")] == 60.0
@@ -549,17 +546,16 @@ class TestVectorAssembly:
             # Both should be finite for this well-covered row
             assert math.isfinite(float(tv)), f"train feature[{i}] ({names[i]}) is non-finite: {tv!r}"
             assert tv == pytest.approx(pv, rel=1e-9), (
-                f"Train/predict MISMATCH at feature[{i}] ({names[i]}): "
-                f"train={tv!r}, predict={pv!r}"
+                f"Train/predict MISMATCH at feature[{i}] ({names[i]}): train={tv!r}, predict={pv!r}"
             )
 
         # --- Indices 14-16: NaN in predict (cloud_cover/humidity/wind_speed) ---
         for key in ("cloud_cover", "humidity", "wind_speed"):
             idx = names.index(key)
             assert math.isnan(pred_vec[idx]), (
-                f"predict feature[{idx}] ({key}) should be NaN at serve time, "
-                f"got {pred_vec[idx]!r}"
+                f"predict feature[{idx}] ({key}) should be NaN at serve time, got {pred_vec[idx]!r}"
             )
+
     def test_full_signal_serve_matches_training(self):
         """With weather + persons supplied at serve, the serve vector == training vector."""
         rows = _make_hourly_rows(30)
@@ -583,8 +579,7 @@ class TestVectorAssembly:
         assert len(pred_vec) == len(names) == 18
         for i in range(len(names)):
             assert train_vec[i] == pytest.approx(pred_vec[i], rel=1e-9), (
-                f"train/serve mismatch at feature[{i}] ({names[i]}): "
-                f"{train_vec[i]!r} vs {pred_vec[i]!r}"
+                f"train/serve mismatch at feature[{i}] ({names[i]}): {train_vec[i]!r} vs {pred_vec[i]!r}"
             )
 
 
@@ -647,8 +642,7 @@ class TestResilienceFixes:
         # Must not raise despite the all-NaN load_lag_168h column
         model.fit(rows, quantiles=(0.5,))
         assert model._fitted, (
-            "fit() should succeed on 7 days — Fix 2 should have neutralized the "
-            "all-NaN load_lag_168h column"
+            "fit() should succeed on 7 days — Fix 2 should have neutralized the all-NaN load_lag_168h column"
         )
         assert 0.5 in model._models
 

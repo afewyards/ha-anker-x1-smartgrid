@@ -1,9 +1,9 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 import pytest
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
 from custom_components.anker_x1_smartgrid import energy
 
-T0 = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
 
 
 def _iv(pv, load, dt=1.0, i=0):
@@ -44,13 +44,14 @@ def test_soc_capped_at_target():
 # export_surplus_kwh (B2)
 # ---------------------------------------------------------------------------
 
+
 class TestExportSurplusKwh:
     """Tests for energy.export_surplus_kwh — energy above the reserve."""
 
     def _cfg(self, **kw) -> Config:
         defaults = dict(
             capacity_kwh=10.0,
-            soc_floor=10.0,   # 1 kWh
+            soc_floor=10.0,  # 1 kWh
             soc_target=90.0,
             max_charge_w=3000.0,
             eta_charge=1.0,
@@ -104,14 +105,12 @@ class TestRideOutReserveKwh:
 
     def _cfg(self, **kw) -> Config:
         # 10 kWh pack, floor 10% (1 kWh), eta_d = min(rte/eta_c, 1) = 1.0 by default.
-        d = dict(capacity_kwh=10.0, soc_floor=10.0, eta_charge=1.0,
-                 round_trip_eff=1.0, max_charge_w=6000.0)
+        d = dict(capacity_kwh=10.0, soc_floor=10.0, eta_charge=1.0, round_trip_eff=1.0, max_charge_w=6000.0)
         d.update(kw)
         return Config(**d)
 
     def _ivs(self, specs):  # specs: list of (pv_w, load_w)
-        return [ForecastInterval(T0 + timedelta(hours=i), pv, load, 1.0)
-                for i, (pv, load) in enumerate(specs)]
+        return [ForecastInterval(T0 + timedelta(hours=i), pv, load, 1.0) for i, (pv, load) in enumerate(specs)]
 
     def test_floor_stacked_on_rideout(self):
         # 4 h of 500 W deficit then recovery. ride = 2.0 kWh; reserve = floor(1.0)+2.0.
@@ -122,8 +121,7 @@ class TestRideOutReserveKwh:
     def test_is_cheap_none_equals_legacy(self):
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg = self._cfg()
-        assert energy.ride_out_reserve_kwh(T0, ivs, cfg, is_cheap=None) == \
-               energy.ride_out_reserve_kwh(T0, ivs, cfg)
+        assert energy.ride_out_reserve_kwh(T0, ivs, cfg, is_cheap=None) == energy.ride_out_reserve_kwh(T0, ivs, cfg)
 
     def test_is_cheap_early_break_bridges_to_cheap_hour(self):
         # 4h of 500W deficit; hour h+2 flagged cheap → walk stops there.
@@ -131,14 +129,14 @@ class TestRideOutReserveKwh:
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cheap = {T0 + timedelta(hours=2): True}
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap=cheap)
-        assert r == pytest.approx(2.0, abs=1e-6)   # vs 3.0 legacy (test_floor_stacked_on_rideout)
+        assert r == pytest.approx(2.0, abs=1e-6)  # vs 3.0 legacy (test_floor_stacked_on_rideout)
 
     def test_is_cheap_never_breaks_at_now_hour(self):
         # Current hour flagged cheap must NOT truncate the ride-out (we ride FROM now).
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cheap = {T0: True}
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap=cheap)
-        assert r == pytest.approx(3.0, abs=1e-6)   # unchanged from legacy
+        assert r == pytest.approx(3.0, abs=1e-6)  # unchanged from legacy
 
     def test_double_dip_survives_is_cheap_when_blip_not_cheap(self):
         # dawn PV blip then bigger breakfast deficit; no cheap hour → double-dip intact.
@@ -202,8 +200,9 @@ class TestRideOutReserveKwh:
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg_default = self._cfg()
         cfg_explicit_zero = self._cfg(idle_drain_w=0.0)
-        assert energy.ride_out_reserve_kwh(T0, ivs, cfg_default) == \
-            energy.ride_out_reserve_kwh(T0, ivs, cfg_explicit_zero)
+        assert energy.ride_out_reserve_kwh(T0, ivs, cfg_default) == energy.ride_out_reserve_kwh(
+            T0, ivs, cfg_explicit_zero
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +213,9 @@ from custom_components.anker_x1_smartgrid.energy import export_net_target_w
 
 
 def _drain_cfg(**kw):
-    base = dict(round_trip_eff=0.90, eta_charge=0.95, max_export_w=6000.0,
-                grid_export_limit_w=6000.0, export_drain_window_h=0.0)
+    base = dict(
+        round_trip_eff=0.90, eta_charge=0.95, max_export_w=6000.0, grid_export_limit_w=6000.0, export_drain_window_h=0.0
+    )
     base.update(kw)
     return Config(**base)
 
@@ -233,7 +233,7 @@ def test_export_net_target_respects_grid_limit():
 def test_export_net_target_tiny_surplus_throttles_below_cap():
     cfg = _drain_cfg()
     eta_d = min(0.90 / 0.95, 1.0)
-    expected = 0.05 * eta_d * 1000.0 / (60 / 3600.0)   # TICK_SECONDS = 60
+    expected = 0.05 * eta_d * 1000.0 / (60 / 3600.0)  # TICK_SECONDS = 60
     assert export_net_target_w(0.05, cfg) == pytest.approx(expected)
     assert export_net_target_w(0.05, cfg) < cfg.max_export_w
 
@@ -257,38 +257,38 @@ def test_export_net_target_decisive_converges_vs_legacy():
     eta_d = min(0.90 / 0.95, 1.0)
 
     def _simulate(window_h, ticks):
-        cfg = _drain_cfg(export_drain_window_h=window_h,
-                         max_export_w=6000.0, grid_export_limit_w=6000.0)
+        cfg = _drain_cfg(export_drain_window_h=window_h, max_export_w=6000.0, grid_export_limit_w=6000.0)
         soc_kwh = 9.0
         lowest = soc_kwh
         for _ in range(ticks):
             surplus = max(0.0, soc_kwh - reserve_kwh)
-            net_w = export_net_target_w(surplus, cfg)        # AC W
-            soc_kwh -= net_w / eta_d / 1000.0 * tick_h       # DC drawn this tick
+            net_w = export_net_target_w(surplus, cfg)  # AC W
+            soc_kwh -= net_w / eta_d / 1000.0 * tick_h  # DC drawn this tick
             lowest = min(lowest, soc_kwh)
         return soc_kwh, lowest
 
-    decisive_soc, decisive_low = _simulate(0.0, 60)   # 60 one-minute ticks
+    decisive_soc, decisive_low = _simulate(0.0, 60)  # 60 one-minute ticks
     legacy_soc, _ = _simulate(1.0, 60)
 
-    one_tick_dc = 6000.0 / eta_d / 1000.0 * tick_h    # ~0.105 kWh
+    one_tick_dc = 6000.0 / eta_d / 1000.0 * tick_h  # ~0.105 kWh
     assert decisive_soc == pytest.approx(reserve_kwh, abs=one_tick_dc + 1e-9)
-    assert decisive_low >= reserve_kwh - one_tick_dc - 1e-9   # bounded overshoot below reserve
-    assert legacy_soc > reserve_kwh + 1.0                     # legacy stalls well above reserve
+    assert decisive_low >= reserve_kwh - one_tick_dc - 1e-9  # bounded overshoot below reserve
+    assert legacy_soc > reserve_kwh + 1.0  # legacy stalls well above reserve
 
 
 # ---------------------------------------------------------------------------
 # eta_curve threading (Task 12) — optional curve param, None branch byte-identical
 # ---------------------------------------------------------------------------
 
+
 def test_reserve_none_is_byte_identical():
     from datetime import datetime
     from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
     from custom_components.anker_x1_smartgrid.energy import ride_out_reserve_kwh
+
     cfg = Config(eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0)
     now = datetime(2026, 7, 1, 22, 0, 0)
-    ivs = [ForecastInterval(datetime(2026, 7, 1, 22 + i % 2, 0, 0), 0.0, 800.0, 1.0)
-           for i in range(6)]
+    ivs = [ForecastInterval(datetime(2026, 7, 1, 22 + i % 2, 0, 0), 0.0, 800.0, 1.0) for i in range(6)]
     assert ride_out_reserve_kwh(now, ivs, cfg) == ride_out_reserve_kwh(now, ivs, cfg, eta_curve=None)
 
 
@@ -297,6 +297,7 @@ def test_reserve_curve_raises_for_lower_low_power_eta():
     from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, BinStat
     from custom_components.anker_x1_smartgrid.energy import ride_out_reserve_kwh
+
     cfg = Config(eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0)
     base = EfficiencyCurve.static(cfg)
     disch = list(base._discharge)

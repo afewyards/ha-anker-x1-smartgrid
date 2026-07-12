@@ -8,21 +8,22 @@ Tier-agnostic predictor wrapper, same pattern as ``load_adapt.py``.
 ``occ_adapt_fraction=0.0`` disables entirely (wrapper never constructed —
 byte-identical planning).  Pure module: no HA imports, no I/O.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from zoneinfo import ZoneInfo
 
 from . import featureset
 
 _TZ_AMS = ZoneInfo("Europe/Amsterdam")
 
-STATE_MAX = 3          # counts >= 3 bin together as "3+"
-MIN_CELL_HOURS = 20    # hours before a (band, daytype, state) cell is trusted
+STATE_MAX = 3  # counts >= 3 bin together as "3+"
+MIN_CELL_HOURS = 20  # hours before a (band, daytype, state) cell is trusted
 MULT_MIN = 0.5
 MULT_MAX = 2.0
-_AWAY_EPS = 0.25       # hourly persons_home_mean below this bins as away (0)
+_AWAY_EPS = 0.25  # hourly persons_home_mean below this bins as away (0)
 
 
 def state_bin(persons_mean: float | None) -> int | None:
@@ -34,7 +35,7 @@ def state_bin(persons_mean: float | None) -> int | None:
         return None
     if v < _AWAY_EPS:
         return 0
-    return min(STATE_MAX, max(1, int(round(v))))
+    return min(STATE_MAX, max(1, round(v)))
 
 
 def band_of(when_utc: datetime) -> tuple[int, bool]:
@@ -77,16 +78,14 @@ def build_table(rows: list[dict]) -> OccupancyTable:
         except ValueError:
             continue
         if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
+            when = when.replace(tzinfo=UTC)
         band, weekend = band_of(when)
         count_acc.setdefault((band, weekend, st), []).append(load_w)
         bin_acc.setdefault((band, weekend, 1 if st > 0 else 0), []).append(load_w)
         climo_acc.setdefault((band, weekend), []).append(float(r["persons_home_mean"]))
     count_cells = {k: (sum(v) / len(v), len(v)) for k, v in count_acc.items()}
     binary_cells = {k: (sum(v) / len(v), len(v)) for k, v in bin_acc.items()}
-    climo_state = {
-        k: (state_bin(sum(v) / len(v)) or 0) for k, v in climo_acc.items()
-    }
+    climo_state = {k: (state_bin(sum(v) / len(v)) or 0) for k, v in climo_acc.items()}
     ready = sum(1 for _, n in count_cells.values() if n >= MIN_CELL_HOURS) + sum(
         1 for _, n in binary_cells.values() if n >= MIN_CELL_HOURS
     )
@@ -138,8 +137,13 @@ class OccupancyPredictor:
     """Duck-typed predictor wrapper: base × occupancy-deviation multiplier."""
 
     def __init__(
-        self, base, table: OccupancyTable | None, occ_now: int | None,
-        now: datetime, persistence_h: int, fraction: float,
+        self,
+        base,
+        table: OccupancyTable | None,
+        occ_now: int | None,
+        now: datetime,
+        persistence_h: int,
+        fraction: float,
     ) -> None:
         self._base = base
         self._table = table
@@ -149,11 +153,19 @@ class OccupancyPredictor:
         self._fraction = float(fraction)
 
     def predict(
-        self, when: datetime, temp: float | None, fallback_w: float,
-        *, quantile: float = 0.5,
+        self,
+        when: datetime,
+        temp: float | None,
+        fallback_w: float,
+        *,
+        quantile: float = 0.5,
     ) -> float:
         base_w = self._base.predict(when, temp, fallback_w, quantile=quantile)
         return base_w * multiplier(
-            self._table, self._occ_now, when, self._now,
-            self._persistence_h, self._fraction,
+            self._table,
+            self._occ_now,
+            when,
+            self._now,
+            self._persistence_h,
+            self._fraction,
         )

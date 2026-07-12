@@ -14,6 +14,7 @@ reset-before-release ordering on the export-disabled path), and hysteresis/
 tick-lock interaction is unchanged from the pre-extraction code — this is a
 mechanical ``self`` → ``controller`` move, not a rewrite.
 """
+
 from __future__ import annotations
 
 import logging
@@ -31,7 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def safe_release(
-    controller: "Controller",
+    controller: Controller,
     now: datetime,
     context: str = "",
     *,
@@ -66,14 +67,14 @@ async def safe_release(
     if release:
         try:
             await controller._actuator.release_to_self()
-        except Exception:  # noqa: BLE001 — best-effort release must never raise
+        except Exception:
             _LOGGER.error(context, exc_info=True)
     if reset_export and not reset_before_release and controller.export_state.engaged:
         controller.export_state = ExportState(engaged=False, state_since=now)
 
 
 async def run_forcing_and_export(
-    controller: "Controller",
+    controller: Controller,
     now: datetime,
     new_plan: PlanState,
     inputs: PlantInputs,
@@ -101,7 +102,9 @@ async def run_forcing_and_export(
     _engage_failed = False
     if new_plan.state is ControllerState.FORCING:
         setpoint = guard.command_setpoint(
-            controller.cfg.max_charge_w, controller._actuator.last_setpoint_w, controller.cfg,
+            controller.cfg.max_charge_w,
+            controller._actuator.last_setpoint_w,
+            controller.cfg,
         )
         try:
             await controller._actuator.engage_and_charge(setpoint)
@@ -119,7 +122,9 @@ async def run_forcing_and_export(
         setpoint = 0.0
         if controller.plan.state is ControllerState.FORCING:
             await safe_release(
-                controller, now, "Actuator release_to_self failed (FORCING→PASSIVE transition)",
+                controller,
+                now,
+                "Actuator release_to_self failed (FORCING→PASSIVE transition)",
                 reset_export=False,
             )
 
@@ -143,8 +148,12 @@ async def run_forcing_and_export(
                 _cur_h_reserve = now
                 _reserve_is_cheap = None
             _reserve = energy.ride_out_reserve_kwh(
-                _cur_h_reserve, _ivs_reserve, controller.cfg, is_cheap=_reserve_is_cheap,
-                slot_minutes=_slot_minutes, eta_curve=controller._planner_curve(),
+                _cur_h_reserve,
+                _ivs_reserve,
+                controller.cfg,
+                is_cheap=_reserve_is_cheap,
+                slot_minutes=_slot_minutes,
+                eta_curve=controller._planner_curve(),
             )
             _surplus = energy.export_surplus_kwh(inputs.soc, _reserve, controller.cfg)
 
@@ -182,7 +191,9 @@ async def run_forcing_and_export(
                 # _hurdle gates WHETHER to export (DP plan membership); committed
                 # rate no longer throttles HOW FAST.
                 _net_target_w = energy.export_net_target_w(
-                    _surplus, controller.cfg, eta_curve=controller._planner_curve(),
+                    _surplus,
+                    controller.cfg,
+                    eta_curve=controller._planner_curve(),
                 )
                 # GROSS setpoint must cover house load (firmware serves house
                 # first, exports the remainder).  Bounded only by SETPOINT_MAX_W
@@ -193,8 +204,7 @@ async def run_forcing_and_export(
                 # the gross setpoint beyond the reserve-aware target;
                 # under-compensating (0.0) is the safe direction here.
                 _load_comp_w = (
-                    controller.cfg.export_load_comp_factor * _house_load_now_w
-                    if controller._house_load_fresh else 0.0
+                    controller.cfg.export_load_comp_factor * _house_load_now_w if controller._house_load_fresh else 0.0
                 )
                 _gross_w = _net_target_w + _load_comp_w
                 _export_sp = guard.command_setpoint(
@@ -228,9 +238,7 @@ async def run_forcing_and_export(
                             max(0.0, -inputs.meter_w),
                             max(0.0, _batt_w_now if _batt_w_now is not None else 0.0),
                         )
-                        _export_kwh = (
-                            _metered_export_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
-                        )
+                        _export_kwh = _metered_export_w / 1000.0 * (const.TICK_SECONDS / 3600.0)
                         _reserve_kwh_val = _reserve
                         _surplus_kwh_val = _surplus
                         # E3: accumulate realized PnL for this export interval.
@@ -243,9 +251,7 @@ async def run_forcing_and_export(
                         # energy actually dispatched. _export_kwh (recorded AC) is
                         # now the measured value above, not a setpoint estimate.
                         _eta_d = controller._eta_d_at(_metered_export_w)
-                        _export_kwh_dc = (
-                            _export_kwh / _eta_d if _eta_d > 1e-9 else _export_kwh
-                        )
+                        _export_kwh_dc = _export_kwh / _eta_d if _eta_d > 1e-9 else _export_kwh
                         # Retain for the NEXT tick's drift add-back (duration-scaled).
                         # The drift step re-zeros this field at its start; C3 re-sets
                         # it here only when an export actually fired this tick.
@@ -256,9 +262,7 @@ async def run_forcing_and_export(
                         # one step). Do NOT add an extra _persist() here; that risks
                         # double-counting if C3 fires multiple times per tick.
                         controller._soc_drift_last_export_kwh_dc = _export_kwh_dc
-                        _eff_export_price = optimize_mod.effective_export_price(
-                            _export_price, controller.cfg
-                        )
+                        _eff_export_price = optimize_mod.effective_export_price(_export_price, controller.cfg)
                         _tick_pnl = optimize_mod.export_pnl_eur(
                             _export_kwh_dc, _eff_export_price, _keep_value, controller.cfg
                         )

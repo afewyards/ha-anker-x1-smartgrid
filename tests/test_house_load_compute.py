@@ -12,15 +12,16 @@ or batt is unavailable, the compute is skipped entirely and the cached
 _last_house_load_w is returned instead (N2 telemetry fallback), which is also
 refreshed on every successful compute.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import PlantInputs
 
-NOW = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
 
 class _StateObj:

@@ -23,6 +23,7 @@ def test_load_mae_sensor():
 # New ML-metric sensors (P3-T4)
 # ---------------------------------------------------------------------------
 
+
 class _MlCtl:
     """Stub controller exposing all new backtest metric keys."""
 

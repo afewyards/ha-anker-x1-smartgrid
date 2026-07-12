@@ -1,4 +1,5 @@
 """C2a: export_peak_band_frac config knob."""
+
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 from custom_components.anker_x1_smartgrid.models import Config
@@ -26,6 +27,7 @@ def test_options_schema_exposes_knob():
 def test_export_peak_lookback_default_is_4():
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.models import Config
+
     assert const.DEFAULT_EXPORT_PEAK_LOOKBACK_H == 4
     # Unset key falls back to the dataclass default (live-entry deploy path).
     cfg = Config.from_dict({"capacity_kwh": 10.0})
@@ -34,5 +36,6 @@ def test_export_peak_lookback_default_is_4():
 
 def test_export_peak_lookback_round_trips_from_dict():
     from custom_components.anker_x1_smartgrid.models import Config
+
     cfg = Config.from_dict({"capacity_kwh": 10.0, "export_peak_lookback_h": 5})
     assert cfg.export_peak_lookback_h == 5

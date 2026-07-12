@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const, resolution
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot
@@ -15,6 +15,6 @@ def test_config_from_dict_reads_override():
 
 
 def test_auto_resolves_from_live_slots():
-    base = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 8, 1, tzinfo=UTC)
     q = [PriceSlot(base + timedelta(minutes=15 * i), 0.2) for i in range(96)]
     assert resolution.resolve_slot_minutes(q, Config().slot_resolution) == 15

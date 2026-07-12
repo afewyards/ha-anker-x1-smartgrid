@@ -1,5 +1,6 @@
 """Controller wiring for the occupancy corrector (Layer B)."""
-from datetime import datetime, timezone
+
+from datetime import datetime, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import occupancy
 from custom_components.anker_x1_smartgrid.controller import Controller
@@ -7,7 +8,7 @@ from custom_components.anker_x1_smartgrid.load_adapt import PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.occupancy import OccupancyPredictor
 
-NOW = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)  # Wed 14:00 CEST → band 2, weekday
+NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)  # Wed 14:00 CEST → band 2, weekday
 
 
 class _StubPredictor:
@@ -45,7 +46,10 @@ def test_default_fraction_returns_base_unchanged():
 def test_fraction_on_wraps_base_with_occupancy():
     ctl = _make_ctl({"occ_adapt_fraction": 1.0})
     ctl._occ_table = occupancy.OccupancyTable(
-        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)}, {}, {(2, False): 1}, 2,
+        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)},
+        {},
+        {(2, False): 1},
+        2,
     )
     ctl._persons_home_now = 0
     pred = ctl._update_load_adapt(NOW, 20.0, {})
@@ -57,7 +61,10 @@ def test_fraction_on_wraps_base_with_occupancy():
 def test_remote_tier_guard_skips_occupancy():
     ctl = _make_ctl({"occ_adapt_fraction": 1.0})
     ctl._occ_table = occupancy.OccupancyTable(
-        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)}, {}, {(2, False): 1}, 2,
+        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)},
+        {},
+        {(2, False): 1},
+        2,
     )
     ctl._persons_home_now = 0
     ctl.active_model_name = "remote"
@@ -68,7 +75,10 @@ def test_remote_tier_guard_skips_occupancy():
 def test_load_adapt_log_records_occ_corrected_p50():
     ctl = _make_ctl({"occ_adapt_fraction": 1.0, "load_adapt_fraction": 0.7})
     ctl._occ_table = occupancy.OccupancyTable(
-        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)}, {}, {(2, False): 1}, 2,
+        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)},
+        {},
+        {(2, False): 1},
+        2,
     )
     ctl._persons_home_now = 0
     base_w = ctl.predictor.predict(NOW, 20.0, 250.0, quantile=0.5)
@@ -79,7 +89,10 @@ def test_load_adapt_log_records_occ_corrected_p50():
 def test_status_attrs_exposed():
     ctl = _make_ctl({"occ_adapt_fraction": 1.0})
     ctl._occ_table = occupancy.OccupancyTable(
-        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)}, {}, {(2, False): 1}, 2,
+        {(2, False, 0): (300.0, 25), (2, False, 1): (500.0, 25)},
+        {},
+        {(2, False): 1},
+        2,
     )
     ctl._persons_home_now = 0
     attrs = ctl._occ_status_attrs(NOW)

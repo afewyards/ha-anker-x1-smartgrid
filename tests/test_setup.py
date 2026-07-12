@@ -1,4 +1,5 @@
 """Test setup and unload of the Anker X1 SmartGrid integration."""
+
 from unittest.mock import MagicMock
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry

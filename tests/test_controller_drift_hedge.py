@@ -17,9 +17,10 @@ Covers all 11 reviewer cases from the plan:
                             keyed at the cheapest forward price slot.
 11. New-day reset         — yesterday _soc_drift_day → day rollover clears accumulator AND SoC anchor.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -34,7 +35,7 @@ from custom_components.anker_x1_smartgrid.models import (
 )
 from tests.helpers import StubHass as _StubHass
 
-UTC = timezone.utc
+UTC = UTC
 # 14:00 UTC on 2026-06-29 — keeps local date June 29 even in deeply-west zones.
 BASE = datetime(2026, 6, 29, 14, 0, tzinfo=UTC)
 
@@ -192,15 +193,19 @@ def _seed_inputs(hass, *, soc: str = "60.0", now: datetime = BASE):
     hass.set_state("weather.home", "sunny", {"temperature": 22.0})
     sunset_iso = (now + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-    hass.set_state("sensor.price", "0.25", {
-        "forecast": [
-            {
-                "datetime": (now + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(0.25 * const.PRICE_SCALE),
-            }
-            for i in range(12)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.25",
+        {
+            "forecast": [
+                {
+                    "datetime": (now + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.25 * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
 
 
 def _make_stub(
@@ -214,14 +219,30 @@ def _make_stub(
     - Writes intervals into _out["intervals"]
     - Returns PASSIVE plan, deadline=now+deadline_offset_h, empty horizon
     """
+
     def _stub(
-        plan, inputs, slots, pv_remaining, sunset,
-        predictor, cur_temp, cfg,
-        tomorrow_total=None, sun_times=None, today_arrays=None, tomorrow_arrays=None,
-        today_watts=None, tomorrow_watts=None,
-        export_price=None, _out=None, _shadow_dp=False,
-        export_price_matches_import=False, estimated_tomorrow=None,
-        past_actuals_by_hour=None, hedge_drain_by_hour=None, temp_by_hour=None,
+        plan,
+        inputs,
+        slots,
+        pv_remaining,
+        sunset,
+        predictor,
+        cur_temp,
+        cfg,
+        tomorrow_total=None,
+        sun_times=None,
+        today_arrays=None,
+        tomorrow_arrays=None,
+        today_watts=None,
+        tomorrow_watts=None,
+        export_price=None,
+        _out=None,
+        _shadow_dp=False,
+        export_price_matches_import=False,
+        estimated_tomorrow=None,
+        past_actuals_by_hour=None,
+        hedge_drain_by_hour=None,
+        temp_by_hour=None,
         **kwargs,
     ):
         if capture is not None:
@@ -234,6 +255,7 @@ def _make_stub(
         passive = PlanState(ControllerState.PASSIVE, inputs.now, ())
         deadline = inputs.now + timedelta(hours=deadline_offset_h)
         return passive, 0.0, deadline, [], "water_value", []
+
     return _stub
 
 
@@ -542,9 +564,9 @@ async def test_hysteresis_stays_engaged_between_bands(monkeypatch):
     ivs: list = []  # forecast doesn't matter; step is gated by SoC rail
 
     for acc_value, prev_engaged, expected_engaged in [
-        (0.5, False, True),   # A: above engage band → engages
-        (0.2, True, True),    # B: above release, below engage, was engaged → stays on
-        (0.1, True, False),   # C: below release → releases
+        (0.5, False, True),  # A: above engage band → engages
+        (0.2, True, True),  # B: above release, below engage, was engaged → stays on
+        (0.1, True, False),  # C: below release → releases
     ]:
         hass = _StubHass()
         cfg = _drift_cfg()
@@ -630,23 +652,26 @@ async def test_hedge_keyed_at_trough_slot(monkeypatch):
 
     # Price forecast with a clear cheap slot at +2h
     cheap_h = (BASE + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-    hass.set_state("sensor.price", "0.40", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(price * const.PRICE_SCALE),
-            }
-            for i, price in enumerate([0.40, 0.40, 0.15, 0.40, 0.35, 0.40, 0.40, 0.40])
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.40",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(price * const.PRICE_SCALE),
+                }
+                for i, price in enumerate([0.40, 0.40, 0.15, 0.40, 0.35, 0.40, 0.40, 0.40])
+            ]
+        },
+    )
     hass.set_state("sensor.soc", "60.0")
     hass.set_state("sensor.meter_power", "300.0")
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "600.0")
     hass.set_state("weather.home", "sunny", {"temperature": 22.0})
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": (BASE + timedelta(hours=8)).isoformat()})
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": (BASE + timedelta(hours=8)).isoformat()})
 
     # Tick 1: seed anchor (gated, first sample)
     monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
@@ -662,15 +687,12 @@ async def test_hedge_keyed_at_trough_slot(monkeypatch):
     # Re-seed soc (stays flat for this tick)
     hass.set_state("sensor.soc", "60.0")
     capture: dict = {}
-    monkeypatch.setattr(ctrl_mod, "compute_decision",
-                        _make_stub(intervals=ivs, capture=capture))
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs, capture=capture))
     await ctrl.tick()
 
     hedge = capture.get("hedge_drain_by_hour")
     assert hedge is not None, "Expected non-None hedge_drain_by_hour with drift above deadband"
-    assert cheap_h in hedge, (
-        f"Hedge must be keyed at cheapest slot {cheap_h}; got keys={list(hedge.keys())}"
-    )
+    assert cheap_h in hedge, f"Hedge must be keyed at cheapest slot {cheap_h}; got keys={list(hedge.keys())}"
     assert hedge[cheap_h] > 0.0
 
 

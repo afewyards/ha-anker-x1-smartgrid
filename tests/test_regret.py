@@ -5,6 +5,7 @@ All tests use hand-computable synthetic days with round numbers (eta_charge=1.0
 so AC kWh == DC kWh).  Config: capacity=10 kWh, floor=20% (2 kWh),
 target=80% (8 kWh), max_charge=3 kWh/h, eta=1.0.
 """
+
 import pytest
 from custom_components.anker_x1_smartgrid.regret import (
     DayData,
@@ -19,14 +20,15 @@ from custom_components.anker_x1_smartgrid.models import Config
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_cfg(**overrides) -> Config:
     """Config with clean test defaults; all other fields take their defaults."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=20.0,   # 2 kWh floor
+        soc_floor=20.0,  # 2 kWh floor
         soc_target=80.0,  # 8 kWh target
         max_charge_w=3000.0,  # 3 kWh/h
-        eta_charge=1.0,   # AC == DC (simplifies test arithmetic)
+        eta_charge=1.0,  # AC == DC (simplifies test arithmetic)
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -66,6 +68,7 @@ def flat_grid(kwh_by_hour: list[float], price: list[float]) -> dict:
 # ---------------------------------------------------------------------------
 # hindsight_optimal_grid
 # ---------------------------------------------------------------------------
+
 
 class TestHindsightOptimal:
     """Solar fills battery -> zero grid needed."""
@@ -171,6 +174,7 @@ class TestHindsightOptimal:
 # score_regret
 # ---------------------------------------------------------------------------
 
+
 class TestScoreRegret:
     """
     (a) Over-buy: grid-charged unnecessarily (solar covers it) -> over_buy_kwh > 0.
@@ -186,7 +190,7 @@ class TestScoreRegret:
         # Solar fills from 2 kWh to 8 kWh without any grid (PV h6-h9)
         pv = [0.0] * 6 + [1.5] * 4 + [0.0] * 14
         d = make_day(pv, 0, 0.10, soc_start=20.0)
-        opt = hindsight_optimal_grid(d, cfg)          # = 0 kWh, 0 €
+        opt = hindsight_optimal_grid(d, cfg)  # = 0 kWh, 0 €
         # Realized: charged 3 kWh unnecessarily in h0
         actual = [3.0] + [0.0] * 23
         real = flat_grid(actual, [0.10] * 24)
@@ -215,7 +219,7 @@ class TestScoreRegret:
         realized = {"kwh": 10.0, "eur": -1.0, "export_revenue_eur": 3.0}
         optimal = {"kwh": 6.0, "eur": -2.0, "export_revenue_eur": 3.0}
         out = score_regret(realized, optimal)
-        assert out["over_buy_eur"] == pytest.approx(0.80, abs=1e-6)   # 4 kWh × 0.20 gross
+        assert out["over_buy_eur"] == pytest.approx(0.80, abs=1e-6)  # 4 kWh × 0.20 gross
 
     # -- (b) Under-buy -------------------------------------------------------
 
@@ -262,7 +266,7 @@ class TestScoreRegret:
         cfg = make_cfg()
         pv = [0.0] * 6 + [1.5] * 4 + [0.0] * 14
         d = make_day(pv, 0, 0.10, soc_start=20.0)
-        opt = hindsight_optimal_grid(d, cfg)    # = 0 kWh
+        opt = hindsight_optimal_grid(d, cfg)  # = 0 kWh
         real = flat_grid([0.0] * 24, [0.10] * 24)
         result = score_regret(real, opt)
         assert result["regret_eur"] == pytest.approx(0.0, abs=1e-6)
@@ -308,6 +312,7 @@ class TestScoreRegret:
 # ---------------------------------------------------------------------------
 # Feasibility helper + tests (reviewer requirement)
 # ---------------------------------------------------------------------------
+
 
 def assert_feasible(schedule: list[float], day: DayData, cfg: Config, *, atol: float = 1e-3) -> None:
     """Simulate *schedule* forward and assert all feasibility constraints hold.
@@ -384,6 +389,7 @@ class TestFeasibility:
 # Reviewer's capacity-constrained counterexample
 # ---------------------------------------------------------------------------
 
+
 class TestCapacityConstrainedCounterexample:
     """Reviewer's pinned counterexample: battery near-full during cheapest hours.
 
@@ -422,6 +428,7 @@ class TestCapacityConstrainedCounterexample:
 # Battery high during cheapest hours → limited absorption
 # ---------------------------------------------------------------------------
 
+
 class TestBatteryHighDuringCheapHours:
     """When cheap hours arrive with the battery near-full, less kWh can be absorbed.
 
@@ -455,6 +462,7 @@ class TestBatteryHighDuringCheapHours:
 # Wrong-timing / right-volume → cost_regret_eur semantics
 # ---------------------------------------------------------------------------
 
+
 class TestCostRegretEurSemantics:
     """cost_regret_eur captures timing penalty; under_buy_kwh stays 0 when kWh match."""
 
@@ -473,8 +481,8 @@ class TestCostRegretEurSemantics:
         cfg = make_cfg()
         price = [0.10] * 11 + [0.50] * 13
         d = make_day(0, 0, price, soc_start=50.0)
-        opt = hindsight_optimal_grid(d, cfg)   # 3 kWh at 0.10, eur=0.30
-        actual = [0.0] * 11 + [3.0] + [0.0] * 12   # bought at h11 (expensive)
+        opt = hindsight_optimal_grid(d, cfg)  # 3 kWh at 0.10, eur=0.30
+        actual = [0.0] * 11 + [3.0] + [0.0] * 12  # bought at h11 (expensive)
         real = flat_grid(actual, price)
         result = score_regret(real, opt)
         assert result["regret_eur"] == pytest.approx(1.20, abs=0.02)
@@ -487,11 +495,12 @@ class TestCostRegretEurSemantics:
 # Validation — len != 24 raises ValueError
 # ---------------------------------------------------------------------------
 
+
 class TestValidation:
     def test_hindsight_raises_on_short_pv(self):
         cfg = make_cfg()
         d = DayData(
-            pv_kwh=(0.0,) * 23,   # wrong length!
+            pv_kwh=(0.0,) * 23,  # wrong length!
             load_kwh=(0.0,) * 24,
             price=(0.10,) * 24,
             soc_start=50.0,
@@ -511,11 +520,10 @@ class TestValidation:
             hindsight_optimal_grid(d, cfg)
 
 
-
-
 # ---------------------------------------------------------------------------
 # eta != 1.0 — guards AC↔DC accounting under real charge efficiency
 # ---------------------------------------------------------------------------
+
 
 class TestEtaLessThanOne:
     """Verify AC↔DC accounting: cost = g_dc/eta, rate cap = rate×eta, headroom in DC.
@@ -555,6 +563,7 @@ class TestEtaLessThanOne:
 # ---------------------------------------------------------------------------
 # realized_grid_cost — battery simulation with forced floor-hit imports
 # ---------------------------------------------------------------------------
+
 
 class TestRealizedGridCost:
     """realized_grid_cost: simulate realized schedule + forced floor-hit imports.
@@ -662,7 +671,7 @@ class TestRealizedGridCost:
         cfg = make_cfg()
         d = make_day(0, 0, 0.15, soc_start=30.0)
         opt = hindsight_optimal_grid(d, cfg)
-        assert_feasible(opt["schedule"], d, cfg)   # sanity: schedule itself is valid
+        assert_feasible(opt["schedule"], d, cfg)  # sanity: schedule itself is valid
         result = realized_grid_cost(d, opt["schedule"], cfg)
         assert result["grid_kwh"] == pytest.approx(opt["kwh"], abs=1e-6)
         assert result["eur"] == pytest.approx(opt["eur"], abs=1e-6)
@@ -718,6 +727,7 @@ class TestRealizedGridCost:
 # ---------------------------------------------------------------------------
 # hindsight_optimal_grid — export leg (F1)
 # ---------------------------------------------------------------------------
+
 
 class TestHindsightExport:
     """Export leg: oracle credits discharge→export revenue when export_price supplied.
@@ -824,6 +834,7 @@ class TestHindsightExport:
 
         # Verify SoC never below floor via forward simulation.
         from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
+
         cap_kwh = cfg.capacity_kwh
         floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
         target_kwh = cfg.soc_target / 100.0 * cap_kwh
@@ -898,6 +909,7 @@ class TestHindsightExport:
 # realized_grid_cost — eta != 1.0 (guards AC↔DC accounting for forced imports)
 # ---------------------------------------------------------------------------
 
+
 class TestRealizedGridCostEta:
     """Verify forced-import and deliberate-charge physics under real eta (0.9).
 
@@ -943,7 +955,7 @@ class TestRealizedGridCostEta:
         cfg = make_cfg(eta_charge=0.9)
         d = make_day(0, 0, 0.15, soc_start=30.0)
         opt = hindsight_optimal_grid(d, cfg)
-        assert_feasible(opt["schedule"], d, cfg)   # sanity: schedule is valid
+        assert_feasible(opt["schedule"], d, cfg)  # sanity: schedule is valid
         result = realized_grid_cost(d, opt["schedule"], cfg)
         assert all(x < 1e-9 for x in result["forced_import_kwh"])
         assert result["kwh"] == pytest.approx(opt["kwh"], abs=1e-4)
@@ -954,6 +966,7 @@ class TestRealizedGridCostEta:
 # ---------------------------------------------------------------------------
 # realized_grid_cost — export revenue leg (F3)
 # ---------------------------------------------------------------------------
+
 
 class TestRealizedGridCostExport:
     """F3: realized_grid_cost honours actual export revenue when supplied.
@@ -1001,13 +1014,15 @@ class TestRealizedGridCostExport:
         ep = [0.0] * 8 + [0.40] + [0.0] * 15
 
         result = realized_grid_cost(
-            d, charge_by_hour, cfg,
+            d,
+            charge_by_hour,
+            cfg,
             realized_export_by_hour=actual_export,
             export_price=ep,
         )
 
-        import_eur = 2.0 * 0.10   # 0.20
-        export_rev = 1.0 * 0.40   # 0.40
+        import_eur = 2.0 * 0.10  # 0.20
+        export_rev = 1.0 * 0.40  # 0.40
         assert result["eur"] == pytest.approx(import_eur - export_rev, abs=1e-6)
         assert result["export_revenue_eur"] == pytest.approx(export_rev, abs=1e-6)
 
@@ -1023,12 +1038,14 @@ class TestRealizedGridCostExport:
         """
         cfg = self._cfg()
         d = make_day(0, 0, [0.10] * 24, soc_start=50.0)
-        actual_export = [0.0] * 10 + [1.5] + [0.0] * 13   # actual metered
+        actual_export = [0.0] * 10 + [1.5] + [0.0] * 13  # actual metered
         # commanded_export_kwh = 3.0 is deliberately NOT passed
         ep = [0.0] * 10 + [0.50] + [0.0] * 13
 
         result = realized_grid_cost(
-            d, [0.0] * 24, cfg,
+            d,
+            [0.0] * 24,
+            cfg,
             realized_export_by_hour=actual_export,
             export_price=ep,
         )
@@ -1048,7 +1065,9 @@ class TestRealizedGridCostExport:
 
         result_no_export = realized_grid_cost(d, charge_by_hour, cfg)
         result_explicit_none = realized_grid_cost(
-            d, charge_by_hour, cfg,
+            d,
+            charge_by_hour,
+            cfg,
             realized_export_by_hour=None,
             export_price=None,
         )
@@ -1066,7 +1085,9 @@ class TestRealizedGridCostExport:
         ep = [0.0] * 12 + [0.30] + [0.0] * 11
 
         result = realized_grid_cost(
-            d, [0.0] * 24, cfg,
+            d,
+            [0.0] * 24,
+            cfg,
             realized_export_by_hour=actual_export,
             export_price=ep,
         )
@@ -1108,7 +1129,9 @@ class TestRealizedGridCostExport:
         realized_export = list(opt["export_schedule"])
 
         realized = realized_grid_cost(
-            d, opt["schedule"], cfg,
+            d,
+            opt["schedule"],
+            cfg,
             realized_export_by_hour=realized_export,
             export_price=list(ep),
         )
@@ -1142,12 +1165,14 @@ class TestRealizedGridCostExport:
         cfg = self._cfg()
         price = [0.20] + [0.10] * 23
         ep = [0.40] + [0.0] * 23
-        d = make_day(0, 0, price, soc_start=10.0)   # 1 kWh; firmware floor=0.5 kWh
+        d = make_day(0, 0, price, soc_start=10.0)  # 1 kWh; firmware floor=0.5 kWh
 
-        actual_export = [1.5] + [0.0] * 23          # 1.5 AC kWh at h0
+        actual_export = [1.5] + [0.0] * 23  # 1.5 AC kWh at h0
 
         result = realized_grid_cost(
-            d, [0.0] * 24, cfg,
+            d,
+            [0.0] * 24,
+            cfg,
             realized_export_by_hour=actual_export,
             export_price=ep,
         )

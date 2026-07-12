@@ -1,4 +1,5 @@
 """Pure-Python temperature-bucketed load model (Phase 2)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -43,10 +44,11 @@ def _empirical_quantile(sorted_vals: list[float], q: float) -> float:
 
 
 class BucketedLoadModel:
-    def __init__(self, cell, hourly, global_mean, n_samples,
-                 cell_samples=None, hourly_samples=None, global_samples=None) -> None:
-        self._cell = cell          # (weekend, hour, bucket) -> mean
-        self._hourly = hourly      # (weekend, hour) -> mean
+    def __init__(
+        self, cell, hourly, global_mean, n_samples, cell_samples=None, hourly_samples=None, global_samples=None
+    ) -> None:
+        self._cell = cell  # (weekend, hour, bucket) -> mean
+        self._hourly = hourly  # (weekend, hour) -> mean
         self._global = global_mean  # float | None
         self.n_samples = n_samples
         # Sorted sample lists for upper-quantile computation (None = not stored)
@@ -59,7 +61,7 @@ class BucketedLoadModel:
         return len(self._cell)
 
     @classmethod
-    def fit(cls, rows: list[FeatureRow]) -> "BucketedLoadModel":
+    def fit(cls, rows: list[FeatureRow]) -> BucketedLoadModel:
         cell_acc: dict[tuple, list[float]] = {}
         hour_acc: dict[tuple, list[float]] = {}
         all_loads: list[float] = []
@@ -75,13 +77,23 @@ class BucketedLoadModel:
         cell_samples = {k: sorted(v) for k, v in cell_acc.items()}
         hourly_samples = {k: sorted(v) for k, v in hour_acc.items()}
         global_samples = sorted(all_loads) if all_loads else []
-        return cls(cell, hourly, global_mean, len(rows),
-                   cell_samples=cell_samples, hourly_samples=hourly_samples,
-                   global_samples=global_samples)
+        return cls(
+            cell,
+            hourly,
+            global_mean,
+            len(rows),
+            cell_samples=cell_samples,
+            hourly_samples=hourly_samples,
+            global_samples=global_samples,
+        )
 
     def predict_load_w(
-        self, when: datetime, temp: float | None, fallback_w: float,
-        *, quantile: float = 0.5,
+        self,
+        when: datetime,
+        temp: float | None,
+        fallback_w: float,
+        *,
+        quantile: float = 0.5,
     ) -> float:
         """Predict load using bucketed mean hierarchy; for quantile>0.5, add empirical upper cushion.
 

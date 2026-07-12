@@ -1,13 +1,16 @@
 """Occupancy corrector: binning, bands, table build."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import occupancy
 
 
 def _row(hour_ts, persons, kwh, count=60):
     return {
-        "hour_ts": hour_ts, "persons_home_mean": persons,
-        "house_load_kwh_sum": kwh, "house_load_count": count,
+        "hour_ts": hour_ts,
+        "persons_home_mean": persons,
+        "house_load_kwh_sum": kwh,
+        "house_load_count": count,
         "house_load_mean": None,
     }
 
@@ -28,20 +31,20 @@ def test_state_bin_none_nan_and_negative():
 
 def test_state_bin_away_rounding_and_cap():
     assert occupancy.state_bin(0.0) == 0
-    assert occupancy.state_bin(0.24) == 0          # < _AWAY_EPS → away
-    assert occupancy.state_bin(0.3) == 1           # occupied but < 1 rounds up to min 1
+    assert occupancy.state_bin(0.24) == 0  # < _AWAY_EPS → away
+    assert occupancy.state_bin(0.3) == 1  # occupied but < 1 rounds up to min 1
     assert occupancy.state_bin(1.4) == 1
     assert occupancy.state_bin(1.6) == 2
-    assert occupancy.state_bin(5.0) == 3           # capped at 3+
+    assert occupancy.state_bin(5.0) == 3  # capped at 3+
 
 
 def test_band_of_local_time_and_weekend():
     # 2026-07-08 is a Wednesday; 05:00 UTC = 07:00 Amsterdam (CEST) → band 1 (morning)
-    assert occupancy.band_of(datetime(2026, 7, 8, 5, 0, tzinfo=timezone.utc)) == (1, False)
+    assert occupancy.band_of(datetime(2026, 7, 8, 5, 0, tzinfo=UTC)) == (1, False)
     # 22:30 UTC Wed = 00:30 Thu local → band 0 (night), still weekday
-    assert occupancy.band_of(datetime(2026, 7, 8, 22, 30, tzinfo=timezone.utc)) == (0, False)
+    assert occupancy.band_of(datetime(2026, 7, 8, 22, 30, tzinfo=UTC)) == (0, False)
     # Saturday 12:00 UTC = 14:00 local → band 2, weekend
-    assert occupancy.band_of(datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)) == (2, True)
+    assert occupancy.band_of(datetime(2026, 7, 11, 12, 0, tzinfo=UTC)) == (2, True)
 
 
 def test_build_table_cells_and_climo():
@@ -68,9 +71,9 @@ def test_build_table_cells_and_climo():
 
 def test_build_table_skips_null_and_bad_rows():
     rows = [
-        _row("2026-06-01T12:00:00+00:00", None, 0.5),   # no persons → skip
-        _row("2026-06-01T13:00:00+00:00", 1.0, None),    # no load → skip
-        _row("not-a-date", 1.0, 0.5),                    # bad ts → skip
+        _row("2026-06-01T12:00:00+00:00", None, 0.5),  # no persons → skip
+        _row("2026-06-01T13:00:00+00:00", 1.0, None),  # no load → skip
+        _row("not-a-date", 1.0, 0.5),  # bad ts → skip
     ]
     t = occupancy.build_table(rows)
     assert not t.count_cells and not t.binary_cells and t.cells_ready == 0
@@ -85,7 +88,7 @@ def test_build_table_coverage_rescale():
     assert abs(mean - 500.0) < 1.0
 
 
-NOW = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)  # Wed 14:00 CEST → band 2, weekday
+NOW = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)  # Wed 14:00 CEST → band 2, weekday
 
 
 def _table(count=None, binary=None, climo=None, ready=0):
@@ -103,10 +106,10 @@ def _full_table():
 
 def test_multiplier_neutral_cases():
     t = _full_table()
-    assert occupancy.multiplier(None, 2, NOW, NOW, 4, 1.0) == 1.0        # no table
-    assert occupancy.multiplier(t, None, NOW, NOW, 4, 1.0) == 1.0        # no person entities
-    assert occupancy.multiplier(t, 2, NOW, NOW, 4, 0.0) == 1.0           # fraction off
-    assert occupancy.multiplier(t, 1, NOW, NOW, 4, 1.0) == 1.0           # matches climo
+    assert occupancy.multiplier(None, 2, NOW, NOW, 4, 1.0) == 1.0  # no table
+    assert occupancy.multiplier(t, None, NOW, NOW, 4, 1.0) == 1.0  # no person entities
+    assert occupancy.multiplier(t, 2, NOW, NOW, 4, 0.0) == 1.0  # fraction off
+    assert occupancy.multiplier(t, 1, NOW, NOW, 4, 1.0) == 1.0  # matches climo
 
 
 def test_multiplier_deviation_count_level():

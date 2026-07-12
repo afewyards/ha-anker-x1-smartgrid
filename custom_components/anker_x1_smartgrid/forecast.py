@@ -1,4 +1,5 @@
 """Load/PV forecasting helpers (Phase 1: rolling profile + synth PV)."""
+
 from __future__ import annotations
 
 import inspect
@@ -69,16 +70,15 @@ class LoadPredictor:
         self._profile_samples: dict[tuple[bool, int], list[float]] | None = profile_samples
         # Detect quantile-kwarg support once at construction to avoid masking real TypeErrors
         self._model_accepts_quantile: bool = (
-            model is not None
-            and "quantile" in inspect.signature(model.predict_load_w).parameters
+            model is not None and "quantile" in inspect.signature(model.predict_load_w).parameters
         )
 
     @classmethod
-    def from_profile(cls, profile: dict) -> "LoadPredictor":
+    def from_profile(cls, profile: dict) -> LoadPredictor:
         return cls(profile=profile)  # no profile_samples — quantile-unaware (legacy scalar dict)
 
     @classmethod
-    def from_model(cls, model) -> "LoadPredictor":
+    def from_model(cls, model) -> LoadPredictor:
         return cls(model=model)
 
     @classmethod
@@ -87,7 +87,7 @@ class LoadPredictor:
         samples: list[tuple[str, float]],
         lookback_days: int,
         now: datetime,
-    ) -> "LoadPredictor":
+    ) -> LoadPredictor:
         """Build a LoadPredictor from raw (timestamp_iso, watts) samples.
 
         Keeps the mean-based profile for the P50/central path AND retains sorted

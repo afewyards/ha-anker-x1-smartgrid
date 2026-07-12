@@ -1,9 +1,9 @@
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot, ForecastInterval
 from custom_components.anker_x1_smartgrid import plan
 
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 def _slots(n, price=0.30):
@@ -18,7 +18,7 @@ def test_modes_grid_solar_idle():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
     slots = _slots(3)
     intervals = [
-        ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),       # solar surplus
+        ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),  # solar surplus
         ForecastInterval(BASE + timedelta(hours=1), pv_w=0.0, load_w=400.0, dt_h=1.0),  # no sun
         ForecastInterval(BASE + timedelta(hours=2), pv_w=0.0, load_w=400.0, dt_h=1.0),
     ]
@@ -37,9 +37,9 @@ def test_soc_projection_rises_and_caps():
     selected = [s.start for s in slots]
     out = plan.build_plan_horizon(slots, [], selected, 0.0, BASE + timedelta(hours=4), cfg)
     socs = [e["soc"] for e in out]
-    assert socs[0] == 50.0           # 0 -> 50
-    assert socs[1] == 90.0           # capped at target (would be 100)
-    assert socs[-1] == 90.0          # stays capped
+    assert socs[0] == 50.0  # 0 -> 50
+    assert socs[1] == 90.0  # capped at target (would be 100)
+    assert socs[-1] == 90.0  # stays capped
     assert all(e["mode"] == "grid" for e in out)
 
 
@@ -61,30 +61,31 @@ class _StubPredictor:
 
 def test_display_intervals_fill_pv_and_load():
     # slots 09:00..15:00; now=11:00; PV only at 12:00
-    now = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
-    slots = [PriceSlot(datetime(2026, 6, 20, h, 0, tzinfo=timezone.utc), 0.30) for h in range(9, 16)]
-    pv_curve = [(datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc), 2000.0)]
+    now = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
+    slots = [PriceSlot(datetime(2026, 6, 20, h, 0, tzinfo=UTC), 0.30) for h in range(9, 16)]
+    pv_curve = [(datetime(2026, 6, 20, 12, 0, tzinfo=UTC), 2000.0)]
     out = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0)
     starts = [iv.start for iv in out]
     # past hours (09,10) dropped; starts at 11:00
-    assert starts[0] == datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+    assert starts[0] == datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
     assert all(s >= now for s in starts)
     by_hour = {iv.start.hour: iv for iv in out}
-    assert by_hour[12].pv_w == 2000.0          # daylight curve value
-    assert by_hour[11].pv_w == 0.0             # no curve point -> 0
+    assert by_hour[12].pv_w == 2000.0  # daylight curve value
+    assert by_hour[11].pv_w == 0.0  # no curve point -> 0
     assert all(iv.load_w == 500.0 for iv in out)  # predicted every hour
     assert all(iv.dt_h == 1.0 for iv in out)
 
 
 def test_display_intervals_empty_slots():
-    now = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
     assert plan.build_display_intervals([], now, [], _StubPredictor(), None, 400.0) == []
 
 
 def test_soc_discharges_on_deficit():
     # idle hour with load > pv must LOWER soc by discharge energy / eta_discharge
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=0.5)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=0.5
+    )
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
     out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=1), cfg)
@@ -100,8 +101,9 @@ def test_idle_drain_sags_projected_soc():
     discharge (deficit) slots — sags soc_sim below the idle_drain_w=0 baseline by
     the idle term (130 W * 1 h / 1000 = 0.13 kWh -> 1.3% of a 10 kWh battery).
     Charge and export-only slots are unaffected (idle drain is not paid there)."""
-    base_kwargs = dict(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                        max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    base_kwargs = dict(
+        capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
     cfg0 = Config(**base_kwargs, idle_drain_w=0.0)
     cfg_idle = Config(**base_kwargs, idle_drain_w=130.0)
     deadline = BASE + timedelta(hours=1)
@@ -126,11 +128,21 @@ def test_idle_drain_sags_projected_soc():
     # idle drain must NOT apply.
     export_intervals = [ForecastInterval(BASE, pv_w=500.0, load_w=500.0, dt_h=1.0)]
     out0_e = plan.build_plan_horizon(
-        slots, export_intervals, [], 50.0, deadline, cfg0,
+        slots,
+        export_intervals,
+        [],
+        50.0,
+        deadline,
+        cfg0,
         export_request_by_hour={BASE: 1000.0},
     )
     out_idle_e = plan.build_plan_horizon(
-        slots, export_intervals, [], 50.0, deadline, cfg_idle,
+        slots,
+        export_intervals,
+        [],
+        50.0,
+        deadline,
+        cfg_idle,
         export_request_by_hour={BASE: 1000.0},
     )
     assert out0_e[0]["mode"] == "idle"
@@ -141,8 +153,15 @@ def test_plan_idle_zero_parity():
     """idle_drain_w=0.0 reproduces the pre-idle-drain deficit-slot SoC math exactly
     (regression guard: same scenario/expected values as test_soc_discharges_on_deficit,
     with idle_drain_w explicit)."""
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=0.5, idle_drain_w=0.0)
+    cfg = Config(
+        capacity_kwh=10.0,
+        soc_floor=0.0,
+        soc_target=100.0,
+        max_charge_w=6000.0,
+        eta_charge=1.0,
+        round_trip_eff=0.5,
+        idle_drain_w=0.0,
+    )
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
     out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=1), cfg)
@@ -155,13 +174,11 @@ def test_soc_discharge_clamped_at_firmware_floor():
     """Deficit night (load > pv, no charge, no export): the projected-SoC sim sags to
     the firmware hard floor (5%), NOT the soft cfg.soc_floor planning margin — nothing
     force-charges to hold soc_floor, so the real battery keeps draining past it."""
-    cfg = Config(capacity_kwh=10.0, soc_floor=10.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
     slots = _slots(3)
-    intervals = [
-        ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0)
-        for i in range(3)
-    ]
+    intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0) for i in range(3)]
     out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
     socs = [e["soc"] for e in out]
     # hour0: 20 - 60 -> sags well below soc_floor=10, clamps at the firmware floor
@@ -174,13 +191,11 @@ def test_soc_discharge_clamp_identical_at_live_default_soc_floor():
     byte-identical to the pre-change behaviour (regression guard for the firmware-
     floor clamp: same deficit scenario as test_soc_discharge_clamped_at_firmware_floor,
     just with soc_floor lowered to the firmware value)."""
-    cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
     slots = _slots(3)
-    intervals = [
-        ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0)
-        for i in range(3)
-    ]
+    intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0) for i in range(3)]
     out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
     socs = [e["soc"] for e in out]
     assert socs == [5.0, 5.0, 5.0]
@@ -190,13 +205,11 @@ def test_soc_discharge_never_below_firmware_floor_when_soc_floor_set_lower():
     """soc_floor=3 (below the firmware floor) must never let the sim display below
     5.0 — the firmware refuses to discharge past its hard floor regardless of the
     (soft) config value."""
-    cfg = Config(capacity_kwh=10.0, soc_floor=3.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=3.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
     slots = _slots(3)
-    intervals = [
-        ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0)
-        for i in range(3)
-    ]
+    intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0) for i in range(3)]
     out = plan.build_plan_horizon(slots, intervals, [], 20.0, BASE + timedelta(hours=3), cfg)
     socs = [e["soc"] for e in out]
     assert socs == [5.0, 5.0, 5.0]
@@ -205,8 +218,9 @@ def test_soc_discharge_never_below_firmware_floor_when_soc_floor_set_lower():
 
 def test_soc_discharge_capped_load_by_max_charge_w():
     # discharge AC is capped at max_charge_w even if load is huge
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=2000.0, eta_charge=1.0, round_trip_eff=1.0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=2000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=9000.0, dt_h=1.0)]
     out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=1), cfg)
@@ -219,8 +233,9 @@ def test_eta_discharge_clamped_to_one():
     # eta_charge=0.8, round_trip_eff=1.0 -> raw ratio 1.25, clamped to 1.0.
     # idle hour with load_w=1000, pv_w=0 -> discharge=1000W ->
     # dSoC = -(1000/1.0) * 1 / 10000 * 100 = -10.0, NOT -8.0 (unclamped).
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=0.8, round_trip_eff=1.0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=0.8, round_trip_eff=1.0
+    )
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
     out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=1), cfg)
@@ -237,84 +252,115 @@ def test_soc_no_discharge_when_interval_missing():
 
 
 def test_build_display_horizon_none_sun_times_returns_empty():
-    now = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
     slots = _slots(3)
     out = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)], sun_times=None,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
+        sun_times=None,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
     )
     assert out == []
 
 
 def test_build_display_horizon_self_consumption_no_grid():
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),   # today_sunset
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),    # tomorrow_sunrise
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),   # tomorrow_sunset
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),  # today_sunset
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),  # tomorrow_sunrise
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),  # tomorrow_sunset
     )
     out = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=15.0, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        predictor=_StubPredictor(),
+        cur_temp=15.0,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
     )
     assert out, "expected a non-empty horizon"
-    assert all(e["mode"] != "grid" for e in out)        # selected=[] -> never grid
+    assert all(e["mode"] != "grid" for e in out)  # selected=[] -> never grid
     assert any(e["pv_w"] and e["pv_w"] > 0 for e in out)  # tomorrow daytime PV present
-    assert all(e["load_w"] == 500.0 for e in out)          # _StubPredictor returns 500
+    assert all(e["load_w"] == 500.0 for e in out)  # _StubPredictor returns 500
 
 
 def test_build_display_horizon_energy_conserved():
     """Tomorrow-only PV: total pv_w in horizon ≈ sum of kWh * 1000 Wh."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),   # today_sunset
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),    # tomorrow_sunrise
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),   # tomorrow_sunset
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),  # today_sunset
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),  # tomorrow_sunrise
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),  # tomorrow_sunset
     )
     tomorrow_kwh = 6.0
     out = plan.build_display_horizon(
-        slots, now, today_arrays=None, tomorrow_arrays=[(tomorrow_kwh, None)],
+        slots,
+        now,
+        today_arrays=None,
+        tomorrow_arrays=[(tomorrow_kwh, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
     )
     assert out, "expected a non-empty horizon"
     total_pv_wh = sum(e["pv_w"] for e in out if e["pv_w"])
     # Each horizon entry is 1 hour; pv_w in watts → energy in Wh per slot.
     # All tomorrow daytime slots are in the future so no hours are clipped.
-    assert abs(total_pv_wh - tomorrow_kwh * 1000) < 100, (
-        f"Expected ~{tomorrow_kwh * 1000} Wh, got {total_pv_wh:.1f} Wh"
-    )
+    assert abs(total_pv_wh - tomorrow_kwh * 1000) < 100, f"Expected ~{tomorrow_kwh * 1000} Wh, got {total_pv_wh:.1f} Wh"
 
 
 def test_build_display_horizon_shoulder_lift():
     """E/W split arrays: early-peak and late-peak hours are HIGHER than single centred array,
     while midday (13:00) is LOWER — proves timing fidelity, not a higher global peak."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),
     )
-    early_peak = datetime(2026, 6, 21, 9, 0, tzinfo=timezone.utc)   # E-array peak
-    late_peak = datetime(2026, 6, 21, 17, 0, tzinfo=timezone.utc)  # W-array peak
-    mid_hour = datetime(2026, 6, 21, 13, 0, tzinfo=timezone.utc)   # midday valley
+    early_peak = datetime(2026, 6, 21, 9, 0, tzinfo=UTC)  # E-array peak
+    late_peak = datetime(2026, 6, 21, 17, 0, tzinfo=UTC)  # W-array peak
+    mid_hour = datetime(2026, 6, 21, 13, 0, tzinfo=UTC)  # midday valley
 
     ew_arrays = [(3.0, early_peak), (3.0, late_peak)]
     centered_arrays = [(6.0, None)]  # peaks at window midpoint ≈ 13:00
 
     def _build(tomorrow_arrays):
         return plan.build_display_horizon(
-            slots, now, today_arrays=None, tomorrow_arrays=tomorrow_arrays,
+            slots,
+            now,
+            today_arrays=None,
+            tomorrow_arrays=tomorrow_arrays,
             sun_times=sun_times,
-            predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-            soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+            predictor=_StubPredictor(),
+            cur_temp=None,
+            fallback_w=400.0,
+            soc=50.0,
+            selected=[],
+            horizon_edge=now,
+            cfg=Config(),
         )
 
     ew_horizon = _build(ew_arrays)
@@ -387,29 +433,37 @@ def test_charge_w_in_horizon_entries():
 def test_solar_and_grid_coexist_in_grid_hour():
     # Grid-requested hour that ALSO has solar surplus: both bars > 0, summing
     # to the requested total, never exceeding max_charge_w.
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0)
+    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=2000.0, load_w=800.0, dt_h=1.0)]  # surplus 1200
     selected = [BASE]
     out = plan.build_plan_horizon(
-        slots, intervals, selected, 60.0, BASE + timedelta(hours=1), cfg,
+        slots,
+        intervals,
+        selected,
+        60.0,
+        BASE + timedelta(hours=1),
+        cfg,
         grid_request_by_hour={BASE: 6000.0},  # ask for full rate
     )
     e = out[0]
     assert e["mode"] == "grid"
-    assert e["solar_charge_w"] == 1200.0           # solar first
-    assert e["grid_charge_w"] == 2800.0            # headroom(4000) - solar(1200) = 2800
-    assert e["charge_w"] == 4000.0                 # total lands exactly at soc_target
+    assert e["solar_charge_w"] == 1200.0  # solar first
+    assert e["grid_charge_w"] == 2800.0  # headroom(4000) - solar(1200) = 2800
+    assert e["charge_w"] == 4000.0  # total lands exactly at soc_target
 
 
 def test_grid_request_below_remaining_rate():
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0,
-                 max_charge_w=6000.0, eta_charge=1.0)
+    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=1000.0, load_w=470.0, dt_h=1.0)]  # surplus 530
     out = plan.build_plan_horizon(
-        slots, intervals, [BASE], 50.0, BASE + timedelta(hours=1), cfg,
+        slots,
+        intervals,
+        [BASE],
+        50.0,
+        BASE + timedelta(hours=1),
+        cfg,
         grid_request_by_hour={BASE: 800.0},
     )
     assert out[0]["solar_charge_w"] == 530.0
@@ -420,12 +474,16 @@ def test_grid_request_below_remaining_rate():
 def test_grid_bar_collapses_when_battery_full():
     # Near-full battery: headroom ~0 -> grid bar ~0 (no phantom max_charge_w),
     # but mode stays "grid" (hour is selected) so planned_grid_hours is intact.
-    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=97.0,
-                 max_charge_w=6000.0, eta_charge=1.0)
+    cfg = Config(capacity_kwh=10.0, soc_floor=0.0, soc_target=97.0, max_charge_w=6000.0, eta_charge=1.0)
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
     out = plan.build_plan_horizon(
-        slots, intervals, [BASE], 97.0, BASE + timedelta(hours=1), cfg,
+        slots,
+        intervals,
+        [BASE],
+        97.0,
+        BASE + timedelta(hours=1),
+        cfg,
         grid_request_by_hour={BASE: 6000.0},
     )
     assert out[0]["mode"] == "grid"
@@ -439,8 +497,7 @@ def test_heuristic_grid_hour_defaults_to_max_charge_w():
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=400.0, dt_h=1.0)]
-    out = plan.build_plan_horizon(slots, intervals, [BASE], 50.0,
-                                  BASE + timedelta(hours=1), cfg)
+    out = plan.build_plan_horizon(slots, intervals, [BASE], 50.0, BASE + timedelta(hours=1), cfg)
     assert out[0]["mode"] == "grid"
     assert out[0]["grid_charge_w"] == 3000.0
     assert out[0]["solar_charge_w"] == 0.0
@@ -455,8 +512,12 @@ def test_heuristic_grid_hour_defaults_to_max_charge_w():
 def test_export_hour_sets_grid_export_w_and_drains_soc():
     """Export hour: grid_export_w is set and projected SoC drops by exported energy."""
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
     )
     slots = _slots(2)
     # Hour 0: export 2000 W, pv covers load (no self-discharge from battery)
@@ -467,7 +528,12 @@ def test_export_hour_sets_grid_export_w_and_drains_soc():
     ]
     export_req = {BASE: 2000.0}
     out = plan.build_plan_horizon(
-        slots, intervals, [], 80.0, BASE + timedelta(hours=2), cfg,
+        slots,
+        intervals,
+        [],
+        80.0,
+        BASE + timedelta(hours=2),
+        cfg,
         export_request_by_hour=export_req,
     )
     # Export hour: field populated
@@ -488,14 +554,23 @@ def test_export_hour_sets_grid_export_w_and_drains_soc():
 def test_export_drains_soc_sim_no_solar():
     """Export from battery-only hour (no PV): SoC drops by the exported energy."""
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=5000.0, eta_charge=1.0, round_trip_eff=1.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=5000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
     )
     slots = _slots(1)
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
     export_req = {BASE: 3000.0}  # 3000 W * 1 h = 3 kWh = 30% of 10 kWh
     out = plan.build_plan_horizon(
-        slots, intervals, [], 70.0, BASE + timedelta(hours=1), cfg,
+        slots,
+        intervals,
+        [],
+        70.0,
+        BASE + timedelta(hours=1),
+        cfg,
         export_request_by_hour=export_req,
     )
     assert out[0]["grid_export_w"] == 3000.0
@@ -515,8 +590,12 @@ def test_non_export_hour_grid_export_w_is_zero():
 def test_self_discharge_w_set_in_battery_covering_load():
     """Self-discharge: battery covers load deficit when no PV and not a grid hour."""
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
     )
     slots = _slots(1)
     # No PV, 1500 W load -> battery discharges 1500 W
@@ -539,13 +618,21 @@ def test_reserve_soc_present_and_within_bounds():
     """reserve_soc is present and within [soc_floor, 100] when reserve_by_hour supplied."""
     cap_kwh = 10.0
     cfg = Config(
-        capacity_kwh=cap_kwh, soc_floor=5.0, soc_target=100.0, max_charge_w=3000.0,
+        capacity_kwh=cap_kwh,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
     )
     slots = _slots(2)
     # 2 kWh reserve = 20% of 10 kWh
     reserve_by_hour = {BASE: 2.0, BASE + timedelta(hours=1): 3.0}
     out = plan.build_plan_horizon(
-        slots, [], [], 50.0, BASE + timedelta(hours=2), cfg,
+        slots,
+        [],
+        [],
+        50.0,
+        BASE + timedelta(hours=2),
+        cfg,
         reserve_by_hour=reserve_by_hour,
     )
     assert out[0]["reserve_soc"] == pytest.approx(20.0)
@@ -566,15 +653,24 @@ def test_reserve_soc_defaults_to_soc_floor_when_no_reserve_by_hour():
 def test_export_and_self_discharge_are_separate_fields():
     """Export hour: grid_export_w and self_discharge_w are independent fields."""
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
     )
     slots = _slots(1)
     # PV covers partial load, battery covers the rest (no export)
     intervals = [ForecastInterval(BASE, pv_w=500.0, load_w=1500.0, dt_h=1.0)]
     export_req = {BASE: 2000.0}
     out = plan.build_plan_horizon(
-        slots, intervals, [], 80.0, BASE + timedelta(hours=1), cfg,
+        slots,
+        intervals,
+        [],
+        80.0,
+        BASE + timedelta(hours=1),
+        cfg,
         export_request_by_hour=export_req,
     )
     # load_w (1500) > pv_w (500), so self-discharge = min(1500-500, max_charge_w) = 1000
@@ -586,10 +682,11 @@ def test_export_and_self_discharge_are_separate_fields():
 # Tests for build_display_horizon — export_request_by_hour + reserve_by_hour
 # ---------------------------------------------------------------------------
 
+
 def _sun_times_for(now: datetime):
     """Standard sun_times tuple starting from 'now'."""
     return (
-        now + timedelta(hours=9),   # today_sunset
+        now + timedelta(hours=9),  # today_sunset
         now + timedelta(hours=19),  # tomorrow_sunrise
         now + timedelta(hours=33),  # tomorrow_sunset
     )
@@ -598,28 +695,39 @@ def _sun_times_for(now: datetime):
 def test_build_display_horizon_export_request_sets_grid_export_w():
     """export_request_by_hour is threaded through: export hour has grid_export_w > 0,
     non-export hour has grid_export_w == 0."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = _sun_times_for(now)
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
-        max_export_w=3000.0, grid_export_limit_w=6000.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=6000.0,
     )
     export_hour = now.replace(minute=0, second=0, microsecond=0)
     export_req = {export_hour: 2000.0}
     out = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=80.0, selected=[], horizon_edge=now, cfg=cfg,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=80.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=cfg,
         export_request_by_hour=export_req,
     )
     assert out, "expected non-empty horizon"
     first = out[0]
-    assert first["grid_export_w"] == 2000.0, (
-        f"Export hour must have grid_export_w=2000.0, got {first['grid_export_w']}"
-    )
+    assert first["grid_export_w"] == 2000.0, f"Export hour must have grid_export_w=2000.0, got {first['grid_export_w']}"
     # Second hour onwards: no export scheduled → 0
     for entry in out[1:]:
         assert entry["grid_export_w"] == 0.0, (
@@ -630,28 +738,49 @@ def test_build_display_horizon_export_request_sets_grid_export_w():
 def test_build_display_horizon_export_drains_soc():
     """Export drains the projected SoC — the SoC after the export hour is lower
     than it would be without export."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = _sun_times_for(now)
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0,
-        max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
-        max_export_w=3000.0, grid_export_limit_w=6000.0,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=6000.0,
     )
     export_hour = now.replace(minute=0, second=0, microsecond=0)
     export_req = {export_hour: 2000.0}  # 2000 W for 1 hour = 2 kWh = 20% of 10 kWh
 
     without_export = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=80.0, selected=[], horizon_edge=now, cfg=cfg,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=80.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=cfg,
     )
     with_export = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=80.0, selected=[], horizon_edge=now, cfg=cfg,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=80.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=cfg,
         export_request_by_hour=export_req,
     )
     assert without_export and with_export, "both horizons must be non-empty"
@@ -666,22 +795,33 @@ def test_build_display_horizon_export_drains_soc():
 def test_build_display_horizon_reserve_by_hour_sets_reserve_soc():
     """reserve_by_hour is threaded through: reserve_soc reflects supplied per-hour reserve
     (NOT flat soc_floor)."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = _sun_times_for(now)
     cap_kwh = 10.0
     cfg = Config(
-        capacity_kwh=cap_kwh, soc_floor=5.0, soc_target=100.0, max_charge_w=3000.0,
+        capacity_kwh=cap_kwh,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=3000.0,
     )
     h0 = now.replace(minute=0, second=0, microsecond=0)
     h1 = h0 + timedelta(hours=1)
     # 3 kWh reserve = 30%, 4 kWh reserve = 40%
     reserve_by_hour = {h0: 3.0, h1: 4.0}
     out = plan.build_display_horizon(
-        slots, now, today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=None, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=cfg,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=cfg,
         reserve_by_hour=reserve_by_hour,
     )
     assert out, "expected non-empty horizon"
@@ -706,7 +846,7 @@ def test_build_display_intervals_uses_per_hour_temp_map():
     from custom_components.anker_x1_smartgrid.plan import build_display_intervals
     from custom_components.anker_x1_smartgrid.models import PriceSlot
 
-    now = datetime(2026, 6, 29, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 29, 0, tzinfo=UTC)
     slots = [PriceSlot(start=now + timedelta(hours=h), price=0.2) for h in range(3)]
     pv_curve = []
     seen = {}
@@ -718,7 +858,12 @@ def test_build_display_intervals_uses_per_hour_temp_map():
 
     temp_by_hour = {now: 5.0, now + timedelta(hours=1): 12.0}  # hour 2 absent → falls back
     build_display_intervals(
-        slots, now, pv_curve, _RecordingPredictor(), -99.0, 400.0,
+        slots,
+        now,
+        pv_curve,
+        _RecordingPredictor(),
+        -99.0,
+        400.0,
         temp_by_hour=temp_by_hour,
     )
     assert seen[now] == 5.0
@@ -729,20 +874,19 @@ def test_build_display_intervals_uses_per_hour_temp_map():
 def test_eta_charge_guard_unified_at_subnano_boundary():
     """Sub-1e-9 eta_charge must hit the same fallback as eta_charge=0:
     finite projected SoC, no blow-up, identical trajectory (eta_discharge=1.0)."""
-    common = dict(capacity_kwh=10.0, soc_target=90.0, soc_floor=5.0,
-                  max_charge_w=3000.0, round_trip_eff=0.85)
+    common = dict(capacity_kwh=10.0, soc_target=90.0, soc_floor=5.0, max_charge_w=3000.0, round_trip_eff=0.85)
     slots = _slots(2)
     # An idle hour where load>pv self-discharges the SoC sim by load/eta_discharge.
     intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=1000.0, dt_h=1.0)]
     out_tiny = plan.build_plan_horizon(
-        slots, intervals, [], 50.0, BASE + timedelta(hours=2),
-        Config(eta_charge=5e-10, **common))
+        slots, intervals, [], 50.0, BASE + timedelta(hours=2), Config(eta_charge=5e-10, **common)
+    )
     out_zero = plan.build_plan_horizon(
-        slots, intervals, [], 50.0, BASE + timedelta(hours=2),
-        Config(eta_charge=0.0, **common))
+        slots, intervals, [], 50.0, BASE + timedelta(hours=2), Config(eta_charge=0.0, **common)
+    )
     socs_tiny = [e["soc"] for e in out_tiny]
-    assert all(s == s and abs(s) < 1e6 for s in socs_tiny)          # finite, no inf/nan
-    assert socs_tiny == [e["soc"] for e in out_zero]                # same fallback path
+    assert all(s == s and abs(s) < 1e6 for s in socs_tiny)  # finite, no inf/nan
+    assert socs_tiny == [e["soc"] for e in out_zero]  # same fallback path
 
 
 def test_build_plan_horizon_no_zerodiv_at_zero_round_trip_eff():
@@ -750,21 +894,27 @@ def test_build_plan_horizon_no_zerodiv_at_zero_round_trip_eff():
     NOT caught by the eta_charge>1e-9 guard at line 128. The self_discharge_w/
     grid_export_w division sites must guard their own denominator so an export
     slot at zero round-trip efficiency doesn't ZeroDivisionError the display sim."""
-    cfg = Config.from_dict({
-        "capacity_kwh": 10.0, "soc_floor": 10.0, "soc_target": 90.0,
-        "max_charge_w": 3000.0, "eta_charge": 1.0, "round_trip_eff": 0.0,
-    })
-    t = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
-    out = plan.build_plan_horizon([PriceSlot(t, 0.20)], [], [], 80.0, t, cfg,
-                                   export_request_by_hour={t: 500.0})
-    assert out   # completes without ZeroDivisionError
+    cfg = Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_floor": 10.0,
+            "soc_target": 90.0,
+            "max_charge_w": 3000.0,
+            "eta_charge": 1.0,
+            "round_trip_eff": 0.0,
+        }
+    )
+    t = datetime(2026, 7, 8, 12, 0, tzinfo=UTC)
+    out = plan.build_plan_horizon([PriceSlot(t, 0.20)], [], [], 80.0, t, cfg, export_request_by_hour={t: 500.0})
+    assert out  # completes without ZeroDivisionError
 
 
 def test_build_plan_horizon_accepts_eta_curve_none_identical():
     """Adding the eta_curve kwarg must not change default behaviour: a call that
     omits it must be byte-identical to one that passes eta_curve=None explicitly."""
-    cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=90.0,
-                 max_charge_w=3000.0, eta_charge=0.9, round_trip_eff=0.8)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=5.0, soc_target=90.0, max_charge_w=3000.0, eta_charge=0.9, round_trip_eff=0.8
+    )
     slots = _slots(3)
     intervals = [
         ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),
@@ -775,12 +925,23 @@ def test_build_plan_horizon_accepts_eta_curve_none_identical():
     export = {BASE + timedelta(hours=2): 500.0}
 
     out_omitted = plan.build_plan_horizon(
-        slots, intervals, selected, 50.0, BASE + timedelta(hours=3), cfg,
+        slots,
+        intervals,
+        selected,
+        50.0,
+        BASE + timedelta(hours=3),
+        cfg,
         export_request_by_hour=export,
     )
     out_explicit_none = plan.build_plan_horizon(
-        slots, intervals, selected, 50.0, BASE + timedelta(hours=3), cfg,
-        export_request_by_hour=export, eta_curve=None,
+        slots,
+        intervals,
+        selected,
+        50.0,
+        BASE + timedelta(hours=3),
+        cfg,
+        export_request_by_hour=export,
+        eta_curve=None,
     )
     assert out_omitted == out_explicit_none
 
@@ -790,8 +951,9 @@ def test_build_plan_horizon_eta_curve_static_matches_default():
     path derives from cfg — so substituting it must produce a byte-identical horizon."""
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 
-    cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=90.0,
-                 max_charge_w=3000.0, eta_charge=0.9, round_trip_eff=0.8)
+    cfg = Config(
+        capacity_kwh=10.0, soc_floor=5.0, soc_target=90.0, max_charge_w=3000.0, eta_charge=0.9, round_trip_eff=0.8
+    )
     slots = _slots(3)
     intervals = [
         ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),
@@ -803,12 +965,24 @@ def test_build_plan_horizon_eta_curve_static_matches_default():
     curve = EfficiencyCurve.static(cfg)
 
     out_none = plan.build_plan_horizon(
-        slots, intervals, selected, 50.0, BASE + timedelta(hours=3), cfg,
-        export_request_by_hour=export, eta_curve=None,
+        slots,
+        intervals,
+        selected,
+        50.0,
+        BASE + timedelta(hours=3),
+        cfg,
+        export_request_by_hour=export,
+        eta_curve=None,
     )
     out_curve = plan.build_plan_horizon(
-        slots, intervals, selected, 50.0, BASE + timedelta(hours=3), cfg,
-        export_request_by_hour=export, eta_curve=curve,
+        slots,
+        intervals,
+        selected,
+        50.0,
+        BASE + timedelta(hours=3),
+        cfg,
+        export_request_by_hour=export,
+        eta_curve=curve,
     )
     assert out_none == out_curve
 
@@ -816,18 +990,24 @@ def test_build_plan_horizon_eta_curve_static_matches_default():
 def test_build_display_horizon_accepts_eta_curve_kwarg():
     """build_display_horizon threads eta_curve straight through to build_plan_horizon;
     eta_curve=None (default) must be byte-identical to omitting it."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(30)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),   # today_sunset
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),    # tomorrow_sunrise
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),   # tomorrow_sunset
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),  # today_sunset
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),  # tomorrow_sunrise
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),  # tomorrow_sunset
     )
     kwargs = dict(
-        today_arrays=[(1.0, None)], tomorrow_arrays=[(6.0, None)],
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
         sun_times=sun_times,
-        predictor=_StubPredictor(), cur_temp=15.0, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        predictor=_StubPredictor(),
+        cur_temp=15.0,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
     )
     out_omitted = plan.build_display_horizon(slots, now, **kwargs)
     out_explicit_none = plan.build_display_horizon(slots, now, eta_curve=None, **kwargs)
@@ -836,6 +1016,7 @@ def test_build_display_horizon_accepts_eta_curve_kwarg():
 
 class _TempEchoPredictor:
     """Returns temp * 10 so the observed load_w reveals which temp was used."""
+
     def predict(self, when, temp, fallback_w, *, quantile=0.5):
         return temp * 10.0
 
@@ -845,12 +1026,12 @@ def test_build_display_horizon_forwards_temp_by_hour():
     build_display_intervals so every FUTURE hour of the published horizon is
     predicted at its own forecast temp, not compute_decision's flat cur_temp
     scalar (the display-only load-inflation bug)."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(4)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),
     )
     hour0 = now.replace(minute=0, second=0, microsecond=0)
     hour1 = hour0 + timedelta(hours=1)
@@ -858,30 +1039,48 @@ def test_build_display_horizon_forwards_temp_by_hour():
     temp_by_hour = {hour0: 5.0, hour1: 12.0}
 
     out = plan.build_display_horizon(
-        slots, now, today_arrays=None, tomorrow_arrays=[(6.0, None)], sun_times=sun_times,
-        predictor=_TempEchoPredictor(), cur_temp=20.0, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        slots,
+        now,
+        today_arrays=None,
+        tomorrow_arrays=[(6.0, None)],
+        sun_times=sun_times,
+        predictor=_TempEchoPredictor(),
+        cur_temp=20.0,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
         temp_by_hour=temp_by_hour,
     )
     by_start = {e["start"]: e for e in out}
-    assert by_start[hour0.isoformat()]["load_w"] == 50.0    # 5.0 * 10 (per-hour temp)
-    assert by_start[hour1.isoformat()]["load_w"] == 120.0   # 12.0 * 10 (per-hour temp)
-    assert by_start[hour2.isoformat()]["load_w"] == 200.0   # missing hour -> cur_temp (20.0) * 10
+    assert by_start[hour0.isoformat()]["load_w"] == 50.0  # 5.0 * 10 (per-hour temp)
+    assert by_start[hour1.isoformat()]["load_w"] == 120.0  # 12.0 * 10 (per-hour temp)
+    assert by_start[hour2.isoformat()]["load_w"] == 200.0  # missing hour -> cur_temp (20.0) * 10
 
 
 def test_build_display_horizon_omitting_temp_by_hour_uses_cur_temp():
     """Omitting temp_by_hour must preserve old behaviour: every hour predicted at cur_temp."""
-    now = datetime(2026, 6, 20, 17, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(4)]
     sun_times = (
-        datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 6, 0, tzinfo=timezone.utc),
-        datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc),
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),
     )
     out = plan.build_display_horizon(
-        slots, now, today_arrays=None, tomorrow_arrays=[(6.0, None)], sun_times=sun_times,
-        predictor=_TempEchoPredictor(), cur_temp=20.0, fallback_w=400.0,
-        soc=50.0, selected=[], horizon_edge=now, cfg=Config(),
+        slots,
+        now,
+        today_arrays=None,
+        tomorrow_arrays=[(6.0, None)],
+        sun_times=sun_times,
+        predictor=_TempEchoPredictor(),
+        cur_temp=20.0,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now,
+        cfg=Config(),
     )
     assert out, "expected a non-empty horizon"
     assert all(e["load_w"] == 200.0 for e in out)  # 20.0 * 10 everywhere

@@ -5,16 +5,17 @@ latch + ``_detected_slot_minutes`` diagnostic were dead code (always read the
 ``__init__`` default of 60).  These tests exercise the method directly:
 override bypass, same-day latch-to-finest, and UTC-day rollover reset.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _bare_controller(slot_resolution: str) -> ctrl.Controller:

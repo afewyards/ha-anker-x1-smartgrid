@@ -1,12 +1,17 @@
 """Tests for edge hysteresis on the committed current-hour charge (C3b)."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PlanState, PlantInputs, PriceSlot,
+    Config,
+    ControllerState,
+    PlanState,
+    PlantInputs,
+    PriceSlot,
 )
 
 
@@ -43,7 +48,7 @@ def _dp_zero_charge(*args, **kwargs):
 
 
 def test_current_hour_decision_held_within_deadband():
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
     plan = PlanState(ControllerState.PASSIVE, now, (), committed_charge_kwh=0.0)
@@ -51,18 +56,20 @@ def test_current_hour_decision_held_within_deadband():
     # hold must keep the prior commit (0.0), not adopt the fresh 0.15 delta.
     with patch(
         "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-        return_value={"schedule": [0.15] + [0.0] * 14, "kwh": 0.15, "eur": 0.0,
-                      "export_schedule": [0.0] * 15},
+        return_value={"schedule": [0.15] + [0.0] * 14, "kwh": 0.15, "eur": 0.0, "export_schedule": [0.0] * 15},
     ):
         new_plan, *_ = ctrl.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=88.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
             _out={},
         )
-    assert new_plan.committed_charge_kwh == pytest.approx(0.0)   # held prior, not 0.15
+    assert new_plan.committed_charge_kwh == pytest.approx(0.0)  # held prior, not 0.15
 
 
 def test_committed_export_hour_not_force_charged():
@@ -81,15 +88,18 @@ def test_committed_export_hour_not_force_charged():
     (intra-slot) — otherwise the re-injection this test exists to guard against
     would never fire and the anti-fight guard below would go untested.
     """
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
     # Stale previous-tick commitment: small, but within end_soc_deadband (0.25)
     # of the fresh DP's 0 kWh charge — triggers the re-injection branch alone.
     # committed_charge_slot == now (== cur_h, on-the-hour) keeps this intra-slot.
     plan = PlanState(
-        ControllerState.PASSIVE, now - timedelta(hours=2), (),
-        committed_charge_kwh=0.1, committed_charge_slot=now,
+        ControllerState.PASSIVE,
+        now - timedelta(hours=2),
+        (),
+        committed_charge_kwh=0.1,
+        committed_charge_slot=now,
     )
 
     with patch(
@@ -99,8 +109,11 @@ def test_committed_export_hour_not_force_charged():
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
         )
 
@@ -116,15 +129,18 @@ def test_stale_commit_not_reinjected_across_slot_boundary():
     it must not re-inject the current hour into ``selected`` and force
     ``decide_state`` into FORCING, bypassing the DP's fresh price mask.
     """
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
     cur_h = now
     prev_slot = cur_h - timedelta(hours=1)
     # Stale commit: belongs to the PREVIOUS slot, not the current one.
     plan = PlanState(
-        ControllerState.PASSIVE, now, (),
-        committed_charge_kwh=0.2, committed_charge_slot=prev_slot,
+        ControllerState.PASSIVE,
+        now,
+        (),
+        committed_charge_kwh=0.2,
+        committed_charge_slot=prev_slot,
     )
 
     with patch(
@@ -134,8 +150,11 @@ def test_stale_commit_not_reinjected_across_slot_boundary():
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
         )
 
@@ -154,14 +173,17 @@ def test_stale_commit_reinjected_within_same_slot():
     re-injects the current hour, exactly as before this fix (unchanged
     behaviour within a single slot).
     """
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
     cur_h = now
     # Same-slot commit: belongs to the CURRENT slot.
     plan = PlanState(
-        ControllerState.PASSIVE, now, (),
-        committed_charge_kwh=0.2, committed_charge_slot=cur_h,
+        ControllerState.PASSIVE,
+        now,
+        (),
+        committed_charge_kwh=0.2,
+        committed_charge_slot=cur_h,
     )
 
     with patch(
@@ -171,8 +193,11 @@ def test_stale_commit_reinjected_within_same_slot():
         new_plan, setpoint, *_ = ctrl.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=50.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
         )
 
@@ -181,5 +206,3 @@ def test_stale_commit_reinjected_within_same_slot():
     assert setpoint != 0.0
     assert new_plan.committed_charge_kwh == 0.2
     assert new_plan.committed_charge_slot == cur_h
-
-

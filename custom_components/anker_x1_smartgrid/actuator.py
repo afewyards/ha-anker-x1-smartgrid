@@ -9,6 +9,7 @@ Release protocol (from any engaged state):
   2. select Self-consumption — restore passive workmode
   3. switch turn_off  — hand control back to firmware
 """
+
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
@@ -31,8 +32,10 @@ class Actuator:
         VPP/modbus engage sequence is identical (A1: no separate export workmode).
         """
         await self._hass.services.async_call(
-            "switch", "turn_on",
-            {"entity_id": self._data[const.CONF_ENT_ENGAGE]}, blocking=True,
+            "switch",
+            "turn_on",
+            {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+            blocking=True,
         )
         # Set the control flag BEFORE writing the setpoint.  If set_value fails,
         # engaged=True ensures the next disabled/failsafe tick fires release_to_self
@@ -40,7 +43,8 @@ class Actuator:
         # failed engage never reports engaged.
         self.engaged = True
         await self._hass.services.async_call(
-            "number", "set_value",
+            "number",
+            "set_value",
             {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": setpoint_w},
             blocking=True,
         )
@@ -73,18 +77,22 @@ class Actuator:
         (positive setpoint) engaged state.
         """
         await self._hass.services.async_call(
-            "number", "set_value",
+            "number",
+            "set_value",
             {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": 0.0},
             blocking=True,
         )
         await self._hass.services.async_call(
-            "select", "select_option",
+            "select",
+            "select_option",
             {"entity_id": self._data[const.CONF_ENT_WORKMODE], "option": const.WORKMODE_SELF},
             blocking=True,
         )
         await self._hass.services.async_call(
-            "switch", "turn_off",
-            {"entity_id": self._data[const.CONF_ENT_ENGAGE]}, blocking=True,
+            "switch",
+            "turn_off",
+            {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+            blocking=True,
         )
         self.last_setpoint_w = 0.0
         self.engaged = False

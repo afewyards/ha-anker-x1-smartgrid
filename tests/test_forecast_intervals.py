@@ -1,12 +1,13 @@
 """Tests for forecast.build_intervals."""
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timezone, timedelta, UTC
 
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid import forecast
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 
-NOW = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
 
 
 class _StubHGBR(HGBRQuantileModel):
@@ -51,6 +52,7 @@ def test_build_intervals_empty():
 # ---------------------------------------------------------------------------
 # quantile threading — P80 vs P50 with an HGBR predictor
 # ---------------------------------------------------------------------------
+
 
 def test_build_intervals_threads_quantile_p80_to_hgbr():
     """quantile=0.8 is forwarded to HGBRQuantileModel.predict_load_w on every call."""

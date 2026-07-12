@@ -2,32 +2,43 @@
 independent of charge_trough_lookback_h (heuristic charge selection was removed in
 the P80-survival cleanup). Pins the DP-exception → PASSIVE contract, not a look-back
 behaviour."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 from custom_components.anker_x1_smartgrid.controller import compute_decision
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PlantInputs, PlanState, PriceSlot,
+    Config,
+    ControllerState,
+    PlantInputs,
+    PlanState,
+    PriceSlot,
 )
 
 
 def _cfg(**ov):
-    return Config.from_dict({
-        "capacity_kwh": 10.0, "soc_target": 97.0, "eta_charge": 0.92,
-        "eps_hi_kwh": 0.4, "eps_lo_kwh": 0.2, "min_dwell_min": 0,
-        "max_charge_w": 500.0, "round_trip_eff": 0.85,
-        **ov,
-    })
+    return Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_target": 97.0,
+            "eta_charge": 0.92,
+            "eps_hi_kwh": 0.4,
+            "eps_lo_kwh": 0.2,
+            "min_dwell_min": 0,
+            "max_charge_w": 500.0,
+            "round_trip_eff": 0.85,
+            **ov,
+        }
+    )
 
 
 def _run(cfg, lookback):
-    base = datetime(2026, 6, 22, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 6, 22, 0, 0, tzinfo=UTC)
     # cheap noon trough 0.13 (past), expensive evening 'now' 0.25, peak 0.42 later.
-    prices = {9: 0.20, 10: 0.15, 11: 0.13, 12: 0.13, 13: 0.15, 14: 0.19,
-              15: 0.25, 16: 0.28, 17: 0.34, 18: 0.42}
+    prices = {9: 0.20, 10: 0.15, 11: 0.13, 12: 0.13, 13: 0.15, 14: 0.19, 15: 0.25, 16: 0.28, 17: 0.34, 18: 0.42}
     slots = [PriceSlot(base.replace(hour=h), p) for h, p in prices.items()]
     now = base.replace(hour=15)
     inputs = PlantInputs(soc=20.0, meter_w=0.0, now=now)

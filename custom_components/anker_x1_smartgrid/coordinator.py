@@ -1,7 +1,8 @@
 """Read live HA state into pure-model inputs."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -106,9 +107,7 @@ def read_pv_power_w(hass: HomeAssistant, data: dict) -> float | None:
 def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     # Static tariff mode: synthesize slots from config, ignore any price sensor.
     if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:
-        return synth_static_price_slots(
-            dt_util.utcnow(), Config.from_dict(data), dt_util.DEFAULT_TIME_ZONE
-        )
+        return synth_static_price_slots(dt_util.utcnow(), Config.from_dict(data), dt_util.DEFAULT_TIME_ZONE)
     # Sensor mode (default): read the dynamic price sensor's forecast attribute.
     ent = data.get(const.CONF_ENT_PRICE)
     if not ent:
@@ -173,9 +172,7 @@ def read_pv_tomorrow_kwh(hass: HomeAssistant, data: dict) -> float | None:
     return total
 
 
-def read_sun_times(
-    hass: HomeAssistant, data: dict
-) -> tuple[datetime | None, datetime, datetime] | None:
+def read_sun_times(hass: HomeAssistant, data: dict) -> tuple[datetime | None, datetime, datetime] | None:
     """Return (today_sunset, tomorrow_sunrise, tomorrow_sunset) from the sun entity.
 
     When the sun is above the horizon (daytime): next_setting > next_rising, so
@@ -197,9 +194,7 @@ def read_sun_times(
         if raw is None:
             return None
         try:
-            return datetime.fromisoformat(
-                str(raw).replace("Z", "+00:00")
-            ).astimezone(timezone.utc)
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(UTC)
         except (ValueError, TypeError):
             return None
 
@@ -216,9 +211,7 @@ def read_sun_times(
         return next_setting, next_rising, next_setting + timedelta(hours=24)
 
 
-def read_pv_today_watts(
-    hass: HomeAssistant, data: dict
-) -> list[list[tuple[datetime, float]]] | None:
+def read_pv_today_watts(hass: HomeAssistant, data: dict) -> list[list[tuple[datetime, float]]] | None:
     """Return per-source sub-hourly (datetime_utc, watts) sample arrays for
     today's PV forecast.
 
@@ -232,9 +225,7 @@ def read_pv_today_watts(
     return _read_pv_watts(hass, data, const.CONF_ENT_PV_TODAY)
 
 
-def read_pv_tomorrow_watts(
-    hass: HomeAssistant, data: dict
-) -> list[list[tuple[datetime, float]]] | None:
+def read_pv_tomorrow_watts(hass: HomeAssistant, data: dict) -> list[list[tuple[datetime, float]]] | None:
     """Return per-source sub-hourly (datetime_utc, watts) sample arrays for
     tomorrow's PV forecast.
 
@@ -311,30 +302,22 @@ def _read_pv_watts(
     return per_source
 
 
-def read_pv_today_arrays(
-    hass: HomeAssistant, data: dict
-) -> list[tuple[float, datetime | None]] | None:
+def read_pv_today_arrays(hass: HomeAssistant, data: dict) -> list[tuple[float, datetime | None]] | None:
     """Return per-array (kwh, peak_dt) tuples for today's PV forecast.
 
     Returns None iff the kWh list is non-empty and every array is unavailable.
     Returns [] for an empty kWh list.
     """
-    return _read_pv_arrays(
-        hass, data, const.CONF_ENT_PV_TODAY, const.CONF_ENT_PV_PEAK_TODAY
-    )
+    return _read_pv_arrays(hass, data, const.CONF_ENT_PV_TODAY, const.CONF_ENT_PV_PEAK_TODAY)
 
 
-def read_pv_tomorrow_arrays(
-    hass: HomeAssistant, data: dict
-) -> list[tuple[float, datetime | None]] | None:
+def read_pv_tomorrow_arrays(hass: HomeAssistant, data: dict) -> list[tuple[float, datetime | None]] | None:
     """Return per-array (kwh, peak_dt) tuples for tomorrow's PV forecast.
 
     Returns None iff the kWh list is non-empty and every array is unavailable.
     Returns [] for an empty kWh list.
     """
-    return _read_pv_arrays(
-        hass, data, const.CONF_ENT_PV_TOMORROW, const.CONF_ENT_PV_PEAK_TOMORROW
-    )
+    return _read_pv_arrays(hass, data, const.CONF_ENT_PV_TOMORROW, const.CONF_ENT_PV_PEAK_TOMORROW)
 
 
 def _read_pv_arrays(
@@ -376,7 +359,7 @@ def read_sunset(hass: HomeAssistant, data: dict) -> datetime | None:
         dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 def _forecast_float(item: dict, key: str) -> float | None:
@@ -390,9 +373,7 @@ def _forecast_float(item: dict, key: str) -> float | None:
         return None
 
 
-async def read_hourly_weather_forecast(
-    hass: HomeAssistant, data: dict
-) -> list[dict]:
+async def read_hourly_weather_forecast(hass: HomeAssistant, data: dict) -> list[dict]:
     """Fetch the hourly weather forecast via the ``weather.get_forecasts`` service.
 
     Each returned dict has the keys:
@@ -429,7 +410,7 @@ async def read_hourly_weather_forecast(
             blocking=True,
             return_response=True,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
     if not resp or entity_id not in resp:
@@ -445,25 +426,23 @@ async def read_hourly_weather_forecast(
         if not dt_str:
             continue
         try:
-            dt = datetime.fromisoformat(
-                str(dt_str).replace("Z", "+00:00")
-            ).astimezone(timezone.utc)
+            dt = datetime.fromisoformat(str(dt_str).replace("Z", "+00:00")).astimezone(UTC)
         except (ValueError, TypeError):
             continue
-        result.append({
-            "datetime": dt,
-            "temp_forecast": _forecast_float(item, "temperature"),
-            "cloud_cover": _forecast_float(item, "cloud_coverage"),
-            "humidity": _forecast_float(item, "humidity"),
-            "wind_speed": _forecast_float(item, "wind_speed"),
-        })
+        result.append(
+            {
+                "datetime": dt,
+                "temp_forecast": _forecast_float(item, "temperature"),
+                "cloud_cover": _forecast_float(item, "cloud_coverage"),
+                "humidity": _forecast_float(item, "humidity"),
+                "wind_speed": _forecast_float(item, "wind_speed"),
+            }
+        )
 
     return result
 
 
-def get_forecast_for_hour(
-    forecast: list[dict], target_dt: datetime
-) -> dict | None:
+def get_forecast_for_hour(forecast: list[dict], target_dt: datetime) -> dict | None:
     """Return the entry in *forecast* whose ``datetime`` is nearest to *target_dt*.
 
     Returns ``None`` when *forecast* is empty.

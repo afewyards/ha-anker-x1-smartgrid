@@ -7,9 +7,10 @@ The separate P80 grid-charge deficit series was removed in Task 2.
 RED on old code (intervals_reserve built from P80 quantile → 900 W).
 GREEN after the fix (intervals_reserve built from quantile=0.5 → 300 W).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -23,10 +24,10 @@ from custom_components.anker_x1_smartgrid.models import (
 )
 
 # Summer evening: 20:00 UTC, just before tonight's sunset.
-NOW = datetime(2026, 6, 28, 20, 0, tzinfo=timezone.utc)
-SUNSET = datetime(2026, 6, 28, 21, 0, tzinfo=timezone.utc)
-SUNRISE = datetime(2026, 6, 29, 5, 0, tzinfo=timezone.utc)
-SUNSET2 = datetime(2026, 6, 29, 21, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 28, 20, 0, tzinfo=UTC)
+SUNSET = datetime(2026, 6, 28, 21, 0, tzinfo=UTC)
+SUNRISE = datetime(2026, 6, 29, 5, 0, tzinfo=UTC)
+SUNSET2 = datetime(2026, 6, 29, 21, 0, tzinfo=UTC)
 
 SUN_TIMES = (SUNSET, SUNRISE, SUNSET2)
 TODAY_ARRAYS = [(1.0, None)]
@@ -63,7 +64,9 @@ def _call_compute_decision(predictor):
     inputs = PlantInputs(soc=80.0, meter_w=0.0, now=NOW)
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.40) for i in range(24)]
     return controller.compute_decision(
-        plan, inputs, slots,
+        plan,
+        inputs,
+        slots,
         pv_remaining=0.0,
         sunset=SUNSET,
         predictor=predictor,
@@ -89,8 +92,7 @@ def test_intervals_reserve_uses_p50_load_for_overnight_hours():
 
     for iv in overnight:
         assert iv.load_w == pytest.approx(300.0), (
-            f"Expected P50 load_w=300.0 at {iv.start}, got {iv.load_w} "
-            f"(P80 code returns 900.0 — fix not applied)"
+            f"Expected P50 load_w=300.0 at {iv.start}, got {iv.load_w} (P80 code returns 900.0 — fix not applied)"
         )
 
 
@@ -102,9 +104,7 @@ def test_p50_reserve_kwh_strictly_lower_than_p80():
     both old and new code — it validates the energy layer logic.
     """
     cfg = _cfg()
-    curve = parsers.build_two_day_pv_curve(
-        TODAY_ARRAYS, TOMORROW_ARRAYS, NOW, *SUN_TIMES
-    )
+    curve = parsers.build_two_day_pv_curve(TODAY_ARRAYS, TOMORROW_ARRAYS, NOW, *SUN_TIMES)
     assert curve, "Expected non-empty PV curve for primary reserve path"
 
     predictor = LoadPredictor.from_model(_SpreadModel())
@@ -115,8 +115,7 @@ def test_p50_reserve_kwh_strictly_lower_than_p80():
     rsv_p80 = energy.ride_out_reserve_kwh(NOW, ivs_p80, cfg)
 
     assert rsv_p50 < rsv_p80, (
-        f"P50 reserve ({rsv_p50:.3f} kWh) must be strictly lower than "
-        f"P80 reserve ({rsv_p80:.3f} kWh)"
+        f"P50 reserve ({rsv_p50:.3f} kWh) must be strictly lower than P80 reserve ({rsv_p80:.3f} kWh)"
     )
 
 
@@ -166,8 +165,8 @@ def test_reserve_is_p50_and_display_is_p50_only(monkeypatch):
     - build_intervals (reserve): all 0.5
     - build_display_intervals (display): only 0.5 (P80 build deleted)
     """
-    reserve_q: list = []   # quantiles passed to the reserve builder
-    display_q: list = []   # quantiles passed to build_display_intervals
+    reserve_q: list = []  # quantiles passed to the reserve builder
+    display_q: list = []  # quantiles passed to build_display_intervals
 
     real_build = controller.build_intervals
     real_display = controller.plan_mod.build_display_intervals
@@ -193,9 +192,7 @@ def test_reserve_is_p50_and_display_is_p50_only(monkeypatch):
     _call_compute_decision(predictor)
 
     # Reserve built P50.
-    assert reserve_q and all(q == 0.5 for q in reserve_q), (
-        f"reserve builder quantiles={reserve_q}, expected all 0.5"
-    )
+    assert reserve_q and all(q == 0.5 for q in reserve_q), f"reserve builder quantiles={reserve_q}, expected all 0.5"
     # P80 deficit build deleted (Task 2): quantile 0.8 must NOT appear in display calls.
     # (build_display_horizon also calls build_display_intervals internally with no kwarg
     #  → captured as None; that is an expected internal call, not a deficit build.)

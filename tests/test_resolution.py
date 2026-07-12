@@ -1,9 +1,9 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.models import PriceSlot
 from custom_components.anker_x1_smartgrid import resolution as res
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def _slots(start, minutes, n, price=0.20):
@@ -100,7 +100,7 @@ def test_resample_forward_fills_coarse_into_fine():
     s = [PriceSlot(base, 0.10), PriceSlot(base + timedelta(hours=1), 0.20)]
     m = res.resample_price_map(s, 15)
     assert m[base] == 0.10
-    assert m[base + timedelta(minutes=45)] == 0.10          # forward-filled
+    assert m[base + timedelta(minutes=45)] == 0.10  # forward-filled
     assert m[base + timedelta(minutes=60)] == 0.20
 
 
@@ -123,7 +123,7 @@ def test_latch_keeps_finest_within_utc_day():
     eff, state = res.latch_finest(15, now, (15, d))
     assert eff == 15
     eff2, state2 = res.latch_finest(60, now.replace(hour=20), state)
-    assert eff2 == 15                       # no 15→60 flip within the day
+    assert eff2 == 15  # no 15→60 flip within the day
 
 
 def _t(h, m=0):
@@ -166,4 +166,4 @@ def test_latch_resets_at_utc_day_rollover():
     eff, state = res.latch_finest(15, datetime(2026, 8, 1, 23, 0, tzinfo=UTC), (15, date(2026, 8, 1)))
     assert eff == 15
     eff2, _ = res.latch_finest(60, datetime(2026, 8, 2, 0, 30, tzinfo=UTC), state)
-    assert eff2 == 60                        # new UTC day → back to detected
+    assert eff2 == 60  # new UTC day → back to detected

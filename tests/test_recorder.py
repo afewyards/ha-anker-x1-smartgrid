@@ -1,12 +1,13 @@
 import sqlite3
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder, _VERSION_TARGET
 
 
 # ---------------------------------------------------------------------------
 # R1 — read_load_samples: load_w-first with derive fallback
 # ---------------------------------------------------------------------------
+
 
 def test_read_load_samples_prefers_load_w(tmp_path):
     """Row with load_w=150, p1_w=99 → returns (ts, 150.0) — load_w wins."""
@@ -60,6 +61,7 @@ def test_read_load_samples_empty_when_no_data(tmp_path):
 # R8 — read_persons_home_samples: mirrors read_load_samples (P8)
 # ---------------------------------------------------------------------------
 
+
 def test_read_persons_home_samples_returns_non_null_rows(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append({"ts": "2026-06-24T10:00:00+00:00", "persons_home": 2.0})
@@ -101,11 +103,11 @@ def test_append_missing_keys_ok(tmp_path):
 
 def test_purge_old_rows(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
-    old = (datetime(2026, 1, 1, tzinfo=timezone.utc)).isoformat()
-    new = (datetime(2026, 6, 20, tzinfo=timezone.utc)).isoformat()
+    old = (datetime(2026, 1, 1, tzinfo=UTC)).isoformat()
+    new = (datetime(2026, 6, 20, tzinfo=UTC)).isoformat()
     rec.append({"ts": old})
     rec.append({"ts": new})
-    now = datetime(2026, 6, 21, tzinfo=timezone.utc).isoformat()
+    now = datetime(2026, 6, 21, tzinfo=UTC).isoformat()
     deleted = rec.purge_older_than(now, retention_days=90)
     assert deleted == 1
     assert rec.count() == 1
@@ -115,6 +117,7 @@ def test_purge_old_rows(tmp_path):
 # ---------------------------------------------------------------------------
 # decisions table — migration
 # ---------------------------------------------------------------------------
+
 
 def _make_old_db(path: str) -> None:
     """Create a DB that looks like pre-v1: only the samples table, user_version=0."""
@@ -145,18 +148,8 @@ def test_migration_creates_decisions_table(tmp_path):
 
     # Re-open with plain sqlite3 to inspect schema.
     conn = sqlite3.connect(db_path)
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
-    indexes = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     # Original sample row must be untouched.
     sample_count = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
@@ -194,7 +187,7 @@ _SAMPLE_DECISION = dict(
     horizon_mode="today",
     pv_today_forecast_kwh=8.1,
     pv_tomorrow_forecast_kwh=6.4,
-    predicted_load_json='[1.5, 1.6, 1.4]',
+    predicted_load_json="[1.5, 1.6, 1.4]",
     price_window_json='{"start": "2026-06-21T10:00:00+00:00"}',
     setpoint_w=3600.0,
     state="forcing",
@@ -232,15 +225,18 @@ def test_append_decision_active_false_stores_zero(tmp_path):
 # decisions table — purge
 # ---------------------------------------------------------------------------
 
+
 def test_purge_decisions_older_than(tmp_path):
     """purge_decisions_older_than removes rows with ts < cutoff, keeps newer."""
     db_path = str(tmp_path / "t.db")
     rec = DataRecorder(db_path)
     for hour in [8, 9, 10, 11]:
-        rec.append_decision(**dict(  # type: ignore[arg-type]
-            _SAMPLE_DECISION,
-            ts=f"2026-06-21T{hour:02d}:00:00+00:00",
-        ))
+        rec.append_decision(
+            **dict(  # type: ignore[arg-type]
+                _SAMPLE_DECISION,
+                ts=f"2026-06-21T{hour:02d}:00:00+00:00",
+            )
+        )
 
     deleted = rec.purge_decisions_older_than("2026-06-21T10:00:00+00:00")
     rec.close()
@@ -255,9 +251,11 @@ def test_purge_decisions_older_than(tmp_path):
 def test_purge_decisions_returns_zero_when_nothing_to_delete(tmp_path):
     """Purge with a cutoff before all rows must return 0."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append_decision(**dict(  # type: ignore[arg-type]
-        _SAMPLE_DECISION, ts="2026-06-21T12:00:00+00:00"
-    ))
+    rec.append_decision(
+        **dict(  # type: ignore[arg-type]
+            _SAMPLE_DECISION, ts="2026-06-21T12:00:00+00:00"
+        )
+    )
     deleted = rec.purge_decisions_older_than("2026-06-01T00:00:00+00:00")
     rec.close()
 
@@ -291,6 +289,7 @@ def test_existing_row_survives_reopen(tmp_path):
 # daily_regret table — migration v1 → v2
 # ---------------------------------------------------------------------------
 
+
 def _make_v1_db(path: str) -> None:
     """Create a DB at user_version=1 (samples + decisions, no daily_regret)."""
     conn = sqlite3.connect(path)
@@ -310,8 +309,7 @@ def _make_v1_db(path: str) -> None:
         "setpoint_w REAL, state TEXT)"
     )
     conn.execute(
-        "INSERT INTO decisions (ts, active, start_soc, deficit_kwh, state, committed_hours) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO decisions (ts, active, start_soc, deficit_kwh, state, committed_hours) VALUES (?, ?, ?, ?, ?, ?)",
         ("2026-01-01T00:00:00+00:00", 1, 50.0, 1.0, "forcing", "[]"),
     )
     conn.execute("PRAGMA user_version = 1")
@@ -328,12 +326,7 @@ def test_migration_v1_to_v2_creates_daily_regret_table(tmp_path):
     rec.close()
 
     conn = sqlite3.connect(db_path)
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     # Existing decision row must survive.
     decision_count = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
@@ -397,10 +390,15 @@ def test_upsert_daily_regret_replaces_existing(tmp_path):
     rec.upsert_daily_regret(**_SAMPLE_REGRET)  # type: ignore[arg-type]
     rec.upsert_daily_regret(
         day="2026-06-20",
-        regret_eur=0.10, over_buy_kwh=0.1, over_buy_eur=0.01,
-        under_buy_kwh=0.0, cost_regret_eur=0.09,
-        optimal_kwh=3.0, optimal_eur=2.00,
-        realized_kwh=3.1, realized_eur=2.10,
+        regret_eur=0.10,
+        over_buy_kwh=0.1,
+        over_buy_eur=0.01,
+        under_buy_kwh=0.0,
+        cost_regret_eur=0.09,
+        optimal_kwh=3.0,
+        optimal_eur=2.00,
+        realized_kwh=3.1,
+        realized_eur=2.10,
         infeasible=0,
         computed_ts="2026-06-21T00:05:00+00:00",
     )
@@ -417,10 +415,15 @@ def test_upsert_daily_regret_infeasible_stores_null_metrics(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.upsert_daily_regret(
         day="2026-06-20",
-        regret_eur=None, over_buy_kwh=None, over_buy_eur=None,
-        under_buy_kwh=None, cost_regret_eur=None,
-        optimal_kwh=None, optimal_eur=None,
-        realized_kwh=None, realized_eur=None,
+        regret_eur=None,
+        over_buy_kwh=None,
+        over_buy_eur=None,
+        under_buy_kwh=None,
+        cost_regret_eur=None,
+        optimal_kwh=None,
+        optimal_eur=None,
+        realized_kwh=None,
+        realized_eur=None,
         infeasible=1,
         computed_ts="2026-06-21T00:01:00+00:00",
     )
@@ -446,10 +449,16 @@ def test_read_daily_regret_range_respects_window(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     for day in ["2026-06-18", "2026-06-19", "2026-06-20", "2026-06-21"]:
         rec.upsert_daily_regret(
-            day=day, regret_eur=0.1, over_buy_kwh=0.0, over_buy_eur=0.0,
-            under_buy_kwh=0.0, cost_regret_eur=0.1,
-            optimal_kwh=1.0, optimal_eur=1.0,
-            realized_kwh=1.1, realized_eur=1.1,
+            day=day,
+            regret_eur=0.1,
+            over_buy_kwh=0.0,
+            over_buy_eur=0.0,
+            under_buy_kwh=0.0,
+            cost_regret_eur=0.1,
+            optimal_kwh=1.0,
+            optimal_eur=1.0,
+            realized_kwh=1.1,
+            realized_eur=1.1,
             infeasible=0,
             computed_ts="2026-06-22T00:00:00+00:00",
         )
@@ -530,9 +539,7 @@ def test_migration_v2_to_v3_adds_weather_columns_and_preserves_rows(tmp_path):
     col_names = {row[1] for row in conn.execute("PRAGMA table_info(samples)").fetchall()}
     sample_count = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     # Pre-existing row should have NULL for all new weather cols.
-    row = conn.execute(
-        "SELECT temp_forecast, cloud_cover, humidity, wind_speed FROM samples"
-    ).fetchone()
+    row = conn.execute("SELECT temp_forecast, cloud_cover, humidity, wind_speed FROM samples").fetchone()
     conn.close()
 
     assert version == _VERSION_TARGET
@@ -547,8 +554,8 @@ def test_migration_v2_to_v3_is_idempotent(tmp_path):
     db_path = str(tmp_path / "v2.db")
     _make_v2_db(db_path)
 
-    DataRecorder(db_path).close()   # first open: v2 → v3 → v4
-    DataRecorder(db_path).close()   # second open: already at target, no-op
+    DataRecorder(db_path).close()  # first open: v2 → v3 → v4
+    DataRecorder(db_path).close()  # second open: already at target, no-op
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -588,6 +595,7 @@ def test_migration_v2_to_v3_recovers_from_partial_alter(tmp_path):
 # samples_hourly table — migration v3 → v4
 # ---------------------------------------------------------------------------
 
+
 def _make_v3_db(path: str) -> None:
     """Create a DB at user_version=3 (samples with weather cols, no samples_hourly)."""
     conn = sqlite3.connect(path)
@@ -618,12 +626,7 @@ def test_migration_v3_to_v4_creates_samples_hourly(tmp_path):
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     sample_count = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     conn.close()
 
@@ -637,17 +640,12 @@ def test_migration_v3_to_v4_is_idempotent(tmp_path):
     db_path = str(tmp_path / "v3.db")
     _make_v3_db(db_path)
 
-    DataRecorder(db_path).close()   # first open: v3 → v4
-    DataRecorder(db_path).close()   # second open: already at target, no-op
+    DataRecorder(db_path).close()  # first open: v3 → v4
+    DataRecorder(db_path).close()  # second open: already at target, no-op
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn.close()
 
     assert version == _VERSION_TARGET
@@ -660,12 +658,7 @@ def test_fresh_db_has_samples_hourly(tmp_path):
     rec.close()
 
     conn = sqlite3.connect(str(tmp_path / "fresh.db"))
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     conn.close()
 
     assert "samples_hourly" in tables
@@ -674,6 +667,7 @@ def test_fresh_db_has_samples_hourly(tmp_path):
 # ---------------------------------------------------------------------------
 # rollup_hours — functional tests
 # ---------------------------------------------------------------------------
+
 
 def test_rollup_hours_rolls_up_completed_hour(tmp_path):
     """rollup_hours aggregates a completed clock-hour and returns count=1."""
@@ -728,8 +722,9 @@ def test_rollup_hours_microsecond_ts_at_boundary_stays_in_progress(tmp_path):
 
     assert rolled == 1, "only hour 10 is completed"
     assert len(hourly) == 1, "microsecond-bearing hour-11 row must stay in-progress"
-    assert hourly[0]["hour_ts"] == "2026-06-20T10:00:00+00:00", \
+    assert hourly[0]["hour_ts"] == "2026-06-20T10:00:00+00:00", (
         "only the completed hour-10 bucket must appear in samples_hourly"
+    )
 
 
 def test_rollup_hours_is_idempotent(tmp_path):
@@ -788,11 +783,13 @@ def test_rollup_hours_multiple_completed_hours(tmp_path):
     """rollup_hours rolls up multiple completed hours in a single call."""
     rec = DataRecorder(str(tmp_path / "t.db"))
     for hour in [8, 9, 10]:
-        rec.append({
-            "ts": f"2026-06-20T{hour:02d}:30:00+00:00",
-            "p1_w": float(hour * 100),
-            "batt_w": 0.0,
-        })
+        rec.append(
+            {
+                "ts": f"2026-06-20T{hour:02d}:30:00+00:00",
+                "p1_w": float(hour * 100),
+                "batt_w": 0.0,
+            }
+        )
 
     rolled = rec.rollup_hours("2026-06-20T11:00:00+00:00")
     hourly = rec.read_hourly_rows()
@@ -809,21 +806,19 @@ def test_rollup_hours_multiple_completed_hours(tmp_path):
 # rollup_hours — watermark-bounded read
 # ---------------------------------------------------------------------------
 
+
 def test_rollup_hours_bounded_read_uses_watermark(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append({"ts": "2026-06-20T08:30:00+00:00", "p1_w": 100.0, "batt_w": 0.0})
     rec.append({"ts": "2026-06-20T09:30:00+00:00", "p1_w": 200.0, "batt_w": 0.0})
-    rec.rollup_hours("2026-06-20T10:00:00+00:00")        # rolls hours 8 & 9
+    rec.rollup_hours("2026-06-20T10:00:00+00:00")  # rolls hours 8 & 9
 
     stmts: list[str] = []
     rec._conn.set_trace_callback(stmts.append)
-    rec.rollup_hours("2026-06-20T11:00:00+00:00")        # nothing new; must NOT rescan 8/9
+    rec.rollup_hours("2026-06-20T11:00:00+00:00")  # nothing new; must NOT rescan 8/9
     rec._conn.set_trace_callback(None)
 
-    raw_selects = [
-        s for s in stmts
-        if "FROM samples" in s and "samples_hourly" not in s and "WHERE" in s
-    ]
+    raw_selects = [s for s in stmts if "FROM samples" in s and "samples_hourly" not in s and "WHERE" in s]
     assert raw_selects, "expected a bounded raw-sample SELECT"
     assert any("ts >= " in s for s in raw_selects), (
         "bounded rollup must lower-bound the raw read by the samples_hourly watermark"
@@ -834,12 +829,13 @@ def test_rollup_hours_bounded_read_uses_watermark(tmp_path):
 def test_rollup_hours_bounded_still_rolls_new_hours(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append({"ts": "2026-06-20T08:30:00+00:00", "p1_w": 100.0, "batt_w": 0.0})
-    assert rec.rollup_hours("2026-06-20T09:00:00+00:00") == 1     # hour 8
+    assert rec.rollup_hours("2026-06-20T09:00:00+00:00") == 1  # hour 8
     rec.append({"ts": "2026-06-20T09:30:00+00:00", "p1_w": 200.0, "batt_w": 0.0})
-    assert rec.rollup_hours("2026-06-20T10:00:00+00:00") == 1     # hour 9 (new) only
-    assert rec.rollup_hours("2026-06-20T10:00:00+00:00") == 0     # idempotent re-run
+    assert rec.rollup_hours("2026-06-20T10:00:00+00:00") == 1  # hour 9 (new) only
+    assert rec.rollup_hours("2026-06-20T10:00:00+00:00") == 0  # idempotent re-run
     assert {r["hour_ts"] for r in rec.read_hourly_rows()} == {
-        "2026-06-20T08:00:00+00:00", "2026-06-20T09:00:00+00:00",
+        "2026-06-20T08:00:00+00:00",
+        "2026-06-20T09:00:00+00:00",
     }
     rec.close()
 
@@ -848,15 +844,18 @@ def test_rollup_hours_bounded_still_rolls_new_hours(tmp_path):
 # purge_hourly_older_than
 # ---------------------------------------------------------------------------
 
+
 def test_purge_hourly_older_than_deletes_older_rows(tmp_path):
     """purge_hourly_older_than removes rows with hour_ts < cutoff, keeps boundary."""
     rec = DataRecorder(str(tmp_path / "t.db"))
     for hour in [8, 9, 10, 11]:
-        rec.append({
-            "ts": f"2026-06-20T{hour:02d}:30:00+00:00",
-            "p1_w": float(hour * 100),
-            "batt_w": 0.0,
-        })
+        rec.append(
+            {
+                "ts": f"2026-06-20T{hour:02d}:30:00+00:00",
+                "p1_w": float(hour * 100),
+                "batt_w": 0.0,
+            }
+        )
     rec.rollup_hours("2026-06-20T12:00:00+00:00")  # rolls up hours 8, 9, 10, 11
 
     # Delete rows with hour_ts < 10:00 → hours 8 and 9 removed; 10 and 11 kept.
@@ -901,17 +900,20 @@ def test_purge_hourly_returns_zero_when_nothing_to_delete(tmp_path):
 # P1-T2: weather-forecast columns — append/read round-trips
 # ---------------------------------------------------------------------------
 
+
 def test_append_with_weather_columns_persists_all_four(tmp_path):
     """append() with all 4 weather keys stores them; read_feature_rows returns exact values."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({
-        "ts": "2026-06-22T10:00:00+00:00",
-        "soc": 50.0,
-        "temp_forecast": 18.5,
-        "cloud_cover": 30.0,
-        "humidity": 65.0,
-        "wind_speed": 4.2,
-    })
+    rec.append(
+        {
+            "ts": "2026-06-22T10:00:00+00:00",
+            "soc": 50.0,
+            "temp_forecast": 18.5,
+            "cloud_cover": 30.0,
+            "humidity": 65.0,
+            "wind_speed": 4.2,
+        }
+    )
     rows = rec.read_feature_rows()
     rec.close()
 
@@ -926,10 +928,12 @@ def test_append_with_weather_columns_persists_all_four(tmp_path):
 def test_append_without_weather_columns_stores_null(tmp_path):
     """append() with no weather keys stores NULL (None) for all 4 forecast columns."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({
-        "ts": "2026-06-22T10:00:00+00:00",
-        "soc": 50.0,
-    })
+    rec.append(
+        {
+            "ts": "2026-06-22T10:00:00+00:00",
+            "soc": 50.0,
+        }
+    )
     rows = rec.read_feature_rows()
     rec.close()
 
@@ -944,6 +948,7 @@ def test_append_without_weather_columns_stores_null(tmp_path):
 # ---------------------------------------------------------------------------
 # load_w column — migration v5 → v6
 # ---------------------------------------------------------------------------
+
 
 def _make_v5_db(path: str) -> None:
     """Create a DB at user_version=5 (all current columns except load_w)."""
@@ -971,9 +976,7 @@ def _make_v5_db(path: str) -> None:
         "realized_kwh REAL, realized_eur REAL, infeasible INTEGER, computed_ts TEXT, "
         "dp_regret_eur REAL)"
     )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS samples_hourly (hour_ts TEXT PRIMARY KEY)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS samples_hourly (hour_ts TEXT PRIMARY KEY)")
     # Insert a sample row (no load_w col) to verify survival after migration.
     conn.execute(
         "INSERT INTO samples (ts, soc, p1_w, state) VALUES (?, ?, ?, ?)",
@@ -1024,8 +1027,8 @@ def test_migration_v5_to_v6_is_idempotent(tmp_path):
     db_path = str(tmp_path / "v5.db")
     _make_v5_db(db_path)
 
-    DataRecorder(db_path).close()   # first open: v5 → v6
-    DataRecorder(db_path).close()   # second open: already at target, no-op
+    DataRecorder(db_path).close()  # first open: v5 → v6
+    DataRecorder(db_path).close()  # second open: already at target, no-op
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -1062,11 +1065,13 @@ def test_migration_v5_to_v6_recovers_from_partial_alter(tmp_path):
 def test_append_with_load_w_roundtrips(tmp_path):
     """append() with load_w=150.0 stores it; read_feature_rows returns exact value."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({
-        "ts": "2026-06-24T10:00:00+00:00",
-        "p1_w": 300.0,
-        "load_w": 150.0,
-    })
+    rec.append(
+        {
+            "ts": "2026-06-24T10:00:00+00:00",
+            "p1_w": 300.0,
+            "load_w": 150.0,
+        }
+    )
     rows = rec.read_feature_rows()
     rec.close()
 
@@ -1113,9 +1118,7 @@ def _make_v6_db(path: str) -> None:
         "realized_kwh REAL, realized_eur REAL, infeasible INTEGER, computed_ts TEXT, "
         "dp_regret_eur REAL)"
     )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS samples_hourly (hour_ts TEXT PRIMARY KEY)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS samples_hourly (hour_ts TEXT PRIMARY KEY)")
     # Insert a sample row to verify survival after migration.
     conn.execute(
         "INSERT INTO samples (ts, soc, p1_w, load_w, state) VALUES (?, ?, ?, ?, ?)",
@@ -1154,9 +1157,7 @@ def test_migration_v6_to_v7_adds_export_columns_and_preserves_rows(tmp_path):
     col_names = {row[1] for row in conn.execute("PRAGMA table_info(samples)").fetchall()}
     sample_count = conn.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     # New v7 cols must be NULL for pre-existing rows.
-    row = conn.execute(
-        "SELECT export_setpoint_w, export_kwh, reserve_kwh, surplus_kwh FROM samples"
-    ).fetchone()
+    row = conn.execute("SELECT export_setpoint_w, export_kwh, reserve_kwh, surplus_kwh FROM samples").fetchone()
     conn.close()
 
     assert version == _VERSION_TARGET
@@ -1171,8 +1172,8 @@ def test_migration_v6_to_v7_is_idempotent(tmp_path):
     db_path = str(tmp_path / "v6.db")
     _make_v6_db(db_path)
 
-    DataRecorder(db_path).close()   # first open: v6 → v7
-    DataRecorder(db_path).close()   # second open: already at target, no-op
+    DataRecorder(db_path).close()  # first open: v6 → v7
+    DataRecorder(db_path).close()  # second open: already at target, no-op
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -1212,19 +1213,23 @@ def test_migration_v6_to_v7_recovers_from_partial_alter(tmp_path):
 def test_append_with_v7_export_columns_roundtrips(tmp_path):
     """append() with v7 export columns stores them; missing cols → NULL."""
     rec = DataRecorder(str(tmp_path / "t7.db"))
-    rec.append({
-        "ts": "2026-06-25T10:00:00+00:00",
-        "p1_w": 300.0,
-        "export_setpoint_w": 2500.0,
-        "export_kwh": 3.5,
-        "reserve_kwh": 5.0,
-        "surplus_kwh": 2.1,
-    })
-    rec.append({
-        "ts": "2026-06-25T10:05:00+00:00",
-        "p1_w": 300.0,
-        # v7 cols absent → must store as NULL
-    })
+    rec.append(
+        {
+            "ts": "2026-06-25T10:00:00+00:00",
+            "p1_w": 300.0,
+            "export_setpoint_w": 2500.0,
+            "export_kwh": 3.5,
+            "reserve_kwh": 5.0,
+            "surplus_kwh": 2.1,
+        }
+    )
+    rec.append(
+        {
+            "ts": "2026-06-25T10:05:00+00:00",
+            "p1_w": 300.0,
+            # v7 cols absent → must store as NULL
+        }
+    )
     rec.close()
 
     conn = sqlite3.connect(str(tmp_path / "t7.db"))
@@ -1243,8 +1248,11 @@ def test_append_with_v7_export_columns_roundtrips(tmp_path):
 
 _V8_COLS = ["persons_home"]
 _V8_HOURLY_COLS = [
-    "persons_home_mean", "persons_home_max", "persons_home_min",
-    "persons_home_std", "persons_home_count",
+    "persons_home_mean",
+    "persons_home_max",
+    "persons_home_min",
+    "persons_home_std",
+    "persons_home_count",
 ]
 
 
@@ -1353,19 +1361,18 @@ def test_migration_v7_to_v8_recovers_from_partial_alter(tmp_path):
 # D1 — rollup watermark clamp + future hourly-row purge; NULL-ts purge
 # ---------------------------------------------------------------------------
 
+
 def test_rollup_recovers_after_future_dated_watermark(tmp_path):
     """A future-dated sample rolled during a pre-NTP boot must NOT freeze the
     hourly rollup once the clock steps back; the bogus future hourly row is dropped."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2027-01-01T10:05:00+00:00", "p1_w": 100.0, "batt_w": 0.0,
-                "pv_w": 0.0, "load_w": 100.0})
-    rec.rollup_hours("2027-01-01T11:00:00+00:00")           # future watermark written
-    rec.append({"ts": "2026-07-08T09:10:00+00:00", "p1_w": 200.0, "batt_w": 0.0,
-                "pv_w": 0.0, "load_w": 200.0})
-    rec.rollup_hours("2026-07-08T10:00:00+00:00")           # clock corrected
+    rec.append({"ts": "2027-01-01T10:05:00+00:00", "p1_w": 100.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 100.0})
+    rec.rollup_hours("2027-01-01T11:00:00+00:00")  # future watermark written
+    rec.append({"ts": "2026-07-08T09:10:00+00:00", "p1_w": 200.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 200.0})
+    rec.rollup_hours("2026-07-08T10:00:00+00:00")  # clock corrected
     hours = {r["hour_ts"] for r in rec.read_hourly_rows()}
-    assert "2026-07-08T09:00:00+00:00" in hours             # recovered
-    assert "2027-01-01T10:00:00+00:00" not in hours         # bogus future row dropped
+    assert "2026-07-08T09:00:00+00:00" in hours  # recovered
+    assert "2027-01-01T10:00:00+00:00" not in hours  # bogus future row dropped
     rec.close()
 
 
@@ -1380,8 +1387,7 @@ def test_purge_removes_null_ts_rows(tmp_path):
 def test_wal_checkpoint_makes_rows_visible_to_immutable_reader(tmp_path):
     path = str(tmp_path / "t.db")
     rec = DataRecorder(path)
-    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 100.0, "batt_w": 0.0,
-                "pv_w": 0.0, "load_w": 100.0})
+    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 100.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 100.0})
     rec.wal_checkpoint()
     ro = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
     n = ro.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
@@ -1394,8 +1400,7 @@ def test_append_normalizes_non_utc_ts_to_plus0000(tmp_path):
     """A +02:00 ts is stored as its canonical +00:00 equivalent so lexicographic
     ts compares (rollup watermark / purge cutoff) stay sound."""
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2026-07-08T12:00:00+02:00", "p1_w": 100.0, "batt_w": 0.0,
-                "pv_w": 0.0, "load_w": 100.0})
+    rec.append({"ts": "2026-07-08T12:00:00+02:00", "p1_w": 100.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 100.0})
     stored = rec._conn.execute("SELECT ts FROM samples").fetchone()[0]
     assert stored == "2026-07-08T10:00:00+00:00"
     rec.close()
@@ -1403,8 +1408,7 @@ def test_append_normalizes_non_utc_ts_to_plus0000(tmp_path):
 
 def test_append_utc_ts_is_byte_identical(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 1.0, "batt_w": 0.0,
-                "pv_w": 0.0, "load_w": 1.0})
+    rec.append({"ts": "2026-07-08T09:00:00+00:00", "p1_w": 1.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 1.0})
     stored = rec._conn.execute("SELECT ts FROM samples").fetchone()[0]
     assert stored == "2026-07-08T09:00:00+00:00"
     rec.close()
@@ -1413,10 +1417,19 @@ def test_append_utc_ts_is_byte_identical(tmp_path):
 def test_append_decision_normalizes_ts(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append_decision(
-        ts="2026-07-08T12:00:00+02:00", active=True, start_soc=50.0, deadline=None,
-        committed_hours=[], horizon_mode="single-day",
-        pv_today_forecast_kwh=None, pv_tomorrow_forecast_kwh=None,
-        predicted_load_json=None, price_window_json=None, setpoint_w=0.0, state="passive")
+        ts="2026-07-08T12:00:00+02:00",
+        active=True,
+        start_soc=50.0,
+        deadline=None,
+        committed_hours=[],
+        horizon_mode="single-day",
+        pv_today_forecast_kwh=None,
+        pv_tomorrow_forecast_kwh=None,
+        predicted_load_json=None,
+        price_window_json=None,
+        setpoint_w=0.0,
+        state="passive",
+    )
     stored = rec._conn.execute("SELECT ts FROM decisions").fetchone()[0]
     assert stored == "2026-07-08T10:00:00+00:00"
     rec.close()

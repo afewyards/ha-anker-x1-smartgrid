@@ -1,6 +1,8 @@
 """Pure price-slot resolution detection (no Home Assistant imports)."""
+
 from __future__ import annotations
 
+import itertools
 from datetime import date, datetime, timedelta
 
 from .models import PriceSlot
@@ -28,7 +30,7 @@ def detect_slot_minutes(slots: list[PriceSlot]) -> int:
     starts = sorted(s.start for s in slots)
     deltas = [
         (b - a).total_seconds() / 60.0
-        for a, b in zip(starts, starts[1:])
+        for a, b in itertools.pairwise(starts)
         if (b - a).total_seconds() / 60.0 >= _MIN_GAP_MIN
     ]
     if not deltas:
@@ -82,9 +84,7 @@ def hour_floor(dt: datetime) -> datetime:
     return floor_to_slot(dt, 60)
 
 
-def price_at(
-    slots: list[PriceSlot], at: datetime, slot_minutes: int
-) -> float | None:
+def price_at(slots: list[PriceSlot], at: datetime, slot_minutes: int) -> float | None:
     """Price (€/kWh) of the slot covering ``at``; ``None`` when none matches.
 
     Containment scan (``start <= at < start + duration``) rather than a

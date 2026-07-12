@@ -1,10 +1,13 @@
 # tests/test_controller_water_value.py
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
-    Config, PlanState, PlantInputs, PriceSlot,
+    Config,
+    PlanState,
+    PlantInputs,
+    PriceSlot,
 )
 
 
@@ -14,8 +17,9 @@ class _FlatPredictor:
 
 
 def _price_slots(now, prices):
-    return [PriceSlot(now.replace(minute=0, second=0, microsecond=0)
-                      + timedelta(hours=i), p) for i, p in enumerate(prices)]
+    return [
+        PriceSlot(now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=i), p) for i, p in enumerate(prices)
+    ]
 
 
 def _base_kwargs(now, slots):
@@ -32,13 +36,14 @@ def _base_kwargs(now, slots):
 
 
 def test_horizon_extends_to_trough_not_deadline():
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     # Trough at +8h (02:00); deadline (sunset-buffer) is ~1h out.
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _price_slots(now, prices)
     out: dict = {}
     plan, sp, deadline, horizon, hm, _ = ctrl.compute_decision(
-        **_base_kwargs(now, slots), _out=out,
+        **_base_kwargs(now, slots),
+        _out=out,
     )
     # The fictive/plan horizon spans through the trough hour (02:00), well past
     # the legacy deadline.
@@ -47,7 +52,7 @@ def test_horizon_extends_to_trough_not_deadline():
 
 
 def test_water_value_terminal_does_not_force_target_when_full_enough():
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _price_slots(now, prices)
     kw = _base_kwargs(now, slots)
@@ -73,21 +78,26 @@ def test_heavy_drain_does_not_set_dp_infeasible():
     the soft floor during the horizon, but dp_infeasible stays False.  The DP may
     economically select the cheap trough slot regardless of load magnitude.
     """
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
 
     class _HeavyPredictor:
         def predict(self, start, temp, fallback, quantile=0.5):
-            return 12000.0   # 12 kW load >> 6 kW max charge
+            return 12000.0  # 12 kW load >> 6 kW max charge
 
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
-    slots = [PriceSlot(now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=i), p)
-             for i, p in enumerate(prices)]
+    slots = [
+        PriceSlot(now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=i), p) for i, p in enumerate(prices)
+    ]
     out: dict = {}
     ctrl.compute_decision(
         plan=PlanState.initial(now),
         inputs=PlantInputs(soc=12.0, meter_w=0.0, now=now),
-        slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-        predictor=_HeavyPredictor(), cur_temp=10.0, cfg=Config(),
+        slots=slots,
+        pv_remaining=0.0,
+        sunset=now + timedelta(hours=2),
+        predictor=_HeavyPredictor(),
+        cur_temp=10.0,
+        cfg=Config(),
         _out=out,
     )
     # Economic-only (A1): water_value mode never sets dp_infeasible=True for
@@ -103,7 +113,7 @@ def test_new_mode_shield_does_not_inflate_safe_schedule():
     minimal consumption, the bridge deficit to soc_floor=10% is effectively zero.
     The DP should schedule little to no grid charging even when cheap slots exist.
     """
-    now = datetime(2026, 6, 23, 20, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 23, 20, 0, tzinfo=UTC)
 
     class _LightPredictor:
         def predict(self, start, temp, fallback, quantile=0.5):
@@ -115,8 +125,11 @@ def test_new_mode_shield_does_not_inflate_safe_schedule():
     ctrl.compute_decision(
         plan=PlanState.initial(now),
         inputs=PlantInputs(soc=85.0, meter_w=0.0, now=now),
-        slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=1),
-        predictor=_LightPredictor(), cur_temp=10.0,
+        slots=slots,
+        pv_remaining=0.0,
+        sunset=now + timedelta(hours=1),
+        predictor=_LightPredictor(),
+        cur_temp=10.0,
         cfg=Config(),
         _out=out,
     )

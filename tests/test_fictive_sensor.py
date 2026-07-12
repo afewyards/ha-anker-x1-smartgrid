@@ -4,6 +4,7 @@ Mirrors test_entities_plan.py — verifies the fictive_plan sensor
 reads last_status["fictive_plan"] and exposes the DP-proposed plan
 so the dashboard card (T0.6c) can render it.
 """
+
 from custom_components.anker_x1_smartgrid.sensor import X1FictivePlanSensor
 
 

@@ -1,4 +1,5 @@
 """TDD: build_charge_mask per-hour trough gate (S1 fix)."""
+
 from __future__ import annotations
 
 from custom_components.anker_x1_smartgrid.optimize import build_charge_mask
@@ -29,10 +30,10 @@ def test_trough_none_preserves_scalar_window_min_behaviour():
 def test_trough_mask_fails_closed_on_padded_hour():
     """F2: a 0.0-padded phantom-price hour must fail closed even when it would
     otherwise satisfy the trough band."""
-    price = [0.10, 0.00, 0.12]      # index 1 is a 0.0 pad
+    price = [0.10, 0.00, 0.12]  # index 1 is a 0.0 pad
     trough = [0.10, 0.10, 0.12]
     ceiling = 0.30
     m = build_charge_mask(price, ceiling, price_band=0.02, trough=trough, price_valid=[True, False, True])
     assert m[1] is False
-    m2 = build_charge_mask(price, ceiling, price_band=0.02, trough=trough)   # default → all valid
+    m2 = build_charge_mask(price, ceiling, price_band=0.02, trough=trough)  # default → all valid
     assert m2[1] is True

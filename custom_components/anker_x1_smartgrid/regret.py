@@ -23,6 +23,7 @@ hindsight_optimal_grid   — minimum-cost grid schedule in hindsight (DP-exact)
 realized_grid_cost       — battery sim of realized schedule + forced floor imports
 score_regret             — regret decomposition vs optimal
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ _BIN_KWH: float = 0.05
 # Input type
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class DayData:
     """Per-slot observations for a completed day (24 at 60-min, 96 at 15-min).
@@ -52,22 +54,21 @@ class DayData:
     soc_start  : Battery SoC at the very start of the day (%).
     """
 
-    pv_kwh: tuple[float, ...]    # length 24 (60-min) / 96 (15-min)
+    pv_kwh: tuple[float, ...]  # length 24 (60-min) / 96 (15-min)
     load_kwh: tuple[float, ...]  # length 24 (60-min) / 96 (15-min)
-    price: tuple[float, ...]     # length 24 (60-min) / 96 (15-min)
-    soc_start: float             # %
+    price: tuple[float, ...]  # length 24 (60-min) / 96 (15-min)
+    soc_start: float  # %
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_day_len(seq: tuple | list, name: str, expected: int) -> None:
     """Raise ValueError if *seq* does not have exactly *expected* elements."""
     if len(seq) != expected:
-        raise ValueError(
-            f"{name} must have exactly {expected} elements, got {len(seq)}"
-        )
+        raise ValueError(f"{name} must have exactly {expected} elements, got {len(seq)}")
 
 
 def _eta_charge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
@@ -169,6 +170,7 @@ def _max_grid_dc(
 # Public functions
 # ---------------------------------------------------------------------------
 
+
 def windowed_peak_prices(
     prices: list[float],
     lookback: int,
@@ -196,7 +198,7 @@ def windowed_peak_prices(
     run = float("-inf")
     for h in range(n - 1, -1, -1):
         if h == n - 1 or day_index[h] != day_index[h + 1]:
-            run = prices[h]                      # reset suffix at the day boundary
+            run = prices[h]  # reset suffix at the day boundary
         else:
             run = max(run, prices[h])
         suffix[h] = run
@@ -234,7 +236,7 @@ def windowed_trough_prices(
     run = float("inf")
     for h in range(n - 1, -1, -1):
         if h == n - 1 or day_index[h] != day_index[h + 1]:
-            run = prices[h]                      # reset suffix at the day boundary
+            run = prices[h]  # reset suffix at the day boundary
         else:
             run = min(run, prices[h])
         suffix[h] = run
@@ -378,17 +380,11 @@ def hindsight_optimal_grid(
     if n < 1:
         raise ValueError(f"DayData must have at least 1 hour, got {n}")
     if export_price is not None and len(export_price) != n:
-        raise ValueError(
-            f"export_price length {len(export_price)} != day length {n}"
-        )
+        raise ValueError(f"export_price length {len(export_price)} != day length {n}")
     if reserve_by_hour is not None and len(reserve_by_hour) != n:
-        raise ValueError(
-            f"reserve_by_hour length {len(reserve_by_hour)} != day length {n}"
-        )
+        raise ValueError(f"reserve_by_hour length {len(reserve_by_hour)} != day length {n}")
     if grid_charge_ceiling is not None and len(grid_charge_ceiling) != n:
-        raise ValueError(
-            f"grid_charge_ceiling length {len(grid_charge_ceiling)} != day length {n}"
-        )
+        raise ValueError(f"grid_charge_ceiling length {len(grid_charge_ceiling)} != day length {n}")
 
     cap_kwh = cfg.capacity_kwh
     floor_kwh = cfg.floor_kwh
@@ -405,7 +401,11 @@ def hindsight_optimal_grid(
     # Export leg pre-computations (F1).  All zero / off when export_price is None.
     _do_export = export_price is not None
     eta_d, cycle_cost, max_export_dc_h, ac_cap, _band, peak_from = export_leg_precompute(
-        export_price, cfg, eta, eta_curve, dt_h,
+        export_price,
+        cfg,
+        eta,
+        eta_curve,
+        dt_h,
     )
 
     bin_kwh = _BIN_KWH
@@ -442,8 +442,8 @@ def hindsight_optimal_grid(
             # optimize.optimize_grid:603-608.  Used by the export leg's
             # combined-AC cap below.  net <= 0 → no surplus → 0.0.
             if net > 0.0:
-                delta_soc = soc_after - soc            # DC kWh stored from solar
-                ac_for_battery = delta_soc / eta       # AC equivalent absorbed
+                delta_soc = soc_after - soc  # DC kWh stored from solar
+                ac_for_battery = delta_soc / eta  # AC equivalent absorbed
                 solar_export_ac = max(0.0, net - ac_for_battery)
             else:
                 solar_export_ac = 0.0
@@ -485,15 +485,9 @@ def hindsight_optimal_grid(
                 floor_import_cost = max(0.0, firmware_floor_kwh - new_soc_pre) * price_h
                 new_soc = max(new_soc_pre, firmware_floor_kwh)
                 new_b = to_bin(new_soc)
-                eta_g = (
-                    eta if eta_curve is None
-                    else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
-                )
+                eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                 g_ac = g_dc / eta_g
-                new_cost = (
-                    cost + g_ac * price_h + floor_import_cost
-                    + g_dc * cfg.charge_margin_eur_per_kwh
-                )
+                new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh
 
                 if new_cost < dp_next[new_b]:
                     dp_next[new_b] = new_cost
@@ -513,16 +507,9 @@ def hindsight_optimal_grid(
                 # Net export revenue per DC kWh: must be strictly positive to export.
                 net_rev_per_dc = ep_h * eta_d - cycle_cost
                 # C1 mirror: per-hour ride-out floor; defaults to firmware floor.
-                export_floor_h = (
-                    floor_kwh if reserve_by_hour is None
-                    else max(floor_kwh, reserve_by_hour[h])
-                )
+                export_floor_h = floor_kwh if reserve_by_hour is None else max(floor_kwh, reserve_by_hour[h])
                 band_floor = peak_from[h] * (1.0 - _band)
-                if (
-                    net_rev_per_dc > 1e-9
-                    and ep_h >= band_floor - 1e-9
-                    and soc_after > export_floor_h + bin_kwh - 1e-9
-                ):
+                if net_rev_per_dc > 1e-9 and ep_h >= band_floor - 1e-9 and soc_after > export_floor_h + bin_kwh - 1e-9:
                     export_headroom_dc = max(0.0, soc_after - export_floor_h)
                     # Cap battery export so combined AC feed-in (solar spill +
                     # battery) does not exceed ac_cap = min(max_export_w,
@@ -543,8 +530,7 @@ def hindsight_optimal_grid(
 
                         new_b = to_bin(new_soc)
                         eta_d_step = (
-                            eta_d if eta_curve is None
-                            else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+                            eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
                         )
                         e_ac = e_dc * eta_d_step  # DC → AC: 1 DC kWh → eta_d AC kWh
                         export_revenue = e_ac * ep_h
@@ -565,7 +551,7 @@ def hindsight_optimal_grid(
     # Select minimum-cost end state per terminal_mode.  MUST mirror
     # optimize.optimize_grid byte-for-byte (parity-critical pair) — see
     # TestExportOnParity.test_two_peaks_water_value_mode.
-    best_end_b, best_cost, infeasible = select_end_state(
+    best_end_b, _best_cost, infeasible = select_end_state(
         dp,
         terminal_mode=terminal_mode,
         water_value=water_value,
@@ -616,7 +602,10 @@ def hindsight_optimal_grid(
         # transitions g_ac=0 (and soc_after_h > floor anyway).  Zero when the
         # floor never binds.
         soc_after_h = _apply_solar_load(
-            from_bin(prev_b), day.pv_kwh[h] - day.load_kwh[h], cfg, dt_h,
+            from_bin(prev_b),
+            day.pv_kwh[h] - day.load_kwh[h],
+            cfg,
+            dt_h,
             eta_curve=eta_curve,
         )
         new_soc_pre_h = soc_after_h + g_ac * eta
@@ -635,10 +624,7 @@ def hindsight_optimal_grid(
     # reported schedule matches the objective the DP actually optimised).
     if _do_export:
         export_schedule_ac: list[float] = [
-            e_dc * (
-                eta_d if eta_curve is None
-                else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
-            )
+            e_dc * (eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
             for e_dc in export_dc_sched
         ]
         total_export_kwh = sum(export_schedule_ac)
@@ -824,14 +810,13 @@ def realized_grid_cost(
         # where the import physically occurs — mirrors D1 DP transition semantics.
         if soc < firmware_floor_kwh - 1e-9:
             shortfall_dc = firmware_floor_kwh - soc
-            forced_ac = shortfall_dc          # 1:1: grid serves load directly
+            forced_ac = shortfall_dc  # 1:1: grid serves load directly
             forced_imports[h] = forced_ac
             soc = firmware_floor_kwh
 
     total_kwh = sum(realized_charge_by_hour) + sum(forced_imports)
-    eur = (
-        sum(realized_charge_by_hour[h] * day.price[h] for h in range(_expected))
-        + sum(forced_imports[h] * day.price[h] for h in range(_expected))
+    eur = sum(realized_charge_by_hour[h] * day.price[h] for h in range(_expected)) + sum(
+        forced_imports[h] * day.price[h] for h in range(_expected)
     )
 
     # Step 4 (F3): Subtract actual export revenue to mirror oracle accounting.
@@ -851,8 +836,8 @@ def realized_grid_cost(
         eur -= net_export_revenue
 
     return {
-        "kwh": total_kwh,           # primary key — score_regret reads realized["kwh"]
-        "grid_kwh": total_kwh,      # alias for backwards compat
+        "kwh": total_kwh,  # primary key — score_regret reads realized["kwh"]
+        "grid_kwh": total_kwh,  # alias for backwards compat
         "eur": eur,
         "charge_kwh": total_charge_dc,
         "forced_import_kwh": forced_imports,

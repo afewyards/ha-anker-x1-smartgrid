@@ -6,6 +6,7 @@ floor=20% (2 kWh), target=80% (8 kWh), max_charge=3 kWh/h, eta=1.0.
 
 These tests are written FIRST (TDD), before optimize.py exists.
 """
+
 import pytest
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
@@ -16,14 +17,15 @@ from custom_components.anker_x1_smartgrid.optimize import build_charge_mask, opt
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_cfg(**overrides) -> Config:
     """Config with clean test defaults; all other fields take their defaults."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=20.0,   # 2 kWh floor
+        soc_floor=20.0,  # 2 kWh floor
         soc_target=80.0,  # 8 kWh target
         max_charge_w=3000.0,  # 3 kWh/h
-        eta_charge=1.0,   # AC == DC (simplifies test arithmetic)
+        eta_charge=1.0,  # AC == DC (simplifies test arithmetic)
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -58,6 +60,7 @@ def trace_soc(
 # Test 1: deficit=0 (full-PV day) → all-zero schedule, end SoC ≥ target
 # ---------------------------------------------------------------------------
 
+
 class TestFullPvDayZeroSchedule:
     """When PV alone covers load + fills battery, grid schedule should be zero."""
 
@@ -75,8 +78,13 @@ class TestFullPvDayZeroSchedule:
         price = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=20.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=20.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
 
         assert all(g == pytest.approx(0.0, abs=1e-6) for g in result["schedule"]), (
@@ -88,9 +96,7 @@ class TestFullPvDayZeroSchedule:
 
         # Verify trajectory: end SoC should reach target (8 kWh)
         traj = trace_soc(pv, load, result["schedule"], soc_start_kwh=2.0, cfg=cfg)
-        assert traj[-1] == pytest.approx(8.0, abs=0.1), (
-            f"End SoC {traj[-1]:.3f} kWh < target 8 kWh"
-        )
+        assert traj[-1] == pytest.approx(8.0, abs=0.1), f"End SoC {traj[-1]:.3f} kWh < target 8 kWh"
 
     def test_partial_window_full_pv(self):
         """Partial 12-h window: PV surplus fills battery; grid stays zero."""
@@ -101,8 +107,13 @@ class TestFullPvDayZeroSchedule:
         price = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=20.0, cfg=cfg,
-            window_start_h=6, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=20.0,
+            cfg=cfg,
+            window_start_h=6,
+            window_len=window_len,
         )
 
         assert all(g == pytest.approx(0.0, abs=1e-6) for g in result["schedule"])
@@ -113,6 +124,7 @@ class TestFullPvDayZeroSchedule:
 # ---------------------------------------------------------------------------
 # Test 2: single cheap hour, zero PV → charges exactly deficit in cheapest hour
 # ---------------------------------------------------------------------------
+
 
 class TestCheapestHourChargesDeficit:
     """DP selects the single cheapest hour to charge the full deficit."""
@@ -131,8 +143,13 @@ class TestCheapestHourChargesDeficit:
         price = [0.20, 0.10] + [0.20] * 22
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
 
         assert result["schedule"][1] == pytest.approx(3.0, abs=1e-6), (
@@ -163,8 +180,13 @@ class TestCheapestHourChargesDeficit:
         price = [0.20, 0.10, 0.15, 0.25, 0.18, 0.12]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=10, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=10,
+            window_len=window_len,
         )
 
         assert len(result["schedule"]) == window_len
@@ -177,6 +199,7 @@ class TestCheapestHourChargesDeficit:
 # ---------------------------------------------------------------------------
 # Test 3: floor never breached at any per-hour boundary (trajectory test)
 # ---------------------------------------------------------------------------
+
 
 def trace_soc_clamped(
     pv: list[float],
@@ -237,9 +260,15 @@ class TestFloorNeverBreached:
         price = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=40.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
-            terminal_mode="water_value", water_value=0.0,
+            pv,
+            load,
+            price,
+            soc_start=40.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
+            terminal_mode="water_value",
+            water_value=0.0,
         )
 
         # DP does not grid-charge purely to hold the floor.
@@ -251,9 +280,7 @@ class TestFloorNeverBreached:
         floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 2.0 kWh
         traj = trace_soc_clamped(pv, load, result["schedule"], soc_start_kwh=4.0, cfg=cfg)
         for h, soc in enumerate(traj):
-            assert soc >= floor_kwh - 1e-6, (
-                f"Floor breached at hour {h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
-            )
+            assert soc >= floor_kwh - 1e-6, f"Floor breached at hour {h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
 
     def test_single_spike_load_floor_respected(self):
         """Single load spike that would breach the floor is met by direct import.
@@ -273,9 +300,15 @@ class TestFloorNeverBreached:
         price = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=30.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
-            terminal_mode="water_value", water_value=0.0,
+            pv,
+            load,
+            price,
+            soc_start=30.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
+            terminal_mode="water_value",
+            water_value=0.0,
         )
 
         # DP does not grid-charge purely to hold the floor.
@@ -286,14 +319,13 @@ class TestFloorNeverBreached:
         floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 2.0 kWh
         traj = trace_soc_clamped(pv, load, result["schedule"], soc_start_kwh=3.0, cfg=cfg)
         for h, soc in enumerate(traj):
-            assert soc >= floor_kwh - 1e-6, (
-                f"Floor breached at hour {h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
-            )
+            assert soc >= floor_kwh - 1e-6, f"Floor breached at hour {h}: SoC={soc:.4f} kWh < floor={floor_kwh} kWh"
 
 
 # ---------------------------------------------------------------------------
 # Test 4: partial-day [now, deadline] window → only schedules within window
 # ---------------------------------------------------------------------------
+
 
 class TestPartialDayWindow:
     """optimize_grid accepts arbitrary window lengths and returns matching schedule."""
@@ -307,13 +339,17 @@ class TestPartialDayWindow:
             price = [0.10] * window_len
 
             result = optimize_grid(
-                pv, load, price, soc_start=80.0, cfg=cfg,
-                window_start_h=0, window_len=window_len,
+                pv,
+                load,
+                price,
+                soc_start=80.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=window_len,
             )
 
             assert len(result["schedule"]) == window_len, (
-                f"window_len={window_len}: expected {window_len} elements, "
-                f"got {len(result['schedule'])}"
+                f"window_len={window_len}: expected {window_len} elements, got {len(result['schedule'])}"
             )
 
     def test_window_start_h_does_not_affect_schedule(self):
@@ -329,12 +365,22 @@ class TestPartialDayWindow:
         price = [0.20, 0.10, 0.15, 0.25, 0.18, 0.12]
 
         result_a = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
         result_b = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=10, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=10,
+            window_len=window_len,
         )
 
         for h in range(window_len):
@@ -361,18 +407,26 @@ class TestPartialDayWindow:
         cfg = make_cfg()
         with pytest.raises(ValueError, match="window_len"):
             optimize_grid(
-                [], [], [],
-                soc_start=50.0, cfg=cfg,
-                window_start_h=0, window_len=0,
+                [],
+                [],
+                [],
+                soc_start=50.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=0,
             )
 
     def test_single_hour_window(self):
         """1-hour window: schedule has exactly 1 element."""
         cfg = make_cfg()
         result = optimize_grid(
-            [0.0], [0.0], [0.10],
-            soc_start=50.0, cfg=cfg,
-            window_start_h=14, window_len=1,
+            [0.0],
+            [0.0],
+            [0.10],
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=14,
+            window_len=1,
         )
         assert len(result["schedule"]) == 1
         # deficit = 3 kWh, max_charge = 3 kWh/h → can fill in 1 hour
@@ -392,8 +446,13 @@ class TestPartialDayWindow:
         price = [0.30, 0.10, 0.20, 0.25]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=18, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=18,
+            window_len=window_len,
         )
 
         assert len(result["schedule"]) == window_len
@@ -491,8 +550,13 @@ class TestChargeMaskActionMask:
         chargeable = [False, True, True]  # h0 blocked
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
@@ -518,15 +582,18 @@ class TestChargeMaskActionMask:
         chargeable = [False, False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
         for h, g in enumerate(result["schedule"]):
-            assert g == pytest.approx(0.0, abs=1e-6), (
-                f"Hour h={h} must be zero (masked), got {g}"
-            )
+            assert g == pytest.approx(0.0, abs=1e-6), f"Hour h={h} must be zero (masked), got {g}"
         assert result["kwh"] == pytest.approx(0.0, abs=1e-6)
 
     def test_expensive_hours_masked_charge_in_cheap_hour(self):
@@ -544,8 +611,13 @@ class TestChargeMaskActionMask:
         assert chargeable == [True, False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
@@ -570,21 +642,31 @@ class TestChargeMaskActionMask:
         price = [0.20, 0.10, 0.15, 0.25, 0.18, 0.12]
 
         result_none = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=None,
         )
         result_all_true = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=[True] * window_len,
         )
 
         assert result_none["kwh"] == pytest.approx(result_all_true["kwh"], abs=1e-6)
         for h in range(window_len):
-            assert result_none["schedule"][h] == pytest.approx(
-                result_all_true["schedule"][h], abs=1e-6
-            ), f"Schedule mismatch at h={h}"
+            assert result_none["schedule"][h] == pytest.approx(result_all_true["schedule"][h], abs=1e-6), (
+                f"Schedule mismatch at h={h}"
+            )
 
     def test_chargeable_wrong_length_raises(self):
         """chargeable list with wrong length raises ValueError."""
@@ -596,8 +678,13 @@ class TestChargeMaskActionMask:
 
         with pytest.raises(ValueError, match="chargeable"):
             optimize_grid(
-                pv, load, price, soc_start=50.0, cfg=cfg,
-                window_start_h=0, window_len=window_len,
+                pv,
+                load,
+                price,
+                soc_start=50.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=window_len,
                 chargeable=[True, True, True],  # wrong: 3 != 4
             )
 
@@ -616,15 +703,18 @@ class TestChargeMaskActionMask:
         assert chargeable == [False, False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
         for h, g in enumerate(result["schedule"]):
-            assert g == pytest.approx(0.0, abs=1e-6), (
-                f"Hour h={h} must be zero (fail-closed mask), got {g}"
-            )
+            assert g == pytest.approx(0.0, abs=1e-6), f"Hour h={h} must be zero (fail-closed mask), got {g}"
         assert result["kwh"] == pytest.approx(0.0, abs=1e-6)
 
 
@@ -654,14 +744,17 @@ class TestMaskInfeasibleSurfaces:
         chargeable = [False, False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=20.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=20.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
-        assert result.get("infeasible", False), (
-            "Reserve unreachable due to full mask → must surface infeasible=True"
-        )
+        assert result.get("infeasible", False), "Reserve unreachable due to full mask → must surface infeasible=True"
         # Schedule must still be all-zero (mask was enforced)
         for h, g in enumerate(result["schedule"]):
             assert g == pytest.approx(0.0, abs=1e-6)
@@ -680,14 +773,17 @@ class TestMaskInfeasibleSurfaces:
         chargeable = [True, False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
-        assert not result.get("infeasible", False), (
-            "h0 alone covers 3 kWh deficit → should be feasible"
-        )
+        assert not result.get("infeasible", False), "h0 alone covers 3 kWh deficit → should be feasible"
         assert result["schedule"][0] == pytest.approx(3.0, abs=1e-6)
 
     def test_mask_prevents_floor_recovery_surfaces_infeasible(self):
@@ -706,25 +802,37 @@ class TestMaskInfeasibleSurfaces:
         chargeable = [False, False, False]
 
         result = optimize_grid(
-            pv, load, price, soc_start=25.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=25.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             chargeable=chargeable,
         )
 
         assert result.get("infeasible", False), (
-            "Floor breach + all masked → infeasible must surface (mask must not "
-            "silently swallow the floor breach)"
+            "Floor breach + all masked → infeasible must surface (mask must not silently swallow the floor breach)"
         )
-
 
 
 def test_optimize_grid_export_keys_present_and_absent():
     """export_price=None → no export keys; export_price=list → export keys populated."""
     from custom_components.anker_x1_smartgrid.optimize import optimize_grid
     from custom_components.anker_x1_smartgrid.models import Config
-    cfg = Config(capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0,
-                 max_charge_w=3000.0, eta_charge=1.0, round_trip_eff=1.0,
-                 cycle_cost_eur_per_kwh=0.04, max_export_w=3000.0, grid_export_limit_w=3000.0)
+
+    cfg = Config(
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+        cycle_cost_eur_per_kwh=0.04,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
+    )
     pv = [0.0] * 24
     load = [0.0] * 24
     price = [0.20] * 24
@@ -732,7 +840,9 @@ def test_optimize_grid_export_keys_present_and_absent():
     assert "export_schedule" not in charge_only
     ep = [0.0] * 24
     ep[18] = 0.50
-    with_export = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=24, export_price=ep)
+    with_export = optimize_grid(
+        pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=24, export_price=ep
+    )
     assert with_export["export_schedule"][18] > 0.0
     assert with_export["export_kwh"] > 0.0
     assert with_export["export_revenue_eur"] > 0.0
@@ -743,9 +853,18 @@ def test_optimize_grid_48h_export_runtime_under_2s():
     import time
     from custom_components.anker_x1_smartgrid.optimize import optimize_grid
     from custom_components.anker_x1_smartgrid.models import Config
-    cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=97.0, max_charge_w=6000.0,
-                 eta_charge=0.92, round_trip_eff=0.85, cycle_cost_eur_per_kwh=0.04,
-                 max_export_w=6000.0, grid_export_limit_w=6000.0)
+
+    cfg = Config(
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=97.0,
+        max_charge_w=6000.0,
+        eta_charge=0.92,
+        round_trip_eff=0.85,
+        cycle_cost_eur_per_kwh=0.04,
+        max_export_w=6000.0,
+        grid_export_limit_w=6000.0,
+    )
     n = 48
     pv = ([0.0] * 8 + [2.0] * 8 + [0.0] * 8) * 2
     load = [0.4] * n
@@ -761,6 +880,7 @@ def test_optimize_grid_48h_export_runtime_under_2s():
 def test_effective_export_price_subtracts_fee():
     from custom_components.anker_x1_smartgrid.optimize import effective_export_price
     from custom_components.anker_x1_smartgrid.models import Config
+
     cfg = Config(export_fee_eur_per_kwh=0.02)
     assert effective_export_price(0.50, cfg) == pytest.approx(0.48)
     # Config picks up the default and tolerates the new field via from_dict.

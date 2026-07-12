@@ -11,12 +11,13 @@ wrapped in ``asyncio.wait_for`` and a broad ``except Exception`` so that any
 failure (timeout, non-200, bad JSON, missing add-on) silently returns ``None``
 and the caller falls back to the bucketed/profile predictor.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from . import const
 from .resolution import hour_floor
@@ -58,20 +59,22 @@ def build_hours_payload(
             continue
         # Normalise to UTC top-of-hour (C2 alignment).
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
         top_of_hour = hour_floor(dt)
         top_iso = top_of_hour.isoformat()
-        payload.append({
-            "ts": top_iso,
-            "temp_forecast": entry.get("temp_forecast"),
-            "cloud_cover": entry.get("cloud_cover"),
-            "humidity": entry.get("humidity"),
-            "wind_speed": entry.get("wind_speed"),
-            "irradiance": None,  # vestigial; dropped from the featureset in Task 2
-            "persons_home": (persons_by_ts or {}).get(top_iso),
-        })
+        payload.append(
+            {
+                "ts": top_iso,
+                "temp_forecast": entry.get("temp_forecast"),
+                "cloud_cover": entry.get("cloud_cover"),
+                "humidity": entry.get("humidity"),
+                "wind_speed": entry.get("wind_speed"),
+                "irradiance": None,  # vestigial; dropped from the featureset in Task 2
+                "persons_home": (persons_by_ts or {}).get(top_iso),
+            }
+        )
     return payload
 
 
@@ -116,7 +119,7 @@ def project_persons_home(
     cutoff = now + timedelta(hours=persistence_hours)
     out: dict[str, float | None] = {}
     for hs in hour_starts:
-        top = hour_floor(hs.replace(tzinfo=timezone.utc) if hs.tzinfo is None else hs.astimezone(timezone.utc))
+        top = hour_floor(hs.replace(tzinfo=UTC) if hs.tzinfo is None else hs.astimezone(UTC))
         key_iso = top.isoformat()
         if current_count is None:
             out[key_iso] = None
@@ -135,9 +138,9 @@ def _parse_ts(ts_str: str) -> datetime | None:
     try:
         dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
         return hour_floor(dt)
     except (ValueError, TypeError):
         return None
@@ -188,16 +191,16 @@ async def fetch_forecast(
                 return None
             try:
                 return await resp.json(content_type=None)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _LOGGER.warning("remote_forecast: JSON parse error: %s", exc)
                 return None
 
     try:
         data = await asyncio.wait_for(_do_request(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _LOGGER.debug("remote_forecast: request timed out after %ss — falling back", timeout)
         return None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOGGER.debug("remote_forecast: connection error: %s — falling back", exc)
         return None
 
@@ -237,23 +240,25 @@ async def fetch_forecast(
             if not math.isfinite(p50) or not math.isfinite(p80):
                 _LOGGER.debug(
                     "remote_forecast: skipping entry %s — non-finite p50=%s p80=%s",
-                    ts_str, p50_raw, p80_raw,
+                    ts_str,
+                    p50_raw,
+                    p80_raw,
                 )
                 continue
             # Skip negative loads — nonsensical; better to fall back to bucketed.
             if p50 < 0 or p80 < 0:
                 _LOGGER.debug(
                     "remote_forecast: skipping entry %s — negative load p50=%s p80=%s",
-                    ts_str, p50, p80,
+                    ts_str,
+                    p50,
+                    p80,
                 )
                 continue
             # Clamp p80 >= p50: the P50/P80 models are trained independently and
             # can cross; an inverted cushion would under-size the charge deficit.
             forecast_map[hour_dt] = (p50, max(p80, p50))
-    except Exception as exc:  # noqa: BLE001
-        _LOGGER.warning(
-            "remote_forecast: error decoding predictions body: %s — falling back", exc
-        )
+    except Exception as exc:
+        _LOGGER.warning("remote_forecast: error decoding predictions body: %s — falling back", exc)
         return None
 
     _LOGGER.debug("remote_forecast: loaded %d hour entries from add-on", len(forecast_map))
@@ -300,9 +305,9 @@ class RemoteForecastPredictor:
         """
         # Round down to the hour in UTC — matches how _parse_ts built the map keys.
         if when.tzinfo is None:
-            hour_key = hour_floor(when.replace(tzinfo=timezone.utc))
+            hour_key = hour_floor(when.replace(tzinfo=UTC))
         else:
-            hour_key = hour_floor(when.astimezone(timezone.utc))
+            hour_key = hour_floor(when.astimezone(UTC))
 
         entry = self._map.get(hour_key)
         if entry is None:

@@ -1,4 +1,5 @@
 """async_setup_entry re-resolves the Anker device in-memory (self-heal)."""
+
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.anker_x1_smartgrid import const
@@ -12,7 +13,7 @@ async def test_setup_applies_anker_resolution_without_persisting(hass):
         data={
             **const.DEFAULT_ENTITIES,
             const.CONF_ANKER_DEVICE: device_id,
-            const.CONF_CAPACITY_KWH: 10.0,        # stale; device reports 15.0
+            const.CONF_CAPACITY_KWH: 10.0,  # stale; device reports 15.0
             const.CONF_ENT_SOC: "sensor.stale_soc",
         },
     )

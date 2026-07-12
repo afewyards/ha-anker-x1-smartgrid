@@ -2,6 +2,7 @@
 
 Imported by server.py and directly by tests (never imports fastapi/uvicorn).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,14 +46,17 @@ def read_options(path: str = "/data/options.json") -> dict:
         rh = int(opts.get("retrain_hour", _DEFAULTS["retrain_hour"]))
         opts["retrain_hour"] = min(23, max(0, rh))
     except (TypeError, ValueError):
-        _log.warning("read_options: invalid retrain_hour %r, using default %s",
-                     opts.get("retrain_hour"), _DEFAULTS["retrain_hour"])
+        _log.warning(
+            "read_options: invalid retrain_hour %r, using default %s",
+            opts.get("retrain_hour"),
+            _DEFAULTS["retrain_hour"],
+        )
         opts["retrain_hour"] = _DEFAULTS["retrain_hour"]
     return opts
 
 
 def build_health_payload(
-    state: "TrainState",
+    state: TrainState,
     sklearn_version: str,
     python_version: str,
     db_readable: bool | None = None,
@@ -120,8 +124,7 @@ SCHEDULER_BACKOFF_SECONDS = 60.0
 """Sleep after a crashed retrain iteration to avoid a tight failure loop."""
 
 
-async def run_retrain_loop(retrain_hour, run_train, *, now_fn, sleep_fn,
-                           should_continue=lambda: True):
+async def run_retrain_loop(retrain_hour, run_train, *, now_fn, sleep_fn, should_continue=lambda: True):
     """Daily retrain loop, crash-wrapped so one failing iteration cannot stop all
     future retrains (which would permanently freeze the served model).
 
@@ -133,13 +136,11 @@ async def run_retrain_loop(retrain_hour, run_train, *, now_fn, sleep_fn,
     while should_continue():
         try:
             wait_seconds = seconds_until_next_run(now_fn(), retrain_hour)
-            _log.info("run_retrain_loop: next retrain in %.0f s (hour=%s local)",
-                      wait_seconds, retrain_hour)
+            _log.info("run_retrain_loop: next retrain in %.0f s (hour=%s local)", wait_seconds, retrain_hour)
             await sleep_fn(wait_seconds)
             await run_train()
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("run_retrain_loop: iteration failed; backing off %.0fs",
-                           SCHEDULER_BACKOFF_SECONDS)
+            _log.exception("run_retrain_loop: iteration failed; backing off %.0fs", SCHEDULER_BACKOFF_SECONDS)
             await sleep_fn(SCHEDULER_BACKOFF_SECONDS)

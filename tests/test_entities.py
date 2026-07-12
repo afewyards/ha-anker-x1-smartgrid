@@ -28,7 +28,7 @@ async def test_enable_switch_toggles_controller():
     assert sw.is_on is True
     await sw.async_turn_off()
     assert ctl.enabled is False
-    assert ctl.saved_enabled is False   # persisted on toggle
+    assert ctl.saved_enabled is False  # persisted on toggle
     await sw.async_turn_on()
     assert ctl.enabled is True
     assert ctl.saved_enabled is True
@@ -42,6 +42,7 @@ def test_solar_charge_sensor_reads_status():
 
 class _RegretCtl:
     """Minimal controller stub with regret keys in last_status."""
+
     last_status = {
         "regret_eur": 0.42,
         "over_buy_kwh": 1.1,
@@ -72,6 +73,7 @@ def test_under_buy_kwh_sensor_reads_status():
 
 def test_regret_sensors_return_none_when_no_regret_data():
     """Sensors must return None gracefully when last_regret hasn't been computed yet."""
+
     class _NoRegretCtl:
         last_status = {"regret_eur": None, "over_buy_kwh": None, "under_buy_kwh": None}
 

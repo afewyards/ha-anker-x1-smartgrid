@@ -1,5 +1,6 @@
 """Tests for coordinator.py — reading live HA state into pure inputs."""
-from datetime import datetime, timezone
+
+from datetime import datetime, timezone, UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -71,7 +72,8 @@ async def test_read_plant_inputs_meter_power_key_absent_uses_default_entity(hass
 async def test_read_price_slots(hass):
     d = _data()
     hass.states.async_set(
-        d[const.CONF_ENT_PRICE], "0.13",
+        d[const.CONF_ENT_PRICE],
+        "0.13",
         {"forecast": [{"datetime": "2026-06-20T12:00:00Z", "electricity_price": 1300000}]},
     )
     slots = coordinator.read_price_slots(hass, d)
@@ -121,6 +123,7 @@ async def test_read_pv_remaining_sums(hass):
 # ---------------------------------------------------------------------------
 # FIX M4 — all-PV-unavailable must return None (fail-safe)
 # ---------------------------------------------------------------------------
+
 
 async def test_read_pv_remaining_all_unavailable_returns_none(hass):
     """When every PV-today entity is unavailable, return None (not 0.0)."""
@@ -189,9 +192,9 @@ async def test_read_sun_times_parses_and_derives(hass):
         },
     )
     today_sunset, tom_sunrise, tom_sunset = coordinator.read_sun_times(hass, d)
-    assert today_sunset == datetime(2026, 6, 20, 20, 0, tzinfo=timezone.utc)
-    assert tom_sunrise == datetime(2026, 6, 21, 3, 0, tzinfo=timezone.utc)
-    assert tom_sunset == datetime(2026, 6, 21, 20, 0, tzinfo=timezone.utc)  # +24h
+    assert today_sunset == datetime(2026, 6, 20, 20, 0, tzinfo=UTC)
+    assert tom_sunrise == datetime(2026, 6, 21, 3, 0, tzinfo=UTC)
+    assert tom_sunset == datetime(2026, 6, 21, 20, 0, tzinfo=UTC)  # +24h
 
 
 async def test_read_sun_times_none_when_attr_missing(hass):
@@ -217,8 +220,8 @@ async def test_read_sun_times_night_branch(hass):
     assert result is not None
     today_sunset, tom_sunrise, tom_sunset = result
     assert today_sunset is None
-    assert tom_sunrise == datetime(2026, 6, 21, 3, 18, 0, tzinfo=timezone.utc)
-    assert tom_sunset == datetime(2026, 6, 21, 20, 6, 0, tzinfo=timezone.utc)
+    assert tom_sunrise == datetime(2026, 6, 21, 3, 18, 0, tzinfo=UTC)
+    assert tom_sunset == datetime(2026, 6, 21, 20, 6, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -237,8 +240,8 @@ _KWH_TOMORROW_1 = "sensor.pv_tomorrow_test_1"
 
 _PEAK_TS_0 = "2026-06-21T09:00:00+00:00"
 _PEAK_TS_1 = "2026-06-21T17:00:00+00:00"
-_PEAK_DT_0 = datetime(2026, 6, 21, 9, 0, tzinfo=timezone.utc)
-_PEAK_DT_1 = datetime(2026, 6, 21, 17, 0, tzinfo=timezone.utc)
+_PEAK_DT_0 = datetime(2026, 6, 21, 9, 0, tzinfo=UTC)
+_PEAK_DT_1 = datetime(2026, 6, 21, 17, 0, tzinfo=UTC)
 
 
 async def test_read_pv_today_arrays_pairs_kwh_with_peak(hass):
@@ -294,8 +297,8 @@ async def test_read_pv_today_arrays_peak_list_shorter_than_kwh_list(hass):
 
     assert result is not None
     assert len(result) == 2
-    assert result[0][1] == _PEAK_DT_0   # first peak present
-    assert result[1][1] is None          # second peak missing → None
+    assert result[0][1] == _PEAK_DT_0  # first peak present
+    assert result[1][1] is None  # second peak missing → None
 
 
 async def test_read_pv_today_arrays_bad_peak_state_gives_none(hass):
@@ -358,8 +361,7 @@ async def test_read_pv_today_arrays_empty_kwh_list_returns_empty(hass):
 async def test_read_pv_today_arrays_get_fallback_no_keyerror(hass):
     """Entry without CONF_ENT_PV_PEAK_TODAY falls back to DEFAULT_ENTITIES via .get."""
     # Seed data as if it came from an old entry that lacks the new peak keys
-    d = {k: v for k, v in const.DEFAULT_ENTITIES.items()
-         if k != const.CONF_ENT_PV_PEAK_TODAY}
+    d = {k: v for k, v in const.DEFAULT_ENTITIES.items() if k != const.CONF_ENT_PV_PEAK_TODAY}
     d[const.CONF_ENT_PV_TODAY] = [_KWH_TODAY_0, _KWH_TODAY_1]
     hass.states.async_set(d[const.CONF_ENT_PV_TODAY][0], "3.1")
     hass.states.async_set(d[const.CONF_ENT_PV_TODAY][1], "4.3")
@@ -404,6 +406,7 @@ async def test_read_pv_today_arrays_sum_parity_one_unavailable(hass):
 
 # --- tomorrow mirrors ---
 
+
 async def test_read_pv_tomorrow_arrays_pairs_kwh_with_peak(hass):
     """read_pv_tomorrow_arrays pairs kWh with parsed peak datetimes."""
     d = _data()
@@ -438,8 +441,7 @@ async def test_read_pv_tomorrow_arrays_all_unavailable_returns_none(hass):
 
 async def test_read_pv_tomorrow_arrays_get_fallback_no_keyerror(hass):
     """Entry without CONF_ENT_PV_PEAK_TOMORROW falls back to DEFAULT_ENTITIES via .get."""
-    d = {k: v for k, v in const.DEFAULT_ENTITIES.items()
-         if k != const.CONF_ENT_PV_PEAK_TOMORROW}
+    d = {k: v for k, v in const.DEFAULT_ENTITIES.items() if k != const.CONF_ENT_PV_PEAK_TOMORROW}
     d[const.CONF_ENT_PV_TOMORROW] = [_KWH_TOMORROW_0, _KWH_TOMORROW_1]
     hass.states.async_set(d[const.CONF_ENT_PV_TOMORROW][0], "4.5")
     hass.states.async_set(d[const.CONF_ENT_PV_TOMORROW][1], "3.0")
@@ -497,14 +499,14 @@ async def test_read_hourly_weather_forecast_maps_fields_and_parses_datetime(hass
     assert len(result) == 3
 
     h0 = result[0]
-    assert h0["datetime"] == datetime(2026, 6, 22, 9, 0, tzinfo=timezone.utc)
+    assert h0["datetime"] == datetime(2026, 6, 22, 9, 0, tzinfo=UTC)
     assert h0["temp_forecast"] == pytest.approx(17.0)
     assert h0["cloud_cover"] == pytest.approx(20.0)
     assert h0["humidity"] == pytest.approx(60.0)
     assert h0["wind_speed"] == pytest.approx(8.0)
 
     h1 = result[1]
-    assert h1["datetime"] == datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)
+    assert h1["datetime"] == datetime(2026, 6, 22, 10, 0, tzinfo=UTC)
     assert h1["temp_forecast"] == pytest.approx(18.5)
     assert h1["cloud_cover"] == pytest.approx(30.0)
     assert h1["humidity"] == pytest.approx(65.0)
@@ -640,7 +642,7 @@ async def test_read_hourly_weather_forecast_skips_items_without_datetime(hass):
         mock_call.return_value = {
             _ENTITY_WX: {
                 "forecast": [
-                    {"temperature": 18.5},          # no datetime → skip
+                    {"temperature": 18.5},  # no datetime → skip
                     {
                         "datetime": "2026-06-22T11:00:00+00:00",
                         "temperature": 19.0,
@@ -652,18 +654,19 @@ async def test_read_hourly_weather_forecast_skips_items_without_datetime(hass):
         result = await coordinator.read_hourly_weather_forecast(hass, d)
 
     assert len(result) == 1
-    assert result[0]["datetime"] == datetime(2026, 6, 22, 11, 0, tzinfo=timezone.utc)
+    assert result[0]["datetime"] == datetime(2026, 6, 22, 11, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
 # get_forecast_for_hour
 # ---------------------------------------------------------------------------
 
+
 def _make_entries(*hours_utc: int) -> list[dict]:
     """Build minimal forecast entries for the given UTC hours on 2026-06-22."""
     return [
         {
-            "datetime": datetime(2026, 6, 22, h, 0, tzinfo=timezone.utc),
+            "datetime": datetime(2026, 6, 22, h, 0, tzinfo=UTC),
             "temp_forecast": float(h),
             "cloud_cover": None,
             "humidity": None,
@@ -677,7 +680,7 @@ def test_get_forecast_for_hour_returns_nearest_entry():
     """Returns the entry whose datetime is closest to target_dt."""
     entries = _make_entries(9, 10, 11)
     # 10:15 is 15 min from 10:00, 45 min from 11:00 → nearest is 10:00
-    target = datetime(2026, 6, 22, 10, 15, tzinfo=timezone.utc)
+    target = datetime(2026, 6, 22, 10, 15, tzinfo=UTC)
 
     result = coordinator.get_forecast_for_hour(entries, target)
 
@@ -688,7 +691,7 @@ def test_get_forecast_for_hour_returns_nearest_entry():
 def test_get_forecast_for_hour_exact_match():
     """Returns the entry when target matches exactly."""
     entries = _make_entries(9, 10, 11)
-    target = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)
+    target = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)
 
     result = coordinator.get_forecast_for_hour(entries, target)
 
@@ -698,14 +701,15 @@ def test_get_forecast_for_hour_exact_match():
 
 def test_get_forecast_for_hour_empty_returns_none():
     """Empty forecast list → None."""
-    result = coordinator.get_forecast_for_hour([], datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc))
+    result = coordinator.get_forecast_for_hour([], datetime(2026, 6, 22, 10, 0, tzinfo=UTC))
     assert result is None
 
 
 def test_read_price_slots_static_mode_synth(hass, monkeypatch):
     import datetime as _dt
     from custom_components.anker_x1_smartgrid import coordinator as _coord
-    fixed = _dt.datetime(2026, 7, 10, 14, 0, tzinfo=_dt.timezone.utc)
+
+    fixed = _dt.datetime(2026, 7, 10, 14, 0, tzinfo=_dt.UTC)
     monkeypatch.setattr(_coord.dt_util, "utcnow", lambda: fixed)
     d = {
         const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,

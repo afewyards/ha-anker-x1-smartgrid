@@ -9,6 +9,7 @@ Worked example (from plan §C1):
 
   cycle_cost=0.04
 """
+
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
@@ -20,6 +21,7 @@ from custom_components.anker_x1_smartgrid.optimize import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def cfg_worked() -> Config:
@@ -34,6 +36,7 @@ def cfg_worked() -> Config:
 # ---------------------------------------------------------------------------
 # eta_discharge
 # ---------------------------------------------------------------------------
+
 
 class TestEtaDischarge:
     def test_basic_worked_example(self, cfg_worked):
@@ -59,4 +62,3 @@ class TestEtaDischarge:
 
     def test_returns_float(self, cfg_worked):
         assert isinstance(eta_discharge(cfg_worked), float)
-

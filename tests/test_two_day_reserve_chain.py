@@ -1,19 +1,20 @@
 """Plan A regression-lock (pure layer): the overnight gap-fill makes build_intervals
 emit accurate per-hour overnight intervals, so energy.ride_out_reserve_kwh integrates
 the real overnight load instead of one lumped interval / a floor collapse."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 
 from custom_components.anker_x1_smartgrid import energy, parsers, scheduler
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor, build_intervals
 from custom_components.anker_x1_smartgrid.models import Config
 
-NOW = datetime(2026, 6, 26, 19, 0, tzinfo=timezone.utc)       # summer evening
-SUNSET = datetime(2026, 6, 26, 21, 0, tzinfo=timezone.utc)
-SUNRISE = datetime(2026, 6, 27, 5, 0, tzinfo=timezone.utc)
-SUNSET2 = datetime(2026, 6, 27, 21, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 26, 19, 0, tzinfo=UTC)  # summer evening
+SUNSET = datetime(2026, 6, 26, 21, 0, tzinfo=UTC)
+SUNRISE = datetime(2026, 6, 27, 5, 0, tzinfo=UTC)
+SUNSET2 = datetime(2026, 6, 27, 21, 0, tzinfo=UTC)
 
 
 def _cfg(**kw) -> Config:
@@ -23,9 +24,7 @@ def _cfg(**kw) -> Config:
 
 
 def _curve_and_intervals(cfg: Config):
-    curve = parsers.build_two_day_pv_curve(
-        [(0.2, None)], [(8.0, None)], NOW, SUNSET, SUNRISE, SUNSET2, step_h=1.0
-    )
+    curve = parsers.build_two_day_pv_curve([(0.2, None)], [(8.0, None)], NOW, SUNSET, SUNRISE, SUNSET2, step_h=1.0)
     predictor = LoadPredictor.from_profile({})  # empty profile → 400 W fallback everywhere
     intervals = build_intervals(curve, predictor, 400.0, cfg, quantile=0.8)
     return curve, intervals
@@ -56,5 +55,5 @@ def test_ride_out_reserve_integrates_full_overnight_not_floor():
     # ride_out walks [SUNSET, trough] debit-only; the dark night dominates the trough.
     rsv = energy.ride_out_reserve_kwh(SUNSET, suffix, cfg)
     dark_h = (SUNRISE - SUNSET).total_seconds() / 3600.0  # 8 h
-    assert rsv >= dark_h * 0.4 - 1e-6        # >= raw AC night load (ride_out divides by eta_d -> larger)
-    assert rsv > floor_kwh + 1.0             # NOT floor-collapsed
+    assert rsv >= dark_h * 0.4 - 1e-6  # >= raw AC night load (ride_out divides by eta_d -> larger)
+    assert rsv > floor_kwh + 1.0  # NOT floor-collapsed

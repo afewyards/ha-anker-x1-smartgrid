@@ -5,9 +5,10 @@ No Home Assistant imports — unit-testable in isolation.  ``synth_static_price_
 wall-clock ranges) into UTC PriceSlots over a rolling top-of-current-hour →
 tomorrow-local-midnight horizon.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from .models import Config, PriceSlot
 from .resolution import _ALLOWED as _RESOLUTION_STEPS  # (15, 30, 60)
@@ -105,7 +106,7 @@ def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
     validates on entry; this guards direct/legacy edits).
     """
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     try:
         ranges = parse_offpeak_ranges(cfg.static_offpeak_hours)
     except ValueError:
@@ -119,8 +120,8 @@ def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
     start_local = hour_floor(now_local)
     end_date = now_local.date() + timedelta(days=2)
     end_local = datetime(end_date.year, end_date.month, end_date.day, 0, 0, tzinfo=tz)
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
+    start_utc = start_local.astimezone(UTC)
+    end_utc = end_local.astimezone(UTC)
 
     step = timedelta(minutes=step_min)
     slots: list[PriceSlot] = []
@@ -128,11 +129,7 @@ def synth_static_price_slots(now: datetime, cfg: Config, tz) -> list[PriceSlot]:
     while t < end_utc:
         local = t.astimezone(tz)
         minute_of_day = local.hour * 60 + local.minute
-        price = (
-            offpeak_price
-            if use_offpeak and _in_offpeak(minute_of_day, ranges)
-            else import_price
-        )
+        price = offpeak_price if use_offpeak and _in_offpeak(minute_of_day, ranges) else import_price
         slots.append(PriceSlot(t, price, duration_min=float(step_min)))
         t += step
     return slots

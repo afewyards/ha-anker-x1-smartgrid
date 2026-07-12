@@ -1,4 +1,5 @@
 """Config flow for Anker X1 SmartGrid."""
+
 from __future__ import annotations
 
 import logging
@@ -91,7 +92,7 @@ def _schema(defaults: dict, services=None) -> vol.Schema:
 def _forecast_service_options(services) -> list[SelectOptionDict]:
     """Selector options for the forecast-service multi-select."""
     options = []
-    for entry_id, title, domain in (services or []):
+    for entry_id, title, domain in services or []:
         integration_name = forecast_sources.FORECAST_SOURCE_MAP.get(domain, {}).get("name", domain)
         options.append(SelectOptionDict(value=entry_id, label=f"{title} — {integration_name}"))
     return options
@@ -112,19 +113,14 @@ def _apply_forecast_pv_derivation(hass, user_input: dict, chosen: list[str], sto
     """
     if not chosen or chosen == stored:
         return
-    resolved = {
-        eid: forecast_sources.derive_pv_entities(hass, eid)
-        for eid in chosen
-    }
+    resolved = {eid: forecast_sources.derive_pv_entities(hass, eid) for eid in chosen}
     day_roles = [
-        ("today", "peak_today",
-         const.CONF_ENT_PV_TODAY, const.CONF_ENT_PV_PEAK_TODAY),
-        ("tomorrow", "peak_tomorrow",
-         const.CONF_ENT_PV_TOMORROW, const.CONF_ENT_PV_PEAK_TOMORROW),
+        ("today", "peak_today", const.CONF_ENT_PV_TODAY, const.CONF_ENT_PV_PEAK_TODAY),
+        ("tomorrow", "peak_tomorrow", const.CONF_ENT_PV_TOMORROW, const.CONF_ENT_PV_PEAK_TOMORROW),
     ]
     for e_role, p_role, e_key, p_key in day_roles:
         pairs: list[tuple[str, str | None]] = []
-        for eid in chosen:            # preserve selection order
+        for eid in chosen:  # preserve selection order
             energy = resolved[eid].get(e_role)
             if energy and energy not in [p[0] for p in pairs]:
                 pairs.append((energy, resolved[eid].get(p_role)))
@@ -235,7 +231,11 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
 # "Plain" tunables: vol.Optional(key, default=defaults.get(key, DEFAULT)) with
 # a single validator. (conf_key, default_const, validator).
 _TUNABLES: list[tuple[str, object, object]] = [
-    (const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR, vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0))),
+    (
+        const.CONF_SOC_FLOOR,
+        const.DEFAULT_SOC_FLOOR,
+        vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0)),
+    ),
     (const.CONF_ADDON_ENABLED, const.DEFAULT_ADDON_ENABLED, cv.boolean),
     (const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL, cv.string),
     (const.CONF_ADDON_TIMEOUT, const.DEFAULT_ADDON_TIMEOUT, vol.All(vol.Coerce(int), vol.Range(min=1, max=60))),
@@ -256,32 +256,108 @@ _TUNABLES: list[tuple[str, object, object]] = [
         # well above the X1's own 6000W device ceiling (SETPOINT_MAX_W).
         vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
     ),
-    (const.CONF_EXPORT_FEE_EUR_PER_KWH, const.DEFAULT_EXPORT_FEE_EUR_PER_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5))),
+    (
+        const.CONF_EXPORT_FEE_EUR_PER_KWH,
+        const.DEFAULT_EXPORT_FEE_EUR_PER_KWH,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
+    ),
     (const.CONF_CYCLE_COST_EUR_PER_KWH, const.DEFAULT_CYCLE_COST_EUR_PER_KWH, cv.positive_float),
     (const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH, cv.positive_float),
     (const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0))),
-    (const.CONF_RESERVE_CHEAP_BAND, const.DEFAULT_RESERVE_CHEAP_BAND, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
+    (
+        const.CONF_RESERVE_CHEAP_BAND,
+        const.DEFAULT_RESERVE_CHEAP_BAND,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
     (const.CONF_EXPORT_DWELL_MIN, const.DEFAULT_EXPORT_DWELL_MIN, cv.positive_int),
     (const.CONF_EXPORT_EPS_LO_KWH, const.DEFAULT_EXPORT_EPS_LO_KWH, cv.positive_float),
     (const.CONF_EXPORT_EPS_HI_KWH, const.DEFAULT_EXPORT_EPS_HI_KWH, cv.positive_float),
-    (const.CONF_EXPORT_PEAK_BAND_FRAC, const.DEFAULT_EXPORT_PEAK_BAND_FRAC, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_EXPORT_PEAK_LOOKBACK_H, const.DEFAULT_EXPORT_PEAK_LOOKBACK_H, vol.All(vol.Coerce(int), vol.Range(min=0, max=12))),
-    (const.CONF_EXPORT_MIN_BLOCK_KWH, const.DEFAULT_EXPORT_MIN_BLOCK_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0))),
-    (const.CONF_EXPORT_LOAD_COMP_FACTOR, const.DEFAULT_EXPORT_LOAD_COMP_FACTOR, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_CHARGE_TROUGH_LOOKBACK_H, const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H, vol.All(vol.Coerce(int), vol.Range(min=0, max=12))),
-    (const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
-    (const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
+    (
+        const.CONF_EXPORT_PEAK_BAND_FRAC,
+        const.DEFAULT_EXPORT_PEAK_BAND_FRAC,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_EXPORT_PEAK_LOOKBACK_H,
+        const.DEFAULT_EXPORT_PEAK_LOOKBACK_H,
+        vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
+    ),
+    (
+        const.CONF_EXPORT_MIN_BLOCK_KWH,
+        const.DEFAULT_EXPORT_MIN_BLOCK_KWH,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0)),
+    ),
+    (
+        const.CONF_EXPORT_LOAD_COMP_FACTOR,
+        const.DEFAULT_EXPORT_LOAD_COMP_FACTOR,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_CHARGE_TROUGH_LOOKBACK_H,
+        const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H,
+        vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
+    ),
+    (
+        const.CONF_STATIC_PRICE_IMPORT,
+        const.DEFAULT_STATIC_PRICE_IMPORT,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+    ),
+    (
+        const.CONF_STATIC_PRICE_OFFPEAK,
+        const.DEFAULT_STATIC_PRICE_OFFPEAK,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+    ),
     (const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS, cv.string),
-    (const.CONF_STATIC_PRICE_EXPORT, const.DEFAULT_STATIC_PRICE_EXPORT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0))),
-    (const.CONF_PRICE_HISTORY_DAYS, const.DEFAULT_PRICE_HISTORY_DAYS, vol.All(vol.Coerce(int), vol.Range(min=2, max=30))),
-    (const.CONF_PRICE_BLEND_WEIGHT_TODAY, const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT, const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH, const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5))),
-    (const.CONF_SOC_HEDGE_FRACTION, const.DEFAULT_SOC_HEDGE_FRACTION, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_SOC_DRIFT_DEADBAND_KWH, const.DEFAULT_SOC_DRIFT_DEADBAND_KWH, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5.0))),
-    (const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H, const.DEFAULT_SOC_DRIFT_DECAY_HALFLIFE_H, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=48.0))),
-    (const.CONF_LOAD_ADAPT_FRACTION, const.DEFAULT_LOAD_ADAPT_FRACTION, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0))),
-    (const.CONF_LOAD_ADAPT_WINDOW_H, const.DEFAULT_LOAD_ADAPT_WINDOW_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=12))),
+    (
+        const.CONF_STATIC_PRICE_EXPORT,
+        const.DEFAULT_STATIC_PRICE_EXPORT,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
+    ),
+    (
+        const.CONF_PRICE_HISTORY_DAYS,
+        const.DEFAULT_PRICE_HISTORY_DAYS,
+        vol.All(vol.Coerce(int), vol.Range(min=2, max=30)),
+    ),
+    (
+        const.CONF_PRICE_BLEND_WEIGHT_TODAY,
+        const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT,
+        const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH,
+        const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
+    ),
+    (
+        const.CONF_SOC_HEDGE_FRACTION,
+        const.DEFAULT_SOC_HEDGE_FRACTION,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_SOC_DRIFT_DEADBAND_KWH,
+        const.DEFAULT_SOC_DRIFT_DEADBAND_KWH,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5.0)),
+    ),
+    (
+        const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
+        const.DEFAULT_SOC_DRIFT_DECAY_HALFLIFE_H,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=48.0)),
+    ),
+    (
+        const.CONF_LOAD_ADAPT_FRACTION,
+        const.DEFAULT_LOAD_ADAPT_FRACTION,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_LOAD_ADAPT_WINDOW_H,
+        const.DEFAULT_LOAD_ADAPT_WINDOW_H,
+        vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
+    ),
     (const.CONF_LOAD_ADAPT_FADE_H, const.DEFAULT_LOAD_ADAPT_FADE_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=24))),
 ]
 
@@ -380,22 +456,20 @@ def _options_fields(defaults: dict, services=None) -> dict:
         vol.Optional(
             const.CONF_ENT_PV_POWER,
             description={
-                "suggested_value": const.normalize_pv_power_entities(
-                    defaults.get(const.CONF_ENT_PV_POWER)
-                ) or None
+                "suggested_value": const.normalize_pv_power_entities(defaults.get(const.CONF_ENT_PV_POWER)) or None
             },
         ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
     }
     for key, default, validator in _TUNABLES:
         fields[vol.Optional(key, default=defaults.get(key, default))] = validator
     for key, domain in _ENTITY_LIST_PICKERS:
-        fields[
-            vol.Optional(key, description={"suggested_value": defaults.get(key, [])})
-        ] = EntitySelector(EntitySelectorConfig(domain=domain, multiple=True))
+        fields[vol.Optional(key, description={"suggested_value": defaults.get(key, [])})] = EntitySelector(
+            EntitySelectorConfig(domain=domain, multiple=True)
+        )
     for key, domain in _CLEARABLE_ENTITY_PICKERS:
-        fields[
-            vol.Optional(key, description={"suggested_value": defaults.get(key) or None})
-        ] = _ClearableEntitySelector(EntitySelectorConfig(domain=domain))
+        fields[vol.Optional(key, description={"suggested_value": defaults.get(key) or None})] = (
+            _ClearableEntitySelector(EntitySelectorConfig(domain=domain))
+        )
     for key, default, options in _SELECT_GROUPS.values():
         fields[vol.Optional(key, default=defaults.get(key, default))] = SelectSelector(
             SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
@@ -409,10 +483,7 @@ def _options_schema(defaults: dict, services=None) -> vol.Schema:
     The stored options/data shape stays FLAT: sections exist only in the form.
     _flatten_sections un-nests the submit data before any validation/persist.
     """
-    fields = {
-        marker.schema: (marker, validator)
-        for marker, validator in _options_fields(defaults, services).items()
-    }
+    fields = {marker.schema: (marker, validator) for marker, validator in _options_fields(defaults, services).items()}
     schema: dict = {}
     for name, keys in OPTIONS_SECTIONS.items():
         schema[vol.Required(name)] = section(
@@ -439,7 +510,7 @@ class X1SmartGridConfigFlow(config_entries.ConfigFlow, domain=const.DOMAIN):
     @staticmethod
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> "X1SmartGridOptionsFlow":
+    ) -> X1SmartGridOptionsFlow:
         return X1SmartGridOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input=None):
@@ -475,9 +546,7 @@ class X1SmartGridConfigFlow(config_entries.ConfigFlow, domain=const.DOMAIN):
                 data.update(user_input)
                 return self.async_create_entry(title="Anker X1 SmartGrid", data=data)
         services = forecast_sources.list_forecast_services(self.hass)
-        return self.async_show_form(
-            step_id="user", data_schema=_schema(user_input or {}, services), errors=errors
-        )
+        return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}, services), errors=errors)
 
 
 class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
@@ -502,21 +571,26 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
                     errors["base"] = "anker_roles_missing"
                 else:
                     user_input.update(resolved)
-            if not errors and user_input.get(
-                const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR
-            ) >= user_input.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET):
+            if not errors and user_input.get(const.CONF_SOC_FLOOR, const.DEFAULT_SOC_FLOOR) >= user_input.get(
+                const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET
+            ):
                 errors["base"] = "soc_floor_above_target"
-            if not errors and user_input.get(
-                const.CONF_PRICE_MODE, merged.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE)
-            ) == const.PRICE_MODE_STATIC:
+            if (
+                not errors
+                and user_input.get(const.CONF_PRICE_MODE, merged.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE))
+                == const.PRICE_MODE_STATIC
+            ):
                 _imp = user_input.get(
                     const.CONF_STATIC_PRICE_IMPORT,
                     merged.get(const.CONF_STATIC_PRICE_IMPORT, const.DEFAULT_STATIC_PRICE_IMPORT),
                 )
-                _op_hours = (user_input.get(
-                    const.CONF_STATIC_OFFPEAK_HOURS,
-                    merged.get(const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS),
-                ) or "").strip()
+                _op_hours = (
+                    user_input.get(
+                        const.CONF_STATIC_OFFPEAK_HOURS,
+                        merged.get(const.CONF_STATIC_OFFPEAK_HOURS, const.DEFAULT_STATIC_OFFPEAK_HOURS),
+                    )
+                    or ""
+                ).strip()
                 _op_price = user_input.get(
                     const.CONF_STATIC_PRICE_OFFPEAK,
                     merged.get(const.CONF_STATIC_PRICE_OFFPEAK, const.DEFAULT_STATIC_PRICE_OFFPEAK),
@@ -534,7 +608,8 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
             if not errors:
                 chosen = user_input.get(const.CONF_FORECAST_SERVICE, []) or []
                 stored = {**self._config_entry.data, **self._config_entry.options}.get(
-                    const.CONF_FORECAST_SERVICE, []) or []
+                    const.CONF_FORECAST_SERVICE, []
+                ) or []
                 _apply_forecast_pv_derivation(self.hass, user_input, chosen, stored)
                 # CONF_FORECAST_SERVICE stays in user_input → persisted for next open.
                 return self.async_create_entry(title="", data=user_input)

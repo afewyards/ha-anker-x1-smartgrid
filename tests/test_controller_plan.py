@@ -1,9 +1,9 @@
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot
 from custom_components.anker_x1_smartgrid import controller, forecast
 
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 def test_compute_decision_returns_horizon():
@@ -14,8 +14,14 @@ def test_compute_decision_returns_horizon():
     predictor = forecast.LoadPredictor.from_profile({})
     plan_state = PlanState.initial(BASE - timedelta(hours=1))
     result = controller.compute_decision(
-        plan_state, inputs, slots, pv_remaining=2.0, sunset=sunset,
-        predictor=predictor, cur_temp=None, cfg=cfg,
+        plan_state,
+        inputs,
+        slots,
+        pv_remaining=2.0,
+        sunset=sunset,
+        predictor=predictor,
+        cur_temp=None,
+        cfg=cfg,
     )
     assert len(result) == 6
     horizon = result[3]
@@ -42,7 +48,7 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
     # Trough: hours 0-1 (0.05), regular: all others (0.09 — below hurdle),
     # peak: hours 14-15 (0.45 — above hurdle, the only export-worthy hours)
     slot_prices = [0.09] * 36
-    slot_prices[0] = 0.05   # trough — charge here cheaply
+    slot_prices[0] = 0.05  # trough — charge here cheaply
     slot_prices[1] = 0.05
     slot_prices[14] = 0.45  # peak — export here
     slot_prices[15] = 0.45
@@ -50,9 +56,9 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
 
     # sun_times: sunset tonight, sunrise/sunset tomorrow
     sun_times = (
-        BASE + timedelta(hours=8),    # today_sunset
-        BASE + timedelta(hours=18),   # tomorrow_sunrise
-        BASE + timedelta(hours=32),   # tomorrow_sunset
+        BASE + timedelta(hours=8),  # today_sunset
+        BASE + timedelta(hours=18),  # tomorrow_sunrise
+        BASE + timedelta(hours=32),  # tomorrow_sunset
     )
     sunset = BASE + timedelta(hours=8)
 
@@ -60,10 +66,15 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
     # export_price_matches_import=True: the 0.45 peak is also the export price forecast
     # cycle_cost_eur_per_kwh=0.04 (default): ensures 0.09 hours don't clear the hurdle
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=5.0, soc_target=97.0,
-        max_charge_w=3000.0, eta_charge=0.95, round_trip_eff=0.90,
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=97.0,
+        max_charge_w=3000.0,
+        eta_charge=0.95,
+        round_trip_eff=0.90,
         enable_export=True,
-        max_export_w=3000.0, grid_export_limit_w=6000.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=6000.0,
         min_dwell_min=0,
     )
     inputs = PlantInputs(soc=90.0, meter_w=0.0, now=BASE)
@@ -71,8 +82,14 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
     plan_state = PlanState.initial(BASE - timedelta(hours=1))
 
     result = controller.compute_decision(
-        plan_state, inputs, slots, pv_remaining=0.5, sunset=sunset,
-        predictor=predictor, cur_temp=None, cfg=cfg,
+        plan_state,
+        inputs,
+        slots,
+        pv_remaining=0.5,
+        sunset=sunset,
+        predictor=predictor,
+        cur_temp=None,
+        cfg=cfg,
         tomorrow_total=6.0,
         sun_times=sun_times,
         today_arrays=[(0.5, None)],
@@ -95,16 +112,14 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
     # as the ride-out reserve changes per hour (approaching the next solar/cheap window)
     reserve_socs = [entry["reserve_soc"] for entry in horizon]
     assert not all(r == pytest.approx(cfg.soc_floor) for r in reserve_socs), (
-        f"reserve_soc is flat at soc_floor={cfg.soc_floor} — per-hour reserve not wired in. "
-        f"Values: {reserve_socs[:6]}"
+        f"reserve_soc is flat at soc_floor={cfg.soc_floor} — per-hour reserve not wired in. Values: {reserve_socs[:6]}"
     )
 
     # When DP commits export for peak hours (0.45 price), at least one export entry
     # should have grid_export_w > 0
     export_ws = [entry["grid_export_w"] for entry in horizon]
     assert any(w > 0 for w in export_ws), (
-        f"No export in horizon despite 0.45 export price and high SoC. "
-        f"Export values: {export_ws[:20]}"
+        f"No export in horizon despite 0.45 export price and high SoC. Export values: {export_ws[:20]}"
     )
 
 
@@ -123,31 +138,38 @@ def test_compute_decision_forwards_temp_by_hour_to_display_horizon(monkeypatch):
 
     monkeypatch.setattr(controller.plan_mod, "build_display_horizon", spy)
 
-    cfg = Config(capacity_kwh=10.0, soc_target=97.0, max_charge_w=3000.0,
-                 eta_charge=0.95, round_trip_eff=0.90, min_dwell_min=0)
+    cfg = Config(
+        capacity_kwh=10.0, soc_target=97.0, max_charge_w=3000.0, eta_charge=0.95, round_trip_eff=0.90, min_dwell_min=0
+    )
     slots = [PriceSlot(BASE + timedelta(hours=i), 0.20) for i in range(30)]
     sun_times = (
-        BASE + timedelta(hours=8),    # today_sunset
-        BASE + timedelta(hours=18),   # tomorrow_sunrise
-        BASE + timedelta(hours=32),   # tomorrow_sunset
+        BASE + timedelta(hours=8),  # today_sunset
+        BASE + timedelta(hours=18),  # tomorrow_sunrise
+        BASE + timedelta(hours=32),  # tomorrow_sunset
     )
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=BASE)
     predictor = forecast.LoadPredictor.from_profile({})
     plan_state = PlanState.initial(BASE - timedelta(hours=1))
     temp_by_hour = {
-        (BASE + timedelta(hours=i)).replace(minute=0, second=0, microsecond=0): float(i * 2)
-        for i in range(30)
+        (BASE + timedelta(hours=i)).replace(minute=0, second=0, microsecond=0): float(i * 2) for i in range(30)
     }
 
     controller.compute_decision(
-        plan_state, inputs, slots, pv_remaining=0.5, sunset=BASE + timedelta(hours=8),
-        predictor=predictor, cur_temp=99.0, cfg=cfg,
-        tomorrow_total=6.0, sun_times=sun_times,
-        today_arrays=[(0.5, None)], tomorrow_arrays=[(6.0, None)],
+        plan_state,
+        inputs,
+        slots,
+        pv_remaining=0.5,
+        sunset=BASE + timedelta(hours=8),
+        predictor=predictor,
+        cur_temp=99.0,
+        cfg=cfg,
+        tomorrow_total=6.0,
+        sun_times=sun_times,
+        today_arrays=[(0.5, None)],
+        tomorrow_arrays=[(6.0, None)],
         temp_by_hour=temp_by_hour,
     )
 
     assert captured.get("temp_by_hour") == temp_by_hour, (
-        "build_display_horizon was not passed compute_decision's temp_by_hour "
-        f"(got {captured.get('temp_by_hour')!r})"
+        f"build_display_horizon was not passed compute_decision's temp_by_hour (got {captured.get('temp_by_hour')!r})"
     )

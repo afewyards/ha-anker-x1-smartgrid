@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-import sklearn  # noqa: F401 — import at module level: install failure surfaces at container start
+import sklearn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -68,8 +68,9 @@ async def _scheduler(db_path: str, retrain_hour: int) -> None:
 
     # Daily loop, crash-wrapped (see health.run_retrain_loop).
     await run_retrain_loop(
-        retrain_hour, _run_train,
-        now_fn=lambda: _dt.datetime.now(_dt.timezone.utc),
+        retrain_hour,
+        _run_train,
+        now_fn=lambda: _dt.datetime.now(_dt.UTC),
         sleep_fn=asyncio.sleep,
     )
 
@@ -87,12 +88,12 @@ async def startup_event() -> None:
 
 class HourIn(BaseModel):
     ts: str
-    temp_forecast: Optional[float] = None
-    cloud_cover: Optional[float] = None
-    humidity: Optional[float] = None
-    wind_speed: Optional[float] = None
-    irradiance: Optional[float] = None
-    persons_home: Optional[float] = None
+    temp_forecast: float | None = None
+    cloud_cover: float | None = None
+    humidity: float | None = None
+    wind_speed: float | None = None
+    irradiance: float | None = None
+    persons_home: float | None = None
 
 
 class PredictRequest(BaseModel):
@@ -109,7 +110,7 @@ def _probe_db_readable(db_path: str | None) -> bool:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=2.0)
         conn.execute("SELECT 1 FROM samples LIMIT 1").fetchone()
         return True
-    except Exception:  # noqa: BLE001 — health probe must never raise
+    except Exception:
         return False
     finally:
         if conn is not None:
@@ -134,10 +135,7 @@ def predict(req: PredictRequest) -> dict:
     if len(req.hours) > MAX_PREDICT_HOURS:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"hours: at most {MAX_PREDICT_HOURS} entries allowed, "
-                f"got {len(req.hours)}"
-            ),
+            detail=(f"hours: at most {MAX_PREDICT_HOURS} entries allowed, got {len(req.hours)}"),
         )
     state = STATE
     if state.model is None or not state.ready:

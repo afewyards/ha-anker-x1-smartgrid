@@ -13,9 +13,10 @@ Six scenarios:
 5. No-op — export_min_block_kwh=0.0 keeps every DP-scheduled hour intact.
 6. Real DP (no mock) — actual optimize_grid emits peak + sub-min dribble; filter drops it.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +34,7 @@ from custom_components.anker_x1_smartgrid.optimize import effective_export_price
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-NOW = datetime(2026, 6, 28, 17, 0, tzinfo=timezone.utc)  # 17:00 UTC
+NOW = datetime(2026, 6, 28, 17, 0, tzinfo=UTC)  # 17:00 UTC
 
 
 def _cfg(**overrides) -> Config:
@@ -54,9 +55,9 @@ def _cfg(**overrides) -> Config:
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
         grid_export_limit_w=3000.0,
-        export_peak_band_frac=1.0,      # open band — only block filter in scope
+        export_peak_band_frac=1.0,  # open band — only block filter in scope
         export_peak_lookback_h=0,
-        export_min_block_kwh=0.5,       # default threshold under test
+        export_min_block_kwh=0.5,  # default threshold under test
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -64,10 +65,7 @@ def _cfg(**overrides) -> Config:
 
 def _ivs(now: datetime, n: int, load_w: float = 200.0) -> list:
     """Build *n* × 1-hour ForecastIntervals starting at *now*, zero PV."""
-    return [
-        ForecastInterval(start=now + timedelta(hours=h), pv_w=0.0, load_w=load_w, dt_h=1.0)
-        for h in range(n)
-    ]
+    return [ForecastInterval(start=now + timedelta(hours=h), pv_w=0.0, load_w=load_w, dt_h=1.0) for h in range(n)]
 
 
 def _slots(now: datetime, prices: list[float]) -> list:
@@ -101,7 +99,7 @@ def _call_dp(
         "kwh": sum(charge_schedule),
         "eur": 0.0,
         "export_schedule": export_schedule,
-        "export_revenue_eur": 999.0,   # sentinel — never valid revenue
+        "export_revenue_eur": 999.0,  # sentinel — never valid revenue
     }
     with patch(
         "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
@@ -131,6 +129,7 @@ def _net_rev(ac: list[float], prices: list[float], cfg: Config) -> float:
 # 1. Evening regression (06-28) — peak run kept, sub-min dribble dropped
 # ===========================================================================
 
+
 def test_evening_peak_kept_submin_dribble_dropped():
     """06-28 evening case: DP emits a 1.617 kWh peak run and a 0.23 kWh dribble.
 
@@ -152,9 +151,7 @@ def test_evening_peak_kept_submin_dribble_dropped():
     export_schedule = [0.0, 0.0, 1.617, 0.0, 0.23, 0.0]
     cfg = _cfg(export_min_block_kwh=0.5)
 
-    _, _, _, export_request, export_revenue_eur, _ = _call_dp(
-        cfg, NOW, prices, export_schedule
-    )
+    _, _, _, export_request, export_revenue_eur, _ = _call_dp(cfg, NOW, prices, export_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2
     hour_21 = NOW + timedelta(hours=4)  # idx 4
@@ -183,6 +180,7 @@ def test_evening_peak_kept_submin_dribble_dropped():
 # 2. Receding-horizon non-truncation — in-progress run exempt at idx 0
 # ===========================================================================
 
+
 def test_receding_horizon_inprogress_run_not_truncated():
     """A run starting at idx 0 is exempt even if its remaining total < min.
 
@@ -202,16 +200,12 @@ def test_receding_horizon_inprogress_run_not_truncated():
 
     _, _, _, export_request, _, _ = _call_dp(cfg, NOW, prices, export_schedule)
 
-    hour_0 = NOW                         # idx 0 — in-progress
-    hour_1 = NOW + timedelta(hours=1)    # idx 1 — same run
+    hour_0 = NOW  # idx 0 — in-progress
+    hour_1 = NOW + timedelta(hours=1)  # idx 1 — same run
 
     # Both hours of the in-progress run must survive (exempt_index=0 protects them)
-    assert hour_0 in export_request, (
-        "In-progress run at idx 0 must be kept regardless of total (C1 exemption)"
-    )
-    assert hour_1 in export_request, (
-        "Continuation of in-progress run at idx 1 must also be kept"
-    )
+    assert hour_0 in export_request, "In-progress run at idx 0 must be kept regardless of total (C1 exemption)"
+    assert hour_1 in export_request, "Continuation of in-progress run at idx 1 must also be kept"
     assert export_request[hour_0] == pytest.approx(200.0, abs=1.0)
     assert export_request[hour_1] == pytest.approx(200.0, abs=1.0)
 
@@ -220,6 +214,7 @@ def test_receding_horizon_inprogress_run_not_truncated():
 # 3. Reserve feasibility — filtered SoC ≥ unfiltered SoC at every hour;
 #    strictly higher at/after the dropped dribble hour
 # ===========================================================================
+
 
 def test_reserve_feasibility_filtered_soc_geq_unfiltered():
     """Dropping an export run can only RAISE projected SoC — never lower it.
@@ -245,9 +240,7 @@ def test_reserve_feasibility_filtered_soc_geq_unfiltered():
     selected_f, grid_req_f, _, export_req_f, _, ceil_f = _call_dp(
         cfg_filtered, NOW, prices, export_schedule, soc=soc_start
     )
-    _, _, _, export_req_u, _, _ = _call_dp(
-        cfg_unfiltered, NOW, prices, export_schedule, soc=soc_start
-    )
+    _, _, _, export_req_u, _, _ = _call_dp(cfg_unfiltered, NOW, prices, export_schedule, soc=soc_start)
 
     hour_21 = NOW + timedelta(hours=4)  # idx 4 — dropped dribble
 
@@ -282,8 +275,7 @@ def test_reserve_feasibility_filtered_soc_geq_unfiltered():
     # Filtered SoC must be ≥ unfiltered at every hour (dropping export only raises SoC)
     for i, (sf, su) in enumerate(zip(socs_f, socs_u)):
         assert sf >= su - 1e-6, (
-            f"Filtered SoC {sf:.2f}% < unfiltered {su:.2f}% at row {i} — "
-            f"filter must never lower SoC"
+            f"Filtered SoC {sf:.2f}% < unfiltered {su:.2f}% at row {i} — filter must never lower SoC"
         )
 
     # At idx 4 (21:00 UTC) the dribble is dropped → filtered SoC must be strictly higher
@@ -296,6 +288,7 @@ def test_reserve_feasibility_filtered_soc_geq_unfiltered():
 # ===========================================================================
 # 4. Filter-scope guard — filter touches export only, never grid_request
 # ===========================================================================
+
 
 def test_filter_touches_export_only_not_grid():
     """Filter drops sub-min export run but leaves grid_request completely untouched.
@@ -318,18 +311,14 @@ def test_filter_touches_export_only_not_grid():
     charge_schedule = [0.0, 0.0, 0.0, 0.5, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.5)
 
-    _, grid_request, _, export_request, _, _ = _call_dp(
-        cfg, NOW, prices, export_schedule, schedule=charge_schedule
-    )
+    _, grid_request, _, export_request, _, _ = _call_dp(cfg, NOW, prices, export_schedule, schedule=charge_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2 — peak export
     hour_20 = NOW + timedelta(hours=3)  # idx 3 — grid charge (non-overlapping)
     hour_21 = NOW + timedelta(hours=4)  # idx 4 — sub-min export (dropped)
 
     # Grid charge at 20:00 must survive (filter does NOT touch grid_request; no overlap)
-    assert hour_20 in grid_request, (
-        "Grid charge at idx 3 must remain — filter touches export only"
-    )
+    assert hour_20 in grid_request, "Grid charge at idx 3 must remain — filter touches export only"
     assert grid_request[hour_20] == pytest.approx(500.0, abs=1.0), (
         f"grid_request[20:00] must be 500W, got {grid_request.get(hour_20)}"
     )
@@ -349,6 +338,7 @@ def test_filter_touches_export_only_not_grid():
 # 5. No-op — export_min_block_kwh=0.0 keeps all DP-scheduled hours intact
 # ===========================================================================
 
+
 def test_noop_when_min_block_zero():
     """Escape hatch: export_min_block_kwh=0.0 → filter is a no-op.
 
@@ -362,11 +352,9 @@ def test_noop_when_min_block_zero():
     """
     prices = [0.25, 0.28, 0.32, 0.31, 0.30, 0.25]
     export_schedule = [0.0, 0.0, 1.617, 0.0, 0.23, 0.0]
-    cfg = _cfg(export_min_block_kwh=0.0)   # filter disabled
+    cfg = _cfg(export_min_block_kwh=0.0)  # filter disabled
 
-    _, _, _, export_request, export_revenue_eur, _ = _call_dp(
-        cfg, NOW, prices, export_schedule
-    )
+    _, _, _, export_request, export_revenue_eur, _ = _call_dp(cfg, NOW, prices, export_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2
     hour_21 = NOW + timedelta(hours=4)  # idx 4
@@ -393,6 +381,7 @@ def test_noop_when_min_block_zero():
 #    filter drops the dribble
 # ===========================================================================
 
+
 def test_real_dp_submin_dribble_dropped():
     """End-to-end with the REAL optimize_grid: DP emits peak + dribble; filter drops dribble.
 
@@ -414,10 +403,7 @@ def test_real_dp_submin_dribble_dropped():
     now = NOW
     deadline = now + timedelta(hours=n)
     # Pure export scenario: no load, no PV — battery exports only.
-    ivs = [
-        ForecastInterval(start=now + timedelta(hours=h), pv_w=0.0, load_w=0.0, dt_h=1.0)
-        for h in range(n)
-    ]
+    ivs = [ForecastInterval(start=now + timedelta(hours=h), pv_w=0.0, load_w=0.0, dt_h=1.0) for h in range(n)]
     slots = _slots(now, prices)
 
     def _run(export_min_block_kwh: float):
@@ -433,7 +419,7 @@ def test_real_dp_submin_dribble_dropped():
             inputs=inputs,
             slots=slots,
             deadline=deadline,
-            ceiling=None,       # no grid charging — pure export test
+            ceiling=None,  # no grid charging — pure export test
             cfg=cfg,
             export_price=0.31,  # current-hour export price (scaled by match ratio)
             export_price_matches_import=True,
@@ -443,8 +429,8 @@ def test_real_dp_submin_dribble_dropped():
             intervals=ivs,
         )
 
-    hour_1 = now + timedelta(hours=1)   # 18:00 UTC — peak run
-    hour_4 = now + timedelta(hours=4)   # 21:00 UTC — potential dribble
+    hour_1 = now + timedelta(hours=1)  # 18:00 UTC — peak run
+    hour_4 = now + timedelta(hours=4)  # 21:00 UTC — potential dribble
 
     # Precondition: with filter disabled, DP produces a sub-min dribble at h=4.
     _, _, _, unfiltered_req, _, _ = _run(export_min_block_kwh=0.0)
@@ -454,8 +440,7 @@ def test_real_dp_submin_dribble_dropped():
     )
     dribble_kwh = unfiltered_req[hour_4] / 1000.0
     assert dribble_kwh < 0.5, (
-        f"Precondition: h=4 export {dribble_kwh:.3f} kWh must be < 0.5 kWh min "
-        f"(otherwise it's not a dribble scenario)."
+        f"Precondition: h=4 export {dribble_kwh:.3f} kWh must be < 0.5 kWh min (otherwise it's not a dribble scenario)."
     )
 
     # Peak at h=1 exists even without filter
@@ -464,9 +449,7 @@ def test_real_dp_submin_dribble_dropped():
 
     # With filter enabled: h=4 dribble must be dropped; h=1 peak must survive.
     _, _, _, filtered_req, export_rev, _ = _run(export_min_block_kwh=0.5)
-    assert hour_4 not in filtered_req, (
-        f"Filter must drop the sub-min dribble ({dribble_kwh:.3f} kWh < 0.5) at h=4"
-    )
+    assert hour_4 not in filtered_req, f"Filter must drop the sub-min dribble ({dribble_kwh:.3f} kWh < 0.5) at h=4"
     assert hour_1 in filtered_req, "Peak run at h=1 must be kept by filter"
     assert filtered_req[hour_1] / 1000.0 >= 0.5, "Kept peak must be ≥ min_block_kwh"
     assert export_rev > 0.0, "Filtered revenue must be positive (peak run generates revenue)"
@@ -479,6 +462,7 @@ def test_real_dp_submin_dribble_dropped():
 # ===========================================================================
 # 7. Charge/export overlap net-out — dominant action preserved, no dual-action
 # ===========================================================================
+
 
 def test_export_dominant_hour_netted_to_export_only():
     """When export > charge for the same hour, export_request keeps the net; charge removed.
@@ -566,15 +550,9 @@ def test_near_equal_charge_export_cancels_to_idle():
 
     hour_2 = NOW + timedelta(hours=2)  # idx 2 — the overlapping hour
 
-    assert hour_2 not in selected, (
-        "Cancelled hour must be absent from selected (idle, not charging)"
-    )
-    assert hour_2 not in grid_request, (
-        "Cancelled hour must be absent from grid_request"
-    )
-    assert hour_2 not in export_request, (
-        "Cancelled hour must be absent from export_request"
-    )
+    assert hour_2 not in selected, "Cancelled hour must be absent from selected (idle, not charging)"
+    assert hour_2 not in grid_request, "Cancelled hour must be absent from grid_request"
+    assert hour_2 not in export_request, "Cancelled hour must be absent from export_request"
 
 
 def test_revenue_reduced_when_export_netted_down():

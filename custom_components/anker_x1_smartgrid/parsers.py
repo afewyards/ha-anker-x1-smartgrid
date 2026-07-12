@@ -1,8 +1,9 @@
 """Pure parsers: Zonneplan price curve and PV forecast curve."""
+
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from . import const
 from .models import PriceSlot
@@ -15,8 +16,8 @@ def _parse_dt(value: str) -> datetime | None:
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
@@ -41,15 +42,9 @@ def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
     slots.sort(key=lambda s: s.start)
     if len(slots) < 2:
         return slots
-    durations = [
-        (slots[i + 1].start - slots[i].start).total_seconds() / 60.0
-        for i in range(len(slots) - 1)
-    ]
+    durations = [(slots[i + 1].start - slots[i].start).total_seconds() / 60.0 for i in range(len(slots) - 1)]
     durations.append(durations[-1])
-    return [
-        PriceSlot(s.start, s.price, duration_min=d)
-        for s, d in zip(slots, durations)
-    ]
+    return [PriceSlot(s.start, s.price, duration_min=d) for s, d in zip(slots, durations)]
 
 
 def synth_pv_curve(
@@ -99,7 +94,9 @@ def synth_pv_curve_peaked(
         if p > start and t <= p:
             w = math.sin((math.pi / 2) * ((t - start) / (p - start)))  # quarter-sine rise
         elif end > p:
-            w = math.sin((math.pi / 2) * max(0.0, (end - t) / (end - p)))  # quarter-sine fall; clamp past-end center -> 0
+            w = math.sin(
+                (math.pi / 2) * max(0.0, (end - t) / (end - p))
+            )  # quarter-sine fall; clamp past-end center -> 0
         else:
             w = 0.0  # defensive; unreachable for non-degenerate
         weights.append(w)
@@ -177,8 +174,8 @@ def build_pv_curve_from_watts(
         return t.replace(minute=minute, second=0, microsecond=0)
 
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    now_h = _floor(now.astimezone(timezone.utc).replace(tzinfo=timezone.utc))
+        now = now.replace(tzinfo=UTC)
+    now_h = _floor(now.astimezone(UTC).replace(tzinfo=UTC))
 
     # Resample EACH source to step_h buckets (mean within bucket) INDEPENDENTLY,
     # then sum the per-bucket means across sources. A coarse (hourly) source keeps
@@ -188,8 +185,7 @@ def build_pv_curve_from_watts(
     for src in sources:
         buckets: dict[datetime, list[float]] = {}
         for dt, w in src:
-            dt_utc = (dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
-                      if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc))
+            dt_utc = dt.astimezone(UTC).replace(tzinfo=UTC) if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
             bucket = _floor(dt_utc)
             if bucket < now_h:
                 continue
@@ -256,9 +252,5 @@ def build_two_day_pv_curve(
             curve.append((fill, 0.0))
             fill += timedelta(hours=step_h)
     if tomorrow_arrays is not None and tomorrow_sunrise is not None and tomorrow_sunset is not None:
-        curve.extend(
-            build_pv_curve_from_arrays(
-                tomorrow_arrays, tomorrow_sunrise, tomorrow_sunset, step_h=step_h
-            )
-        )
+        curve.extend(build_pv_curve_from_arrays(tomorrow_arrays, tomorrow_sunrise, tomorrow_sunset, step_h=step_h))
     return curve

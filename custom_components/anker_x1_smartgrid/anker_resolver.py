@@ -1,4 +1,5 @@
 """Resolve an anker_x1 device_id into the entity roles + scalars x1 needs."""
+
 from __future__ import annotations
 
 import logging
@@ -23,9 +24,7 @@ def _anker_entry_id(hass: HomeAssistant, entries) -> str | None:
     return None
 
 
-def resolve_anker_config(
-    hass: HomeAssistant, device_id: str
-) -> tuple[dict[str, Any], list[str]]:
+def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str, Any], list[str]]:
     """Map an anker_x1 device_id to x1 config values.
 
     Returns (resolved_values, missing_roles):
@@ -36,9 +35,7 @@ def resolve_anker_config(
     never added to missing_roles.
     """
     reg = er.async_get(hass)
-    entries = er.async_entries_for_device(
-        reg, device_id, include_disabled_entities=True
-    )
+    entries = er.async_entries_for_device(reg, device_id, include_disabled_entities=True)
     anker_entry_id = _anker_entry_id(hass, entries)
     if anker_entry_id is None:
         return {}, list(const.ANKER_ROLE_SUFFIXES)
@@ -58,7 +55,9 @@ def resolve_anker_config(
         if ent is None:
             _LOGGER.debug(
                 "Anker device %s: soft role %s (%s) not found; DEFAULT_ENTITIES will apply",
-                device_id, conf_key, suffix,
+                device_id,
+                conf_key,
+                suffix,
             )
         else:
             resolved[conf_key] = ent.entity_id
@@ -90,7 +89,8 @@ def apply_anker_resolution(hass: HomeAssistant, data: dict[str, Any]) -> None:
     if missing:
         _LOGGER.warning(
             "Anker device %s: roles %s unresolved on reload; keeping stored ids",
-            device_id, missing,
+            device_id,
+            missing,
         )
     # ent_pv_power is a user-configurable options multi-select (config_flow),
     # not an Anker device role like the others: the device's own PV sensor is

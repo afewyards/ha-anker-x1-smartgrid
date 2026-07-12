@@ -1,4 +1,5 @@
 """Pure data models for Anker X1 SmartGrid."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from enum import Enum
 from . import const
 
 
-class ControllerState(str, Enum):
+class ControllerState(str, Enum):  # noqa: UP042 -- StrEnum str()/format() differs from (str, Enum); not behavior-neutral to swap
     PASSIVE = "passive"
     FORCING = "forcing"
 
@@ -104,7 +105,7 @@ class Config:
     static_price_export: float = const.DEFAULT_STATIC_PRICE_EXPORT
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Config":
+    def from_dict(cls, d: dict) -> Config:
         fields = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in fields})
 
@@ -186,29 +187,23 @@ class PlanState:
             "state_since": self.state_since.isoformat(),
             "committed_slots": [s.isoformat() for s in self.committed_slots],
             "committed_charge_kwh": self.committed_charge_kwh,
-            "committed_charge_slot": (
-                self.committed_charge_slot.isoformat()
-                if self.committed_charge_slot else None
-            ),
+            "committed_charge_slot": (self.committed_charge_slot.isoformat() if self.committed_charge_slot else None),
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PlanState":
+    def from_dict(cls, d: dict) -> PlanState:
         return cls(
             state=ControllerState(d["state"]),
             state_since=datetime.fromisoformat(d["state_since"]),
-            committed_slots=tuple(
-                datetime.fromisoformat(s) for s in d.get("committed_slots", [])
-            ),
+            committed_slots=tuple(datetime.fromisoformat(s) for s in d.get("committed_slots", [])),
             committed_charge_kwh=float(d.get("committed_charge_kwh", 0.0)),
             committed_charge_slot=(
-                datetime.fromisoformat(d["committed_charge_slot"])
-                if d.get("committed_charge_slot") else None
+                datetime.fromisoformat(d["committed_charge_slot"]) if d.get("committed_charge_slot") else None
             ),
         )
 
     @classmethod
-    def initial(cls, now: datetime) -> "PlanState":
+    def initial(cls, now: datetime) -> PlanState:
         return cls(ControllerState.PASSIVE, now, (), 0.0)
 
 
@@ -226,12 +221,12 @@ class ExportState:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ExportState":
+    def from_dict(cls, d: dict) -> ExportState:
         return cls(
             engaged=bool(d["engaged"]),
             state_since=datetime.fromisoformat(d["state_since"]),
         )
 
     @classmethod
-    def initial(cls, now: datetime) -> "ExportState":
+    def initial(cls, now: datetime) -> ExportState:
         return cls(engaged=False, state_since=now)

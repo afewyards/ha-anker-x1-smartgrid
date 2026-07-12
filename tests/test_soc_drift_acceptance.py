@@ -18,6 +18,7 @@ Two layers kept separate:
        B8b. Real shortfall during export → drift rises (unaccounted drop).
        B9.  Absolute cap: runaway accumulator bounded at ``capacity_kwh``.
 """
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import soc_drift
@@ -32,11 +33,10 @@ from tests.test_optimize_hedge import _resim
 
 # 10 kWh battery, unit efficiency, trough ≈ €0.23, peak ≈ €0.38.
 _TROUGH = 0.23
-_PEAK   = 0.38
+_PEAK = 0.38
 
 
 class TestLayerA_DPEconomics:
-
     def test_a1_cloudy_books_cheap_charge(self):
         """~3.7 kWh hedge debit at trough (h=0) → extra charge lands at cheap hour only.
 
@@ -44,24 +44,29 @@ class TestLayerA_DPEconomics:
         Baseline books nothing (no PV, but SoC above floor).
         Hedged: schedule[0] grows; expensive hours do NOT grow.
         """
-        pv    = [0.0] * 6
-        load  = [0.3] * 6
+        pv = [0.0] * 6
+        load = [0.3] * 6
         price = [_TROUGH, _PEAK, _PEAK, _PEAK, _PEAK, _PEAK]
-        cfg   = make_cfg()
+        cfg = make_cfg()
 
         base = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=50.0, cfg=cfg)
-        hed  = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=50.0, cfg=cfg,
-                             hedge_drain_kwh=[3.7, 0, 0, 0, 0, 0])
+        hed = optimize_grid(
+            pv,
+            load,
+            price,
+            window_start_h=0,
+            window_len=6,
+            soc_start=50.0,
+            cfg=cfg,
+            hedge_drain_kwh=[3.7, 0, 0, 0, 0, 0],
+        )
 
         # Total charge volume must increase (hedge forces more buys)
         assert sum(hed["schedule"]) > sum(base["schedule"]), (
-            f"Hedge should increase charge: base={sum(base['schedule']):.3f}, "
-            f"hed={sum(hed['schedule']):.3f}"
+            f"Hedge should increase charge: base={sum(base['schedule']):.3f}, hed={sum(hed['schedule']):.3f}"
         )
         # Cheap trough hour must NOT be reduced (DP never shrinks cheap slots)
-        assert hed["schedule"][0] >= base["schedule"][0], (
-            "Trough hour must not shrink under hedge"
-        )
+        assert hed["schedule"][0] >= base["schedule"][0], "Trough hour must not shrink under hedge"
         # The total extra charge is bounded: DP only buys when economically justified
         delta = sum(hed["schedule"]) - sum(base["schedule"])
         assert delta > 0.0, "Net charge delta must be positive"
@@ -71,14 +76,22 @@ class TestLayerA_DPEconomics:
 
         The DP bin granularity may round up slightly, but the delta must stay < 1 kWh.
         """
-        pv    = [0.0] * 6
-        load  = [0.3] * 6
+        pv = [0.0] * 6
+        load = [0.3] * 6
         price = [_TROUGH, _PEAK, _PEAK, _PEAK, _PEAK, _PEAK]
-        cfg   = make_cfg()
+        cfg = make_cfg()
 
         base = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=50.0, cfg=cfg)
-        hed  = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=50.0, cfg=cfg,
-                             hedge_drain_kwh=[0.1, 0, 0, 0, 0, 0])
+        hed = optimize_grid(
+            pv,
+            load,
+            price,
+            window_start_h=0,
+            window_len=6,
+            soc_start=50.0,
+            cfg=cfg,
+            hedge_drain_kwh=[0.1, 0, 0, 0, 0, 0],
+        )
 
         delta = sum(hed["schedule"]) - sum(base["schedule"])
         assert delta >= 0.0, "Small hedge must not decrease total charge"
@@ -89,19 +102,25 @@ class TestLayerA_DPEconomics:
 
         Price layout: €0.40 everywhere except €0.20 at h=2.
         """
-        pv    = [0.0] * 6
-        load  = [0.3] * 6
+        pv = [0.0] * 6
+        load = [0.3] * 6
         price = [0.40, 0.40, 0.20, 0.40, 0.40, 0.40]
-        cfg   = make_cfg()
+        cfg = make_cfg()
 
         base = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=40.0, cfg=cfg)
-        hed  = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=40.0, cfg=cfg,
-                             hedge_drain_kwh=[0, 0, 2.0, 0, 0, 0])
+        hed = optimize_grid(
+            pv,
+            load,
+            price,
+            window_start_h=0,
+            window_len=6,
+            soc_start=40.0,
+            cfg=cfg,
+            hedge_drain_kwh=[0, 0, 2.0, 0, 0, 0],
+        )
 
         # The mid-window cheap hour must absorb more charge
-        assert hed["schedule"][2] >= base["schedule"][2], (
-            "Trough at h=2 must absorb more charge under hedge"
-        )
+        assert hed["schedule"][2] >= base["schedule"][2], "Trough at h=2 must absorb more charge under hedge"
         # Total charge grows
         assert sum(hed["schedule"]) >= sum(base["schedule"])
 
@@ -112,18 +131,24 @@ class TestLayerA_DPEconomics:
         Before MAJOR-1: backtrack recomputed floor-import without the hedge → eur drifted.
         After: stored fi_eur/fi_kwh must match an independent re-simulation within FP tolerance.
         """
-        pv    = [0.0] * 6
-        load  = [0.5] * 6
+        pv = [0.0] * 6
+        load = [0.5] * 6
         price = [0.10, 0.40, 0.40, 0.40, 0.40, 0.40]
-        hedge = [3.0,  0.0,  0.0,  0.0,  0.0,  0.0]
-        cfg   = make_cfg()
+        hedge = [3.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        cfg = make_cfg()
 
-        res = optimize_grid(pv, load, price, window_start_h=0, window_len=6, soc_start=12.0,
-                            cfg=cfg, hedge_drain_kwh=hedge)
+        res = optimize_grid(
+            pv, load, price, window_start_h=0, window_len=6, soc_start=12.0, cfg=cfg, hedge_drain_kwh=hedge
+        )
 
         expected_eur, expected_kwh = _resim(
-            res["schedule"], hedge=hedge,
-            pv=pv, load=load, price=price, soc_start=12.0, cfg=cfg,
+            res["schedule"],
+            hedge=hedge,
+            pv=pv,
+            load=load,
+            price=price,
+            soc_start=12.0,
+            cfg=cfg,
         )
         assert res["eur"] == pytest.approx(expected_eur, abs=1e-6), (
             f"eur mismatch: result={res['eur']:.6f}, resim={expected_eur:.6f}"
@@ -138,16 +163,15 @@ class TestLayerA_DPEconomics:
 # ---------------------------------------------------------------------------
 
 # Shared constants: 10 kWh battery, unit efficiencies, slow decay, deadband 0.3 kWh.
-_CAP_KWH  = 10.0
-_ETA_C    = 1.0
-_ETA_D    = 1.0
+_CAP_KWH = 10.0
+_ETA_C = 1.0
+_ETA_D = 1.0
 _DEADBAND = 0.3
-_HALFLIFE = 24.0   # slow decay — keeps signal clear in short test sequences
-_RELEASE  = 0.5 * _DEADBAND   # 0.15 kWh release threshold
+_HALFLIFE = 24.0  # slow decay — keeps signal clear in short test sequences
+_RELEASE = 0.5 * _DEADBAND  # 0.15 kWh release threshold
 
 
 class TestLayerB_ClosedLoopSignal:
-
     def test_b5_underdelivery_accumulates_positive_drift(self):
         """Forecast 2500 W net surplus, measured flat SoC → per_step > 0 → drift builds.
 
@@ -155,11 +179,11 @@ class TestLayerB_ClosedLoopSignal:
         Accumulator crosses the engage deadband → drift_kwh returns (>0, True).
         """
         dt_h = 5.0 / 60.0
-        pv_w, load_w = 3000.0, 500.0   # 2500 W net expected
+        pv_w, load_w = 3000.0, 500.0  # 2500 W net expected
 
         expected_dc = soc_drift.expected_soc_delta_kwh(pv_w, load_w, dt_h, _ETA_C, _ETA_D)
         measured_dc = soc_drift.measured_soc_delta_kwh(60.0, 60.0, _CAP_KWH)  # flat
-        per_step    = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, 0.0)
+        per_step = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, 0.0)
 
         assert per_step > 0.0, "Underdelivery must yield positive per-step drift"
 
@@ -211,14 +235,14 @@ class TestLayerB_ClosedLoopSignal:
         dt_h = 5.0 / 60.0
 
         # Seed accumulator just above engage
-        acc     = _DEADBAND + 0.05   # 0.35 kWh
+        acc = _DEADBAND + 0.05  # 0.35 kWh
         engaged = True
 
         # Over-delivery: expected slight deficit (200 W PV, 500 W load → −300 W net)
         # but measured SoC jumps +5% = +0.5 kWh DC (grid charge)
         expected_dc = soc_drift.expected_soc_delta_kwh(200.0, 500.0, dt_h, _ETA_C, _ETA_D)
         measured_dc = soc_drift.measured_soc_delta_kwh(65.0, 60.0, _CAP_KWH)  # +0.5 kWh
-        per_step    = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, 0.0)
+        per_step = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, 0.0)
         assert per_step < 0.0, "Over-delivery step must be negative"
 
         for _ in range(25):
@@ -240,14 +264,14 @@ class TestLayerB_ClosedLoopSignal:
         Measured: 60% → 59.5% = −0.05 kWh DC (exactly what was exported).
         per_step = 0 − (−0.05 + 0.05) = 0.
         """
-        dt_h   = 1.0 / 60.0
+        dt_h = 1.0 / 60.0
         tick_h = 1.0 / 60.0
 
-        expected_dc         = soc_drift.expected_soc_delta_kwh(0.0, 0.0, dt_h, _ETA_C, _ETA_D)
-        measured_dc         = soc_drift.measured_soc_delta_kwh(59.5, 60.0, _CAP_KWH)   # −0.05
-        last_export_kwh_dc  = 0.05
-        export_dc_step      = last_export_kwh_dc * dt_h / tick_h                        # = 0.05
-        per_step            = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, export_dc_step)
+        expected_dc = soc_drift.expected_soc_delta_kwh(0.0, 0.0, dt_h, _ETA_C, _ETA_D)
+        measured_dc = soc_drift.measured_soc_delta_kwh(59.5, 60.0, _CAP_KWH)  # −0.05
+        last_export_kwh_dc = 0.05
+        export_dc_step = last_export_kwh_dc * dt_h / tick_h  # = 0.05
+        per_step = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, export_dc_step)
 
         assert per_step == pytest.approx(0.0, abs=1e-6), (
             f"Export exactly explains drop — per_step should be 0, got {per_step:.8f}"
@@ -259,19 +283,17 @@ class TestLayerB_ClosedLoopSignal:
         Same setup as b8 but SoC drops twice as much (−0.10 kWh vs −0.05 commanded).
         per_step = 0 − (−0.10 + 0.05) = +0.05 kWh.
         """
-        dt_h   = 1.0 / 60.0
+        dt_h = 1.0 / 60.0
         tick_h = 1.0 / 60.0
 
-        expected_dc        = soc_drift.expected_soc_delta_kwh(0.0, 0.0, dt_h, _ETA_C, _ETA_D)
-        measured_dc        = soc_drift.measured_soc_delta_kwh(59.0, 60.0, _CAP_KWH)   # −0.10
+        expected_dc = soc_drift.expected_soc_delta_kwh(0.0, 0.0, dt_h, _ETA_C, _ETA_D)
+        measured_dc = soc_drift.measured_soc_delta_kwh(59.0, 60.0, _CAP_KWH)  # −0.10
         last_export_kwh_dc = 0.05
-        export_dc_step     = last_export_kwh_dc * dt_h / tick_h                        # = 0.05
-        per_step           = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, export_dc_step)
+        export_dc_step = last_export_kwh_dc * dt_h / tick_h  # = 0.05
+        per_step = soc_drift.per_step_drift_kwh(expected_dc, measured_dc, export_dc_step)
 
         # 0 − (−0.10 + 0.05) = 0 − (−0.05) = +0.05
-        assert per_step == pytest.approx(0.05, abs=1e-6), (
-            f"Residual shortfall should be +0.05 kWh, got {per_step:.8f}"
-        )
+        assert per_step == pytest.approx(0.05, abs=1e-6), f"Residual shortfall should be +0.05 kWh, got {per_step:.8f}"
 
     def test_b9_absolute_cap_bounds_runaway(self):
         """cap_accumulator clamps the accumulator at capacity_kwh even under runaway input.
@@ -280,16 +302,14 @@ class TestLayerB_ClosedLoopSignal:
         Invariant: acc ≤ capacity_kwh at all times.
         Steady-state: acc saturates at exactly capacity_kwh (within FP tolerance).
         """
-        dt_h  = 5.0 / 60.0
-        per_step = 0.5   # large per-step value — uncapped asymptote >> capacity_kwh
+        dt_h = 5.0 / 60.0
+        per_step = 0.5  # large per-step value — uncapped asymptote >> capacity_kwh
 
         acc = 0.0
         for i in range(100):
             acc = soc_drift.accumulate(acc, per_step, dt_h=dt_h, halflife_h=_HALFLIFE)
             acc = soc_drift.cap_accumulator(acc, _CAP_KWH)
-            assert acc <= _CAP_KWH + 1e-9, (
-                f"Step {i}: accumulator {acc:.4f} exceeded cap {_CAP_KWH}"
-            )
+            assert acc <= _CAP_KWH + 1e-9, f"Step {i}: accumulator {acc:.4f} exceeded cap {_CAP_KWH}"
 
         # After saturation the value must be pinned at the cap
         assert acc == pytest.approx(_CAP_KWH, abs=0.05), (

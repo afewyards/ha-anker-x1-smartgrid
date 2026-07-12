@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.dataquality import FeatureRow
 from custom_components.anker_x1_smartgrid import backtest
 
@@ -12,7 +12,7 @@ def test_mae_rmse_basic():
 def _series():
     # 20 days, hour 8 only; cold days (temp 2) load 1000, warm days (temp 18) load 300
     rows = []
-    base = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
     for d in range(20):
         ts = base + timedelta(days=d)
         cold = d % 2 == 0
@@ -39,13 +39,18 @@ def test_walk_forward_handles_insufficient_data():
 # Backward-compatibility: all pre-existing keys still present with defaults
 # ---------------------------------------------------------------------------
 
+
 def test_walk_forward_existing_keys_unchanged():
     """New params must not remove or alter any pre-existing return key."""
     rows = _series()
     res = backtest.walk_forward(rows, train_days=10, test_days=1, fallback_w=500.0)
     for key in (
-        "model_mae", "baseline_mae", "model_rmse", "baseline_rmse",
-        "n_test", "improvement_pct",
+        "model_mae",
+        "baseline_mae",
+        "model_rmse",
+        "baseline_rmse",
+        "n_test",
+        "improvement_pct",
     ):
         assert key in res, f"missing pre-existing key: {key}"
 
@@ -55,9 +60,11 @@ def test_walk_forward_new_keys_present():
     rows = _series()
     res = backtest.walk_forward(rows, train_days=10, test_days=1, fallback_w=500.0)
     for key in (
-        "horizon_energy_mae_24h", "horizon_energy_mae_12h",
+        "horizon_energy_mae_24h",
+        "horizon_energy_mae_12h",
         "baseline_horizon_energy_mae_24h",
-        "pinball_p50", "pinball_p80",
+        "pinball_p50",
+        "pinball_p80",
     ):
         assert key in res, f"missing new key: {key}"
 
@@ -66,19 +73,25 @@ def test_walk_forward_new_keys_present():
 # horizon_energy_mae — hand-computable expected values
 # ---------------------------------------------------------------------------
 
+
 def _hourly_series(n_days=60, train_load=800.0, test_load=1200.0):
     """n_days of hourly FeatureRows; first half at train_load, second half at test_load."""
     rows = []
-    base = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)  # Monday
+    base = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)  # Monday
     half = n_days // 2
     for d in range(n_days):
         for h in range(24):
             ts = base + timedelta(days=d, hours=h)
             load = train_load if d < half else test_load
-            rows.append(FeatureRow(
-                ts=ts, hour=h, is_weekend=(ts.weekday() >= 5),
-                load_w=load, temp=10.0,
-            ))
+            rows.append(
+                FeatureRow(
+                    ts=ts,
+                    hour=h,
+                    is_weekend=(ts.weekday() >= 5),
+                    load_w=load,
+                    temp=10.0,
+                )
+            )
     return rows
 
 
@@ -101,7 +114,10 @@ def test_horizon_energy_mae_24h_hand_computed():
     """
     rows = _hourly_series(n_days=60, train_load=800.0, test_load=1200.0)
     res = backtest.walk_forward(
-        rows, train_days=30, test_days=30, fallback_w=0.0,
+        rows,
+        train_days=30,
+        test_days=30,
+        fallback_w=0.0,
     )
     assert res["horizon_energy_mae_24h"] is not None
     assert res["horizon_energy_mae_12h"] is not None
@@ -123,6 +139,7 @@ def test_horizon_energy_none_when_insufficient_rows():
 # ---------------------------------------------------------------------------
 # pinball_loss — pure function, hand-checked
 # ---------------------------------------------------------------------------
+
 
 def test_pinball_loss_underprediction_p50():
     """q=0.5, predicted < actual: loss = q * (a - p) = 0.5 * 10 = 5.0."""
@@ -176,6 +193,7 @@ def test_pinball_loss_average_over_multiple_pairs():
 # walk_forward pinball: BucketedLoadModel now accepts quantile → pinball computed
 # ---------------------------------------------------------------------------
 
+
 def test_walk_forward_pinball_computed_for_bucketed_model():
     """BucketedLoadModel now accepts a quantile kwarg, so walk_forward computes pinball_p50/p80 (no longer None)."""
     rows = _series()
@@ -189,6 +207,7 @@ def test_walk_forward_pinball_computed_for_bucketed_model():
 # ---------------------------------------------------------------------------
 # should_promote — promotion gate
 # ---------------------------------------------------------------------------
+
 
 def test_should_promote_true_when_beats_both():
     """Strictly better on both horizon-energy-24h AND MAE → promote."""
@@ -241,9 +260,9 @@ def test_should_promote_false_worse_on_horizon():
 def test_should_promote_false_when_improvement_below_margin():
     """Beats baseline on both metrics but by < PROMOTE_MIN_IMPROVEMENT → no promote."""
     metrics = {
-        "horizon_energy_mae_24h": 1.99,            # 0.5% better than 2.0 (< 2% margin)
+        "horizon_energy_mae_24h": 1.99,  # 0.5% better than 2.0 (< 2% margin)
         "baseline_horizon_energy_mae_24h": 2.0,
-        "model_mae": 99.5,                          # 0.5% better than 100 (< 2% margin)
+        "model_mae": 99.5,  # 0.5% better than 100 (< 2% margin)
         "baseline_mae": 100.0,
         "n_horizon_origins_24h": 8,
     }
@@ -253,9 +272,9 @@ def test_should_promote_false_when_improvement_below_margin():
 def test_should_promote_true_when_improvement_clears_margin():
     """Beats baseline on both metrics by > PROMOTE_MIN_IMPROVEMENT → promote."""
     metrics = {
-        "horizon_energy_mae_24h": 1.90,            # 5% better
+        "horizon_energy_mae_24h": 1.90,  # 5% better
         "baseline_horizon_energy_mae_24h": 2.0,
-        "model_mae": 95.0,                          # 5% better
+        "model_mae": 95.0,  # 5% better
         "baseline_mae": 100.0,
         "n_horizon_origins_24h": 8,
     }
@@ -267,14 +286,19 @@ def test_baseline_buckets_amsterdam_local_hour():
     key must use local time so it aligns with the HGBR local calendar."""
     rows = [{"hour_ts": "2026-07-03T22:00:00+00:00", "house_load_mean": 500.0}]  # Fri 22:00Z = Sat 00:00 local
     base = backtest._baseline_fit_hourly(rows)
-    assert (True, 0) in base            # (is_weekend=Sat, hour=0 local)
-    assert (False, 22) not in base      # NOT the raw-UTC (Fri, 22) key
+    assert (True, 0) in base  # (is_weekend=Sat, hour=0 local)
+    assert (False, 22) not in base  # NOT the raw-UTC (Fri, 22) key
+
 
 def test_promote_requires_min_horizon_origins():
     """Primary 24h gate must not promote on too few rolling origins."""
-    m = {"model_mae": 1.0, "baseline_mae": 2.0,
-         "horizon_energy_mae_24h": 1.0, "baseline_horizon_energy_mae_24h": 2.0,
-         "n_horizon_origins_24h": 3}
+    m = {
+        "model_mae": 1.0,
+        "baseline_mae": 2.0,
+        "horizon_energy_mae_24h": 1.0,
+        "baseline_horizon_energy_mae_24h": 2.0,
+        "n_horizon_origins_24h": 3,
+    }
     assert backtest.should_promote(m) is False
     m_ok = {**m, "n_horizon_origins_24h": 8}
     assert backtest.should_promote(m_ok) is True
@@ -304,7 +328,7 @@ def test_should_promote_gappy_fallback_promotes_with_enough_samples():
     metrics = {
         "horizon_energy_mae_24h": None,
         "baseline_horizon_energy_mae_24h": None,
-        "model_mae": 90.0,                          # 10% better than baseline
+        "model_mae": 90.0,  # 10% better than baseline
         "baseline_mae": 100.0,
         "n_test": backtest.MIN_PROMOTE_MAE_SAMPLES,
     }
@@ -328,7 +352,7 @@ def test_should_promote_gappy_fallback_denied_below_margin():
     metrics = {
         "horizon_energy_mae_24h": None,
         "baseline_horizon_energy_mae_24h": None,
-        "model_mae": 99.5,                          # 0.5% better (< 2% margin)
+        "model_mae": 99.5,  # 0.5% better (< 2% margin)
         "baseline_mae": 100.0,
         "n_test": 10_000,
     }
@@ -350,6 +374,7 @@ def test_should_promote_gappy_fallback_denied_without_n_test():
 # walk_forward_hgbr — HGBR rolling-origin backtest
 # ---------------------------------------------------------------------------
 
+
 def _make_hourly_rows(n_days: int, base_load_w: float = 800.0, temp_c: float = 10.0):
     """Generate ``n_days * 24`` hourly rollup row dicts with all feature columns.
 
@@ -359,20 +384,23 @@ def _make_hourly_rows(n_days: int, base_load_w: float = 800.0, temp_c: float = 1
     """
     from datetime import datetime, timezone, timedelta
     import math as _math
+
     rows = []
-    base = datetime(2025, 1, 8, 0, 0, tzinfo=timezone.utc)  # Wednesday — matches test_hgbr convention
+    base = datetime(2025, 1, 8, 0, 0, tzinfo=UTC)  # Wednesday — matches test_hgbr convention
     for d in range(n_days):
         for h in range(24):
             ts = base + timedelta(days=d, hours=h)
-            rows.append({
-                "hour_ts": ts.isoformat(),
-                "house_load_mean": base_load_w + h * 5.0,  # slight hour-to-hour variation
-                "temp_forecast_mean": temp_c,
-                "cloud_cover_mean": 0.5,
-                "humidity_mean": 60.0,
-                "wind_speed_mean": 3.0,
-                "irradiance_mean": max(0.0, 300.0 * _math.sin((h - 6) / 12 * _math.pi)),
-            })
+            rows.append(
+                {
+                    "hour_ts": ts.isoformat(),
+                    "house_load_mean": base_load_w + h * 5.0,  # slight hour-to-hour variation
+                    "temp_forecast_mean": temp_c,
+                    "cloud_cover_mean": 0.5,
+                    "humidity_mean": 60.0,
+                    "wind_speed_mean": 3.0,
+                    "irradiance_mean": max(0.0, 300.0 * _math.sin((h - 6) / 12 * _math.pi)),
+                }
+            )
     return rows
 
 
@@ -402,12 +430,18 @@ def test_walk_forward_hgbr_returns_same_keys_as_walk_forward():
     rows = _make_hourly_rows(n_days=20)
     res = backtest.walk_forward_hgbr(rows, train_days=10, test_days=3, fallback_w=500.0)
     expected_keys = {
-        "model_mae", "baseline_mae", "model_rmse", "baseline_rmse",
-        "n_test", "improvement_pct",
-        "horizon_energy_mae_24h", "horizon_energy_mae_12h",
+        "model_mae",
+        "baseline_mae",
+        "model_rmse",
+        "baseline_rmse",
+        "n_test",
+        "improvement_pct",
+        "horizon_energy_mae_24h",
+        "horizon_energy_mae_12h",
         "baseline_horizon_energy_mae_24h",
         "n_horizon_origins_24h",
-        "pinball_p50", "pinball_p80",
+        "pinball_p50",
+        "pinball_p80",
     }
     assert set(res.keys()) == expected_keys
 
@@ -465,31 +499,35 @@ def test_walk_forward_hgbr_baseline_mae_hand_computed():
     """
     from datetime import datetime, timezone, timedelta as _td
 
-    base = datetime(2025, 1, 8, 0, 0, tzinfo=timezone.utc)  # same start as test_hgbr
+    base = datetime(2025, 1, 8, 0, 0, tzinfo=UTC)  # same start as test_hgbr
     rows = []
-    for d in range(10):          # train at 1000 W
+    for d in range(10):  # train at 1000 W
         for h in range(24):
-            rows.append({
-                "hour_ts": (base + _td(days=d, hours=h)).isoformat(),
-                "house_load_mean": 1000.0,
-                "temp_forecast_mean": 10.0,
-                "cloud_cover_mean": 0.5,
-                "humidity_mean": 60.0,
-                "wind_speed_mean": 3.0,
-                "irradiance_mean": 0.0,
-            })
-    for d in range(10, 20):      # test at 1500 W
+            rows.append(
+                {
+                    "hour_ts": (base + _td(days=d, hours=h)).isoformat(),
+                    "house_load_mean": 1000.0,
+                    "temp_forecast_mean": 10.0,
+                    "cloud_cover_mean": 0.5,
+                    "humidity_mean": 60.0,
+                    "wind_speed_mean": 3.0,
+                    "irradiance_mean": 0.0,
+                }
+            )
+    for d in range(10, 20):  # test at 1500 W
         for h in range(24):
-            rows.append({
-                "hour_ts": (base + _td(days=d, hours=h)).isoformat(),
-                "house_load_mean": 1500.0,
-                "temp_forecast_mean": 10.0,
-                "cloud_cover_mean": 0.5,
-                "humidity_mean": 60.0,
-                "wind_speed_mean": 3.0,
-                "irradiance_mean": 0.0,
-            })
+            rows.append(
+                {
+                    "hour_ts": (base + _td(days=d, hours=h)).isoformat(),
+                    "house_load_mean": 1500.0,
+                    "temp_forecast_mean": 10.0,
+                    "cloud_cover_mean": 0.5,
+                    "humidity_mean": 60.0,
+                    "wind_speed_mean": 3.0,
+                    "irradiance_mean": 0.0,
+                }
+            )
 
     res = backtest.walk_forward_hgbr(rows, train_days=10, test_days=10, fallback_w=500.0)
     assert res["baseline_mae"] is not None
-    assert abs(res["baseline_mae"] - 500.0) < 1.0   # allow tiny float rounding
+    assert abs(res["baseline_mae"] - 500.0) < 1.0  # allow tiny float rounding

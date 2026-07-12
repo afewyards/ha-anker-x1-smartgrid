@@ -17,6 +17,7 @@ this down explicitly with a hand-derived golden. Scenarios (b)-(d) exercise
 cfg.soc_floor values ABOVE the firmware floor (10%, 20%), where the new
 semantics actually diverge from the old fake-wall behaviour.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,8 +47,14 @@ def _call_both(pv, load, price, soc_start, cfg, **kwargs):
     day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=soc_start)
     hind = hindsight_optimal_grid(day, cfg, **kwargs)
     opt = optimize_grid(
-        pv, load, price, soc_start=soc_start, cfg=cfg,
-        window_start_h=0, window_len=n, **kwargs,
+        pv,
+        load,
+        price,
+        soc_start=soc_start,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        **kwargs,
     )
     return opt, hind
 
@@ -77,9 +84,9 @@ class TestFloorEqualsFirmwareGolden:
         assert const.FIRMWARE_SOC_FLOOR == 5.0
         return Config(
             capacity_kwh=10.0,
-            soc_floor=5.0,          # == firmware floor: no-op scenario
-            soc_target=5.0,         # trivial reserve (== floor) — no forced charge
-            max_charge_w=0.0,       # charging impossible — pure drain accounting
+            soc_floor=5.0,  # == firmware floor: no-op scenario
+            soc_target=5.0,  # trivial reserve (== floor) — no forced charge
+            max_charge_w=0.0,  # charging impossible — pure drain accounting
             eta_charge=1.0,
             round_trip_eff=1.0,
         )
@@ -172,9 +179,15 @@ class TestFloor10DeficitNight:
         pv, load, price = self._scenario()
         cfg = self._cfg()
         opt = optimize_grid(
-            pv, load, price, soc_start=15.0, cfg=cfg,
-            window_start_h=0, window_len=len(pv),
-            terminal_mode="water_value", water_value=0.0,
+            pv,
+            load,
+            price,
+            soc_start=15.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=len(pv),
+            terminal_mode="water_value",
+            water_value=0.0,
         )
         # No economic reason to charge (flat price, water_value=0) -> the DP
         # should ride the natural drain, NOT force a top-up charge to hold
@@ -191,9 +204,15 @@ class TestFloor10DeficitNight:
         pv, load, price = self._scenario()
         cfg = self._cfg()
         opt = optimize_grid(
-            pv, load, price, soc_start=15.0, cfg=cfg,
-            window_start_h=0, window_len=len(pv),
-            terminal_mode="water_value", water_value=0.0,
+            pv,
+            load,
+            price,
+            soc_start=15.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=len(pv),
+            terminal_mode="water_value",
+            water_value=0.0,
         )
         # No charging anywhere -> trajectory is deterministic: soc(h) = 1.5 - 0.1*(h+1)
         soc_traj = [1.5 - 0.1 * (i + 1) for i in range(8)]
@@ -217,7 +236,11 @@ class TestFloor10DeficitNight:
         price = [0.01, 0.30, 0.30, 0.30]  # h0 dirt cheap vs the rest
         cfg = self._cfg(soc_target=20.0)  # reachable reserve within the window
         opt, hind = _call_both(
-            pv, load, price, soc_start=15.0, cfg=cfg,
+            pv,
+            load,
+            price,
+            soc_start=15.0,
+            cfg=cfg,
             terminal_mode="reserve",
         )
         _assert_parity(opt, hind)
@@ -240,21 +263,25 @@ class TestFloor10ExportFloorUnchanged:
     def test_export_blocked_below_soft_floor(self):
         cfg = Config(
             capacity_kwh=10.0,
-            soc_floor=10.0,          # 1.0 kWh soft/decision floor
-            soc_target=10.0,         # trivial reserve
+            soc_floor=10.0,  # 1.0 kWh soft/decision floor
+            soc_target=10.0,  # trivial reserve
             eta_charge=1.0,
-            round_trip_eff=1.0,      # eta_discharge = 1.0
+            round_trip_eff=1.0,  # eta_discharge = 1.0
             cycle_cost_eur_per_kwh=0.0,
             max_export_w=6000.0,
             grid_export_limit_w=6000.0,
         )
         pv = [0.0]
-        load = [0.0]          # net=0 -> soc_after == soc_start exactly
+        load = [0.0]  # net=0 -> soc_after == soc_start exactly
         price = [0.20]
         export_price = [1.0]  # deep in the money -> export hurdle clears easily
 
         opt, hind = _call_both(
-            pv, load, price, soc_start=15.0, cfg=cfg,
+            pv,
+            load,
+            price,
+            soc_start=15.0,
+            cfg=cfg,
             export_price=export_price,
         )
         _assert_parity(opt, hind)
@@ -337,7 +364,7 @@ class TestRealizedGridCostFirmwareFloor:
         floor (0.5 kWh) before any forced import is booked."""
         cfg = Config(
             capacity_kwh=10.0,
-            soc_floor=10.0,   # 1.0 kWh soft floor — must NOT gate imports
+            soc_floor=10.0,  # 1.0 kWh soft floor — must NOT gate imports
             soc_target=80.0,
             max_charge_w=3000.0,
             eta_charge=1.0,
@@ -347,8 +374,10 @@ class TestRealizedGridCostFirmwareFloor:
         load = [1.0] * 4
         price = [0.20] * 4
         day = DayData(
-            pv_kwh=tuple(pv), load_kwh=tuple(load),
-            price=tuple(price), soc_start=15.0,
+            pv_kwh=tuple(pv),
+            load_kwh=tuple(load),
+            price=tuple(price),
+            soc_start=15.0,
         )
 
         result = realized_grid_cost(day, [0.0] * 4, cfg)
@@ -357,7 +386,8 @@ class TestRealizedGridCostFirmwareFloor:
         # though 0.5 kWh is already well below the 1.0 kWh SOFT floor.
         # h1-h3: 0.5 -> -0.5 each hour -> clamp to 0.5 -> 1.0 kWh import each.
         assert result["forced_import_kwh"] == pytest.approx(
-            [0.0, 1.0, 1.0, 1.0], abs=1e-9,
+            [0.0, 1.0, 1.0, 1.0],
+            abs=1e-9,
         )
         assert result["kwh"] == pytest.approx(3.0, abs=1e-9)
         assert result["eur"] == pytest.approx(0.60, abs=1e-9)
@@ -378,8 +408,10 @@ class TestRealizedGridCostFirmwareFloor:
         load = [1.3]  # 2.0 kWh (20%) -> 0.7 kWh (7%), above the firmware floor
         price = [0.20]
         day = DayData(
-            pv_kwh=tuple(pv), load_kwh=tuple(load),
-            price=tuple(price), soc_start=20.0,
+            pv_kwh=tuple(pv),
+            load_kwh=tuple(load),
+            price=tuple(price),
+            soc_start=20.0,
         )
 
         result = realized_grid_cost(day, [0.0], cfg)

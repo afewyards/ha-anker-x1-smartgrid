@@ -6,10 +6,11 @@ Public API under test:
 Stable output keys:
     hour_sin, hour_cos, doy_sin, doy_cos, day_of_week, is_holiday
 """
+
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 
 from zoneinfo import ZoneInfo
 
@@ -25,7 +26,7 @@ from custom_components.anker_x1_smartgrid.featureset import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-UTC = timezone.utc
+UTC = UTC
 _TZ_AMS = ZoneInfo("Europe/Amsterdam")
 
 
@@ -182,9 +183,7 @@ class TestDayOfWeek:
         """2026-06-21T23:30:00+00:00 → 2026-06-22T01:30:00 CEST → Monday (0)."""
         ts = datetime(2026, 6, 21, 23, 30, 0, tzinfo=UTC)
         f = encode_calendar_features(ts)
-        assert f["day_of_week"] == 0, (
-            f"2026-06-21 23:30 UTC should be Monday local (0), got {f['day_of_week']}"
-        )
+        assert f["day_of_week"] == 0, f"2026-06-21 23:30 UTC should be Monday local (0), got {f['day_of_week']}"
 
 
 # ---------------------------------------------------------------------------
@@ -237,9 +236,7 @@ class TestInputForms:
         ts_str = "2026-06-20T12:00:00+00:00"
         f_dt = encode_calendar_features(ts_dt)
         f_str = encode_calendar_features(ts_str)
-        assert f_dt == f_str, (
-            f"datetime and ISO-string inputs should produce identical results:\n{f_dt}\nvs\n{f_str}"
-        )
+        assert f_dt == f_str, f"datetime and ISO-string inputs should produce identical results:\n{f_dt}\nvs\n{f_str}"
 
     def test_iso_string_with_zulu_suffix(self):
         """Accept 'Z' suffix (Python 3.11+ fromisoformat supports it)."""
@@ -322,6 +319,7 @@ class TestReturnShape:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _row(hour_ts: str, house_load_mean, **extra) -> dict:
     """Build a minimal hourly rollup row for lag/matrix tests."""
@@ -412,9 +410,9 @@ class TestRollingMean24h:
         """Only 3 of 24 window hours present; mean over those 3."""
         # t-3h, t-12h, t-24h are all inside (t-24h .. t-1h)
         rows = [
-            _row("2026-06-21T12:00:00+00:00", 120.0),   # t-24h (boundary, included)
-            _row("2026-06-22T00:00:00+00:00", 240.0),   # t-12h
-            _row("2026-06-22T09:00:00+00:00", 360.0),   # t-3h
+            _row("2026-06-21T12:00:00+00:00", 120.0),  # t-24h (boundary, included)
+            _row("2026-06-22T00:00:00+00:00", 240.0),  # t-12h
+            _row("2026-06-22T09:00:00+00:00", 360.0),  # t-3h
             _row(self._T, 50.0),
         ]
         f = encode_lag_features(rows, 3)
@@ -431,7 +429,7 @@ class TestRollingMean24h:
         """The rolling mean window is (t-24h..t-1h) — does NOT include t."""
         rows = [
             _row("2026-06-22T11:00:00+00:00", 100.0),  # t-1h (in window)
-            _row(self._T, 999.0),                        # t (NOT in window)
+            _row(self._T, 999.0),  # t (NOT in window)
         ]
         f = encode_lag_features(rows, 1)
         assert abs(f["rolling_mean_24h"] - 100.0) < 1e-9
@@ -459,7 +457,7 @@ class TestRollingMean24h:
     def test_none_load_rows_excluded_from_window(self):
         """None house_load_mean rows don't contribute to the rolling mean."""
         rows = [
-            _row("2026-06-22T10:00:00+00:00", None),   # t-2h, None → skip
+            _row("2026-06-22T10:00:00+00:00", None),  # t-2h, None → skip
             _row("2026-06-22T11:00:00+00:00", 200.0),  # t-1h, valid
             _row(self._T, 50.0),
         ]
@@ -519,7 +517,7 @@ class TestPrevDayTotalKwh:
         Target 2026-01-16T10:00Z → prev_local_date = 2026-01-15."""
         rows = [
             _row("2026-01-15T00:00:00+00:00", 500.0, house_load_kwh_sum=0.5),  # CET 01:00 → local 2026-01-15
-            _row("2026-01-16T10:00:00+00:00", 50.0),   # target
+            _row("2026-01-16T10:00:00+00:00", 50.0),  # target
         ]
         f = encode_lag_features(rows, 1)
         assert abs(f["prev_day_total_kwh"] - 0.5) < 1e-9
@@ -528,7 +526,9 @@ class TestPrevDayTotalKwh:
         """Rows from local today do NOT count toward prev_day_total_kwh."""
         rows = [
             _row("2026-06-21T22:00:00+00:00", 5000.0, house_load_kwh_sum=5.0),  # CEST 00:00 = local 2026-06-22 (today!)
-            _row("2026-06-20T22:00:00+00:00", 1000.0, house_load_kwh_sum=1.0),  # CEST 00:00 = local 2026-06-21 (yesterday)
+            _row(
+                "2026-06-20T22:00:00+00:00", 1000.0, house_load_kwh_sum=1.0
+            ),  # CEST 00:00 = local 2026-06-21 (yesterday)
             _row(self._T, 50.0),
         ]
         f = encode_lag_features(rows, 2)
@@ -683,9 +683,23 @@ class TestWeatherFeatures:
 # 6 calendar + 5 lags + 6 weather = 17 features.
 # NOTE: live ambient temp (temp_mean) is intentionally absent — train/serve skew risk.
 _EXPECTED_FEATURE_NAMES = [
-    "hour_sin", "hour_cos", "doy_sin", "doy_cos", "day_of_week", "is_holiday",
-    "load_lag_1h", "load_lag_24h", "load_lag_168h", "rolling_mean_24h", "prev_day_total_kwh",
-    "temp_forecast", "hdd", "cdd", "cloud_cover", "humidity", "wind_speed",
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos",
+    "day_of_week",
+    "is_holiday",
+    "load_lag_1h",
+    "load_lag_24h",
+    "load_lag_168h",
+    "rolling_mean_24h",
+    "prev_day_total_kwh",
+    "temp_forecast",
+    "hdd",
+    "cdd",
+    "cloud_cover",
+    "humidity",
+    "wind_speed",
     "persons_home",
 ]
 
@@ -716,6 +730,7 @@ class TestFeatureNames:
 # Helpers for matrix tests
 # ---------------------------------------------------------------------------
 
+
 def _full_row(hour_ts: str, house_load_mean, **extra) -> dict:
     """Create a row with all typical weather columns (defaults for unset ones)."""
     d: dict = {
@@ -738,7 +753,6 @@ def _full_row(hour_ts: str, house_load_mean, **extra) -> dict:
 
 
 class TestBuildFeatureMatrix:
-
     def test_empty_input_returns_empty(self):
         X, y, index = build_feature_matrix([])
         assert X == [] and y == [] and index == []
@@ -746,9 +760,9 @@ class TestBuildFeatureMatrix:
     def test_nan_target_excluded_from_all_outputs(self):
         """Rows with None house_load_mean are excluded from X, y, and index."""
         rows = [
-            _full_row("2026-06-22T10:00:00+00:00", None),    # excluded
-            _full_row("2026-06-22T11:00:00+00:00", 500.0),   # kept
-            _full_row("2026-06-22T12:00:00+00:00", None),    # excluded
+            _full_row("2026-06-22T10:00:00+00:00", None),  # excluded
+            _full_row("2026-06-22T11:00:00+00:00", 500.0),  # kept
+            _full_row("2026-06-22T12:00:00+00:00", None),  # excluded
         ]
         X, y, index = build_feature_matrix(rows)
         assert len(X) == 1
@@ -786,7 +800,7 @@ class TestBuildFeatureMatrix:
     def test_index_matches_kept_hour_ts(self):
         """index contains hour_ts strings for the rows that passed the target filter."""
         rows = [
-            _full_row("2026-06-22T10:00:00+00:00", None),    # excluded
+            _full_row("2026-06-22T10:00:00+00:00", None),  # excluded
             _full_row("2026-06-22T11:00:00+00:00", 100.0),
             _full_row("2026-06-22T12:00:00+00:00", 200.0),
         ]
@@ -797,7 +811,7 @@ class TestBuildFeatureMatrix:
         """X, y, index have the same length and ordering."""
         rows = [
             _full_row("2026-06-22T10:00:00+00:00", 100.0),
-            _full_row("2026-06-22T11:00:00+00:00", None),    # excluded
+            _full_row("2026-06-22T11:00:00+00:00", None),  # excluded
             _full_row("2026-06-22T12:00:00+00:00", 300.0),
         ]
         X, y, index = build_feature_matrix(rows)
@@ -860,7 +874,7 @@ class TestBuildFeatureMatrix:
         # 2026-06-20T22:00 UTC = 2026-06-21 00:00 CEST: house_load_kwh_sum=1.0
         rows = [
             _full_row("2026-06-20T22:00:00+00:00", 1000.0, house_load_kwh_sum=1.0),  # prev local day
-            _full_row("2026-06-22T12:00:00+00:00", 200.0),   # target
+            _full_row("2026-06-22T12:00:00+00:00", 200.0),  # target
         ]
         X, y, index = build_feature_matrix(rows)
         names = feature_names()

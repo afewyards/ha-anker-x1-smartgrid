@@ -1,4 +1,5 @@
 """Tests for Anker X1 SmartGrid config flow."""
+
 from homeassistant import config_entries
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import EntitySelector
@@ -34,9 +35,8 @@ def _flat_markers(schema_obj):
 def _nest(flat):
     """Group a flat options dict into the section-nested submit shape."""
     from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS
-    key_to_section = {
-        key: name for name, keys in OPTIONS_SECTIONS.items() for key in keys
-    }
+
+    key_to_section = {key: name for name, keys in OPTIONS_SECTIONS.items() for key in keys}
     nested = {name: {} for name in OPTIONS_SECTIONS}
     for key, value in flat.items():
         sec = key_to_section.get(key)
@@ -50,11 +50,13 @@ def _nest(flat):
 def _validate_flat(schema_obj, flat):
     """Validate flat input against the sectioned schema; return a flat result."""
     from custom_components.anker_x1_smartgrid.config_flow import _flatten_sections
+
     return _flatten_sections(schema_obj(_nest(flat)))
 
 
 def test_sections_cover_all_option_fields():
     from custom_components.anker_x1_smartgrid import config_flow
+
     fields = config_flow._options_fields({})
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
@@ -64,8 +66,11 @@ def test_sections_cover_all_option_fields():
 
 def test_options_schema_is_sectioned_devices_expanded():
     from custom_components.anker_x1_smartgrid.config_flow import (
-        OPTIONS_SECTIONS, SECTION_DEVICES, _options_schema,
+        OPTIONS_SECTIONS,
+        SECTION_DEVICES,
+        _options_schema,
     )
+
     schema_obj = _options_schema({})
     top = {k.schema: v for k, v in schema_obj.schema.items()}
     assert set(top) == set(OPTIONS_SECTIONS)
@@ -76,6 +81,7 @@ def test_options_schema_is_sectioned_devices_expanded():
 
 def test_options_schema_excludes_device_derived_limits():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema, _schema
+
     assert const.CONF_MAX_CHARGE_W not in _flat_keys(_options_schema({}))
     assert const.CONF_MAX_EXPORT_W not in _flat_keys(_options_schema({}))
     install_keys = {k.schema for k in _schema({}).schema}
@@ -85,12 +91,14 @@ def test_options_schema_excludes_device_derived_limits():
 
 def test_flatten_sections_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _flatten_sections
+
     flat = {"soc_floor": 10.0, "soc_target": 90.0, "addon_timeout": 7}
     assert _flatten_sections(_nest(flat)) == flat
 
 
 async def test_options_flow_saves_flat_options(hass):
     from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS
+
     entry = await _create_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
@@ -106,9 +114,7 @@ async def test_options_flow_saves_flat_options(hass):
 
 async def test_user_flow_creates_entry(hass):
     device_id, _ = _register_anker_device(hass)
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     assert result["type"] == "form"
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={const.CONF_ANKER_DEVICE: device_id}
@@ -118,13 +124,10 @@ async def test_user_flow_creates_entry(hass):
     assert result2["data"]["soc_target"] == 97.0
 
 
-
 async def _create_entry(hass):
     """Helper: run the user flow with a resolved Anker device, return the ConfigEntry."""
     device_id, _ = _register_anker_device(hass)
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={const.CONF_ANKER_DEVICE: device_id}
     )
@@ -134,6 +137,7 @@ async def _create_entry(hass):
 # ---------------------------------------------------------------------------
 # P1-T3 — CONF_ENT_WEATHER_FORECAST + CONF_RETENTION_HOURLY_DAYS
 # ---------------------------------------------------------------------------
+
 
 def test_weather_forecast_config_default():
     cfg = Config()
@@ -156,16 +160,19 @@ def test_retention_hourly_days_config_override():
 
 
 def test_from_dict_both_new_keys_honored():
-    cfg = Config.from_dict({
-        "ent_weather_forecast": "weather.custom",
-        "retention_hourly_days": 180,
-    })
+    cfg = Config.from_dict(
+        {
+            "ent_weather_forecast": "weather.custom",
+            "retention_hourly_days": 180,
+        }
+    )
     assert cfg.ent_weather_forecast == "weather.custom"
     assert cfg.retention_hourly_days == 180
 
 
 def test_schema_includes_weather_forecast():
     from custom_components.anker_x1_smartgrid.config_flow import _schema
+
     schema_obj = _schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ENT_WEATHER_FORECAST in keys
@@ -174,6 +181,7 @@ def test_schema_includes_weather_forecast():
 # ---------------------------------------------------------------------------
 # P3-T1 — CONF_ADDON_ENABLED / CONF_ADDON_URL / CONF_ADDON_TIMEOUT
 # ---------------------------------------------------------------------------
+
 
 def test_addon_enabled_config_default():
     cfg = Config()
@@ -214,11 +222,13 @@ def test_addon_config_all_defaults_when_absent():
 
 
 def test_addon_config_all_overrides_honoured():
-    cfg = Config.from_dict({
-        "addon_enabled": True,
-        "addon_url": "http://custom:9000",
-        "addon_timeout": 10,
-    })
+    cfg = Config.from_dict(
+        {
+            "addon_enabled": True,
+            "addon_url": "http://custom:9000",
+            "addon_timeout": 10,
+        }
+    )
     assert cfg.addon_enabled is True
     assert cfg.addon_url == "http://custom:9000"
     assert cfg.addon_timeout == 10
@@ -226,6 +236,7 @@ def test_addon_config_all_overrides_honoured():
 
 def test_options_schema_includes_addon_enabled():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ADDON_ENABLED in keys
@@ -233,6 +244,7 @@ def test_options_schema_includes_addon_enabled():
 
 def test_options_schema_includes_addon_url():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ADDON_URL in keys
@@ -240,6 +252,7 @@ def test_options_schema_includes_addon_url():
 
 def test_options_schema_includes_addon_timeout():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ADDON_TIMEOUT in keys
@@ -247,6 +260,7 @@ def test_options_schema_includes_addon_timeout():
 
 def test_options_schema_addon_enabled_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_ADDON_ENABLED].default() is False
@@ -254,6 +268,7 @@ def test_options_schema_addon_enabled_default():
 
 def test_options_schema_addon_url_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_ADDON_URL].default() == "http://local-anker_x1_forecast:8099"
@@ -261,6 +276,7 @@ def test_options_schema_addon_url_default():
 
 def test_options_schema_addon_timeout_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_ADDON_TIMEOUT].default() == 5
@@ -271,13 +287,17 @@ def test_options_schema_addon_timeout_rejects_below_range():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {
-            const.CONF_ADDON_ENABLED: False,
-            const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
-            const.CONF_ADDON_TIMEOUT: 0,
-        })
+        _validate_flat(
+            schema_obj,
+            {
+                const.CONF_ADDON_ENABLED: False,
+                const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
+                const.CONF_ADDON_TIMEOUT: 0,
+            },
+        )
 
 
 def test_options_schema_addon_timeout_rejects_above_range():
@@ -285,24 +305,32 @@ def test_options_schema_addon_timeout_rejects_above_range():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {
-            const.CONF_ADDON_ENABLED: False,
-            const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
-            const.CONF_ADDON_TIMEOUT: 61,
-        })
+        _validate_flat(
+            schema_obj,
+            {
+                const.CONF_ADDON_ENABLED: False,
+                const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
+                const.CONF_ADDON_TIMEOUT: 61,
+            },
+        )
 
 
 def test_options_schema_addon_roundtrip():
     """All three addon fields must round-trip through the options schema."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {
-        const.CONF_ADDON_ENABLED: True,
-        const.CONF_ADDON_URL: "http://192.168.1.50:8099",
-        const.CONF_ADDON_TIMEOUT: 15,
-    })
+    result = _validate_flat(
+        schema_obj,
+        {
+            const.CONF_ADDON_ENABLED: True,
+            const.CONF_ADDON_URL: "http://192.168.1.50:8099",
+            const.CONF_ADDON_TIMEOUT: 15,
+        },
+    )
     assert result[const.CONF_ADDON_ENABLED] is True
     assert result[const.CONF_ADDON_URL] == "http://192.168.1.50:8099"
     assert result[const.CONF_ADDON_TIMEOUT] == 15
@@ -311,6 +339,7 @@ def test_options_schema_addon_roundtrip():
 # ---------------------------------------------------------------------------
 # T0.3 — ent_export_price entity config
 # ---------------------------------------------------------------------------
+
 
 def test_ent_export_price_config_default():
     cfg = Config()
@@ -330,6 +359,7 @@ def test_ent_export_price_config_absent_uses_default():
 
 def test_options_schema_includes_ent_export_price():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ENT_EXPORT_PRICE in keys
@@ -338,6 +368,7 @@ def test_options_schema_includes_ent_export_price():
 def test_options_schema_ent_export_price_suggested_value():
     """Export price uses suggested_value (clearable), not hard default."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({"ent_export_price": "sensor.feed_in"})
     schema_keys = _flat_markers(schema_obj)
     key = schema_keys[const.CONF_ENT_EXPORT_PRICE]
@@ -347,6 +378,7 @@ def test_options_schema_ent_export_price_suggested_value():
 def test_options_schema_ent_export_price_roundtrip():
     """ent_export_price round-trips through _options_schema validation."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_ENT_EXPORT_PRICE: "sensor.feed_in"})
     assert result[const.CONF_ENT_EXPORT_PRICE] == "sensor.feed_in"
@@ -364,6 +396,7 @@ def test_default_entities_includes_ent_export_price():
 # EntitySelector rejects "" outright ("Entity is neither a valid entity ID
 # nor a valid UUID"), and clearing any optional picker hits the same wall.
 # ---------------------------------------------------------------------------
+
 
 async def test_options_save_with_export_price_blank_succeeds(hass):
     """Fresh-install default ent_export_price="" must round-trip through a
@@ -416,6 +449,7 @@ def test_options_schema_stored_blank_export_price_suggests_none():
     """A stored "" must not prefill the picker with an invalid blank value
     (a prefilled "" would just get echoed straight back on save)."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({const.CONF_ENT_EXPORT_PRICE: ""})
     marker = _flat_markers(schema_obj)[const.CONF_ENT_EXPORT_PRICE]
     assert marker.description["suggested_value"] is None
@@ -423,6 +457,7 @@ def test_options_schema_stored_blank_export_price_suggests_none():
 
 def test_options_schema_stored_blank_price_suggests_none():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({const.CONF_ENT_PRICE: ""})
     marker = _flat_markers(schema_obj)[const.CONF_ENT_PRICE]
     assert marker.description["suggested_value"] is None
@@ -430,6 +465,7 @@ def test_options_schema_stored_blank_price_suggests_none():
 
 def test_options_schema_stored_blank_weather_forecast_suggests_none():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({const.CONF_ENT_WEATHER_FORECAST: ""})
     marker = _flat_markers(schema_obj)[const.CONF_ENT_WEATHER_FORECAST]
     assert marker.description["suggested_value"] is None
@@ -447,11 +483,14 @@ def test_options_schema_serializes_for_frontend_with_blank_pickers():
     import voluptuous_serialize
     from homeassistant.helpers import config_validation as cv
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-    schema_obj = _options_schema({
-        const.CONF_ENT_EXPORT_PRICE: "",
-        const.CONF_ENT_PRICE: "",
-        const.CONF_ENT_WEATHER_FORECAST: "",
-    })
+
+    schema_obj = _options_schema(
+        {
+            const.CONF_ENT_EXPORT_PRICE: "",
+            const.CONF_ENT_PRICE: "",
+            const.CONF_ENT_WEATHER_FORECAST: "",
+        }
+    )
     converted = voluptuous_serialize.convert(schema_obj, custom_serializer=cv.custom_serializer)
     assert converted
 
@@ -461,20 +500,24 @@ def test_options_schema_serializes_for_frontend_with_blank_pickers():
 # meter/inverter-loss roles), not a user-configurable entity picker.
 # ---------------------------------------------------------------------------
 
+
 def test_house_load_not_in_initial_schema():
     from custom_components.anker_x1_smartgrid.config_flow import _schema
+
     install_keys = {k.schema for k in _schema({}).schema}
     assert "ent_house_load" not in install_keys
 
 
 def test_house_load_not_in_options_schema():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     assert "ent_house_load" not in _flat_keys(_options_schema({}))
 
 
 def test_meter_power_and_inverter_loss_not_in_any_flow_schema():
     """Resolver-managed Anker roles never appear as pickable flow fields."""
     from custom_components.anker_x1_smartgrid.config_flow import _schema, _options_schema
+
     install_keys = {k.schema for k in _schema({}).schema}
     options_keys = _flat_keys(_options_schema({}))
     for key in ("ent_meter_power", "ent_inverter_loss"):
@@ -486,10 +529,12 @@ def test_meter_power_and_inverter_loss_not_in_any_flow_schema():
 # Task 5 — CONF_SOC_FLOOR exposed in options flow
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_exposes_soc_floor():
     """CONF_SOC_FLOOR is settable via the options flow so the live entry can move to 5%."""
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     keys = _flat_keys(schema)
     assert const.CONF_SOC_FLOOR in keys
@@ -499,8 +544,10 @@ def test_options_schema_exposes_soc_floor():
 # H1 — Export options in options flow
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_includes_enable_export():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ENABLE_EXPORT in keys
@@ -508,6 +555,7 @@ def test_options_schema_includes_enable_export():
 
 def test_options_schema_enable_export_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_ENABLE_EXPORT].default() is True
@@ -515,6 +563,7 @@ def test_options_schema_enable_export_default():
 
 def test_options_schema_includes_grid_export_limit_w():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_GRID_EXPORT_LIMIT_W in keys
@@ -522,6 +571,7 @@ def test_options_schema_includes_grid_export_limit_w():
 
 def test_options_schema_grid_export_limit_w_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_GRID_EXPORT_LIMIT_W].default() == const.DEFAULT_GRID_EXPORT_LIMIT_W
@@ -529,6 +579,7 @@ def test_options_schema_grid_export_limit_w_default():
 
 def test_options_schema_grid_export_limit_w_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: 4500.0})
     assert result[const.CONF_GRID_EXPORT_LIMIT_W] == 4500.0
@@ -538,6 +589,7 @@ def test_options_schema_grid_export_limit_w_rejects_negative():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
         _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: -100.0})
@@ -545,6 +597,7 @@ def test_options_schema_grid_export_limit_w_rejects_negative():
 
 def test_options_schema_includes_cycle_cost_eur_per_kwh():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_CYCLE_COST_EUR_PER_KWH in keys
@@ -552,6 +605,7 @@ def test_options_schema_includes_cycle_cost_eur_per_kwh():
 
 def test_options_schema_cycle_cost_eur_per_kwh_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_CYCLE_COST_EUR_PER_KWH].default() == const.DEFAULT_CYCLE_COST_EUR_PER_KWH
@@ -559,6 +613,7 @@ def test_options_schema_cycle_cost_eur_per_kwh_default():
 
 def test_options_schema_cycle_cost_eur_per_kwh_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_CYCLE_COST_EUR_PER_KWH: 0.06})
     assert result[const.CONF_CYCLE_COST_EUR_PER_KWH] == 0.06
@@ -566,6 +621,7 @@ def test_options_schema_cycle_cost_eur_per_kwh_roundtrip():
 
 def test_options_schema_includes_export_dwell_min():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_EXPORT_DWELL_MIN in keys
@@ -573,6 +629,7 @@ def test_options_schema_includes_export_dwell_min():
 
 def test_options_schema_export_dwell_min_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_EXPORT_DWELL_MIN].default() == const.DEFAULT_EXPORT_DWELL_MIN
@@ -580,6 +637,7 @@ def test_options_schema_export_dwell_min_default():
 
 def test_options_schema_export_dwell_min_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_EXPORT_DWELL_MIN: 10})
     assert result[const.CONF_EXPORT_DWELL_MIN] == 10
@@ -587,6 +645,7 @@ def test_options_schema_export_dwell_min_roundtrip():
 
 def test_options_schema_includes_export_eps_lo_kwh():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_EXPORT_EPS_LO_KWH in keys
@@ -594,6 +653,7 @@ def test_options_schema_includes_export_eps_lo_kwh():
 
 def test_options_schema_export_eps_lo_kwh_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_EXPORT_EPS_LO_KWH].default() == const.DEFAULT_EXPORT_EPS_LO_KWH
@@ -601,6 +661,7 @@ def test_options_schema_export_eps_lo_kwh_default():
 
 def test_options_schema_export_eps_lo_kwh_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_EXPORT_EPS_LO_KWH: 0.3})
     assert result[const.CONF_EXPORT_EPS_LO_KWH] == 0.3
@@ -608,6 +669,7 @@ def test_options_schema_export_eps_lo_kwh_roundtrip():
 
 def test_options_schema_includes_export_eps_hi_kwh():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_EXPORT_EPS_HI_KWH in keys
@@ -615,6 +677,7 @@ def test_options_schema_includes_export_eps_hi_kwh():
 
 def test_options_schema_export_eps_hi_kwh_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_EXPORT_EPS_HI_KWH].default() == const.DEFAULT_EXPORT_EPS_HI_KWH
@@ -622,6 +685,7 @@ def test_options_schema_export_eps_hi_kwh_default():
 
 def test_options_schema_export_eps_hi_kwh_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_EXPORT_EPS_HI_KWH: 0.6})
     assert result[const.CONF_EXPORT_EPS_HI_KWH] == 0.6
@@ -630,15 +694,19 @@ def test_options_schema_export_eps_hi_kwh_roundtrip():
 def test_options_schema_export_all_roundtrip():
     """All export fields round-trip through _options_schema validation."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {
-        const.CONF_ENABLE_EXPORT: False,
-        const.CONF_GRID_EXPORT_LIMIT_W: 3500.0,
-        const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
-        const.CONF_EXPORT_DWELL_MIN: 20,
-        const.CONF_EXPORT_EPS_LO_KWH: 0.25,
-        const.CONF_EXPORT_EPS_HI_KWH: 0.5,
-    })
+    result = _validate_flat(
+        schema_obj,
+        {
+            const.CONF_ENABLE_EXPORT: False,
+            const.CONF_GRID_EXPORT_LIMIT_W: 3500.0,
+            const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
+            const.CONF_EXPORT_DWELL_MIN: 20,
+            const.CONF_EXPORT_EPS_LO_KWH: 0.25,
+            const.CONF_EXPORT_EPS_HI_KWH: 0.5,
+        },
+    )
     assert result[const.CONF_ENABLE_EXPORT] is False
     assert result[const.CONF_GRID_EXPORT_LIMIT_W] == 3500.0
     assert result[const.CONF_CYCLE_COST_EUR_PER_KWH] == 0.05
@@ -661,15 +729,17 @@ def test_config_reflects_export_defaults():
 
 def test_config_reflects_submitted_export_values():
     """Config.from_dict correctly applies submitted export values."""
-    cfg = Config.from_dict({
-        "enable_export": False,
-        "max_export_w": 3000.0,
-        "grid_export_limit_w": 2500.0,
-        "cycle_cost_eur_per_kwh": 0.06,
-        "export_dwell_min": 10,
-        "export_eps_lo_kwh": 0.3,
-        "export_eps_hi_kwh": 0.6,
-    })
+    cfg = Config.from_dict(
+        {
+            "enable_export": False,
+            "max_export_w": 3000.0,
+            "grid_export_limit_w": 2500.0,
+            "cycle_cost_eur_per_kwh": 0.06,
+            "export_dwell_min": 10,
+            "export_eps_lo_kwh": 0.3,
+            "export_eps_hi_kwh": 0.6,
+        }
+    )
     assert cfg.enable_export is False
     assert cfg.max_export_w == 3000.0
     assert cfg.grid_export_limit_w == 2500.0
@@ -683,9 +753,11 @@ def test_config_reflects_submitted_export_values():
 # Task 5 (co-opt) — CONF_EXPORT_FEE_EUR_PER_KWH exposed in options flow
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_exposes_export_fee():
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     keys = _flat_keys(schema)
     assert const.CONF_EXPORT_FEE_EUR_PER_KWH in keys
@@ -695,10 +767,12 @@ def test_options_schema_exposes_export_fee():
 # Task 2 — editable tunables + entity dropdowns in the options flow
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_includes_editable_tunables():
     """capacity_kwh excluded: it is always-derived (Task 8, finding 4.1) — see
     test_options_schema_excludes_capacity_kwh below."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     keys = _flat_keys(_options_schema({}))
     for key in (
         const.CONF_SOC_TARGET,
@@ -713,6 +787,7 @@ def test_options_schema_includes_editable_tunables():
 
 def test_options_schema_includes_entity_dropdowns():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     keys = _flat_keys(_options_schema({}))
     for key in (
         const.CONF_ENT_PV_TODAY,
@@ -729,6 +804,7 @@ def test_options_schema_includes_entity_dropdowns():
 
 def test_options_schema_pv_today_roundtrips_a_list():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_ENT_PV_TODAY: ["sensor.a", "sensor.b"]})
     assert result[const.CONF_ENT_PV_TODAY] == ["sensor.a", "sensor.b"]
@@ -738,9 +814,11 @@ def test_options_schema_pv_today_roundtrips_a_list():
 # PV-multi C — ent_pv_power multi-select picker (options flow, devices section)
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_includes_pv_power_multiselect():
     """ent_pv_power renders as a multi-select EntitySelector."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     items = _flat_schema_items(schema_obj)
     assert const.CONF_ENT_PV_POWER in items
@@ -751,14 +829,17 @@ def test_options_schema_includes_pv_power_multiselect():
 
 def test_options_schema_pv_power_in_devices_section():
     from custom_components.anker_x1_smartgrid.config_flow import (
-        OPTIONS_SECTIONS, SECTION_DEVICES,
+        OPTIONS_SECTIONS,
+        SECTION_DEVICES,
     )
+
     assert const.CONF_ENT_PV_POWER in OPTIONS_SECTIONS[SECTION_DEVICES]
 
 
 def test_options_schema_pv_power_legacy_string_suggested_as_list():
     """A stored legacy single entity-id string renders prefilled as a one-element list."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({const.CONF_ENT_PV_POWER: "sensor.solar_power"})
     marker = _flat_markers(schema_obj)[const.CONF_ENT_PV_POWER]
     assert marker.description == {"suggested_value": ["sensor.solar_power"]}
@@ -768,6 +849,7 @@ def test_options_schema_pv_power_empty_suggests_none():
     """Nothing stored -> suggested_value is None (not []), so the DEFAULT_ENTITIES
     soft-role fallback (resolve_pv_power_entities) stays in effect on save-through."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     marker = _flat_markers(schema_obj)[const.CONF_ENT_PV_POWER]
     assert marker.description == {"suggested_value": None}
@@ -775,6 +857,7 @@ def test_options_schema_pv_power_empty_suggests_none():
 
 def test_options_schema_pv_power_roundtrips_a_list():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_ENT_PV_POWER: ["sensor.a", "sensor.b"]})
     assert result[const.CONF_ENT_PV_POWER] == ["sensor.a", "sensor.b"]
@@ -811,6 +894,7 @@ async def test_options_save_pv_power_empty_list_accepted(hass):
 
 def test_options_schema_soc_target_roundtrips():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_SOC_TARGET: 95.0})
     assert result[const.CONF_SOC_TARGET] == 95.0
@@ -820,8 +904,10 @@ def test_options_schema_soc_target_roundtrips():
 # Task 3 — forecast-service picker + derive-on-save
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_includes_forecast_service_picker():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     keys = _flat_keys(_options_schema({}))
     assert const.CONF_FORECAST_SERVICE in keys
 
@@ -836,8 +922,9 @@ async def test_options_service_multiselect_derives_and_persists(hass):
         ("power_highest_peak_time_today", "home_power_highest_peak_time_today"),
         ("power_highest_peak_time_tomorrow", "home_power_highest_peak_time_tomorrow"),
     ):
-        reg.async_get_or_create("sensor", src.domain, f"uid_{tkey}", config_entry=src,
-                                translation_key=tkey, suggested_object_id=oid)
+        reg.async_get_or_create(
+            "sensor", src.domain, f"uid_{tkey}", config_entry=src, translation_key=tkey, suggested_object_id=oid
+        )
     entry = await _create_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
@@ -858,10 +945,12 @@ async def test_options_empty_selection_keeps_current_pv(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_FORECAST_SERVICE: [],
-            const.CONF_ENT_PV_TODAY: ["sensor.manual_pv"],
-        }),
+        user_input=_nest(
+            {
+                const.CONF_FORECAST_SERVICE: [],
+                const.CONF_ENT_PV_TODAY: ["sensor.manual_pv"],
+            }
+        ),
     )
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.manual_pv"]
     assert entry.options[const.CONF_FORECAST_SERVICE] == []  # persisted, empty = forget
@@ -879,16 +968,19 @@ async def test_options_missing_peak_drops_peak_list_for_alignment(hass):
         ("energy_production_today_remaining", "home_energy_production_today_remaining"),
         ("energy_production_tomorrow", "home_energy_production_tomorrow"),
     ):
-        reg.async_get_or_create("sensor", src.domain, f"uid_{tkey}", config_entry=src,
-                                translation_key=tkey, suggested_object_id=oid)
+        reg.async_get_or_create(
+            "sensor", src.domain, f"uid_{tkey}", config_entry=src, translation_key=tkey, suggested_object_id=oid
+        )
     entry = await _create_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_FORECAST_SERVICE: [src.entry_id],
-            const.CONF_ENT_PV_PEAK_TODAY: ["sensor.manual_peak"],
-        }),
+        user_input=_nest(
+            {
+                const.CONF_FORECAST_SERVICE: [src.entry_id],
+                const.CONF_ENT_PV_PEAK_TODAY: ["sensor.manual_peak"],
+            }
+        ),
     )
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.home_energy_production_today_remaining"]
     # peak unresolved → dropped to [] to keep index alignment (replaces submitted manual peak)
@@ -905,8 +997,14 @@ async def test_options_two_sources_union_energy_and_align_peaks(hass):
         s = MockConfigEntry(domain="open_meteo_solar_forecast", title=f"Roof{i}")
         s.add_to_hass(hass)
         for tkey in ("energy_production_today_remaining", "power_highest_peak_time_today"):
-            reg.async_get_or_create("sensor", s.domain, f"uid{i}_{tkey}", config_entry=s,
-                                    translation_key=tkey, suggested_object_id=f"roof{i}_{tkey}")
+            reg.async_get_or_create(
+                "sensor",
+                s.domain,
+                f"uid{i}_{tkey}",
+                config_entry=s,
+                translation_key=tkey,
+                suggested_object_id=f"roof{i}_{tkey}",
+            )
         srcs.append(s)
     entry = await _create_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -931,9 +1029,14 @@ async def test_options_unchanged_selection_does_not_rebuild(hass):
     src = MockConfigEntry(domain="open_meteo_solar_forecast", title="Home")
     src.add_to_hass(hass)
     reg = er.async_get(hass)
-    reg.async_get_or_create("sensor", src.domain, "uid_today", config_entry=src,
-                            translation_key="energy_production_today_remaining",
-                            suggested_object_id="home_energy_production_today_remaining")
+    reg.async_get_or_create(
+        "sensor",
+        src.domain,
+        "uid_today",
+        config_entry=src,
+        translation_key="energy_production_today_remaining",
+        suggested_object_id="home_energy_production_today_remaining",
+    )
     entry = await _create_entry(hass)
     r1 = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
@@ -943,10 +1046,12 @@ async def test_options_unchanged_selection_does_not_rebuild(hass):
     r2 = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
         r2["flow_id"],
-        user_input=_nest({
-            const.CONF_FORECAST_SERVICE: [src.entry_id],
-            const.CONF_ENT_PV_TODAY: ["sensor.hand_added"],
-        }),
+        user_input=_nest(
+            {
+                const.CONF_FORECAST_SERVICE: [src.entry_id],
+                const.CONF_ENT_PV_TODAY: ["sensor.hand_added"],
+            }
+        ),
     )
     assert entry.options[const.CONF_ENT_PV_TODAY] == ["sensor.hand_added"]
     await hass.async_block_till_done()
@@ -957,6 +1062,7 @@ async def test_options_unchanged_selection_does_not_rebuild(hass):
 def test_options_schema_forecast_service_is_multiselect_no_sentinel():
     from homeassistant.helpers.selector import SelectSelector
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     _marker, selector = _flat_schema_items(schema)[const.CONF_FORECAST_SERVICE]
     assert isinstance(selector, SelectSelector)
@@ -966,6 +1072,7 @@ def test_options_schema_forecast_service_is_multiselect_no_sentinel():
 
 def test_options_schema_stored_selection_filtered_to_available():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     # stored has a gone id + a live one; only the live one survives as suggested_value
     services = [("live-id", "Roof", "open_meteo_solar_forecast")]
     schema = _options_schema({const.CONF_FORECAST_SERVICE: ["gone-id", "live-id"]}, services=services)
@@ -977,9 +1084,11 @@ def test_options_schema_stored_selection_filtered_to_available():
 # Task 1: Part B — Entity selector alignment
 # ---------------------------------------------------------------------------
 
+
 def test_export_price_uses_entity_selector():
     """CONF_ENT_EXPORT_PRICE should render as an EntitySelector, not cv.string."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     _marker, validator = _flat_schema_items(schema)["ent_export_price"]
     assert isinstance(validator, EntitySelector)
@@ -989,10 +1098,12 @@ def test_export_price_uses_entity_selector():
 # Task 2A — Dropdown label format + sentinel rename
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_forecast_service_label_includes_integration_name():
     """Service option labels must be '{title} — {IntegrationName}'."""
     from homeassistant.helpers.selector import SelectSelector
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     services = [("entry-123", "My Roof", "open_meteo_solar_forecast")]
     schema = _options_schema({}, services=services)
     _marker, selector = _flat_schema_items(schema)[const.CONF_FORECAST_SERVICE]
@@ -1005,9 +1116,11 @@ def test_options_schema_forecast_service_label_includes_integration_name():
 # Anker device picker — schema presence
 # ---------------------------------------------------------------------------
 
+
 def test_user_schema_includes_anker_device():
     from homeassistant.helpers.selector import DeviceSelector
     from custom_components.anker_x1_smartgrid.config_flow import _schema
+
     schema = _schema({})
     key = next(k for k in schema.schema if k.schema == const.CONF_ANKER_DEVICE)
     assert isinstance(schema.schema[key], DeviceSelector)
@@ -1016,6 +1129,7 @@ def test_user_schema_includes_anker_device():
 def test_options_schema_includes_anker_device():
     from homeassistant.helpers.selector import DeviceSelector
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     _marker, selector = _flat_schema_items(schema)[const.CONF_ANKER_DEVICE]
     assert isinstance(selector, DeviceSelector)
@@ -1023,6 +1137,7 @@ def test_options_schema_includes_anker_device():
 
 def test_anker_device_selector_filters_integration():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     _marker, selector = _flat_schema_items(schema)[const.CONF_ANKER_DEVICE]
     assert selector.config["integration"] == const.ANKER_X1_DOMAIN
@@ -1032,11 +1147,10 @@ def test_anker_device_selector_filters_integration():
 # Anker device picker — flow wiring (Task 3)
 # ---------------------------------------------------------------------------
 
+
 async def test_user_flow_with_device_resolves_into_data(hass):
     device_id, _ = _register_anker_device(hass, capacity_state="15.0")
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={const.CONF_ANKER_DEVICE: device_id}
     )
@@ -1051,9 +1165,7 @@ async def test_user_flow_with_device_resolves_into_data(hass):
 
 async def test_user_flow_missing_role_shows_error(hass):
     device_id, _ = _register_anker_device(hass, drop=("soc",))
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={const.CONF_ANKER_DEVICE: device_id}
     )
@@ -1065,6 +1177,7 @@ def test_user_schema_marks_anker_device_required():
     """Setup requires an Anker device so the 5 roles always resolve."""
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _schema
+
     schema = _schema({})
     key = next(k for k in schema.schema if k.schema == const.CONF_ANKER_DEVICE)
     assert isinstance(key, vol.Required)
@@ -1077,13 +1190,9 @@ async def test_user_flow_no_device_blocks_creation(hass):
     import pytest
     from homeassistant.data_entry_flow import InvalidData
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     with pytest.raises(InvalidData):
-        await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input={}
-        )
+        await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
 
 
 async def test_options_flow_device_resolves_into_options(hass):
@@ -1091,9 +1200,7 @@ async def test_options_flow_device_resolves_into_options(hass):
     # Entry starts WITHOUT an anker device, so picking one in options is a real
     # change that triggers re-resolution into entry.options. (Setup now requires
     # a device, so this device-less starting state is built directly.)
-    entry = MockConfigEntry(
-        domain=DOMAIN, data={**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES}
-    )
+    entry = MockConfigEntry(domain=DOMAIN, data={**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     await hass.config_entries.options.async_configure(
@@ -1129,9 +1236,11 @@ async def test_options_flow_no_device_no_error_no_resolution(hass):
 # override" was indistinguishable from the resolver-derived default.
 # ---------------------------------------------------------------------------
 
+
 def test_options_schema_excludes_capacity_kwh():
     """The options flow no longer exposes capacity_kwh — it was inert."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     keys = _flat_keys(_options_schema({}))
     assert const.CONF_CAPACITY_KWH not in keys
 
@@ -1141,16 +1250,19 @@ def test_options_schema_excludes_capacity_kwh():
 # (review finding 4.2)
 # ---------------------------------------------------------------------------
 
+
 async def test_options_flow_rejects_soc_floor_above_target(hass):
     """Same cross-field guard applies to the options flow."""
     entry = await _create_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_SOC_FLOOR: 30.0,
-            const.CONF_SOC_TARGET: 25.0,
-        }),
+        user_input=_nest(
+            {
+                const.CONF_SOC_FLOOR: 30.0,
+                const.CONF_SOC_TARGET: 25.0,
+            }
+        ),
     )
     assert result2["type"] == "form"
     assert result2["errors"] == {"base": "soc_floor_above_target"}
@@ -1163,6 +1275,7 @@ def test_options_schema_range_bounds_on_soc_floor_target_eta():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
         _validate_flat(schema_obj, {const.CONF_SOC_FLOOR: 51.0})
@@ -1193,8 +1306,7 @@ async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog
             store=MagicMock(),
         )
     assert any(
-        "export margin only" in record.message and "firmware floor" in record.message
-        for record in caplog.records
+        "export margin only" in record.message and "firmware floor" in record.message for record in caplog.records
     )
 
 
@@ -1202,11 +1314,13 @@ async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog
 # Task 16 — un-filter price pickers + expose round_trip_eff in options
 # ---------------------------------------------------------------------------
 
+
 def test_price_selectors_do_not_filter_by_monetary_device_class():
     """€/kWh tariff sensors (e.g. Zonneplan) carry no device_class, so the
     'monetary' filter used to hide them from the picker. Both price
     selectors must render as plain sensor-domain EntitySelectors now."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     for conf_key in (const.CONF_ENT_PRICE, const.CONF_ENT_EXPORT_PRICE):
         _marker, selector = _flat_schema_items(schema)[conf_key]
@@ -1217,6 +1331,7 @@ def test_price_selectors_do_not_filter_by_monetary_device_class():
 
 def test_options_schema_includes_round_trip_eff():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ROUND_TRIP_EFF in keys
@@ -1224,6 +1339,7 @@ def test_options_schema_includes_round_trip_eff():
 
 def test_options_schema_round_trip_eff_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_ROUND_TRIP_EFF].default() == const.DEFAULT_ROUND_TRIP_EFF
@@ -1233,6 +1349,7 @@ def test_options_schema_round_trip_eff_rejects_above_range():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
         _validate_flat(schema_obj, {const.CONF_ROUND_TRIP_EFF: 1.5})
@@ -1240,6 +1357,7 @@ def test_options_schema_round_trip_eff_rejects_above_range():
 
 def test_options_schema_round_trip_eff_accepts_in_range():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     result = _validate_flat(schema_obj, {const.CONF_ROUND_TRIP_EFF: 0.85})
     assert result[const.CONF_ROUND_TRIP_EFF] == 0.85
@@ -1271,8 +1389,7 @@ def test_forecast_service_helper_text_present():
     base = pathlib.Path("custom_components/anker_x1_smartgrid")
     for rel in ("strings.json", "translations/en.json"):
         data = json.loads((base / rel).read_text())
-        opt_desc = data["options"]["step"]["init"]["sections"]["solar_forecast"][
-            "data_description"]["forecast_service"]
+        opt_desc = data["options"]["step"]["init"]["sections"]["solar_forecast"]["data_description"]["forecast_service"]
         cfg_desc = data["config"]["step"]["user"]["data_description"]["forecast_service"]
         for desc in (opt_desc, cfg_desc):
             assert "different arrays" in desc and "summed" in desc
@@ -1283,8 +1400,7 @@ def test_strings_cover_all_option_sections_and_fields():
     import pathlib
     from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS
 
-    strings = json.loads(pathlib.Path(
-        "custom_components/anker_x1_smartgrid/strings.json").read_text())
+    strings = json.loads(pathlib.Path("custom_components/anker_x1_smartgrid/strings.json").read_text())
     sections = strings["options"]["step"]["init"]["sections"]
     assert set(sections) == set(OPTIONS_SECTIONS)
     for name, keys in OPTIONS_SECTIONS.items():
@@ -1299,8 +1415,7 @@ def test_strings_cover_install_fields():
     import pathlib
     from custom_components.anker_x1_smartgrid.config_flow import _schema
 
-    strings = json.loads(pathlib.Path(
-        "custom_components/anker_x1_smartgrid/strings.json").read_text())
+    strings = json.loads(pathlib.Path("custom_components/anker_x1_smartgrid/strings.json").read_text())
     user = strings["config"]["step"]["user"]
     form_keys = {k.schema for k in _schema({}).schema}
     assert set(user["data"]) == form_keys
@@ -1322,6 +1437,7 @@ def test_en_json_matches_strings_json():
 def test_options_schema_exposes_person_entities():
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema = _options_schema({})
     keys = _flat_keys(schema)
     assert const.CONF_PERSON_ENTITIES in keys
@@ -1330,6 +1446,7 @@ def test_options_schema_exposes_person_entities():
 def test_options_schema_person_entities_round_trips_selection():
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     chosen = ["person.alice", "person.bob"]
     schema = _options_schema({const.CONF_PERSON_ENTITIES: chosen})
     # suggested_value is carried in the marker description for the person key
@@ -1341,8 +1458,10 @@ def test_options_schema_person_entities_round_trips_selection():
 # Task 3 — shrink install flow to device + core entities
 # ---------------------------------------------------------------------------
 
+
 def test_install_schema_is_minimal_core_fields():
     from custom_components.anker_x1_smartgrid.config_flow import _schema
+
     keys = {k.schema for k in _schema({}).schema}
     assert keys == {
         const.CONF_ANKER_DEVICE,
@@ -1362,12 +1481,11 @@ async def test_user_flow_derives_pv_from_forecast_service(hass):
         ("power_highest_peak_time_today", "home_power_highest_peak_time_today"),
         ("power_highest_peak_time_tomorrow", "home_power_highest_peak_time_tomorrow"),
     ):
-        reg.async_get_or_create("sensor", src.domain, f"uid_{tkey}", config_entry=src,
-                                translation_key=tkey, suggested_object_id=oid)
+        reg.async_get_or_create(
+            "sensor", src.domain, f"uid_{tkey}", config_entry=src, translation_key=tkey, suggested_object_id=oid
+        )
     device_id, _ = _register_anker_device(hass)
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         user_input={
@@ -1376,14 +1494,13 @@ async def test_user_flow_derives_pv_from_forecast_service(hass):
         },
     )
     assert result2["type"] == "create_entry"
-    assert result2["data"][const.CONF_ENT_PV_TODAY] == [
-        "sensor.home_energy_production_today_remaining"
-    ]
+    assert result2["data"][const.CONF_ENT_PV_TODAY] == ["sensor.home_energy_production_today_remaining"]
     assert result2["data"][const.CONF_FORECAST_SERVICE] == [src.entry_id]
 
 
 def test_options_schema_includes_static_price_fields():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     keys = _flat_keys(_options_schema({}))
     for k in (
         const.CONF_PRICE_MODE,
@@ -1400,10 +1517,12 @@ async def test_options_static_mode_requires_positive_import(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-            const.CONF_STATIC_PRICE_IMPORT: 0.0,
-        }),
+        user_input=_nest(
+            {
+                const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+                const.CONF_STATIC_PRICE_IMPORT: 0.0,
+            }
+        ),
     )
     assert result2["type"] == "form"
     assert result2["errors"]["base"] == "static_import_price_required"
@@ -1414,12 +1533,14 @@ async def test_options_static_offpeak_hours_must_parse(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-            const.CONF_STATIC_PRICE_IMPORT: 0.30,
-            const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
-            const.CONF_STATIC_OFFPEAK_HOURS: "25:00-07:00",
-        }),
+        user_input=_nest(
+            {
+                const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+                const.CONF_STATIC_PRICE_IMPORT: 0.30,
+                const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+                const.CONF_STATIC_OFFPEAK_HOURS: "25:00-07:00",
+            }
+        ),
     )
     assert result2["type"] == "form"
     assert result2["errors"]["base"] == "static_offpeak_hours_invalid"
@@ -1430,12 +1551,14 @@ async def test_options_static_offpeak_requires_positive_price(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-            const.CONF_STATIC_PRICE_IMPORT: 0.30,
-            const.CONF_STATIC_PRICE_OFFPEAK: 0.0,
-            const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
-        }),
+        user_input=_nest(
+            {
+                const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+                const.CONF_STATIC_PRICE_IMPORT: 0.30,
+                const.CONF_STATIC_PRICE_OFFPEAK: 0.0,
+                const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+            }
+        ),
     )
     assert result2["type"] == "form"
     assert result2["errors"]["base"] == "static_offpeak_price_required"
@@ -1446,12 +1569,14 @@ async def test_options_static_mode_valid_saves(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-            const.CONF_STATIC_PRICE_IMPORT: 0.30,
-            const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
-            const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
-        }),
+        user_input=_nest(
+            {
+                const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+                const.CONF_STATIC_PRICE_IMPORT: 0.30,
+                const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+                const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+            }
+        ),
     )
     assert result2["type"] == "create_entry"
     assert entry.options[const.CONF_PRICE_MODE] == const.PRICE_MODE_STATIC
@@ -1467,10 +1592,12 @@ async def test_options_sensor_mode_ignores_static_fields(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input=_nest({
-            const.CONF_PRICE_MODE: const.PRICE_MODE_SENSOR,
-            const.CONF_STATIC_PRICE_IMPORT: 0.0,
-        }),
+        user_input=_nest(
+            {
+                const.CONF_PRICE_MODE: const.PRICE_MODE_SENSOR,
+                const.CONF_STATIC_PRICE_IMPORT: 0.0,
+            }
+        ),
     )
     assert result2["type"] == "create_entry"
     await hass.async_block_till_done()
@@ -1481,6 +1608,7 @@ async def test_options_sensor_mode_ignores_static_fields(hass):
 # ---------------------------------------------------------------------------
 # A0 — idle_drain_w (constant inverter/BMS standby DC drain, W)
 # ---------------------------------------------------------------------------
+
 
 def test_config_default_idle_drain_zero():
     cfg = Config()
@@ -1500,6 +1628,7 @@ def test_idle_drain_w_config_absent_uses_default():
 
 def test_idle_drain_w_option_accepted():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_IDLE_DRAIN_W in keys
@@ -1509,6 +1638,7 @@ def test_idle_drain_w_option_accepted():
 
 def test_idle_drain_w_option_default():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     schema_keys = _flat_markers(schema_obj)
     assert schema_keys[const.CONF_IDLE_DRAIN_W].default() == const.DEFAULT_IDLE_DRAIN_W
@@ -1519,6 +1649,7 @@ def test_idle_drain_w_option_rejects_above_range():
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
         _validate_flat(schema_obj, {const.CONF_IDLE_DRAIN_W: 501.0})

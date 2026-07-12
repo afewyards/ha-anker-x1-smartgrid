@@ -18,14 +18,8 @@ def test_meter_power_and_inverter_loss_entities():
     """Single-scalar Anker X1 meter power replaces the 3-phase P1 inputs."""
     assert const.CONF_ENT_METER_POWER == "ent_meter_power"
     assert const.CONF_ENT_INVERTER_LOSS == "ent_inverter_loss"
-    assert (
-        const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]
-        == "sensor.anker_x1_meter_total_power"
-    )
-    assert (
-        const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]
-        == "sensor.anker_x1_inverter_loss"
-    )
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER] == "sensor.anker_x1_meter_total_power"
+    assert const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS] == "sensor.anker_x1_inverter_loss"
 
 
 def test_phase_and_house_load_constants_removed():
@@ -68,10 +62,12 @@ def test_retention_hourly_days_const():
 def test_default_soc_floor_is_firmware_floor():
     """soc_floor default aligns with the Anker X1 firmware 5% hard floor."""
     from custom_components.anker_x1_smartgrid import const
+
     assert const.DEFAULT_SOC_FLOOR == 5.0
 
 
 # ── A2: export hardware constants & config keys ──────────────────────────────
+
 
 def test_setpoint_max_w():
     """SETPOINT_MAX_W mirrors SETPOINT_MIN_W (full ~6000W ceiling per A1)."""
@@ -112,6 +108,7 @@ def test_export_default_values():
 
 def test_default_export_fee_is_two_cents():
     from custom_components.anker_x1_smartgrid import const
+
     assert const.CONF_EXPORT_FEE_EUR_PER_KWH == "export_fee_eur_per_kwh"
     assert const.DEFAULT_EXPORT_FEE_EUR_PER_KWH == 0.02
 
@@ -139,6 +136,7 @@ def test_default_entities_excludes_anker_roles():
 def test_export_drain_window_default():
     from custom_components.anker_x1_smartgrid import const
     from custom_components.anker_x1_smartgrid.models import Config
+
     assert const.DEFAULT_EXPORT_DRAIN_WINDOW_H == 0.0
     assert Config().export_drain_window_h == 0.0
 
@@ -163,9 +161,7 @@ def test_normalize_pv_power_entities_legacy_string_wraps_in_list():
 
 
 def test_normalize_pv_power_entities_list_passthrough():
-    assert const.normalize_pv_power_entities(
-        ["sensor.pv_1", "sensor.pv_2"]
-    ) == ["sensor.pv_1", "sensor.pv_2"]
+    assert const.normalize_pv_power_entities(["sensor.pv_1", "sensor.pv_2"]) == ["sensor.pv_1", "sensor.pv_2"]
 
 
 def test_normalize_pv_power_entities_drops_falsy_list_entries():
@@ -187,6 +183,4 @@ def test_resolve_pv_power_entities_list_stored():
 
 def test_resolve_pv_power_entities_empty_falls_back_to_default():
     for data in ({const.CONF_ENT_PV_POWER: ""}, {const.CONF_ENT_PV_POWER: []}, {}):
-        assert const.resolve_pv_power_entities(data) == [
-            const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER]
-        ]
+        assert const.resolve_pv_power_entities(data) == [const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER]]

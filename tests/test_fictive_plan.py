@@ -14,9 +14,10 @@ Callers that need the DP-proposed slots pass an empty dict as ``_out``;
 exercise that side-channel.  The Controller's ``tick()`` method uses it to publish
 ``last_status["fictive_plan"]``.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 from custom_components.anker_x1_smartgrid import plan as plan_mod
@@ -33,24 +34,25 @@ from custom_components.anker_x1_smartgrid.models import (
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)  # 10:00 UTC, Mon
+BASE = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)  # 10:00 UTC, Mon
 
 _PREDICTOR = LoadPredictor.from_profile({})
 
 
 def _cfg(**overrides) -> Config:
-    return Config.from_dict({
-        "capacity_kwh": 10.0,
-        "soc_target": 97.0,
-        "eta_charge": 0.92,
-        "eps_hi_kwh": 0.4,
-        "eps_lo_kwh": 0.2,
-        "min_dwell_min": 0,
-        "max_charge_w": 6000.0,
-        "round_trip_eff": 0.85,
-
-        **overrides,
-    })
+    return Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_target": 97.0,
+            "eta_charge": 0.92,
+            "eps_hi_kwh": 0.4,
+            "eps_lo_kwh": 0.2,
+            "min_dwell_min": 0,
+            "max_charge_w": 6000.0,
+            "round_trip_eff": 0.85,
+            **overrides,
+        }
+    )
 
 
 def _slots(prices: list[float], base: datetime = BASE) -> list[PriceSlot]:
@@ -63,18 +65,22 @@ def _plan(age_h: float = 2.0) -> PlanState:
 
 def _make_dp_mock_first_hour(charge_kwh: float = 5.0):
     """DP mock that puts all charge in hour 0 (current slot)."""
+
     def _side_effect(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         schedule = [charge_kwh] + [0.0] * (wl - 1)
         return {"schedule": schedule, "kwh": charge_kwh, "eur": charge_kwh * 0.05}
+
     return _side_effect
 
 
 def _make_dp_mock_zero():
     """DP mock that never charges — produces an empty selected list."""
+
     def _side_effect(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         return {"schedule": [0.0] * wl, "kwh": 0.0, "eur": 0.0}
+
     return _side_effect
 
 
@@ -87,14 +93,13 @@ def _call(cfg: Config, *, soc: float = 20.0, slots=None, _out=None):
     kwargs = {}
     if _out is not None:
         kwargs["_out"] = _out
-    return compute_decision(
-        _plan(), inputs, slots, 0.0, sunset, _PREDICTOR, None, cfg, **kwargs
-    )
+    return compute_decision(_plan(), inputs, slots, 0.0, sunset, _PREDICTOR, None, cfg, **kwargs)
 
 
 # ===========================================================================
 # 1. _out side-channel is populated when DP runs successfully
 # ===========================================================================
+
 
 def test_out_populated_when_dp_runs():
     """Flag-on + DP succeeds → _out["dp_selected"] and _out["intervals"] present."""
@@ -143,7 +148,26 @@ def test_out_absent_when_dp_raises():
 # 2. Fictive-plan schema parity with live plan
 # ===========================================================================
 
-_LIVE_PLAN_KEYS = {"start", "price", "pv_w", "load_w", "solar_charge_w", "grid_charge_w", "mode", "soc", "charge_w", "is_past_horizon", "grid_export_w", "self_discharge_w", "reserve_soc", "pv_kwh", "load_kwh", "solar_charge_kwh", "grid_charge_kwh", "grid_export_kwh"}
+_LIVE_PLAN_KEYS = {
+    "start",
+    "price",
+    "pv_w",
+    "load_w",
+    "solar_charge_w",
+    "grid_charge_w",
+    "mode",
+    "soc",
+    "charge_w",
+    "is_past_horizon",
+    "grid_export_w",
+    "self_discharge_w",
+    "reserve_soc",
+    "pv_kwh",
+    "load_kwh",
+    "solar_charge_kwh",
+    "grid_charge_kwh",
+    "grid_export_kwh",
+}
 
 
 def test_fictive_horizon_schema_matches_live_plan():
@@ -165,9 +189,7 @@ def test_fictive_horizon_schema_matches_live_plan():
     dp_selected = _out["dp_selected"]
     intervals = _out["intervals"]
 
-    fictive_horizon = plan_mod.build_plan_horizon(
-        slots, intervals, dp_selected, 20.0, deadline, cfg
-    )
+    fictive_horizon = plan_mod.build_plan_horizon(slots, intervals, dp_selected, 20.0, deadline, cfg)
 
     assert len(fictive_horizon) > 0, "fictive horizon must be non-empty"
     assert len(live_horizon) > 0, "live horizon must be non-empty"
@@ -175,9 +197,7 @@ def test_fictive_horizon_schema_matches_live_plan():
     fictive_keys = set(fictive_horizon[0].keys())
     live_keys = set(live_horizon[0].keys())
 
-    assert fictive_keys == live_keys, (
-        f"fictive horizon entry keys {fictive_keys} != live plan keys {live_keys}"
-    )
+    assert fictive_keys == live_keys, f"fictive horizon entry keys {fictive_keys} != live plan keys {live_keys}"
     # Pin the exact expected schema
     assert fictive_keys == _LIVE_PLAN_KEYS
 
@@ -194,18 +214,12 @@ def test_fictive_horizon_mode_grid_for_dp_hours():
         result = _call(cfg, soc=20.0, slots=slots, _out=_out)
 
     _, _, deadline, _, _, _ = result
-    fictive_horizon = plan_mod.build_plan_horizon(
-        slots, _out["intervals"], _out["dp_selected"], 20.0, deadline, cfg
-    )
+    fictive_horizon = plan_mod.build_plan_horizon(slots, _out["intervals"], _out["dp_selected"], 20.0, deadline, cfg)
 
     base_h = BASE.replace(minute=0, second=0, microsecond=0)
-    h0_entry = next(
-        (e for e in fictive_horizon if e["start"] == base_h.isoformat()), None
-    )
+    h0_entry = next((e for e in fictive_horizon if e["start"] == base_h.isoformat()), None)
     assert h0_entry is not None, f"No entry for {base_h.isoformat()} in fictive horizon"
-    assert h0_entry["mode"] == "grid", (
-        f"Expected mode='grid' for DP-selected hour 0, got '{h0_entry['mode']}'"
-    )
+    assert h0_entry["mode"] == "grid", f"Expected mode='grid' for DP-selected hour 0, got '{h0_entry['mode']}'"
 
 
 def test_fictive_horizon_grid_entries_exactly_match_dp_selected():
@@ -227,23 +241,20 @@ def test_fictive_horizon_grid_entries_exactly_match_dp_selected():
         result = _call(cfg, soc=20.0, slots=slots, _out=_out)
 
     _, _, deadline, _, _, _ = result
-    fictive_horizon = plan_mod.build_plan_horizon(
-        slots, _out["intervals"], _out["dp_selected"], 20.0, deadline, cfg
-    )
+    fictive_horizon = plan_mod.build_plan_horizon(slots, _out["intervals"], _out["dp_selected"], 20.0, deadline, cfg)
 
-    dp_selected_isos = {dt.replace(minute=0, second=0, microsecond=0).isoformat()
-                        for dt in _out["dp_selected"]}
+    dp_selected_isos = {dt.replace(minute=0, second=0, microsecond=0).isoformat() for dt in _out["dp_selected"]}
     grid_entry_isos = {e["start"] for e in fictive_horizon if e["mode"] == "grid"}
 
     assert grid_entry_isos == dp_selected_isos, (
-        f"Fictive horizon grid entries {grid_entry_isos} must exactly match "
-        f"dp_selected hours {dp_selected_isos}"
+        f"Fictive horizon grid entries {grid_entry_isos} must exactly match dp_selected hours {dp_selected_isos}"
     )
 
 
 # ===========================================================================
 # 3. fictive_plan absent when DP did not run
 # ===========================================================================
+
 
 def test_dp_zero_schedule_yields_empty_dp_selected():
     """DP runs but the safety floor forces no charge (SoC at target → zero deficit).
@@ -269,7 +280,11 @@ def test_dp_zero_schedule_yields_empty_dp_selected():
     _, _, deadline, _, _, _ = result
     fictive_horizon = plan_mod.build_plan_horizon(
         _slots([0.05, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40]),
-        _out["intervals"], _out["dp_selected"], 97.0, deadline, cfg
+        _out["intervals"],
+        _out["dp_selected"],
+        97.0,
+        deadline,
+        cfg,
     )
     grid_hours = sum(1 for e in fictive_horizon if e["mode"] == "grid")
     assert grid_hours == 0, f"Zero DP schedule must yield 0 planned_grid_hours, got {grid_hours}"
@@ -278,6 +293,7 @@ def test_dp_zero_schedule_yields_empty_dp_selected():
 # ===========================================================================
 # 4. grid_request side-channel and fictive bar magnitude
 # ===========================================================================
+
 
 def test_out_grid_request_present_and_keyed_by_hour():
     # At soc=target the survival floor is a no-op, so grid_request reflects the
@@ -309,7 +325,12 @@ def test_fictive_grid_bar_uses_dp_schedule_not_max_charge():
         result = _call(cfg, soc=97.0, slots=slots, _out=_out)
     _, _, deadline, _, _, _ = result
     fictive = plan_mod.build_plan_horizon(
-        slots, _out["intervals"], _out["dp_selected"], 20.0, deadline, cfg,
+        slots,
+        _out["intervals"],
+        _out["dp_selected"],
+        20.0,
+        deadline,
+        cfg,
         grid_request_by_hour=_out["grid_request"],
     )
     base_h = BASE.replace(minute=0, second=0, microsecond=0)

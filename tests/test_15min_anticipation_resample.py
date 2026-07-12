@@ -6,9 +6,10 @@ shape).  Pre-fix, `detect_slot_minutes` picked the finest grid (15) but the
 RAW un-resampled slots were passed through, so still-60-min slots were
 counted at a quarter of their true DC (spec §M4 deviation).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -18,27 +19,31 @@ from custom_components.anker_x1_smartgrid import optimize as opt
 from custom_components.anker_x1_smartgrid import pricing_store, scheduler
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
 
-NOW_H = datetime(2026, 6, 26, 18, 0, tzinfo=timezone.utc)
-REAL_END = datetime(2026, 6, 27, 0, 0, tzinfo=timezone.utc)
-PICKUP = datetime(2026, 6, 27, 8, 0, tzinfo=timezone.utc)   # winter-late: peak sits before pickup
+NOW_H = datetime(2026, 6, 26, 18, 0, tzinfo=UTC)
+REAL_END = datetime(2026, 6, 27, 0, 0, tzinfo=UTC)
+PICKUP = datetime(2026, 6, 27, 8, 0, tzinfo=UTC)  # winter-late: peak sits before pickup
 
 
 def _cfg(**kw) -> Config:
     d = dict(
-        capacity_kwh=10.0, soc_target=97.0, soc_floor=5.0, export_fee_eur_per_kwh=0.0,
-        export_peak_band_frac=0.5,        # wide band: only the est_morning walk gates inclusion
-        max_export_w=3000.0, grid_export_limit_w=3000.0,
-        anticipation_confidence_haircut=0.0, anticipation_margin_eur_per_kwh=0.02,
+        capacity_kwh=10.0,
+        soc_target=97.0,
+        soc_floor=5.0,
+        export_fee_eur_per_kwh=0.0,
+        export_peak_band_frac=0.5,  # wide band: only the est_morning walk gates inclusion
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
+        anticipation_confidence_haircut=0.0,
+        anticipation_margin_eur_per_kwh=0.02,
     )
     d.update(kw)
     return Config(**d)  # type: ignore[arg-type]
 
 
 def _intervals():  # 14 h of overnight load then tomorrow's PV ramp at +14h (08:00 pickup)
-    return (
-        [ForecastInterval(NOW_H + timedelta(hours=i), 0.0, 400.0, 1.0) for i in range(14)]
-        + [ForecastInterval(PICKUP, 2000.0, 300.0, 1.0)]
-    )
+    return [ForecastInterval(NOW_H + timedelta(hours=i), 0.0, 400.0, 1.0) for i in range(14)] + [
+        ForecastInterval(PICKUP, 2000.0, 300.0, 1.0)
+    ]
 
 
 def _base_reserve():
@@ -69,16 +74,10 @@ def _mixed_real_slots():
     `resample_price_map` so the boundary hour still infers its true 60-min
     span instead of truncating to one fine sub-slot.
     """
-    quarter_prices = [0.30, 0.30, 0.30, 0.30]      # 18:00 hour, split into 4x15min
+    quarter_prices = [0.30, 0.30, 0.30, 0.30]  # 18:00 hour, split into 4x15min
     hourly_prices = [0.32, 0.34, 0.36, 0.28, 0.26]  # 19:00..23:00, still 60-min
-    slots = [
-        PriceSlot(NOW_H + timedelta(minutes=15 * i), p)
-        for i, p in enumerate(quarter_prices)
-    ]
-    slots += [
-        PriceSlot(NOW_H + timedelta(hours=1 + i), p)
-        for i, p in enumerate(hourly_prices)
-    ]
+    slots = [PriceSlot(NOW_H + timedelta(minutes=15 * i), p) for i, p in enumerate(quarter_prices)]
+    slots += [PriceSlot(NOW_H + timedelta(hours=1 + i), p) for i, p in enumerate(hourly_prices)]
     return slots
 
 
@@ -100,13 +99,10 @@ def test_mixed_resolution_real_payload_counts_true_per_hour_dc():
     with patch("homeassistant.util.dt.as_local", side_effect=lambda d: d):
         ctrl._apply_price_prior(rsv, _estimate(), slots, NOW_H, REAL_END, _intervals(), cfg)
 
-    expected_held = 2 * _per_hour_dc(cfg)   # 22:00 + 23:00, each a TRUE 60-min hour
+    expected_held = 2 * _per_hour_dc(cfg)  # 22:00 + 23:00, each a TRUE 60-min hour
     assert rsv[NOW_H] == pytest.approx(1.0 + expected_held)
-    assert all(
-        rsv[NOW_H + timedelta(hours=i)] == pytest.approx(1.0 + expected_held)
-        for i in range(14)
-    )
-    assert rsv[PICKUP] == 0.5   # >= pickup left exactly alone
+    assert all(rsv[NOW_H + timedelta(hours=i)] == pytest.approx(1.0 + expected_held) for i in range(14))
+    assert rsv[PICKUP] == 0.5  # >= pickup left exactly alone
 
     # Containment: the caller's `slots` object must be untouched (resample builds
     # a NEW list; it must never mutate the DP's real price source in place).
@@ -134,7 +130,7 @@ def test_uniform_60_resample_is_identity_byte_identical():
         est_slots = pricing_store.build_estimated_slots(est, REAL_END, pickup)
         held_old = pricing_store.compute_anticipation_held_extra(
             estimated_slots=est_slots,
-            real_slots=_uniform_hourly_slots(),   # raw, un-resampled — pre-fix equivalent
+            real_slots=_uniform_hourly_slots(),  # raw, un-resampled — pre-fix equivalent
             now_h=NOW_H,
             real_horizon_end=REAL_END,
             tomorrow_solar_pickup=pickup,

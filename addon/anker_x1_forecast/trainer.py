@@ -11,14 +11,15 @@ Instead we open the connection ourselves with ``mode=ro`` URI and run the
 same SELECT that DataRecorder.read_hourly_rows() uses, so the dict shape
 (column names, ordering) is identical.
 """
+
 from __future__ import annotations
 
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Sequence
 
 from forecast_core.backtest import should_promote, walk_forward_hgbr
 from forecast_core.const import (
@@ -94,7 +95,7 @@ def train_once(
             model=None,
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     model = HGBRQuantileModel()
 
     if not model.is_ready(rows, min_days=min_days):
@@ -180,9 +181,7 @@ def load_rows(db_path: str, *, since_iso: str | None = None) -> list[dict] | Non
                     (since_iso,),
                 )
             else:
-                cur = conn.execute(
-                    "SELECT * FROM samples_hourly ORDER BY hour_ts ASC"
-                )
+                cur = conn.execute("SELECT * FROM samples_hourly ORDER BY hour_ts ASC")
             rows = [dict(r) for r in cur.fetchall()]
         finally:
             conn.row_factory = None
@@ -217,12 +216,10 @@ def refresh_model_lookups(model, db_path: str) -> bool:
         refresh = getattr(model, "refresh_lookups", None)
         if refresh is None:
             return False
-        since_iso = (
-            datetime.now(timezone.utc) - timedelta(days=_REFRESH_LOOKBACK_DAYS)
-        ).isoformat()
+        since_iso = (datetime.now(UTC) - timedelta(days=_REFRESH_LOOKBACK_DAYS)).isoformat()
         rows = load_rows(db_path, since_iso=since_iso)
         if not rows:
             return False
         return bool(refresh(rows))
-    except Exception:  # noqa: BLE001 — serve-path must never raise
+    except Exception:
         return False

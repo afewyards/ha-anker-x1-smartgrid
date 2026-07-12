@@ -1,4 +1,5 @@
 """Unit tests for controller status sensors."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -299,15 +300,19 @@ def _seed_valid_inputs(hass, *, soc="20.0"):
     hass.set_state("sensor.meter_power", "100.0")
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-    hass.set_state("sensor.price", "0.05", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(0.05 * const.PRICE_SCALE),
-            }
-            for i in range(9)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.05",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.05 * const.PRICE_SCALE),
+                }
+                for i in range(9)
+            ]
+        },
+    )
     hass.set_state("sensor.pv_power", "1200.0")
     hass.set_state("sensor.battery_power", "-500.0")
     hass.set_state("sensor.inverter_loss", "30.0")

@@ -55,6 +55,7 @@ Pure-Python / stdlib only
 -------------------------
 No numpy, no sklearn.  Safe to run on the HAOS box (CPython 3.14 / musl).
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -69,6 +70,7 @@ from .regret import (
     _eta_discharge_at,
     _max_grid_dc,
 )
+
 
 def compute_water_value(trough_price: float, cfg: Config) -> float:
     """Terminal water value v (€/DC-kWh) for the water-value end selection.
@@ -210,16 +212,8 @@ def cash_flows_eur(
     """
     grid_charge_w = min(max(0.0, meter_w), max(0.0, -batt_w))
     batt_export_w = min(max(0.0, -meter_w), max(0.0, batt_w))
-    cost = (
-        grid_charge_w / 1000.0 * tick_h * import_price
-        if import_price is not None
-        else 0.0
-    )
-    credit = (
-        batt_export_w / 1000.0 * tick_h * export_price_eff
-        if export_price_eff is not None
-        else 0.0
-    )
+    cost = grid_charge_w / 1000.0 * tick_h * import_price if import_price is not None else 0.0
+    credit = batt_export_w / 1000.0 * tick_h * export_price_eff if export_price_eff is not None else 0.0
     return cost, credit
 
 
@@ -251,10 +245,7 @@ def solar_reservation_ceiling(
     target_kwh = cfg.target_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
     eta = cfg.eta_charge_safe()
-    solar_dc = [
-        min(max(0.0, window_pv[j] - window_load[j]), rate_kwh_h) * eta
-        for j in range(n)
-    ]
+    solar_dc = [min(max(0.0, window_pv[j] - window_load[j]), rate_kwh_h) * eta for j in range(n)]
     if cycle_end_idx is None:
         cycle_end_idx = [n] * n
     ceiling: list[float] = []
@@ -289,7 +280,7 @@ def solar_cycle_end_idx(
     if sun_times is None:
         return out
     _today_sunset, tomorrow_sunrise, _tomorrow_sunset = sun_times
-    sr_idx = int(round((tomorrow_sunrise - now_h).total_seconds() / (slot_minutes * 60)))
+    sr_idx = round((tomorrow_sunrise - now_h).total_seconds() / (slot_minutes * 60))
     if 0 < sr_idx < window_len:
         for h in range(window_len):
             out[h] = sr_idx if h < sr_idx else window_len
@@ -387,10 +378,7 @@ def build_charge_mask(
         # against its OWN trough[h] = min over [h - lookback, horizon_edge).  None
         # entries (no real price in range) fail closed.
         band = price_band if price_band is not None else 0.0
-        return [
-            (v and t is not None and p <= ceiling and p <= t + band)
-            for p, t, v in zip(price, trough, valid)
-        ]
+        return [(v and t is not None and p <= ceiling and p <= t + band) for p, t, v in zip(price, trough, valid)]
     if price_band is not None:
         trough_v = window_min if window_min is not None else min(price)
         trough_threshold = trough_v + price_band
@@ -532,43 +520,25 @@ def optimize_grid(
     # Input validation
     # ------------------------------------------------------------------
     if len(window_pv) != window_len:
-        raise ValueError(
-            f"window_pv length {len(window_pv)} != window_len {window_len}"
-        )
+        raise ValueError(f"window_pv length {len(window_pv)} != window_len {window_len}")
     if len(window_load) != window_len:
-        raise ValueError(
-            f"window_load length {len(window_load)} != window_len {window_len}"
-        )
+        raise ValueError(f"window_load length {len(window_load)} != window_len {window_len}")
     if len(price) != window_len:
-        raise ValueError(
-            f"price length {len(price)} != window_len {window_len}"
-        )
+        raise ValueError(f"price length {len(price)} != window_len {window_len}")
     if window_len < 1:
         raise ValueError(f"window_len must be >= 1, got {window_len}")
     if chargeable is not None and len(chargeable) != window_len:
-        raise ValueError(
-            f"chargeable length {len(chargeable)} != window_len {window_len}"
-        )
+        raise ValueError(f"chargeable length {len(chargeable)} != window_len {window_len}")
     if feed_in is not None and len(feed_in) != window_len:
-        raise ValueError(
-            f"feed_in length {len(feed_in)} != window_len {window_len}"
-        )
+        raise ValueError(f"feed_in length {len(feed_in)} != window_len {window_len}")
     if export_price is not None and len(export_price) != window_len:
-        raise ValueError(
-            f"export_price length {len(export_price)} != window_len {window_len}"
-        )
+        raise ValueError(f"export_price length {len(export_price)} != window_len {window_len}")
     if reserve_by_hour is not None and len(reserve_by_hour) != window_len:
-        raise ValueError(
-            f"reserve_by_hour length {len(reserve_by_hour)} != window_len {window_len}"
-        )
+        raise ValueError(f"reserve_by_hour length {len(reserve_by_hour)} != window_len {window_len}")
     if grid_charge_ceiling is not None and len(grid_charge_ceiling) != window_len:
-        raise ValueError(
-            f"grid_charge_ceiling length {len(grid_charge_ceiling)} != window_len {window_len}"
-        )
+        raise ValueError(f"grid_charge_ceiling length {len(grid_charge_ceiling)} != window_len {window_len}")
     if hedge_drain_kwh is not None and len(hedge_drain_kwh) != window_len:
-        raise ValueError(
-            f"hedge_drain_kwh length {len(hedge_drain_kwh)} != window_len {window_len}"
-        )
+        raise ValueError(f"hedge_drain_kwh length {len(hedge_drain_kwh)} != window_len {window_len}")
 
     # ------------------------------------------------------------------
     # Derived constants (mirror hindsight_optimal_grid)
@@ -595,13 +565,20 @@ def optimize_grid(
     # and moot when the internal clock is UTC (the common HA default).
     _di = (
         (
-            day_index if day_index is not None
+            day_index
+            if day_index is not None
             else [(window_start_h + h) // slots_per_day for h in range(len(export_price))]
         )
-        if _do_export else None
+        if _do_export
+        else None
     )
     eta_d, cycle_cost, max_export_dc_h, ac_cap, _band, peak_from = export_leg_precompute(
-        export_price, cfg, eta, eta_curve, dt_h, day_index=_di,
+        export_price,
+        cfg,
+        eta,
+        eta_curve,
+        dt_h,
+        day_index=_di,
     )
 
     # C3: solar-only baseline spill (AC kWh) per hour — the spill that occurs with
@@ -749,17 +726,13 @@ def optimize_grid(
                 floor_import_cost = max(0.0, firmware_floor_kwh - new_soc_pre) * price_h
                 new_soc = max(new_soc_pre, firmware_floor_kwh)
                 new_b = to_bin(new_soc)
-                eta_g = (
-                    eta if eta_curve is None
-                    else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
-                )
+                eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                 g_ac = g_dc / eta_g
                 # Subtract export credit from transition cost; add the below-floor
                 # direct-import cost.  When feed_in=None, hour_credit=0.0; when the
                 # floor does not bind, floor_import_cost=0.0 -> new_cost unchanged.
                 new_cost = (
-                    cost + g_ac * price_h - hour_credit + floor_import_cost
-                    + g_dc * cfg.charge_margin_eur_per_kwh
+                    cost + g_ac * price_h - hour_credit + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh
                 )
 
                 # Strict < mirrors hindsight tie-breaking — do not change to <=
@@ -785,16 +758,9 @@ def optimize_grid(
                 # C1: per-hour ride-out floor — voluntary export may not take SoC
                 # below the reserve sized to the next solar pickup.  Defaults to the
                 # firmware floor when reserve_by_hour is None (byte parity preserved).
-                export_floor_h = (
-                    floor_kwh if reserve_by_hour is None
-                    else max(floor_kwh, reserve_by_hour[h])
-                )
+                export_floor_h = floor_kwh if reserve_by_hour is None else max(floor_kwh, reserve_by_hour[h])
                 band_floor = peak_from[h] * (1.0 - _band)
-                if (
-                    net_rev_per_dc > 1e-9
-                    and ep_h >= band_floor - 1e-9
-                    and soc_after > export_floor_h + bin_kwh - 1e-9
-                ):
+                if net_rev_per_dc > 1e-9 and ep_h >= band_floor - 1e-9 and soc_after > export_floor_h + bin_kwh - 1e-9:
                     export_headroom_dc = max(0.0, soc_after - export_floor_h)
                     # Cap battery export so combined AC feed-in (solar spill + battery)
                     # does not exceed ac_cap = min(max_export_w, grid_export_limit_w)/1000.
@@ -812,8 +778,7 @@ def optimize_grid(
                             break  # monotonically discharging — safe to stop
                         new_b = to_bin(new_soc)
                         eta_d_step = (
-                            eta_d if eta_curve is None
-                            else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+                            eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
                         )
                         e_ac = e_dc * eta_d_step
                         export_revenue = e_ac * ep_h
@@ -836,7 +801,7 @@ def optimize_grid(
     # ------------------------------------------------------------------
     # Select best end state
     # ------------------------------------------------------------------
-    best_end_b, best_cost, infeasible = select_end_state(
+    best_end_b, _best_cost, infeasible = select_end_state(
         dp,
         terminal_mode=terminal_mode,
         water_value=water_value,
@@ -893,7 +858,7 @@ def optimize_grid(
         schedule_ac[h] = g_ac
         export_dc_sched[h] = e_dc
         export_credit += step_credit
-        floor_import_eur += fi_eur     # stored from the HEDGED forward pass (was: unhedged recompute)
+        floor_import_eur += fi_eur  # stored from the HEDGED forward pass (was: unhedged recompute)
         floor_import_kwh += fi_kwh
         cur_b = prev_b
 
@@ -902,10 +867,7 @@ def optimize_grid(
 
     if _do_export:
         export_schedule_ac = [
-            e_dc * (
-                eta_d if eta_curve is None
-                else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
-            )
+            e_dc * (eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
             for e_dc in export_dc_sched
         ]
         total_export_kwh = sum(export_schedule_ac)

@@ -19,9 +19,10 @@ firmware floor. Under the pre-fix hourly-strided list this fails (proven
 below by running against the unpatched pre-fix code and observing the
 failure — see the task report for the stash/restore transcript).
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -36,12 +37,12 @@ from custom_components.anker_x1_smartgrid.models import (
     PriceSlot,
 )
 
-BASE = datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc)  # midnight, hour-aligned
+BASE = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)  # midnight, hour-aligned
 _PREDICTOR = LoadPredictor.from_profile({})
 
 HOUR18 = BASE + timedelta(hours=18)
-_DISTINCT_RESERVE_KWH = 5.0   # far above the firmware floor (0.5 kWh below)
-_FLOOR_KWH = 0.5              # soc_floor=5% x capacity_kwh=10.0
+_DISTINCT_RESERVE_KWH = 5.0  # far above the firmware floor (0.5 kWh below)
+_FLOOR_KWH = 0.5  # soc_floor=5% x capacity_kwh=10.0
 
 
 def _cfg() -> Config:
@@ -85,16 +86,25 @@ def _run(slot_minutes: int) -> dict:
     sunset = BASE + timedelta(hours=8)
     slots = _slots(30)
 
-    with patch(
-        "custom_components.anker_x1_smartgrid.decision._build_reserve_by_hour",
-        return_value={HOUR18: _DISTINCT_RESERVE_KWH},
-    ), patch(
-        "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-        side_effect=side_effect,
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.decision._build_reserve_by_hour",
+            return_value={HOUR18: _DISTINCT_RESERVE_KWH},
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+            side_effect=side_effect,
+        ),
     ):
         compute_decision(
-            plan, inputs, slots, 0.0, sunset,
-            _PREDICTOR, None, cfg,
+            plan,
+            inputs,
+            slots,
+            0.0,
+            sunset,
+            _PREDICTOR,
+            None,
+            cfg,
             slot_minutes=slot_minutes,
         )
     return captured

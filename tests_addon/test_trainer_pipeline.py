@@ -12,6 +12,7 @@ FIRST 7 days of rows can never be lag-complete.  With the synthetic start of
 as (days − 7) calendar dates.  Testing with 5 days → 0 lag-complete dates →
 is_ready always returns False, which is the "not-ready" gate we want to verify.
 """
+
 from __future__ import annotations
 
 

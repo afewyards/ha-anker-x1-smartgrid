@@ -8,7 +8,9 @@ class _Ctl:
 
 def test_plan_sensor_value_and_attrs():
     horizon = [{"start": "2026-06-20T11:00:00+00:00", "price": 0.3, "mode": "grid", "soc": 55.0}]
-    s = X1PlanSensor(_Ctl({"plan": {"horizon": horizon, "deadline": "2026-06-20T18:00:00+00:00", "planned_grid_hours": 1}}), "e1")
+    s = X1PlanSensor(
+        _Ctl({"plan": {"horizon": horizon, "deadline": "2026-06-20T18:00:00+00:00", "planned_grid_hours": 1}}), "e1"
+    )
     assert s.native_value == 1
     assert s.native_unit_of_measurement == "h"
     attrs = s.extra_state_attributes

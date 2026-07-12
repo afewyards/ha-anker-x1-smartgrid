@@ -9,14 +9,15 @@ Blend keys on an exact ``when == now_h`` (hour-floored) match: in dormant
 15-min slot mode the current slot start differs and the blend is a safe
 no-op.  Pure module: no HA imports, no I/O.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 
 from .resolution import hour_floor
 
-MIN_COVERAGE_S = 600.0   # ≥10 observed minutes before the blend engages
-MAX_STEP_S = 300.0       # ticks further apart than this break integration
+MIN_COVERAGE_S = 600.0  # ≥10 observed minutes before the blend engages
+MAX_STEP_S = 300.0  # ticks further apart than this break integration
 
 
 class HourAccumulator:
@@ -55,15 +56,15 @@ class CurrentHourBlendPredictor:
         self._now_h = now_h
 
     def predict(
-        self, when: datetime, temp: float | None, fallback_w: float,
-        *, quantile: float = 0.5,
+        self,
+        when: datetime,
+        temp: float | None,
+        fallback_w: float,
+        *,
+        quantile: float = 0.5,
     ) -> float:
         base_w = self._base.predict(when, temp, fallback_w, quantile=quantile)
-        if (
-            when != self._now_h
-            or self._acc.hour != self._now_h
-            or self._acc.covered_s < MIN_COVERAGE_S
-        ):
+        if when != self._now_h or self._acc.hour != self._now_h or self._acc.covered_s < MIN_COVERAGE_S:
             return base_w
         frac_rem = max(0.0, 1.0 - self._acc.covered_s / 3600.0)
         return self._acc.kwh * 1000.0 + base_w * frac_rem

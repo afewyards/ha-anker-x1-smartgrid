@@ -5,6 +5,7 @@ State-class split is deliberate: today = MEASUREMENT (a daily-resetting value
 under TOTAL without last_reset corrupts long-term statistics at midnight);
 total = TOTAL (never resets, may decrease; LTS sum deltas give per-day charts).
 """
+
 from homeassistant.components.sensor import SensorStateClass
 
 from custom_components.anker_x1_smartgrid.sensor import (

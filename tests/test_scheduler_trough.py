@@ -1,10 +1,10 @@
 # tests/test_scheduler_trough.py
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot
 from custom_components.anker_x1_smartgrid.scheduler import find_next_trough
 
-NOW = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 23, 12, 0, tzinfo=UTC)
 
 
 def _slots(prices, start=NOW):

@@ -7,6 +7,7 @@ the DP export leg must still fire on an obvious evening price spike. Prints
 the deltas so a human/CI log can eyeball regression drift across changes to
 the efficiency-curve plumbing.
 """
+
 from datetime import datetime
 
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
@@ -25,8 +26,9 @@ def _curve(cfg, disch_low=0.80):
 
 
 def test_reserve_and_export_regression_report(capsys):
-    cfg = Config(eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0,
-                 max_export_w=6000.0, grid_export_limit_w=6000.0)
+    cfg = Config(
+        eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0, max_export_w=6000.0, grid_export_limit_w=6000.0
+    )
     curve = _curve(cfg)
 
     now = datetime(2026, 7, 1, 22, 0, 0)
@@ -40,10 +42,13 @@ def test_reserve_and_export_regression_report(capsys):
     price = [0.20] * 24
     ep = [0.0] * 24
     ep[18] = 0.55
-    on = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0,
-                        window_len=24, export_price=ep, eta_curve=curve)
+    on = optimize_grid(
+        pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=24, export_price=ep, eta_curve=curve
+    )
     assert on["export_kwh"] > 0.0
 
     with capsys.disabled():
-        print(f"[regression-gate] reserve off={r_off:.3f} on={r_on:.3f} "
-              f"delta={r_on - r_off:+.3f} kWh | peak export_kwh on={on['export_kwh']:.3f}")
+        print(
+            f"[regression-gate] reserve off={r_off:.3f} on={r_on:.3f} "
+            f"delta={r_on - r_off:+.3f} kWh | peak export_kwh on={on['export_kwh']:.3f}"
+        )

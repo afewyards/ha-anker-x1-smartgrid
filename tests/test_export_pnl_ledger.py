@@ -7,9 +7,10 @@ Covers:
 - controller tick: accumulator resets on local-day rollover
 - controller tick: export interval tagged in observability attributes
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -33,7 +34,7 @@ from tests.helpers import (
 # Time anchors
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 25, 14, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ def _make_export_cfg(**overrides) -> Config:
         max_export_w=3000.0,
         grid_export_limit_w=3000.0,
         eta_charge=1.0,
-        round_trip_eff=1.0,     # eta_discharge=1.0 for simple arithmetic
+        round_trip_eff=1.0,  # eta_discharge=1.0 for simple arithmetic
         cycle_cost_eur_per_kwh=0.04,
         export_eps_lo_kwh=0.2,
         export_eps_hi_kwh=0.4,
@@ -120,15 +121,19 @@ def _seed_export_inputs(hass, *, soc="80.0", export_price="0.30"):
     # This gives find_next_trough a cheap slot to return, producing a low
     # keep_value so that exporting at 0.30 yields a genuinely positive PnL.
     prices = [0.30, 0.30, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
-    hass.set_state("sensor.price", "0.30", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(prices[i] * const.PRICE_SCALE),
-            }
-            for i in range(12)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.30",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(prices[i] * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +152,7 @@ class TestExportPnlEur:
           = 0.075 - 0.01 - 0.025
           = 0.040
         """
-        cfg = _make_export_cfg(
-            eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04
-        )
+        cfg = _make_export_cfg(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04)
         result = export_pnl_eur(
             export_kwh=0.25,
             export_price=0.30,
@@ -160,9 +163,7 @@ class TestExportPnlEur:
 
     def test_negative_pnl_when_price_too_low(self):
         """Export price below hurdle → negative PnL (cost exceeds revenue)."""
-        cfg = _make_export_cfg(
-            eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04
-        )
+        cfg = _make_export_cfg(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04)
         # export_price = 0.05 < cycle_cost + keep_value → negative net
         result = export_pnl_eur(
             export_kwh=0.25,
@@ -220,13 +221,10 @@ class TestExportPnlAccumulator:
         await ctrl.tick()
 
         export_calls = [c for c in act.calls if c[0] == "engage_export"]
-        assert len(export_calls) >= 1, (
-            f"engage_export must fire when surplus clears hurdle; calls={act.calls}"
-        )
+        assert len(export_calls) >= 1, f"engage_export must fire when surplus clears hurdle; calls={act.calls}"
         # PnL should be positive (price 0.30 > hurdle with eta=1.0, cost=0.04, keep≈0.10)
         assert ctrl.today_export_pnl_eur > 0.0, (
-            f"Expected positive accumulated PnL after export tick, "
-            f"got {ctrl.today_export_pnl_eur}"
+            f"Expected positive accumulated PnL after export tick, got {ctrl.today_export_pnl_eur}"
         )
 
     @pytest.mark.asyncio
@@ -245,9 +243,7 @@ class TestExportPnlAccumulator:
         await ctrl.tick()
         pnl_after_second = ctrl.today_export_pnl_eur
 
-        assert pnl_after_second >= pnl_after_first, (
-            "Accumulated PnL must be non-decreasing across export ticks"
-        )
+        assert pnl_after_second >= pnl_after_first, "Accumulated PnL must be non-decreasing across export ticks"
 
     @pytest.mark.asyncio
     async def test_pnl_resets_on_day_rollover(self, monkeypatch):
@@ -278,8 +274,7 @@ class TestExportPnlAccumulator:
         # PnL can be slightly negative in corner cases (e.g., very high keep_value);
         # the key invariant is that it does NOT carry forward the 1.234 sentinel.
         assert ctrl.today_export_pnl_eur > -0.10, (
-            f"today_export_pnl_eur unexpectedly very negative after reset: "
-            f"{ctrl.today_export_pnl_eur}"
+            f"today_export_pnl_eur unexpectedly very negative after reset: {ctrl.today_export_pnl_eur}"
         )
 
 
@@ -297,17 +292,16 @@ class TestExportPnlBasis:
         hass = _StubHass()
         # eta_discharge = 0.85/0.95 ≈ 0.8947 (<1) so a spurious η would be visible.
         ctrl, act, _, rec = _make_controller(
-            hass, cfg_overrides=dict(eta_charge=0.95, round_trip_eff=0.85,
-                                     cycle_cost_eur_per_kwh=0.0))
+            hass, cfg_overrides=dict(eta_charge=0.95, round_trip_eff=0.85, cycle_cost_eur_per_kwh=0.0)
+        )
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
         # Zero out opportunity cost so PnL == revenue == AC_metered_kwh * eff_price.
-        monkeypatch.setattr(ctrl_mod.optimize_mod, "compute_water_value",
-                            lambda *a, **k: 0.0)
+        monkeypatch.setattr(ctrl_mod.optimize_mod, "compute_water_value", lambda *a, **k: 0.0)
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
 
         assert [c for c in act.calls if c[0] == "engage_export"], "expected an export tick"
-        ac_kwh = rec.rows[-1]["export_kwh"]          # AC metered net the controller exported
+        ac_kwh = rec.rows[-1]["export_kwh"]  # AC metered net the controller exported
         assert ac_kwh and ac_kwh > 0
         eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, ctrl.cfg)
         # Fixed: revenue = (ac/eta_d)*eff_price*eta_d = ac*eff_price (eta cancels).
@@ -343,17 +337,13 @@ class TestExportPnlTagging:
         """No export → today_export_pnl_eur is 0.0 in last_status (not None)."""
         hass = _StubHass()
         # Disable export
-        ctrl, act, _, rec = _make_controller(
-            hass, cfg_overrides={"enable_export": False}
-        )
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides={"enable_export": False})
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         await ctrl.tick()
 
         val = ctrl.last_status.get("today_export_pnl_eur")
-        assert val == pytest.approx(0.0), (
-            f"today_export_pnl_eur should be 0.0 when export is disabled, got {val!r}"
-        )
+        assert val == pytest.approx(0.0), f"today_export_pnl_eur should be 0.0 when export is disabled, got {val!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -458,9 +448,7 @@ class TestExportKwhCadence:
         # discharge -> battery-sourced (min) export = 2000W.
         hass.set_state("sensor.meter_power", "-2000.0")
         hass.set_state("sensor.battery_power", "2500.0")
-        ctrl.export_state = ExportState(
-            engaged=True, state_since=BASE - timedelta(hours=1)
-        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
 
         await ctrl.tick()
 
@@ -515,9 +503,7 @@ class TestExportPnlMeasuredNotSetpoint:
         # Sanity: the inflated load-comp factor really did push the commanded
         # setpoint far above the metered 2000W/1500W scenario -- proving PnL
         # below is disconnected from it.
-        assert wild_setpoint_w > 4000.0, (
-            f"fixture setpoint not wild enough to prove the point: {wild_setpoint_w}"
-        )
+        assert wild_setpoint_w > 4000.0, f"fixture setpoint not wild enough to prove the point: {wild_setpoint_w}"
 
         eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, ctrl.cfg)
         expected_kwh = min(2000.0, 1500.0) / 1000.0 * (const.TICK_SECONDS / 3600.0)

@@ -20,6 +20,7 @@ Usage::
     ])
     # [{"ts": "2024-02-01T14:00:00+00:00", "p50_w": 820.0, "p80_w": 1040.0}, ...]
 """
+
 from __future__ import annotations
 
 import logging
@@ -90,15 +91,11 @@ def predict_hours(
             try:
                 ts_dt = datetime.fromisoformat(ts_raw)
             except (ValueError, TypeError) as exc:
-                _log.warning(
-                    "predict_hours: unparseable 'ts' %r — %s, skipping", ts_raw, exc
-                )
+                _log.warning("predict_hours: unparseable 'ts' %r — %s, skipping", ts_raw, exc)
                 continue
 
             if ts_dt.tzinfo is None:
-                _log.warning(
-                    "predict_hours: naive ts %r (no tzinfo), skipping", ts_raw
-                )
+                _log.warning("predict_hours: naive ts %r (no tzinfo), skipping", ts_raw)
                 continue
 
             temp: float | None = hour.get("temp_forecast")
@@ -131,9 +128,10 @@ def predict_hours(
             # Drop non-finite values before they reach the control loop.
             if not math.isfinite(p50) or not math.isfinite(p80):
                 _log.warning(
-                    "predict_hours: non-finite prediction for ts=%r "
-                    "(p50=%s p80=%s), skipping",
-                    ts_raw, p50, p80,
+                    "predict_hours: non-finite prediction for ts=%r (p50=%s p80=%s), skipping",
+                    ts_raw,
+                    p50,
+                    p80,
                 )
                 continue
 
@@ -149,14 +147,14 @@ def predict_hours(
                 }
             )
 
-        except Exception:  # noqa: BLE001
+        except Exception:
             _log.exception("predict_hours: unexpected error for hour %r, skipping", hour)
 
     return results
 
 
 def build_predict_payload(
-    state: "TrainState",
+    state: TrainState,
     predictions: list[dict],
 ) -> dict:
     """Assemble the /predict response body from a TrainState and predictions.

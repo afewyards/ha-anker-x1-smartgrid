@@ -1,4 +1,5 @@
 """Discover PV forecast services and derive their forecast entities."""
+
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
@@ -25,10 +26,10 @@ _SOLCAST_FORECAST_KEYS: dict[str, str] = {
 
 # domain -> {name, keys} — accepted PV-energy-production forecast integrations.
 FORECAST_SOURCE_MAP: dict[str, dict] = {
-    "forecast_solar":            {"name": "Forecast.Solar", "keys": _SHARED_FORECAST_KEYS},
-    "open_meteo_solar_forecast": {"name": "Open-Meteo",     "keys": _SHARED_FORECAST_KEYS},
-    "solcast_solar":             {"name": "Solcast",        "keys": _SOLCAST_FORECAST_KEYS},
-    "ha_solcast_fusion":         {"name": "SolcastFusion",  "keys": _SHARED_FORECAST_KEYS},
+    "forecast_solar": {"name": "Forecast.Solar", "keys": _SHARED_FORECAST_KEYS},
+    "open_meteo_solar_forecast": {"name": "Open-Meteo", "keys": _SHARED_FORECAST_KEYS},
+    "solcast_solar": {"name": "Solcast", "keys": _SOLCAST_FORECAST_KEYS},
+    "ha_solcast_fusion": {"name": "SolcastFusion", "keys": _SHARED_FORECAST_KEYS},
 }
 
 
@@ -56,11 +57,7 @@ def derive_pv_entities(hass: HomeAssistant, entry_id: str) -> dict[str, str | No
     for role in PV_ROLES:
         key = role_keys[role]
         result[role] = next(
-            (
-                ent.entity_id
-                for ent in entities
-                if ent.translation_key == key or ent.entity_id.endswith(key)
-            ),
+            (ent.entity_id for ent in entities if ent.translation_key == key or ent.entity_id.endswith(key)),
             None,
         )
     return result

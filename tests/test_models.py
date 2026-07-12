@@ -1,6 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PriceSlot, ForecastInterval, PlantInputs, PlanState,
+    Config,
+    ControllerState,
+    PriceSlot,
+    ForecastInterval,
+    PlantInputs,
+    PlanState,
 )
 
 
@@ -16,7 +21,7 @@ def test_config_from_dict_overrides():
 
 
 def test_planstate_roundtrip():
-    t = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
     ps = PlanState(ControllerState.FORCING, t, (t,))
     d = ps.to_dict()
     ps2 = PlanState.from_dict(d)
@@ -26,7 +31,7 @@ def test_planstate_roundtrip():
 
 
 def test_price_slot_and_interval():
-    t = datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc)
+    t = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
     assert PriceSlot(t, 0.12).price == 0.12
     fi = ForecastInterval(t, 3000.0, 500.0, 1.0)
     assert fi.pv_w == 3000.0 and fi.dt_h == 1.0
@@ -37,7 +42,8 @@ def test_price_slot_and_interval():
 def test_planstate_roundtrips_committed_charge_kwh():
     from datetime import datetime, timezone
     from custom_components.anker_x1_smartgrid.models import ControllerState, PlanState
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     ps = PlanState(ControllerState.FORCING, now, (now,), committed_charge_kwh=1.5)
     restored = PlanState.from_dict(ps.to_dict())
     assert restored.committed_charge_kwh == 1.5
@@ -46,7 +52,8 @@ def test_planstate_roundtrips_committed_charge_kwh():
 def test_planstate_from_dict_defaults_committed_charge_kwh():
     from datetime import datetime, timezone
     from custom_components.anker_x1_smartgrid.models import PlanState
-    now = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
     # Legacy payload without the new key restores to 0.0.
     legacy = {"state": "passive", "state_since": now.isoformat(), "committed_slots": []}
     assert PlanState.from_dict(legacy).committed_charge_kwh == 0.0
@@ -54,9 +61,11 @@ def test_planstate_from_dict_defaults_committed_charge_kwh():
 
 # ── A2: Config export fields ──────────────────────────────────────────────────
 
+
 def test_config_export_defaults():
     """Config() defaults match DEFAULT_* export constants (A2)."""
     from custom_components.anker_x1_smartgrid import const
+
     cfg = Config()
     assert cfg.enable_export is const.DEFAULT_ENABLE_EXPORT
     assert cfg.max_export_w == const.DEFAULT_MAX_EXPORT_W
@@ -70,6 +79,7 @@ def test_config_export_defaults():
 def test_config_from_dict_max_export_w_round_trip():
     """from_dict picks up max_export_w by field name; others stay at default."""
     from custom_components.anker_x1_smartgrid import const
+
     cfg = Config.from_dict({const.CONF_MAX_EXPORT_W: 3000.0})
     assert cfg.max_export_w == 3000.0
     assert cfg.enable_export is const.DEFAULT_ENABLE_EXPORT
@@ -79,12 +89,15 @@ def test_config_from_dict_max_export_w_round_trip():
 def test_config_from_dict_export_eps_dwell_round_trip():
     """from_dict round-trips export hysteresis band + dwell values."""
     from custom_components.anker_x1_smartgrid import const
-    cfg = Config.from_dict({
-        const.CONF_EXPORT_EPS_LO_KWH: 0.1,
-        const.CONF_EXPORT_EPS_HI_KWH: 0.3,
-        const.CONF_EXPORT_DWELL_MIN: 10,
-        const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
-    })
+
+    cfg = Config.from_dict(
+        {
+            const.CONF_EXPORT_EPS_LO_KWH: 0.1,
+            const.CONF_EXPORT_EPS_HI_KWH: 0.3,
+            const.CONF_EXPORT_DWELL_MIN: 10,
+            const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
+        }
+    )
     assert cfg.export_eps_lo_kwh == 0.1
     assert cfg.export_eps_hi_kwh == 0.3
     assert cfg.export_dwell_min == 10

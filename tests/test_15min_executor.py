@@ -17,7 +17,8 @@ Covers:
   cleared ONLY when the controller's LATCHED slot_minutes changes tick-to-tick,
   never on a stable resolution (parity-critical at 60).
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -27,13 +28,17 @@ from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 from custom_components.anker_x1_smartgrid import scheduler
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PlanState, PlantInputs, PriceSlot,
+    Config,
+    ControllerState,
+    PlanState,
+    PlantInputs,
+    PriceSlot,
 )
 from tests.helpers import CapturingStore as _StubStore
 from tests.helpers import StubActuator as _StubActuator
 from tests.helpers import StubHass as _StubHass
 
-UTC = timezone.utc
+UTC = UTC
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +49,9 @@ UTC = timezone.utc
 def test_decide_state_resolves_quarter_slot_membership():
     cfg = Config(min_dwell_min=0)
     now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)
-    selected = [datetime(2026, 8, 1, 10, 30, tzinfo=UTC)]      # 10:30 quarter
+    selected = [datetime(2026, 8, 1, 10, 30, tzinfo=UTC)]  # 10:30 quarter
     plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=1), ())
-    out = scheduler.decide_state(plan, soc=50.0, now=now, selected_slots=selected,
-                                  cfg=cfg, slot_minutes=15)
+    out = scheduler.decide_state(plan, soc=50.0, now=now, selected_slots=selected, cfg=cfg, slot_minutes=15)
     assert out.state is ControllerState.FORCING
 
 
@@ -69,13 +73,14 @@ def test_anti_fight_guard_still_fires_at_15min():
     # A current 15-min slot both selected (stale hysteresis) and export-committed
     # is dropped from selected (export wins).  Modeled on test_controller_hysteresis.
     from custom_components.anker_x1_smartgrid import resolution
+
     now = datetime(2026, 8, 1, 18, 22, tzinfo=UTC)
-    cur = resolution.floor_to_slot(now, 15)                 # 18:15
+    cur = resolution.floor_to_slot(now, 15)  # 18:15
     selected = [cur]
     export_req = {cur: 3000.0}
     eps = 0.01 * 1000.0 / 0.25
     assert cur in selected and export_req.get(cur, 0.0) > eps
-    selected = [h for h in selected if h != cur]             # guard result
+    selected = [h for h in selected if h != cur]  # guard result
     assert cur not in selected
 
 
@@ -96,6 +101,7 @@ def _slots(now, prices):
 
 def _dp_charge_first_slot(kwh_first_slot):
     """Mock optimize_grid: charge `kwh_first_slot` kWh in window index 0, else idle."""
+
     def _dp(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         return {
@@ -104,6 +110,7 @@ def _dp_charge_first_slot(kwh_first_slot):
             "kwh": 0.0,
             "eur": 0.0,
         }
+
     return _dp
 
 
@@ -133,8 +140,7 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh():
     now = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
-    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (),
-                      committed_charge_kwh=0.0)
+    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (), committed_charge_kwh=0.0)
 
     with patch(
         "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
@@ -143,8 +149,11 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh():
         new_plan, *_ = ctrl_mod.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
             slot_minutes=15,
         )
@@ -165,8 +174,7 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh_fails_without_dt_h_fix():
     now = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
-    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (),
-                      committed_charge_kwh=0.0)
+    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (), committed_charge_kwh=0.0)
 
     with patch(
         "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
@@ -175,8 +183,11 @@ def test_hysteresis_recovers_per_slot_kwh_not_hour_kwh_fails_without_dt_h_fix():
         new_plan, *_ = ctrl_mod.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
             slot_minutes=15,
         )
@@ -199,7 +210,8 @@ def test_anti_fight_guard_slot_floors_cur_h_mid_hour():
     FORCING and grid-charges straight through a genuine committed export.
     """
     from custom_components.anker_x1_smartgrid import resolution
-    now = datetime(2026, 8, 1, 18, 22, tzinfo=UTC)   # mid-hour: hour-floor 18:00 != slot-floor 18:15
+
+    now = datetime(2026, 8, 1, 18, 22, tzinfo=UTC)  # mid-hour: hour-floor 18:00 != slot-floor 18:15
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
     # Stale previous-tick commitment: small, but within end_soc_deadband (0.25)
@@ -209,7 +221,9 @@ def test_anti_fight_guard_slot_floors_cur_h_mid_hour():
     # keeps this an intra-slot commit so the deadband-hold still re-injects
     # cur_h and the anti-fight guard's removal branch actually runs.
     plan = PlanState(
-        ControllerState.PASSIVE, now - timedelta(hours=2), (),
+        ControllerState.PASSIVE,
+        now - timedelta(hours=2),
+        (),
         committed_charge_kwh=0.1,
         committed_charge_slot=resolution.floor_to_slot(now, 15),
     )
@@ -221,8 +235,11 @@ def test_anti_fight_guard_slot_floors_cur_h_mid_hour():
         new_plan, setpoint, *_ = ctrl_mod.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=Config(end_soc_deadband=0.25, min_dwell_min=0),
             slot_minutes=15,
         )
@@ -241,8 +258,10 @@ def _mock_flat_ceiling(ceiling_kwh_first_slot):
     index 0 (the current slot), zero elsewhere -- lets the test pin exactly
     which slot key `charge_ceiling_soc` resolved from.
     """
+
     def _ceiling(window_pv, window_load_reserve, cfg, cycle_end_idx=None, dt_h=1.0):
         return [ceiling_kwh_first_slot] + [0.0] * (len(window_pv) - 1)
+
     return _ceiling
 
 
@@ -260,11 +279,10 @@ def test_charge_ceiling_soc_slot_floors_lookup_mid_hour():
     executor then charges straight to `soc_target` instead of stopping at the
     ceiling, buying grid ahead of free forecast solar.
     """
-    now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)   # mid-hour: hour-floor 10:00 != slot-floor 10:30
+    now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)  # mid-hour: hour-floor 10:00 != slot-floor 10:30
     prices = [0.30] * 8 + [0.08] + [0.30] * 6
     slots = _slots(now, prices)
-    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (),
-                      committed_charge_kwh=0.0)
+    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (), committed_charge_kwh=0.0)
     cfg = Config(end_soc_deadband=0.25, min_dwell_min=0)
 
     captured: dict = {}
@@ -274,21 +292,28 @@ def test_charge_ceiling_soc_slot_floors_lookup_mid_hour():
         captured["charge_ceiling_soc"] = kwargs.get("charge_ceiling_soc")
         return real_decide_state(*args, **kwargs)
 
-    with patch(
-        "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-        side_effect=_dp_charge_first_slot(0.0),
-    ), patch(
-        "custom_components.anker_x1_smartgrid.optimize.solar_reservation_ceiling",
-        side_effect=_mock_flat_ceiling(2.4),
-    ), patch(
-        "custom_components.anker_x1_smartgrid.scheduler.decide_state",
-        side_effect=_capture_decide_state,
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+            side_effect=_dp_charge_first_slot(0.0),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.solar_reservation_ceiling",
+            side_effect=_mock_flat_ceiling(2.4),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.scheduler.decide_state",
+            side_effect=_capture_decide_state,
+        ),
     ):
         ctrl_mod.compute_decision(
             plan=plan,
             inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
-            slots=slots, pv_remaining=0.0, sunset=now + timedelta(hours=2),
-            predictor=_FlatPredictor(), cur_temp=10.0,
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
             cfg=cfg,
             slot_minutes=15,
         )
@@ -375,7 +400,7 @@ class _StubRecorder:
 
 
 def _cfg(**overrides) -> Config:
-    defaults = dict(enable_export=False)   # keep the C3 export executor out of scope
+    defaults = dict(enable_export=False)  # keep the C3 export executor out of scope
     defaults.update(overrides)
     return Config(**defaults)
 
@@ -416,15 +441,19 @@ def _seed_inputs(hass):
     hass.set_state("sensor.export_price", "0.30")
     sunset_iso = (BASE + timedelta(hours=6)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-    hass.set_state("sensor.price", "0.30", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(0.30 * const.PRICE_SCALE),
-            }
-            for i in range(12)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.30",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.30 * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
 
 
 def _capture_plan_stub(captured: dict):
@@ -432,13 +461,29 @@ def _capture_plan_stub(captured: dict):
     tick() built BEFORE overwriting self.plan with the stub's own return value),
     bypasses the real DP entirely, and returns an empty-committed PASSIVE plan.
     """
+
     def _stub(
-        plan, inputs, slots, pv_remaining, sunset,
-        predictor, cur_temp, cfg,
-        tomorrow_total=None, sun_times=None, today_arrays=None, tomorrow_arrays=None,
-        today_watts=None, tomorrow_watts=None,
-        export_price=None, _out=None, _shadow_dp=False, export_price_matches_import=False,
-        estimated_tomorrow=None, past_actuals_by_hour=None, **kwargs,
+        plan,
+        inputs,
+        slots,
+        pv_remaining,
+        sunset,
+        predictor,
+        cur_temp,
+        cfg,
+        tomorrow_total=None,
+        sun_times=None,
+        today_arrays=None,
+        tomorrow_arrays=None,
+        today_watts=None,
+        tomorrow_watts=None,
+        export_price=None,
+        _out=None,
+        _shadow_dp=False,
+        export_price_matches_import=False,
+        estimated_tomorrow=None,
+        past_actuals_by_hour=None,
+        **kwargs,
     ):
         captured["plan"] = plan
         if _out is not None:
@@ -449,6 +494,7 @@ def _capture_plan_stub(captured: dict):
         passive = PlanState(ControllerState.PASSIVE, inputs.now, ())
         deadline = inputs.now + timedelta(hours=8)
         return passive, 0.0, deadline, [], "water_value", []
+
     return _stub
 
 
@@ -461,16 +507,19 @@ async def test_committed_state_cleared_on_latched_resolution_change(monkeypatch)
     monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
     ctrl, _act, _store = _make_controller(
-        hass, cfg_overrides=dict(slot_resolution="15", min_dwell_min=0),
+        hass,
+        cfg_overrides=dict(slot_resolution="15", min_dwell_min=0),
     )
     _seed_inputs(hass)
 
     stale_slot = BASE.replace(minute=0, second=0, microsecond=0)
     ctrl.plan = PlanState(
-        ControllerState.PASSIVE, BASE - timedelta(hours=1), (stale_slot,),
+        ControllerState.PASSIVE,
+        BASE - timedelta(hours=1),
+        (stale_slot,),
         committed_charge_kwh=1.23,
     )
-    assert ctrl._committed_slot_minutes == 60   # init value, before this tick
+    assert ctrl._committed_slot_minutes == 60  # init value, before this tick
 
     captured: dict = {}
     monkeypatch.setattr(ctrl_mod, "compute_decision", _capture_plan_stub(captured))
@@ -500,7 +549,9 @@ async def test_committed_state_not_cleared_at_stable_60(monkeypatch):
 
     stale_slot = BASE.replace(minute=0, second=0, microsecond=0)
     ctrl.plan = PlanState(
-        ControllerState.PASSIVE, BASE - timedelta(hours=1), (stale_slot,),
+        ControllerState.PASSIVE,
+        BASE - timedelta(hours=1),
+        (stale_slot,),
         committed_charge_kwh=1.23,
     )
     assert ctrl._committed_slot_minutes == 60

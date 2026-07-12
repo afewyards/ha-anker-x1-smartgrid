@@ -1,10 +1,10 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.dataquality import FeatureRow
 from custom_components.anker_x1_smartgrid import loadmodel, forecast
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 
-NOW = datetime(2026, 6, 22, 8, 0, tzinfo=timezone.utc)  # Monday hour 8
+NOW = datetime(2026, 6, 22, 8, 0, tzinfo=UTC)  # Monday hour 8
 
 
 def test_predictor_from_profile_ignores_temp():
@@ -14,8 +14,8 @@ def test_predictor_from_profile_ignores_temp():
 
 def test_predictor_from_model_uses_temp():
     rows = [
-        FeatureRow(datetime(2026, 6, 15, 8, tzinfo=timezone.utc), 8, False, 1000.0, 2.0),
-        FeatureRow(datetime(2026, 6, 16, 8, tzinfo=timezone.utc), 8, False, 300.0, 18.0),
+        FeatureRow(datetime(2026, 6, 15, 8, tzinfo=UTC), 8, False, 1000.0, 2.0),
+        FeatureRow(datetime(2026, 6, 16, 8, tzinfo=UTC), 8, False, 300.0, 18.0),
     ]
     model = loadmodel.BucketedLoadModel.fit(rows)
     lp = forecast.LoadPredictor.from_model(model)
@@ -26,8 +26,7 @@ def test_predictor_from_model_uses_temp():
 def test_build_intervals_with_predictor_and_temps():
     lp = forecast.LoadPredictor.from_profile({(False, 8): 800.0, (False, 9): 600.0})
     pv_curve = [(NOW, 3000.0), (NOW + timedelta(hours=1), 2000.0)]
-    ivs = forecast.build_intervals(pv_curve, lp, fallback_load_w=400.0, cfg=Config(),
-                                   temp_by_start={NOW: 5.0})
+    ivs = forecast.build_intervals(pv_curve, lp, fallback_load_w=400.0, cfg=Config(), temp_by_start={NOW: 5.0})
     assert ivs[0].load_w == 800.0
     assert ivs[1].load_w == 600.0
 
@@ -111,9 +110,9 @@ def test_loadpredictor_clamps_crossed_hgbr_quantiles():
             return 700.0 if quantile > 0.5 else 900.0
 
     p = LoadPredictor.from_model(_CrossingModel())
-    when = datetime(2026, 6, 29, 18, tzinfo=timezone.utc)
-    assert p.predict(when, None, 400.0, quantile=0.8) == 900.0   # clamped to p50
-    assert p.predict(when, None, 400.0, quantile=0.5) == 900.0   # median unchanged
+    when = datetime(2026, 6, 29, 18, tzinfo=UTC)
+    assert p.predict(when, None, 400.0, quantile=0.8) == 900.0  # clamped to p50
+    assert p.predict(when, None, 400.0, quantile=0.5) == 900.0  # median unchanged
 
 
 def test_loadpredictor_passthrough_when_p80_above_p50():
@@ -126,5 +125,5 @@ def test_loadpredictor_passthrough_when_p80_above_p50():
             return 1100.0 if quantile > 0.5 else 900.0
 
     p = LoadPredictor.from_model(_MonotoneModel())
-    when = datetime(2026, 6, 29, 18, tzinfo=timezone.utc)
+    when = datetime(2026, 6, 29, 18, tzinfo=UTC)
     assert p.predict(when, None, 400.0, quantile=0.8) == 1100.0

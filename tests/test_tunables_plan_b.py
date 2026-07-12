@@ -1,5 +1,6 @@
 """Plan B: the four anticipation tunables are wired the same way as
 export_peak_band_frac (const default → Config field → from_dict override → options schema)."""
+
 from custom_components.anker_x1_smartgrid import config_flow, const
 from custom_components.anker_x1_smartgrid.models import Config
 
@@ -13,12 +14,14 @@ def test_anticipation_tunable_defaults():
 
 
 def test_anticipation_tunables_round_trip_through_from_dict():
-    cfg = Config.from_dict({
-        const.CONF_PRICE_HISTORY_DAYS: 14,
-        const.CONF_PRICE_BLEND_WEIGHT_TODAY: 0.7,
-        const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT: 0.25,
-        const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH: 0.05,
-    })
+    cfg = Config.from_dict(
+        {
+            const.CONF_PRICE_HISTORY_DAYS: 14,
+            const.CONF_PRICE_BLEND_WEIGHT_TODAY: 0.7,
+            const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT: 0.25,
+            const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH: 0.05,
+        }
+    )
     assert cfg.price_history_days == 14
     assert cfg.price_blend_weight_today == 0.7
     assert cfg.anticipation_confidence_haircut == 0.25

@@ -29,6 +29,7 @@ def test_read_feature_rows_since_filter(tmp_path):
 # Pure aggregate_hour tests
 # ---------------------------------------------------------------------------
 
+
 def test_aggregate_hour_correct_stats():
     """Correct mean/max/min/std/count for a hand-computed two-sample set."""
     rows = [
@@ -61,8 +62,22 @@ def test_aggregate_hour_correct_stats():
 def test_aggregate_hour_some_fields_null():
     """Non-NULL-only handling: stats computed only over non-NULL values per field."""
     rows = [
-        {"ts": "2026-06-20T14:00:00+00:00", "p1_w": 1000.0, "batt_w": 0.0, "pv_w": 500.0, "soc": 60.0, "irradiance": 400.0},
-        {"ts": "2026-06-20T14:30:00+00:00", "p1_w": 2000.0, "batt_w": 0.0, "pv_w": None, "soc": None, "irradiance": None},
+        {
+            "ts": "2026-06-20T14:00:00+00:00",
+            "p1_w": 1000.0,
+            "batt_w": 0.0,
+            "pv_w": 500.0,
+            "soc": 60.0,
+            "irradiance": 400.0,
+        },
+        {
+            "ts": "2026-06-20T14:30:00+00:00",
+            "p1_w": 2000.0,
+            "batt_w": 0.0,
+            "pv_w": None,
+            "soc": None,
+            "irradiance": None,
+        },
     ]
     result = aggregate_hour(rows)
 
@@ -206,6 +221,7 @@ def test_aggregate_hour_single_row_has_equal_max_min():
 # T6 — aggregate_hour prefers recorded load_w, falls back to derive
 # ---------------------------------------------------------------------------
 
+
 def test_aggregate_hour_prefers_load_w_over_derive():
     """Row with load_w=200 and p1+batt+pv=900 → house_load_mean=200 (load_w wins)."""
     rows = [
@@ -213,7 +229,7 @@ def test_aggregate_hour_prefers_load_w_over_derive():
             "ts": "2026-06-24T10:00:00+00:00",
             "p1_w": 300.0,
             "batt_w": 400.0,
-            "pv_w": 200.0,   # p1+batt+pv = 900, but load_w=200 overrides
+            "pv_w": 200.0,  # p1+batt+pv = 900, but load_w=200 overrides
             "load_w": 200.0,
         }
     ]
@@ -263,14 +279,14 @@ def test_aggregate_hour_mixed_load_w_prefers_recorded_skips_null():
             "p1_w": 300.0,
             "batt_w": 0.0,
             "pv_w": 0.0,
-            "load_w": 200.0,   # recorded → use 200
+            "load_w": 200.0,  # recorded → use 200
         },
         {
             "ts": "2026-06-24T10:15:00+00:00",
             "p1_w": 400.0,
             "batt_w": 0.0,
             "pv_w": 0.0,
-            "load_w": None,    # null → fallback: 400+0+0=400
+            "load_w": None,  # null → fallback: 400+0+0=400
         },
     ]
     result = aggregate_hour(rows)
@@ -283,14 +299,18 @@ def test_aggregate_hour_mixed_load_w_prefers_recorded_skips_null():
 # T6 — read_efficiency_samples: v6+ load_w residual accessor
 # ---------------------------------------------------------------------------
 
+
 def test_read_efficiency_samples_filters_and_computes_residual(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2026-07-01T00:00:00", "soc": 50.0, "batt_w": -3000.0,
-                "p1_w": 200.0, "pv_w": 100.0, "load_w": -2700.0})
-    rec.append({"ts": "2026-07-01T00:01:00", "soc": 51.0, "batt_w": -3000.0,
-                "p1_w": 200.0, "pv_w": 100.0, "load_w": None})
-    rec.append({"ts": "2026-07-01T00:02:00", "soc": 52.0, "batt_w": -3000.0,
-                "p1_w": 200.0, "pv_w": None, "load_w": -2800.0})
+    rec.append(
+        {"ts": "2026-07-01T00:00:00", "soc": 50.0, "batt_w": -3000.0, "p1_w": 200.0, "pv_w": 100.0, "load_w": -2700.0}
+    )
+    rec.append(
+        {"ts": "2026-07-01T00:01:00", "soc": 51.0, "batt_w": -3000.0, "p1_w": 200.0, "pv_w": 100.0, "load_w": None}
+    )
+    rec.append(
+        {"ts": "2026-07-01T00:02:00", "soc": 52.0, "batt_w": -3000.0, "p1_w": 200.0, "pv_w": None, "load_w": -2800.0}
+    )
     out = rec.read_efficiency_samples()
     assert [r["ts"] for r in out] == ["2026-07-01T00:00:00+00:00", "2026-07-01T00:02:00+00:00"]
     assert out[0]["residual_w"] == -2700.0 - 200.0 - 100.0
@@ -301,8 +321,16 @@ def test_read_efficiency_samples_filters_and_computes_residual(tmp_path):
 def test_read_efficiency_samples_since_filter(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     for h in range(3):
-        rec.append({"ts": f"2026-07-0{h+1}T00:00:00", "soc": 50.0, "batt_w": -3000.0,
-                    "p1_w": 0.0, "pv_w": 0.0, "load_w": -3000.0})
+        rec.append(
+            {
+                "ts": f"2026-07-0{h + 1}T00:00:00",
+                "soc": 50.0,
+                "batt_w": -3000.0,
+                "p1_w": 0.0,
+                "pv_w": 0.0,
+                "load_w": -3000.0,
+            }
+        )
     out = rec.read_efficiency_samples(since_iso="2026-07-02T00:00:00")
     assert [r["ts"] for r in out] == ["2026-07-02T00:00:00+00:00", "2026-07-03T00:00:00+00:00"]
     rec.close()

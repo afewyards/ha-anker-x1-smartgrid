@@ -1,4 +1,5 @@
 """Master enable switch."""
+
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -32,8 +33,6 @@ class X1EnableSwitch(SwitchEntity):
             self.async_write_ha_state()
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-) -> None:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]["controller"]
     async_add_entities([X1EnableSwitch(controller, entry.entry_id)])

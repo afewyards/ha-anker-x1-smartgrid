@@ -17,9 +17,10 @@ Deep feature-vector train==serve equality is guarded by:
 This module tests that the wrapper predict_hours() faithfully passes (ts, temp_forecast)
 to the model without mangling inputs, ensuring its result equals a direct model call.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -32,7 +33,7 @@ from predictor import predict_hours
 # Shared fixture: model fitted on 28 days of synthetic data
 # ---------------------------------------------------------------------------
 
-_SYNTH_START = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+_SYNTH_START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 _SYNTH_END = _SYNTH_START + timedelta(days=28)  # exclusive
 
 
@@ -48,6 +49,7 @@ def fitted_model() -> HGBRQuantileModel:
 # ---------------------------------------------------------------------------
 # Helper: build tz-aware future hours just past the synthetic data window
 # ---------------------------------------------------------------------------
+
 
 def _future_hours(n: int, *, temp: float = 10.0) -> list[dict]:
     """Return n hour dicts starting just after the synthetic training window."""
@@ -92,9 +94,7 @@ def test_p80_ge_p50(fitted_model):
     """P80 quantile must be >= P50 for every predicted hour."""
     out = predict_hours(fitted_model, _future_hours(5, temp=8.0))
     for entry in out:
-        assert entry["p80_w"] >= entry["p50_w"], (
-            f"p80_w={entry['p80_w']} < p50_w={entry['p50_w']} for ts={entry['ts']}"
-        )
+        assert entry["p80_w"] >= entry["p50_w"], f"p80_w={entry['p80_w']} < p50_w={entry['p50_w']} for ts={entry['ts']}"
 
 
 def test_monotonicity_clamp_via_mock(fitted_model):
@@ -110,8 +110,9 @@ def test_monotonicity_clamp_via_mock(fitted_model):
 
     call_count = 0
 
-    def _mock_predict(when, temp, fallback_w, *, quantile=0.5,
-                       cloud_cover=None, humidity=None, wind_speed=None, persons_home=None):
+    def _mock_predict(
+        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+    ):
         nonlocal call_count
         call_count += 1
         # First call: quantile=0.5 → 700.0; second: quantile=0.8 → 650.0 (crossing)
@@ -123,9 +124,7 @@ def test_monotonicity_clamp_via_mock(fitted_model):
     assert call_count == 2, "predict_load_w should be called twice (p50 and p80)"
     assert len(out) == 1
     assert out[0]["p50_w"] == 700.0
-    assert out[0]["p80_w"] == 700.0, (
-        f"Expected clamp to 700.0, got {out[0]['p80_w']}"
-    )
+    assert out[0]["p80_w"] == 700.0, f"Expected clamp to 700.0, got {out[0]['p80_w']}"
 
 
 def test_p80_ge_p50_across_many_hours(fitted_model):
@@ -133,9 +132,7 @@ def test_p80_ge_p50_across_many_hours(fitted_model):
     hours = _future_hours(24, temp=12.0)
     out = predict_hours(fitted_model, hours)
     for entry in out:
-        assert entry["p80_w"] >= entry["p50_w"], (
-            f"p80_w={entry['p80_w']} < p50_w={entry['p50_w']} for ts={entry['ts']}"
-        )
+        assert entry["p80_w"] >= entry["p50_w"], f"p80_w={entry['p80_w']} < p50_w={entry['p50_w']} for ts={entry['ts']}"
 
 
 # ---------------------------------------------------------------------------
@@ -216,15 +213,22 @@ def test_none_temp_forecast_is_accepted(fitted_model):
 def test_predict_hours_forwards_weather(fitted_model):
     """predict_hours passes cloud_cover/humidity/wind_speed into predict_load_w for both quantiles."""
     from unittest.mock import patch
+
     captured = []
 
-    def _cap(when, temp, fallback_w, *, quantile=0.5,
-             cloud_cover=None, humidity=None, wind_speed=None, persons_home=None):
+    def _cap(
+        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+    ):
         captured.append((cloud_cover, humidity, wind_speed))
         return 500.0
 
-    hour = {"ts": _SYNTH_END.isoformat(), "temp_forecast": 10.0,
-            "cloud_cover": 55.0, "humidity": 70.0, "wind_speed": 3.3}
+    hour = {
+        "ts": _SYNTH_END.isoformat(),
+        "temp_forecast": 10.0,
+        "cloud_cover": 55.0,
+        "humidity": 70.0,
+        "wind_speed": 3.3,
+    }
     with patch.object(fitted_model, "predict_load_w", side_effect=_cap):
         out = predict_hours(fitted_model, [hour])
     assert len(out) == 1
@@ -235,10 +239,12 @@ def test_predict_hours_forwards_weather(fitted_model):
 def test_predict_hours_forwards_persons_home(fitted_model):
     """predict_hours passes persons_home into predict_load_w for both quantiles."""
     from unittest.mock import patch
+
     captured = []
 
-    def _cap(when, temp, fallback_w, *, quantile=0.5,
-             cloud_cover=None, humidity=None, wind_speed=None, persons_home=None):
+    def _cap(
+        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+    ):
         captured.append(persons_home)
         return 500.0
 
@@ -297,9 +303,5 @@ def test_wrapper_faithfulness_to_direct_model_call(fitted_model):
     # Assert wrapper result matches direct computation
     assert len(out) == 1, "Expected one result for one input hour"
     assert out[0]["ts"] == ts_iso, "ts should be preserved"
-    assert out[0]["p50_w"] == exp_p50_rounded, (
-        f"Wrapper p50_w={out[0]['p50_w']} != direct p50={exp_p50_rounded}"
-    )
-    assert out[0]["p80_w"] == exp_p80_rounded, (
-        f"Wrapper p80_w={out[0]['p80_w']} != direct p80={exp_p80_rounded}"
-    )
+    assert out[0]["p50_w"] == exp_p50_rounded, f"Wrapper p50_w={out[0]['p50_w']} != direct p50={exp_p50_rounded}"
+    assert out[0]["p80_w"] == exp_p80_rounded, f"Wrapper p80_w={out[0]['p80_w']} != direct p80={exp_p80_rounded}"

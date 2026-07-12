@@ -1,17 +1,15 @@
 """Tests: find_next_solar_pickup() — price-independent ride-out endpoint."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.models import ForecastInterval
 from custom_components.anker_x1_smartgrid.scheduler import find_next_solar_pickup
 
-NOW = datetime(2026, 6, 26, 22, 0, tzinfo=timezone.utc)  # 22:00 — night
+NOW = datetime(2026, 6, 26, 22, 0, tzinfo=UTC)  # 22:00 — night
 
 
 def _ivs(pv_loads, start=NOW, dt_h=1.0):
-    return [
-        ForecastInterval(start + timedelta(hours=i), pv, load, dt_h)
-        for i, (pv, load) in enumerate(pv_loads)
-    ]
+    return [ForecastInterval(start + timedelta(hours=i), pv, load, dt_h) for i, (pv, load) in enumerate(pv_loads)]
 
 
 def test_returns_first_pv_surplus_hour():

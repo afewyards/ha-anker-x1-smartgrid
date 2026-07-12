@@ -35,6 +35,7 @@ def test_plan_horizon_attrs_not_recorded():
 # public `state_class` property instead.
 # ---------------------------------------------------------------------------
 
+
 class _Ctl:
     last_status = {}
 

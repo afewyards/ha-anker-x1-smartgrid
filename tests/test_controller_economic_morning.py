@@ -38,16 +38,21 @@ identical to the canonical fixture in ``test_optimize_floor_economic.py`` (A1).
 The critical parameters — ``eta_charge=0.92``, ``soc_start=22%``, P80=P50×1.6 —
 are documented in decisive.py and the A1 test docstring.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
 from custom_components.anker_x1_smartgrid.controller import compute_decision
 from custom_components.anker_x1_smartgrid.guard import command_setpoint
 from custom_components.anker_x1_smartgrid.models import (
-    Config, ControllerState, PlanState, PlantInputs, PriceSlot,
+    Config,
+    ControllerState,
+    PlanState,
+    PlantInputs,
+    PriceSlot,
 )
 
 # ---------------------------------------------------------------------------
@@ -56,32 +61,50 @@ from custom_components.anker_x1_smartgrid.models import (
 
 # (hour_utc, all-in price €/kWh, pv_w, load50_w)
 _TABLE = [
-    (5, 0.263, 134, 773), (6, 0.259, 204, 383), (7, 0.222, 287, 312),
-    (8, 0.174, 400, 257), (9, 0.146, 651, 318), (10, 0.133, 233, 258),
-    (11, 0.131, 554, 203), (12, 0.135, 1446, 344), (13, 0.146, 1655, 343),
-    (14, 0.191, 1614, 401), (15, 0.250, 1404, 470), (16, 0.282, 1095, 467),
-    (17, 0.341, 638, 550), (18, 0.412, 175, 451), (19, 0.419, 48, 418),
-    (20, 0.348, 0, 397), (21, 0.310, 0, 278),
+    (5, 0.263, 134, 773),
+    (6, 0.259, 204, 383),
+    (7, 0.222, 287, 312),
+    (8, 0.174, 400, 257),
+    (9, 0.146, 651, 318),
+    (10, 0.133, 233, 258),
+    (11, 0.131, 554, 203),
+    (12, 0.135, 1446, 344),
+    (13, 0.146, 1655, 343),
+    (14, 0.191, 1614, 401),
+    (15, 0.250, 1404, 470),
+    (16, 0.282, 1095, 467),
+    (17, 0.341, 638, 550),
+    (18, 0.412, 175, 451),
+    (19, 0.419, 48, 418),
+    (20, 0.348, 0, 397),
+    (21, 0.310, 0, 278),
 ]
 _N = len(_TABLE)
 _PRICE = [r[1] for r in _TABLE]
 _LOAD50_W = [float(r[3]) for r in _TABLE]
 _SOC_START = 22.0
-_NOW0 = datetime(2026, 6, 27, 5, 0, tzinfo=timezone.utc)  # window start = 05:00 UTC
+_NOW0 = datetime(2026, 6, 27, 5, 0, tzinfo=UTC)  # window start = 05:00 UTC
 
 # Trough: global minimum of _PRICE — must be index 6 (11:00, 0.131 €/kWh).
 _TROUGH_IDX = _PRICE.index(min(_PRICE))
-assert _TROUGH_IDX == 6, (
-    f"Fixture invariant broken: expected trough at index 6, got {_TROUGH_IDX}"
-)
+assert _TROUGH_IDX == 6, f"Fixture invariant broken: expected trough at index 6, got {_TROUGH_IDX}"
 _TROUGH_HOUR = _NOW0 + timedelta(hours=_TROUGH_IDX)  # 2026-06-27 11:00 UTC
 
 _BASE_CFG = dict(
-    capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0, eta_charge=0.92,
-    max_charge_w=6000.0, max_export_w=6000.0, grid_export_limit_w=6000.0,
-    enable_export=True, export_fee_eur_per_kwh=0.02, export_peak_band_frac=0.12,
-    round_trip_eff=0.85, cycle_cost_eur_per_kwh=0.04,
-    water_value_factor=1.0, clamp_water_value_nonneg=True,
+    capacity_kwh=10.0,
+    soc_floor=5.0,
+    soc_target=100.0,
+    eta_charge=0.92,
+    max_charge_w=6000.0,
+    max_export_w=6000.0,
+    grid_export_limit_w=6000.0,
+    enable_export=True,
+    export_fee_eur_per_kwh=0.02,
+    export_peak_band_frac=0.12,
+    round_trip_eff=0.85,
+    cycle_cost_eur_per_kwh=0.04,
+    water_value_factor=1.0,
+    clamp_water_value_nonneg=True,
     # Zero dwell so state transitions happen immediately in unit tests.
     min_dwell_min=0,
 )
@@ -90,6 +113,7 @@ _BASE_CFG = dict(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _cfg() -> Config:
     return Config.from_dict(_BASE_CFG)
@@ -123,7 +147,12 @@ class _TablePredictor:
         self._load50: dict[int, float] = {r[0]: float(r[3]) for r in _TABLE}
 
     def predict(
-        self, when: datetime, temp: float | None, fallback_w: float, *, quantile: float = 0.5,
+        self,
+        when: datetime,
+        temp: float | None,
+        fallback_w: float,
+        *,
+        quantile: float = 0.5,
     ) -> float:
         base = self._load50.get(when.hour, fallback_w)
         return min(base * 1.6, 6000.0) if quantile >= 0.8 else base
@@ -142,6 +171,7 @@ def _passive_plan(now: datetime) -> PlanState:
 # Test 1 — 05:00 tick: PASSIVE, zero pre-trough grid charge
 # ---------------------------------------------------------------------------
 
+
 def test_morning_no_survival_charge_passive():
     """A1 fix: at 05:00 the controller stays PASSIVE and schedules no morning charge.
 
@@ -157,12 +187,14 @@ def test_morning_no_survival_charge_passive():
     cfg = _cfg()
     now = _NOW0  # 05:00 UTC
     inputs = PlantInputs(soc=_SOC_START, meter_w=0.0, now=now)
-    sunset = _NOW0 + timedelta(hours=17)   # 22:00 UTC — safely past the TABLE end (21:00)
+    sunset = _NOW0 + timedelta(hours=17)  # 22:00 UTC — safely past the TABLE end (21:00)
     plan = _passive_plan(now)
     _out: dict = {}
 
     new_plan, setpoint, _deadline, _horizon, _hm, _ = compute_decision(
-        plan, inputs, _slots(),
+        plan,
+        inputs,
+        _slots(),
         pv_remaining=0.0,
         sunset=sunset,
         predictor=_TablePredictor(),
@@ -203,6 +235,7 @@ def test_morning_no_survival_charge_passive():
 # Test 2 — 11:00 tick: FORCING, trough economic top-off actuates
 # ---------------------------------------------------------------------------
 
+
 def test_trough_economic_topoff_actuates():
     """A2 fix: at 11:00 (trough, soc=5%), controller enters FORCING.
 
@@ -220,12 +253,14 @@ def test_trough_economic_topoff_actuates():
     now = _TROUGH_HOUR  # 11:00 UTC
     # SoC after riding the morning drain to the firmware floor.
     inputs = PlantInputs(soc=5.0, meter_w=0.0, now=now)
-    sunset = _NOW0 + timedelta(hours=17)   # 22:00 UTC
+    sunset = _NOW0 + timedelta(hours=17)  # 22:00 UTC
     plan = _passive_plan(now)
     _out: dict = {}
 
     new_plan, setpoint, _deadline, _horizon, _hm, _ = compute_decision(
-        plan, inputs, _slots(),
+        plan,
+        inputs,
+        _slots(),
         pv_remaining=0.0,
         sunset=sunset,
         predictor=_TablePredictor(),

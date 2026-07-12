@@ -12,6 +12,7 @@ no-op decorators — then imports server.py for real and calls `server.predict`
 directly as a plain function. This exercises the actual handler code (not a
 reimplementation of it), with no ASGI/HTTP layer involved.
 """
+
 from __future__ import annotations
 
 import sys
@@ -30,7 +31,7 @@ def _install_fastapi_stub_if_missing() -> types.ModuleType | None:
     import may have put there in the meantime.
     """
     try:
-        import fastapi  # noqa: F401
+        import fastapi
 
         return None
     except ImportError:
@@ -67,7 +68,7 @@ def _install_fastapi_stub_if_missing() -> types.ModuleType | None:
 
 _installed_fastapi_stub = _install_fastapi_stub_if_missing()
 
-import server  # noqa: E402 — must follow the stub install above
+import server
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -80,17 +81,12 @@ def _teardown_fastapi_stub():
     defense). Remove it once this module's tests are done, and only if it is
     still the exact object we installed — never touch a real fastapi."""
     yield
-    if (
-        _installed_fastapi_stub is not None
-        and sys.modules.get("fastapi") is _installed_fastapi_stub
-    ):
+    if _installed_fastapi_stub is not None and sys.modules.get("fastapi") is _installed_fastapi_stub:
         del sys.modules["fastapi"]
 
 
-def _make_request(n_hours: int) -> "server.PredictRequest":
-    hours = [
-        server.HourIn(ts=f"2026-01-01T{h % 24:02d}:00:00") for h in range(n_hours)
-    ]
+def _make_request(n_hours: int) -> server.PredictRequest:
+    hours = [server.HourIn(ts=f"2026-01-01T{h % 24:02d}:00:00") for h in range(n_hours)]
     return server.PredictRequest(hours=hours)
 
 

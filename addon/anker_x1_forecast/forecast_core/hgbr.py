@@ -44,11 +44,12 @@ No numpy import at module level — numpy is guaranteed by sklearn but we avoid
 the top-level dependency to keep the "no sklearn" contract clean.  sklearn's
 own ``fit``/``predict`` accept plain Python lists, so we pass them directly.
 """
+
 from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta
-from typing import Sequence
+from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
 from . import featureset
@@ -96,7 +97,7 @@ def _import_sklearn():
 
     or more cleanly via a ``def _raise(): raise ImportError`` + ``patch.object``.
     """
-    from sklearn.ensemble import HistGradientBoostingRegressor  # noqa: PLC0415
+    from sklearn.ensemble import HistGradientBoostingRegressor
 
     return HistGradientBoostingRegressor
 
@@ -146,7 +147,7 @@ class HGBRQuantileModel:
         self,
         hourly_rows: list[dict],
         quantiles: Sequence[float] = (0.5, 0.8),
-    ) -> "HGBRQuantileModel":
+    ) -> HGBRQuantileModel:
         """Fit one HGBR per quantile on the hourly rollup data.
 
         Parameters
@@ -205,16 +206,16 @@ class HGBRQuantileModel:
                 model = HGBR(
                     loss="quantile",
                     quantile=q,
-                    max_iter=100,           # sklearn default; already modest
-                    max_depth=4,            # shallow trees — prevents overfit
-                    min_samples_leaf=10,    # light regularisation
-                    early_stopping=False,   # deterministic; no val-split overhead
-                    random_state=0,         # reproducible across restarts
+                    max_iter=100,  # sklearn default; already modest
+                    max_depth=4,  # shallow trees — prevents overfit
+                    min_samples_leaf=10,  # light regularisation
+                    early_stopping=False,  # deterministic; no val-split overhead
+                    random_state=0,  # reproducible across restarts
                 )
                 # sklearn accepts plain Python list-of-lists — no numpy import needed
                 model.fit(X, y)
                 self._models[float(q)] = model
-        except Exception:  # noqa: BLE001 — propagating violates the never-raise contract
+        except Exception:
             self._fitted = False
             self._models = {}
             return self
@@ -236,7 +237,7 @@ class HGBRQuantileModel:
                 return False
             self._build_lookups(hourly_rows)
             return True
-        except Exception:  # noqa: BLE001 — serve-path must never raise
+        except Exception:
             return False
 
     def predict_load_w(
@@ -288,8 +289,11 @@ class HGBRQuantileModel:
             return fallback_w
 
         vec = self._assemble_feature_vector(
-            when, temp,
-            cloud_cover=cloud_cover, humidity=humidity, wind_speed=wind_speed,
+            when,
+            temp,
+            cloud_cover=cloud_cover,
+            humidity=humidity,
+            wind_speed=wind_speed,
             persons_home=persons_home,
         )
         if vec is None:
@@ -427,9 +431,7 @@ class HGBRQuantileModel:
 
             # --- Lag features (5) --- shared helper ensures train/predict consistency
             t = when
-            lags = featureset.encode_lag_features_from_lookups(
-                self._utc_lookup, self._local_date_kwh, t
-            )
+            lags = featureset.encode_lag_features_from_lookups(self._utc_lookup, self._local_date_kwh, t)
 
             # --- Weather features (7) --- only temp is available at serve time
             if temp is None or (isinstance(temp, float) and math.isnan(temp)):
@@ -438,11 +440,11 @@ class HGBRQuantileModel:
                 cdd: float = _NAN
             else:
                 temp_forecast = float(temp)
-                hdd = max(0.0, 15.5 - temp_forecast)   # spec Decision #4
-                cdd = max(0.0, temp_forecast - 22.0)    # spec Decision #4
+                hdd = max(0.0, 15.5 - temp_forecast)  # spec Decision #4
+                cdd = max(0.0, temp_forecast - 22.0)  # spec Decision #4
 
             feat_dict: dict[str, float] = {
-                **cal,   # hour_sin, hour_cos, doy_sin, doy_cos, day_of_week, is_holiday
+                **cal,  # hour_sin, hour_cos, doy_sin, doy_cos, day_of_week, is_holiday
                 **lags,  # load_lag_1h/24h/168h, rolling_mean_24h, prev_day_total_kwh
                 "temp_forecast": temp_forecast,
                 "hdd": hdd,
@@ -456,5 +458,5 @@ class HGBRQuantileModel:
             # Project to stable feature_names() order (HistGBR is positional)
             return [feat_dict[name] for name in self._feature_names]
 
-        except Exception:  # noqa: BLE001 — return None on any assembly failure
+        except Exception:
             return None

@@ -1,4 +1,5 @@
 """Load and clean recorded samples into feature rows for the load model."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

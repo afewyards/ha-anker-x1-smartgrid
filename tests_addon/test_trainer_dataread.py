@@ -2,6 +2,7 @@
 
 All cases verify the never-crash / read-only contract.
 """
+
 from __future__ import annotations
 
 import os
@@ -16,6 +17,7 @@ from trainer import _MIN_TRAIN_ROWS, load_rows
 # (a) Missing path → None, no raise
 # ---------------------------------------------------------------------------
 
+
 def test_load_rows_missing_file_returns_none(tmp_path):
     result = load_rows(str(tmp_path / "nonexistent.db"))
     assert result is None
@@ -24,6 +26,7 @@ def test_load_rows_missing_file_returns_none(tmp_path):
 # ---------------------------------------------------------------------------
 # (b) DB present but samples_hourly is empty (0 rows) → None
 # ---------------------------------------------------------------------------
+
 
 def test_load_rows_empty_table_returns_none(tmp_path):
     db_path = str(tmp_path / "empty.db")
@@ -35,6 +38,7 @@ def test_load_rows_empty_table_returns_none(tmp_path):
 # ---------------------------------------------------------------------------
 # (c) Fewer than _MIN_TRAIN_ROWS rows → None
 # ---------------------------------------------------------------------------
+
 
 def test_load_rows_too_few_rows_returns_none(tmp_path):
     db_path = str(tmp_path / "sparse.db")
@@ -64,6 +68,7 @@ def test_load_rows_too_few_rows_returns_none(tmp_path):
 # (d) Enough rows → returns list with correct length and key set
 # ---------------------------------------------------------------------------
 
+
 def test_load_rows_sufficient_rows_returns_list(tmp_path):
     days = 28
     db_path = str(tmp_path / "full.db")
@@ -84,6 +89,7 @@ def test_load_rows_sufficient_rows_returns_list(tmp_path):
 # ---------------------------------------------------------------------------
 # (e) Read-only enforcement: chmod 0o444 → load_rows must still succeed
 # ---------------------------------------------------------------------------
+
 
 def test_load_rows_readonly_file_succeeds(tmp_path):
     db_path = str(tmp_path / "ro.db")
@@ -109,6 +115,7 @@ def test_load_rows_readonly_file_succeeds(tmp_path):
 #     change in recorder.py can't silently diverge.
 # ---------------------------------------------------------------------------
 
+
 def test_load_rows_matches_recorder_read_hourly_rows(tmp_path):
     from forecast_core.recorder import DataRecorder
 
@@ -133,13 +140,22 @@ def test_load_rows_matches_recorder_read_hourly_rows(tmp_path):
 #     (Task 9) — the read-only-mount contract for the addon.
 # ---------------------------------------------------------------------------
 
+
 def test_load_rows_reads_wal_db_via_immutable(tmp_path):
     from forecast_core.recorder import DataRecorder
+
     path = str(tmp_path / "t.db")
     rec = DataRecorder(path)
     for h in range(30):
-        rec.append({"ts": f"2026-06-{h % 28 + 1:02d}T10:00:00+00:00",
-                    "p1_w": 100.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 100.0})
+        rec.append(
+            {
+                "ts": f"2026-06-{h % 28 + 1:02d}T10:00:00+00:00",
+                "p1_w": 100.0,
+                "batt_w": 0.0,
+                "pv_w": 0.0,
+                "load_w": 100.0,
+            }
+        )
     rec.rollup_hours("2026-07-08T00:00:00+00:00")
     rec.wal_checkpoint()
     rec.close()

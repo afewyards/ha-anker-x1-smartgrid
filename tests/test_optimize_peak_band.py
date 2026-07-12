@@ -1,4 +1,5 @@
 """C2b: peak-only export gate — morning sub-peak hours export 0."""
+
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
@@ -12,9 +13,16 @@ from custom_components.anker_x1_smartgrid.regret import windowed_peak_prices, wi
 
 def _cfg(**kw):
     d = dict(
-        capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0, max_charge_w=3000.0,
-        eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04,
-        export_fee_eur_per_kwh=0.0, max_export_w=3000.0, grid_export_limit_w=3000.0,
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=3000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+        cycle_cost_eur_per_kwh=0.04,
+        export_fee_eur_per_kwh=0.0,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
         export_peak_band_frac=0.12,
     )
     d.update(kw)
@@ -28,12 +36,20 @@ def test_morning_subpeak_blocked_evening_peak_exports():
     load = [0.0] * n
     price = [0.20] * n
     raw_export = [0.0] * n
-    raw_export[8] = 0.30   # morning bump: clears the cycle-cost hurdle (0.30*1 - 0.04 > 0)
+    raw_export[8] = 0.30  # morning bump: clears the cycle-cost hurdle (0.30*1 - 0.04 > 0)
     raw_export[18] = 0.60  # evening peak
     ep = [effective_export_price(p, cfg) for p in raw_export]
     res = optimize_grid(
-        pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=n,
-        export_price=ep, terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=ep,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
     # Band floor at h8 = peak_from[8] (=0.60) * (1-0.12) = 0.528; morning 0.30 < 0.528 -> blocked.
     assert res["export_schedule"][8] == pytest.approx(0.0, abs=1e-9)
@@ -50,9 +66,16 @@ def test_band_one_admits_all_hours():
     raw_export[18] = 0.60
     ep = [effective_export_price(p, cfg) for p in raw_export]
     res = optimize_grid(
-        [0.0]*n, [0.0]*n, [0.20]*n, soc_start=80.0, cfg=cfg,
-        window_start_h=0, window_len=n, export_price=ep,
-        terminal_mode="water_value", water_value=0.0,
+        [0.0] * n,
+        [0.0] * n,
+        [0.20] * n,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=ep,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
     assert res["export_schedule"][8] > 0.0  # hurdle clears, band fully open
 
@@ -81,14 +104,22 @@ def test_postpeak_downslope_blocked():
     load = [0.0] * n
     price = [0.20] * n
     raw_export = [0.0] * n
-    raw_export[18] = 0.60   # evening peak
-    raw_export[20] = 0.40   # down-slope, 2h after peak: 0.40 < 0.60*0.88=0.528
+    raw_export[18] = 0.60  # evening peak
+    raw_export[20] = 0.40  # down-slope, 2h after peak: 0.40 < 0.60*0.88=0.528
     ep = [effective_export_price(p, cfg) for p in raw_export]
     res = optimize_grid(
-        pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=n,
-        export_price=ep, terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=ep,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
-    assert res["export_schedule"][18] > 0.0          # peak still exports
+    assert res["export_schedule"][18] > 0.0  # peak still exports
     assert res["export_schedule"][20] == pytest.approx(0.0, abs=1e-9)  # down-slope blocked
 
 
@@ -101,20 +132,27 @@ def test_lookback_zero_restores_downslope_export():
     raw_export[20] = 0.40
     ep = [effective_export_price(p, cfg) for p in raw_export]
     res = optimize_grid(
-        [0.0]*n, [0.0]*n, [0.20]*n, soc_start=80.0, cfg=cfg,
-        window_start_h=0, window_len=n, export_price=ep,
-        terminal_mode="water_value", water_value=0.0,
+        [0.0] * n,
+        [0.0] * n,
+        [0.20] * n,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=ep,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
-    assert res["export_schedule"][20] > 0.0   # legacy: forgets the peak -> exports
+    assert res["export_schedule"][20] > 0.0  # legacy: forgets the peak -> exports
 
 
 def test_windowed_peak_per_day_does_not_leak_across_days():
     p = [0.10] * 48
-    p[18] = 0.30   # day1 peak
-    p[42] = 0.50   # day2 (higher) peak
+    p[18] = 0.30  # day1 peak
+    p[42] = 0.50  # day2 (higher) peak
     day = [h // 24 for h in range(48)]
     out = windowed_peak_prices(p, 4, day_index=day)
-    assert out[0] == 0.30    # day1 hour judged vs day1's own peak, not day2's 0.50
+    assert out[0] == 0.30  # day1 hour judged vs day1's own peak, not day2's 0.50
     assert out[18] == 0.30
     assert out[42] == 0.50
 
@@ -123,8 +161,8 @@ def test_windowed_peak_no_day_index_is_legacy_global():
     p = [0.10] * 48
     p[18] = 0.30
     p[42] = 0.50
-    out = windowed_peak_prices(p, 4)   # day_index=None
-    assert out[0] == 0.50    # legacy global suffix-max leaks day2's higher peak
+    out = windowed_peak_prices(p, 4)  # day_index=None
+    assert out[0] == 0.50  # legacy global suffix-max leaks day2's higher peak
 
 
 def test_two_day_horizon_exports_both_daily_peaks():
@@ -132,23 +170,30 @@ def test_two_day_horizon_exports_both_daily_peaks():
     cfg = _cfg(export_peak_lookback_h=4)
     n = 48
     pv = [0.0] * n
-    for h in (10, 11, 12, 13):   # day1 midday solar refills the pack
+    for h in (10, 11, 12, 13):  # day1 midday solar refills the pack
         pv[h] = 3.0
-    for h in (34, 35, 36, 37):   # day2 midday solar refills the pack
+    for h in (34, 35, 36, 37):  # day2 midday solar refills the pack
         pv[h] = 3.0
     load = [0.0] * n
     price = [0.20] * n
     raw_export = [0.10] * n
-    raw_export[18] = 0.30        # day1 evening peak
-    raw_export[42] = 0.50        # day2 evening peak (higher)
+    raw_export[18] = 0.30  # day1 evening peak
+    raw_export[42] = 0.50  # day2 evening peak (higher)
     ep = [effective_export_price(p, cfg) for p in raw_export]
     res = optimize_grid(
-        pv, load, price, soc_start=80.0, cfg=cfg,
-        window_start_h=0, window_len=n, export_price=ep,
-        terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=80.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        export_price=ep,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
-    assert res["export_schedule"][18] > 0.0   # day1 peak exports (per-day band)
-    assert res["export_schedule"][42] > 0.0   # day2 peak exports
+    assert res["export_schedule"][18] > 0.0  # day1 peak exports (per-day band)
+    assert res["export_schedule"][42] > 0.0  # day2 peak exports
 
 
 def test_two_day_trough_band_allows_day1_charge_where_global_blocks():
@@ -170,7 +215,16 @@ def test_two_day_trough_band_allows_day1_charge_where_global_blocks():
     mask_global = build_charge_mask(price, ceiling, price_band=cfg.charge_window_price_band, trough=trough_global)
     assert mask_perday[6] is True
     assert mask_global[6] is False
-    res = optimize_grid(pv, load, price, soc_start=20.0, cfg=cfg,
-                        window_start_h=0, window_len=n, slots_per_day=24,
-                        day_index=day, chargeable=mask_perday)
+    res = optimize_grid(
+        pv,
+        load,
+        price,
+        soc_start=20.0,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        slots_per_day=24,
+        day_index=day,
+        chargeable=mask_perday,
+    )
     assert sum(res["schedule"][:24]) > 0.0

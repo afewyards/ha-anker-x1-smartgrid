@@ -10,9 +10,10 @@ Covers:
 - ExportState persists across ticks (dwell honored)
 - mutual exclusion with force-charge (FORCING state → export skipped)
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -35,7 +36,7 @@ from tests.helpers import (
 # Time anchor
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)  # 14:00 UTC mid-peak
+BASE = datetime(2026, 6, 25, 14, 0, tzinfo=UTC)  # 14:00 UTC mid-peak
 
 
 # ---------------------------------------------------------------------------
@@ -129,13 +130,29 @@ def _patched_compute_decision(export_request: dict):
     into ``_out["export_request"]`` so the executor's committed-plan gate sees
     exactly what the test supplies.
     """
+
     def _stub(
-        plan, inputs, slots, pv_remaining, sunset,
-        predictor, cur_temp, cfg,
-        tomorrow_total=None, sun_times=None, today_arrays=None, tomorrow_arrays=None,
-        today_watts=None, tomorrow_watts=None,
-        export_price=None, _out=None, _shadow_dp=False, export_price_matches_import=False,
-        estimated_tomorrow=None, past_actuals_by_hour=None, **kwargs,
+        plan,
+        inputs,
+        slots,
+        pv_remaining,
+        sunset,
+        predictor,
+        cur_temp,
+        cfg,
+        tomorrow_total=None,
+        sun_times=None,
+        today_arrays=None,
+        tomorrow_arrays=None,
+        today_watts=None,
+        tomorrow_watts=None,
+        export_price=None,
+        _out=None,
+        _shadow_dp=False,
+        export_price_matches_import=False,
+        estimated_tomorrow=None,
+        past_actuals_by_hour=None,
+        **kwargs,
     ):
         if _out is not None:
             _out["export_request"] = export_request
@@ -146,6 +163,7 @@ def _patched_compute_decision(export_request: dict):
         deadline = inputs.now + timedelta(hours=8)
         # Return (plan, setpoint, deadline, horizon, horizon_mode, intervals_reserve)
         return passive, 0.0, deadline, [], "water_value", []
+
     return _stub
 
 
@@ -153,17 +171,17 @@ def _make_export_cfg(**overrides) -> Config:
     """Config with export enabled and simple arithmetic (eta=1.0)."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=10.0,        # 1 kWh floor
+        soc_floor=10.0,  # 1 kWh floor
         soc_target=97.0,
         max_charge_w=3000.0,
         max_export_w=3000.0,
         grid_export_limit_w=3000.0,
         eta_charge=1.0,
-        round_trip_eff=1.0,    # eta_discharge = 1.0 (simplified)
+        round_trip_eff=1.0,  # eta_discharge = 1.0 (simplified)
         cycle_cost_eur_per_kwh=0.04,
         export_eps_lo_kwh=0.2,
         export_eps_hi_kwh=0.4,
-        export_dwell_min=0,    # no dwell for most tests
+        export_dwell_min=0,  # no dwell for most tests
         enable_export=True,
     )
     defaults.update(overrides)
@@ -218,15 +236,19 @@ def _seed_passive_inputs(hass, *, soc="80.0", export_price="0.30"):
     sunset_iso = (BASE + timedelta(hours=6)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
     # Price forecast: flat expensive → controller stays PASSIVE (no cheap slots)
-    hass.set_state("sensor.price", "0.30", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(0.30 * const.PRICE_SCALE),
-            }
-            for i in range(12)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.30",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.30 * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,20 +285,25 @@ class TestExportEngagePositiveSetpoint:
         hass.set_state("sensor.export_price", "0.40")
         sunset_iso = (BASE + timedelta(hours=6)).isoformat()
         hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-        hass.set_state("sensor.price", "0.40", {
-            "forecast": [
-                {
-                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                    "electricity_price": int(0.40 * const.PRICE_SCALE),
-                }
-                for i in range(12)
-            ]
-        })
+        hass.set_state(
+            "sensor.price",
+            "0.40",
+            {
+                "forecast": [
+                    {
+                        "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                        "electricity_price": int(0.40 * const.PRICE_SCALE),
+                    }
+                    for i in range(12)
+                ]
+            },
+        )
 
         # Inject committed plan: current clock-hour committed at 3000W.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         # Force export_state to already-engaged to skip dwell
@@ -315,7 +342,8 @@ class TestExportEngagePositiveSetpoint:
         # Inject committed plan with rate >> cap so max_export_w is the binding constraint.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 5000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -352,7 +380,8 @@ class TestExportEngagePositiveSetpoint:
         # Inject committed plan with rate >> both caps so grid_export_limit_w is the binding constraint.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 5000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -377,8 +406,7 @@ class TestExportEngagePositiveSetpoint:
         ctrl, act, store = _make_controller(hass)
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
-        monkeypatch.setattr(ctrl_mod, "compute_decision",
-                            _patched_compute_decision(export_request={cur_h: 3000.0}))
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={cur_h: 3000.0}))
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         result = await ctrl.tick()
         assert any(c[0] == "engage_export" for c in act.calls)
@@ -391,30 +419,34 @@ class TestExportEngagePositiveSetpoint:
         6000 W default binds; setpoint saturates at exactly 6000."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
-        ctrl, act, _ = _make_controller(hass, cfg_overrides={
-            "max_export_w": 9000.0, "grid_export_limit_w": 6000.0})
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 9000.0, "grid_export_limit_w": 6000.0})
         _seed_passive_inputs(hass, soc="97.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
-        monkeypatch.setattr(ctrl_mod, "compute_decision",
-                            _patched_compute_decision(export_request={cur_h: 8000.0}))
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={cur_h: 8000.0}))
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
-        assert sp == pytest.approx(6000.0)   # exact, not just <=
+        assert sp == pytest.approx(6000.0)  # exact, not just <=
 
     @pytest.mark.asyncio
     async def test_executor_reserve_value_bounds_setpoint(self, monkeypatch):
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
-        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh",
-                            lambda now, ivs, cfg, **kw: 3.0)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda now, ivs, cfg, **kw: 3.0)
         hass = _StubHass()
-        ctrl, act, _ = _make_controller(hass, cfg_overrides={
-            "capacity_kwh": 10.0, "soc_floor": 5.0, "eta_charge": 1.0,
-            "round_trip_eff": 1.0, "max_export_w": 9000.0, "grid_export_limit_w": 9000.0})
+        ctrl, act, _ = _make_controller(
+            hass,
+            cfg_overrides={
+                "capacity_kwh": 10.0,
+                "soc_floor": 5.0,
+                "eta_charge": 1.0,
+                "round_trip_eff": 1.0,
+                "max_export_w": 9000.0,
+                "grid_export_limit_w": 9000.0,
+            },
+        )
         _seed_passive_inputs(hass, soc="80.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
-        monkeypatch.setattr(ctrl_mod, "compute_decision",
-                            _patched_compute_decision(export_request={cur_h: 9000.0}))
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={cur_h: 9000.0}))
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
@@ -469,7 +501,7 @@ class TestExportReleaseConditions:
         ctrl, act, _ = _make_controller(
             hass,
             cfg_overrides={
-                "soc_floor": 10.0,      # 1.0 kWh
+                "soc_floor": 10.0,  # 1.0 kWh
                 "export_eps_lo_kwh": 0.5,  # raise lo threshold
                 "export_eps_hi_kwh": 1.0,
                 "export_dwell_min": 0,
@@ -536,9 +568,7 @@ class TestExportStatePersistence:
         await ctrl.tick()
 
         saved = store.saved
-        assert "export_state" in saved, (
-            f"_persist must save export_state; saved keys={list(saved.keys())}"
-        )
+        assert "export_state" in saved, f"_persist must save export_state; saved keys={list(saved.keys())}"
         assert saved["export_state"]["engaged"] in (True, False)
 
     @pytest.mark.asyncio
@@ -596,9 +626,7 @@ class TestExportDwellHonored:
         )
         _seed_passive_inputs(hass, soc="80.0", export_price="0.30")
         # Disengaged but started only 5 minutes ago → dwell not elapsed
-        ctrl.export_state = ExportState(
-            engaged=False, state_since=BASE - timedelta(minutes=5)
-        )
+        ctrl.export_state = ExportState(engaged=False, state_since=BASE - timedelta(minutes=5))
 
         await ctrl.tick()
 
@@ -628,6 +656,7 @@ class TestMutualExclusionWithForceCharge:
         # Freeze time at BASE so coordinator's dt_util.utcnow() returns BASE,
         # making inputs.now == BASE and aligning slot selection with the seeded prices.
         from custom_components.anker_x1_smartgrid import controller as ctrl_module
+
         monkeypatch.setattr(ctrl_module.dt_util, "utcnow", lambda: BASE)
 
         hass = _StubHass()
@@ -650,17 +679,19 @@ class TestMutualExclusionWithForceCharge:
         sunset_iso = (BASE + timedelta(hours=8)).isoformat()
         hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
         # Price: cheap now (0.05), expensive later (0.30) → BASE hour selected
-        hass.set_state("sensor.price", "0.05", {
-            "forecast": [
-                {
-                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                    "electricity_price": int(
-                        (0.05 if i < 3 else 0.30) * const.PRICE_SCALE
-                    ),
-                }
-                for i in range(12)
-            ]
-        })
+        hass.set_state(
+            "sensor.price",
+            "0.05",
+            {
+                "forecast": [
+                    {
+                        "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                        "electricity_price": int((0.05 if i < 3 else 0.30) * const.PRICE_SCALE),
+                    }
+                    for i in range(12)
+                ]
+            },
+        )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
 
         await ctrl.tick()
@@ -697,7 +728,8 @@ class TestRecorderExportSignals:
         # Inject committed plan so the executor actually engages.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -710,15 +742,9 @@ class TestRecorderExportSignals:
         # Export must have fired — assert unconditionally.
         export_calls = [c for c in act.calls if c[0] == "engage_export"]
         assert export_calls, f"engage_export must fire with committed plan; calls={act.calls}"
-        assert row.get("export_setpoint_w") is not None, (
-            "export_setpoint_w must be set in recorder row on export tick"
-        )
-        assert row.get("reserve_kwh") is not None, (
-            "reserve_kwh must be set in recorder row on export tick"
-        )
-        assert row.get("surplus_kwh") is not None, (
-            "surplus_kwh must be set in recorder row on export tick"
-        )
+        assert row.get("export_setpoint_w") is not None, "export_setpoint_w must be set in recorder row on export tick"
+        assert row.get("reserve_kwh") is not None, "reserve_kwh must be set in recorder row on export tick"
+        assert row.get("surplus_kwh") is not None, "surplus_kwh must be set in recorder row on export tick"
 
     @pytest.mark.asyncio
     async def test_export_signals_none_when_not_engaged(self, monkeypatch):
@@ -773,28 +799,31 @@ class TestStandaloneFallbackNearPeak:
             hass,
             cfg_overrides={
                 "export_dwell_min": 0,
-                "export_eps_hi_kwh": 0.1,   # low threshold so surplus clears easily
+                "export_eps_hi_kwh": 0.1,  # low threshold so surplus clears easily
                 "export_eps_lo_kwh": 0.05,
                 "enable_export": True,
             },
         )
         _seed_passive_inputs(hass, soc="80.0", export_price="0.20")
         # Set the price forecast so max is 0.30 (window_max > current)
-        hass.set_state("sensor.price", "0.20", {
-            "forecast": [
-                {
-                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                    "electricity_price": int(
-                        (0.20 if i < 4 else 0.30) * const.PRICE_SCALE
-                    ),
-                }
-                for i in range(12)
-            ]
-        })
+        hass.set_state(
+            "sensor.price",
+            "0.20",
+            {
+                "forecast": [
+                    {
+                        "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                        "electricity_price": int((0.20 if i < 4 else 0.30) * const.PRICE_SCALE),
+                    }
+                    for i in range(12)
+                ]
+            },
+        )
         # Inject EMPTY export plan (no committed hours) — the retired near_peak
         # gate is replaced by: no committed rate ⇒ no export.
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={}),
         )
         # Dwell=0 and state_since=1h ago → dwell elapsed; only the committed-plan
@@ -820,7 +849,8 @@ class TestCommittedPlanExecutor:
     """Executor reads the committed export VALUE from the DP plan, not near_peak.
 
     New contract (Task 7):
-    - committed rate present → GATE only; engage decisively at min(max_export_w, grid_export_limit_w), stopping at the live reserve
+    - committed rate present → GATE only; engage decisively at
+      min(max_export_w, grid_export_limit_w), stopping at the live reserve
     - no committed rate → never export (strictly safer than standalone gate)
     """
 
@@ -838,7 +868,8 @@ class TestCommittedPlanExecutor:
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 1000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -905,7 +936,8 @@ class TestExecutorReserveAnchoredToSolarPickup:
         # + committed plan present).
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         # Already engaged so dwell does not gate the tick.
@@ -920,8 +952,9 @@ class TestExecutorReserveAnchoredToSolarPickup:
             "reserve; spy was never invoked — old reserve_kwh path may still be active."
         )
         assert calls["is_cheap_kw"] is not None, "executor must thread the is_cheap map"
-        assert calls["now_arg"] == BASE.replace(minute=0, second=0, microsecond=0), \
+        assert calls["now_arg"] == BASE.replace(minute=0, second=0, microsecond=0), (
             "executor must hour-align now before ride_out_reserve_kwh"
+        )
 
     @pytest.mark.asyncio
     async def test_executor_hour_align_and_is_cheap_gated_to_trough_anchor(self, monkeypatch):
@@ -963,7 +996,8 @@ class TestExecutorReserveAnchoredToSolarPickup:
             ctrl, act, _ = _make_controller(hass, cfg_overrides={"reserve_anchor": anchor})
             _seed_passive_inputs(hass, soc="80.0", export_price="0.30")
             monkeypatch.setattr(
-                ctrl_mod, "compute_decision",
+                ctrl_mod,
+                "compute_decision",
                 _patched_compute_decision(export_request={cur_h: 3000.0}),
             )
             # Already engaged so dwell does not gate the tick.
@@ -990,17 +1024,23 @@ class TestExecutorReserveAnchoredToSolarPickup:
         from datetime import datetime, timedelta, timezone
         from custom_components.anker_x1_smartgrid import controller as c, energy
         from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval
-        cur = datetime(2026, 7, 1, 16, 0, tzinfo=timezone.utc)
-        cfg = Config(capacity_kwh=10.0, soc_floor=10.0, eta_charge=1.0,
-                     round_trip_eff=1.0, reserve_cheap_band=0.20, reserve_anchor="trough")
+
+        cur = datetime(2026, 7, 1, 16, 0, tzinfo=UTC)
+        cfg = Config(
+            capacity_kwh=10.0,
+            soc_floor=10.0,
+            eta_charge=1.0,
+            round_trip_eff=1.0,
+            reserve_cheap_band=0.20,
+            reserve_anchor="trough",
+        )
         prices = [0.30, 0.30, 0.30, 0.13, 0.13, 0.13, 0.13, 0.13]
         slots = [PriceSlot(cur + timedelta(hours=i), p) for i, p in enumerate(prices)]
-        ivs = ([ForecastInterval(cur + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(3)]
-               + [ForecastInterval(cur + timedelta(hours=3), 3000.0, 200.0, 1.0)])
-        plan_r = c._build_reserve_by_hour(cur, slots, ivs, cfg,
-                                          is_cheap=c._build_is_cheap_by_hour(slots, cfg))[cur]
-        exec_r = energy.ride_out_reserve_kwh(cur, ivs, cfg,
-                                             is_cheap=c._build_is_cheap_by_hour(slots, cfg))
+        ivs = [ForecastInterval(cur + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(3)] + [
+            ForecastInterval(cur + timedelta(hours=3), 3000.0, 200.0, 1.0)
+        ]
+        plan_r = c._build_reserve_by_hour(cur, slots, ivs, cfg, is_cheap=c._build_is_cheap_by_hour(slots, cfg))[cur]
+        exec_r = energy.ride_out_reserve_kwh(cur, ivs, cfg, is_cheap=c._build_is_cheap_by_hour(slots, cfg))
         assert exec_r == pytest.approx(plan_r, abs=1e-9)
 
 
@@ -1023,7 +1063,8 @@ class TestExportHouseLoadCompensation:
         hass.set_state("sensor.pv_power", "0.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1039,15 +1080,14 @@ class TestExportHouseLoadCompensation:
     async def test_factor_zero_is_legacy(self, monkeypatch):
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
-        ctrl, act, _ = _make_controller(
-            hass, cfg_overrides={"max_export_w": 3000.0, "export_load_comp_factor": 0.0}
-        )
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 3000.0, "export_load_comp_factor": 0.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
         # Computed house load = pv + meter_w + batt - loss = 0 + 300 + 0 - 0 = 300W.
         hass.set_state("sensor.pv_power", "0.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1069,7 +1109,8 @@ class TestExportHouseLoadCompensation:
         hass.set_state("sensor.battery_power", "unknown")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1090,7 +1131,8 @@ class TestExportHouseLoadCompensation:
         hass.set_state("sensor.pv_power", "1200.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 5000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1126,7 +1168,8 @@ class TestExportLoadCompFreshOnly:
         hass.set_state("sensor.battery_power", "unknown")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1172,7 +1215,8 @@ class TestExportPnlMeteredNet:
         hass.set_state("sensor.battery_power", "2000.0")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1196,7 +1240,8 @@ class TestExportPnlMeteredNet:
         hass.set_state("sensor.pv_power", "unknown")
         hass.set_state("sensor.battery_power", "unknown")
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={}),
         )
 
@@ -1228,7 +1273,8 @@ class TestExportPnlMeteredNet:
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
-            ctrl_mod, "compute_decision",
+            ctrl_mod,
+            "compute_decision",
             _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -1270,18 +1316,22 @@ async def test_engage_export_failure_resets_export_state_and_releases(monkeypatc
     hass.set_state("sensor.irradiance", "600.0")
     hass.set_state("weather.home", "sunny", {"temperature": 22.0})
     hass.set_state("sensor.export_price", "0.40")
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": (BASE + timedelta(hours=6)).isoformat()})
-    hass.set_state("sensor.price", "0.40", {
-        "forecast": [
-            {"datetime": (BASE + timedelta(hours=i)).isoformat(),
-             "electricity_price": int(0.40 * const.PRICE_SCALE)}
-            for i in range(12)
-        ]
-    })
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": (BASE + timedelta(hours=6)).isoformat()})
+    hass.set_state(
+        "sensor.price",
+        "0.40",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.40 * const.PRICE_SCALE),
+                }
+                for i in range(12)
+            ]
+        },
+    )
     cur_h = BASE.replace(minute=0, second=0, microsecond=0)
-    monkeypatch.setattr(ctrl_mod, "compute_decision",
-                        _patched_compute_decision(export_request={cur_h: 3000.0}))
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={cur_h: 3000.0}))
     ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
 
     await ctrl.tick()
@@ -1335,11 +1385,14 @@ async def test_forcing_engage_failure_publishes_honest_state(monkeypatch):
     ctrl, act, _ = _make_controller(hass, actuator=act)
     _seed_passive_inputs(hass, soc="30.0", export_price="0.10")
     deadline = BASE + timedelta(hours=2)
-    monkeypatch.setattr(ctrl_mod, "compute_decision", lambda *a, **k: (
-        PlanState(ControllerState.FORCING, BASE, ()), 0.0, deadline, [], "single-day", []))
+    monkeypatch.setattr(
+        ctrl_mod,
+        "compute_decision",
+        lambda *a, **k: (PlanState(ControllerState.FORCING, BASE, ()), 0.0, deadline, [], "single-day", []),
+    )
 
     result = await ctrl.tick()
-    assert result["state"] == "passive"                       # not "forcing"
-    assert result["setpoint_w"] == 0.0                        # not max_charge_w
-    assert not any(c[0] == "release_to_self" for c in act.calls)   # no hardware release
-    assert ctrl.plan.state is ControllerState.FORCING         # intent preserved for retry
+    assert result["state"] == "passive"  # not "forcing"
+    assert result["setpoint_w"] == 0.0  # not max_charge_w
+    assert not any(c[0] == "release_to_self" for c in act.calls)  # no hardware release
+    assert ctrl.plan.state is ControllerState.FORCING  # intent preserved for retry

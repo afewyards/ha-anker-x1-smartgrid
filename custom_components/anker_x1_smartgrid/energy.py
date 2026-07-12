@@ -1,4 +1,5 @@
 """Pure energy model: forward SoC simulation and solar deficit."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -85,9 +86,9 @@ def ride_out_reserve_kwh(
     eta_d = cfg.eta_discharge_static()
 
     horizon_end = now + timedelta(hours=max_window_h)
-    signed_cum = 0.0         # signed DC trajectory vs *now* (credit only locates trough)
-    debit_cum = 0.0          # debit-only DC drawdown accumulated so far
-    trough_signed = 0.0      # most-negative signed_cum seen (0 = no net drawdown yet)
+    signed_cum = 0.0  # signed DC trajectory vs *now* (credit only locates trough)
+    debit_cum = 0.0  # debit-only DC drawdown accumulated so far
+    trough_signed = 0.0  # most-negative signed_cum seen (0 = no net drawdown yet)
     reserve_at_trough = 0.0  # debit_cum at that trough
 
     for iv in sorted(intervals, key=lambda i: i.start):

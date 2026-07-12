@@ -10,6 +10,7 @@ compute source-of-truth for that scaling claim.  A failure here is the
 ONLY intended trigger to pull in the deferred far-horizon-coarsening
 spec -- do not weaken the budget or coarsen the DP to force a pass.
 """
+
 import time
 
 import pytest

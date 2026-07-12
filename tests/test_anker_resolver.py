@@ -1,4 +1,5 @@
 """Tests for the Anker X1 device resolver."""
+
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -34,14 +35,20 @@ def _register_anker_device(hass, *, drop=(), capacity_state="10.0"):
         if suffix in drop:
             continue
         reg.async_get_or_create(
-            platform, const.ANKER_X1_DOMAIN, f"{src.entry_id}_{suffix}",
-            config_entry=src, device_id=device.id, suggested_object_id=oid,
+            platform,
+            const.ANKER_X1_DOMAIN,
+            f"{src.entry_id}_{suffix}",
+            config_entry=src,
+            device_id=device.id,
+            suggested_object_id=oid,
         )
     if capacity_state is not None:
         cap = reg.async_get_or_create(
-            "sensor", const.ANKER_X1_DOMAIN,
+            "sensor",
+            const.ANKER_X1_DOMAIN,
             f"{src.entry_id}_{const.ANKER_CAPACITY_SUFFIX}",
-            config_entry=src, device_id=device.id,
+            config_entry=src,
+            device_id=device.id,
             suggested_object_id="anker_x1_battery_nominal_capacity",
         )
         hass.states.async_set(cap.entity_id, capacity_state)
@@ -75,9 +82,7 @@ async def test_resolve_missing_meter_power_and_inverter_loss_soft(hass):
     """Meter power / inverter loss are SOFT roles: a miss is omitted from the
     resolved values but must NOT be reported as missing (must not block setup
     on anker_x1 versions without these entities)."""
-    device_id, _ = _register_anker_device(
-        hass, drop=("meter_total_power", "inverter_loss")
-    )
+    device_id, _ = _register_anker_device(hass, drop=("meter_total_power", "inverter_loss"))
     resolved, missing = resolve_anker_config(hass, device_id)
     assert missing == []
     assert const.CONF_ENT_METER_POWER not in resolved
@@ -106,8 +111,12 @@ async def test_resolve_exact_match_not_endswith(hass):
     device_id, src = _register_anker_device(hass)
     # decoy whose unique_id ENDS WITH "_soc" but is not the real soc role
     er.async_get(hass).async_get_or_create(
-        "sensor", const.ANKER_X1_DOMAIN, f"{src.entry_id}_house_soc",
-        config_entry=src, device_id=device_id, suggested_object_id="anker_x1_house_soc",
+        "sensor",
+        const.ANKER_X1_DOMAIN,
+        f"{src.entry_id}_house_soc",
+        config_entry=src,
+        device_id=device_id,
+        suggested_object_id="anker_x1_house_soc",
     )
     resolved, missing = resolve_anker_config(hass, device_id)
     assert resolved[const.CONF_ENT_SOC] == "sensor.anker_x1_battery_soc"
@@ -172,8 +181,8 @@ async def test_resolve_usable_pv_power_soft_role(hass):
 async def test_resolve_missing_usable_pv_power_is_soft(hass):
     device_id, _ = _register_anker_device(hass, drop=("usable_pv_power",))
     resolved, missing = resolve_anker_config(hass, device_id)
-    assert const.CONF_ENT_PV_POWER not in resolved   # miss omitted
-    assert const.CONF_ENT_PV_POWER not in missing     # soft: never blocks setup
+    assert const.CONF_ENT_PV_POWER not in resolved  # miss omitted
+    assert const.CONF_ENT_PV_POWER not in missing  # soft: never blocks setup
 
 
 async def test_apply_resolution_preserves_configured_pv_list(hass):

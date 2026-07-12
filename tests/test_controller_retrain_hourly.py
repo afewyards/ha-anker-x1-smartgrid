@@ -2,7 +2,8 @@
 
 energy rollups (samples_hourly) instead of per-tick W samples.
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -53,7 +54,7 @@ def _make_ctl(rec, **cfg_overrides) -> Controller:
     return ctl
 
 
-_BASE = datetime(2026, 6, 1, tzinfo=timezone.utc)
+_BASE = datetime(2026, 6, 1, tzinfo=UTC)
 
 
 def _hourly_rows(n, *, kwh_sum=0.5, temp=15.0):

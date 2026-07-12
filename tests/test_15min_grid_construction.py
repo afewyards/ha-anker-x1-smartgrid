@@ -1,5 +1,6 @@
 """T4: DP window is built on the slot grid (15-min resolvable, 60-min byte-identical)."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
@@ -9,7 +10,7 @@ from custom_components.anker_x1_smartgrid.models import (
     PriceSlot,
 )
 
-UTC = timezone.utc
+UTC = UTC
 NOW = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
 
 
@@ -27,10 +28,7 @@ def _cfg():
 def test_cheapest_quarter_is_individually_resolvable_not_hour_collapsed():
     prices = [0.30, 0.10, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30]  # cheap quarter at 10:15
     slots = [PriceSlot(NOW + timedelta(minutes=15 * i), p) for i, p in enumerate(prices)]
-    ivs = [
-        ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 400.0, 0.25)
-        for i in range(8)
-    ]
+    ivs = [ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 400.0, 0.25) for i in range(8)]
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     sel, grid, infeasible, exp, rev, ceil = ctrl._dp_select_slots(
         inputs=inputs,
@@ -73,24 +71,38 @@ def test_live_dp_path_uses_slot_scaled_dawn_boundary(monkeypatch):
     slots15 = [PriceSlot(now + timedelta(minutes=15 * i), 0.10) for i in range(24)]
     ivs15 = [ForecastInterval(now + timedelta(minutes=15 * i), 0.0, 0.0, 0.25) for i in range(24)]
     ctrl._dp_select_slots(
-        inputs=inputs, slots=slots15, deadline=now + timedelta(hours=6),
-        ceiling=0.20, cfg=_cfg(), export_price=None, sun_times=sun,
-        intervals=ivs15, slot_minutes=15, dt_h=0.25,
+        inputs=inputs,
+        slots=slots15,
+        deadline=now + timedelta(hours=6),
+        ceiling=0.20,
+        cfg=_cfg(),
+        export_price=None,
+        sun_times=sun,
+        intervals=ivs15,
+        slot_minutes=15,
+        dt_h=0.25,
     )
     cyc15 = captured["cycle_end_idx"]
-    assert cyc15[0] == 16                 # 4h == 16 quarter-hour slots
+    assert cyc15[0] == 16  # 4h == 16 quarter-hour slots
     assert cyc15[15] == 16 and cyc15[16] == 24  # dawn switch lands AT slot 16
 
     # 60-min run: 6 slots over the same 6h window; sunrise at slot 4.
     slots60 = [PriceSlot(now + timedelta(hours=i), 0.10) for i in range(6)]
     ivs60 = [ForecastInterval(now + timedelta(hours=i), 0.0, 0.0, 1.0) for i in range(6)]
     ctrl._dp_select_slots(
-        inputs=inputs, slots=slots60, deadline=now + timedelta(hours=6),
-        ceiling=0.20, cfg=_cfg(), export_price=None, sun_times=sun,
-        intervals=ivs60, slot_minutes=60, dt_h=1.0,
+        inputs=inputs,
+        slots=slots60,
+        deadline=now + timedelta(hours=6),
+        ceiling=0.20,
+        cfg=_cfg(),
+        export_price=None,
+        sun_times=sun,
+        intervals=ivs60,
+        slot_minutes=60,
+        dt_h=1.0,
     )
     cyc60 = captured["cycle_end_idx"]
-    assert cyc60[0] == 4                  # legacy: 4 hourly slots
+    assert cyc60[0] == 4  # legacy: 4 hourly slots
     assert cyc60[3] == 4 and cyc60[4] == 6  # dawn switch lands AT slot 4
 
 

@@ -1,4 +1,5 @@
 """Control loop: gather inputs, decide, actuate, record."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +15,28 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, executor, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret_job, remote_forecast, resolution, scheduler, snapshot, soc_drift
+from . import (
+    const,
+    coordinator,
+    energy,
+    executor,
+    featureset,
+    forecast as forecast_mod,
+    guard,
+    intra_hour,
+    load_adapt,
+    occupancy,
+    optimize as optimize_mod,
+    past_actuals as past_actuals_mod,
+    plan as plan_mod,
+    pricing_store,
+    regret_job,
+    remote_forecast,
+    resolution,
+    scheduler,
+    snapshot,
+    soc_drift,
+)
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -27,6 +49,7 @@ from .loadmodel import BucketedLoadModel
 from .models import Config, ControllerState, ExportState, ForecastInterval, PlanState, PlantInputs, PriceSlot
 from .parsers import build_pv_curve_from_arrays, build_pv_curve_from_watts, build_two_day_pv_curve, synth_pv_curve
 from .recorder import DataRecorder
+
 # Pure planner core (Task C2): re-exported so existing call sites / test
 # imports (`from .controller import compute_decision`, `controller._trough_by_hour`,
 # etc.) keep working unchanged after the move to decision.py.
@@ -102,8 +125,11 @@ _PERSIST_GROUPS = [
         ("soc_drift_kwh", "_soc_drift_kwh", lambda v: v, float, False),
         ("soc_drift_day", "_soc_drift_day", lambda v: v, str, True),
         (
-            "soc_drift_last_update", "_soc_drift_last_update",
-            _persist_iso_or_none, dt_util.parse_datetime, True,
+            "soc_drift_last_update",
+            "_soc_drift_last_update",
+            _persist_iso_or_none,
+            dt_util.parse_datetime,
+            True,
         ),
         ("soc_drift_last_soc_pct", "_soc_drift_last_soc_pct", lambda v: v, float, True),
         ("soc_drift_engaged", "_soc_drift_engaged", lambda v: v, bool, False),
@@ -130,7 +156,7 @@ class Controller:
         self._recorder = recorder
         self._actuator = actuator
         self._store = store
-        self._price_store = price_store        # PriceHistoryStore | None (Plan B)
+        self._price_store = price_store  # PriceHistoryStore | None (Plan B)
         # Re-entrancy guard (review 1.2): serializes tick() so a slow tick (e.g. an
         # ML retrain) cannot overlap the next timer fire and race the actuator.
         self._tick_lock = asyncio.Lock()
@@ -138,16 +164,16 @@ class Controller:
         self.cfg = Config.from_dict(data)
         if self.cfg.soc_floor > const.FIRMWARE_SOC_FLOOR + 1e-9:
             _LOGGER.info(
-                "soc_floor=%.1f%%: export margin only; passive drain modeled "
-                "to firmware floor (%.0f%%)",
-                self.cfg.soc_floor, const.FIRMWARE_SOC_FLOOR,
+                "soc_floor=%.1f%%: export margin only; passive drain modeled to firmware floor (%.0f%%)",
+                self.cfg.soc_floor,
+                const.FIRMWARE_SOC_FLOOR,
             )
         self.plan = PlanState.initial(dt_util.utcnow())
         self.enabled = True
         self.profile: dict = {}
         self._profile_predictor: LoadPredictor = LoadPredictor.from_profile(self.profile)
         self.last_status: dict = {}
-        self._res_latch: tuple[int, "date"] | None = None
+        self._res_latch: tuple[int, date] | None = None
         self._detected_slot_minutes: int = 60
         # Last LATCHED slot_minutes used to build self.plan's committed state
         # (committed_slots / committed_charge_kwh).  Compared each live tick;
@@ -300,9 +326,7 @@ class Controller:
             return
         try:
             since = (now - timedelta(days=const.EFFICIENCY_WINDOW_DAYS)).isoformat()
-            rows = await self._hass.async_add_executor_job(
-                self._recorder.read_efficiency_samples, since
-            )
+            rows = await self._hass.async_add_executor_job(self._recorder.read_efficiency_samples, since)
             self._eta_curve = EfficiencyCurve.build(rows, self.cfg, now)
         except Exception:
             _LOGGER.warning("efficiency curve build failed; using static fallback", exc_info=True)
@@ -340,9 +364,7 @@ class Controller:
             return self._past_actuals_cache
         try:
             since_iso = (now - timedelta(hours=48)).isoformat()
-            rows = await self._hass.async_add_executor_job(
-                self._recorder.read_feature_rows, since_iso
-            )
+            rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, since_iso)
             actuals = past_actuals_mod.aggregate_past_actuals(rows)
             actuals = {h: v for h, v in actuals.items() if h < now_h}
             self._past_actuals_cache = actuals
@@ -363,44 +385,49 @@ class Controller:
         base = self.predictor
         # Layer B: occupancy-deviation wrapper (OFF at fraction 0.0; skipped on the
         # remote tier — the addon already conditions on per-hour projected occupancy).
-        if (
-            self.cfg.occ_adapt_fraction > 0.0
-            and self._occ_table is not None
-            and self.active_model_name != "remote"
-        ):
+        if self.cfg.occ_adapt_fraction > 0.0 and self._occ_table is not None and self.active_model_name != "remote":
             base = occupancy.OccupancyPredictor(
-                base, self._occ_table, self._persons_home_now, now,
-                self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
+                base,
+                self._occ_table,
+                self._persons_home_now,
+                now,
+                self.cfg.occ_persistence_h,
+                self.cfg.occ_adapt_fraction,
             )
         now_h = resolution.hour_floor(now)
         try:
             base_p50 = base.predict(
-                now_h, cur_temp, const.DEFAULT_FALLBACK_LOAD_W, quantile=0.5,
+                now_h,
+                cur_temp,
+                const.DEFAULT_FALLBACK_LOAD_W,
+                quantile=0.5,
             )
             self._load_adapt_log.record(now_h, base_p50)
-        except Exception:  # noqa: BLE001 — never block the tick on logging
+        except Exception:
             pass
         try:
             _partial = None
-            if (
-                self.cfg.load_adapt_partial_hour
-                and self._hour_acc.hour == now_h
-                and self._hour_acc.covered_s > 0.0
-            ):
+            if self.cfg.load_adapt_partial_hour and self._hour_acc.hour == now_h and self._hour_acc.covered_s > 0.0:
                 _rate_w = self._hour_acc.kwh * 3_600_000.0 / self._hour_acc.covered_s
                 _partial = (_rate_w, self._hour_acc.covered_s / 3600.0)
             ratio, matched = load_adapt.compute_ratio(
-                self._load_adapt_log, past_actuals or {}, now_h,
-                self.cfg.load_adapt_window_h, partial=_partial,
+                self._load_adapt_log,
+                past_actuals or {},
+                now_h,
+                self.cfg.load_adapt_window_h,
+                partial=_partial,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             ratio, matched = None, 0
         self._load_adapt_ratio = ratio
         self._load_adapt_matched = matched
         pred = base
         if self.cfg.load_adapt_fraction > 0.0 and ratio is not None:
             pred = load_adapt.AdaptivePredictor(
-                base, ratio, now, self.cfg.load_adapt_fade_h,
+                base,
+                ratio,
+                now,
+                self.cfg.load_adapt_fade_h,
                 self.cfg.load_adapt_fraction,
             )
         if self.cfg.current_hour_blend:
@@ -425,23 +452,13 @@ class Controller:
         try:
             now = dt_util.utcnow()
             since_iso = (now - timedelta(days=self.cfg.lookback_days)).isoformat()
-            rows = await self._hass.async_add_executor_job(
-                self._recorder.read_hourly_rows, since_iso
-            )
-            samples = [
-                (str(r["hour_ts"]), load)
-                for r in rows
-                if (load := featureset.hourly_load_w(r)) is not None
-            ]
-            self.profile = forecast_mod.rolling_load_profile(
-                samples, self.cfg.lookback_days, now
-            )
+            rows = await self._hass.async_add_executor_job(self._recorder.read_hourly_rows, since_iso)
+            samples = [(str(r["hour_ts"]), load) for r in rows if (load := featureset.hourly_load_w(r)) is not None]
+            self.profile = forecast_mod.rolling_load_profile(samples, self.cfg.lookback_days, now)
             # Build a quantile-aware predictor from the raw samples so the profile tier
             # CAN return empirical quantiles above P50 if ever requested; live control
             # currently requests only P50 (see the P80-scaffolding note in _retrain_sync).
-            self._profile_predictor = LoadPredictor.from_profile_samples(
-                samples, self.cfg.lookback_days, now
-            )
+            self._profile_predictor = LoadPredictor.from_profile_samples(samples, self.cfg.lookback_days, now)
             self._occ_table = occupancy.build_table(rows)
             self._last_profile_refresh = now
         except Exception:
@@ -458,9 +475,7 @@ class Controller:
             return
         self._price_history_day = today.isoformat()
         yday = today - timedelta(days=1)
-        await self._price_store.async_snapshot(
-            yday.isoformat(), pricing_store.extract_realized_day(slots, yday)
-        )
+        await self._price_store.async_snapshot(yday.isoformat(), pricing_store.extract_realized_day(slots, yday))
 
     def _retrain_sync(self, since_iso: str) -> None:
         """Synchronous body of retrain — safe to run in an executor thread.
@@ -512,7 +527,7 @@ class Controller:
                             self.active_model_name = "hgbr"
                             self.backtest_result = metrics
                             return
-            except Exception:  # noqa: BLE001 — bad HGBR path must not crash
+            except Exception:
                 _LOGGER.warning(
                     "HGBR retrain path failed; falling through to bucketed",
                     exc_info=True,
@@ -555,7 +570,7 @@ class Controller:
                 await self._hass.async_add_executor_job(self._retrain_sync, since_iso)
             else:
                 self._retrain_sync(since_iso)
-        except Exception:  # noqa: BLE001 - never break the loop on training error
+        except Exception:
             pass
 
     async def tick(self) -> dict:
@@ -567,7 +582,7 @@ class Controller:
         async with self._tick_lock:
             try:
                 return await self._tick_impl()
-            except Exception:  # noqa: BLE001 — whole-tick failsafe (review 1.1)
+            except Exception:
                 _LOGGER.exception("tick failed; releasing to self-consumption")
                 now = dt_util.utcnow()
                 await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
@@ -584,7 +599,9 @@ class Controller:
             _today_key = dt_util.as_local(now).date().isoformat()
             _prev_day = self._soc_drift_day
             self._soc_drift_kwh, self._soc_drift_day = soc_drift.reset_if_new_day(
-                self._soc_drift_kwh, self._soc_drift_day, _today_key,
+                self._soc_drift_kwh,
+                self._soc_drift_day,
+                _today_key,
             )
             _new_day = self._soc_drift_day != _prev_day
             # "Real rollover" = day changed AND we had a previous day (not first-ever tick).
@@ -595,7 +612,8 @@ class Controller:
                 self._soc_drift_last_soc_pct = None
             _dt_h = (
                 (now - self._soc_drift_last_update).total_seconds() / 3600.0
-                if self._soc_drift_last_update is not None else 0.0
+                if self._soc_drift_last_update is not None
+                else 0.0
             )
             _soc_now = inputs.soc
             _gated = (
@@ -612,34 +630,37 @@ class Controller:
                 assert self._soc_drift_last_intervals is not None
                 # Use the P50 intervals cached from the PREVIOUS tick's DP run.
                 # Intervals change at most hourly; stale-by-one-tick is functionally identical.
-                _fc_pv_w, _fc_load_w = soc_drift.forecast_rate_at(
-                    self._soc_drift_last_intervals, now
-                )
+                _fc_pv_w, _fc_load_w = soc_drift.forecast_rate_at(self._soc_drift_last_intervals, now)
                 # Curve-derived discharge eta at the forecast deficit power (only used
                 # by expected_soc_delta_kwh on the deficit branch); static scalar when
                 # the flag is off (_eta_d_at's own gate) — byte-identical parity.
                 _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
                 _expected_dc = soc_drift.expected_soc_delta_kwh(
-                    _fc_pv_w, _fc_load_w, _dt_h, self.cfg.eta_charge, _eta_d,
+                    _fc_pv_w,
+                    _fc_load_w,
+                    _dt_h,
+                    self.cfg.eta_charge,
+                    _eta_d,
                     idle_drain_w=self.cfg.idle_drain_w,
                 )
                 _measured_dc = soc_drift.measured_soc_delta_kwh(
-                    _soc_now, self._soc_drift_last_soc_pct, self.cfg.capacity_kwh,
+                    _soc_now,
+                    self._soc_drift_last_soc_pct,
+                    self.cfg.capacity_kwh,
                 )
                 _tick_h = const.TICK_SECONDS / 3600.0
                 # Duration-scale the export add-back: _last_export_kwh_dc is sized over
                 # TICK_SECONDS but this step integrates _dt_h (may differ on missed ticks).
-                _export_dc_step = (
-                    self._soc_drift_last_export_kwh_dc * _dt_h / _tick_h
-                    if _tick_h > 0 else 0.0
-                )
+                _export_dc_step = self._soc_drift_last_export_kwh_dc * _dt_h / _tick_h if _tick_h > 0 else 0.0
                 self._soc_drift_kwh = soc_drift.accumulate(
                     self._soc_drift_kwh,
                     soc_drift.per_step_drift_kwh(_expected_dc, _measured_dc, _export_dc_step),
-                    dt_h=_dt_h, halflife_h=self.cfg.soc_drift_decay_halflife_h,
+                    dt_h=_dt_h,
+                    halflife_h=self.cfg.soc_drift_decay_halflife_h,
                 )
                 self._soc_drift_kwh = soc_drift.cap_accumulator(
-                    self._soc_drift_kwh, self.cfg.capacity_kwh,
+                    self._soc_drift_kwh,
+                    self.cfg.capacity_kwh,
                 )
             # Consume the export field; C3 re-sets it if THIS tick fires an export.
             self._soc_drift_last_export_kwh_dc = 0.0
@@ -650,8 +671,10 @@ class Controller:
             self._soc_drift_last_update = now
             # State is flushed by the single end-of-tick _persist() call (line ~1738).
             _drift, self._soc_drift_engaged = soc_drift.drift_kwh(
-                self._soc_drift_kwh, self.cfg.soc_drift_deadband_kwh,
-                0.5 * self.cfg.soc_drift_deadband_kwh, self._soc_drift_engaged,
+                self._soc_drift_kwh,
+                self.cfg.soc_drift_deadband_kwh,
+                0.5 * self.cfg.soc_drift_deadband_kwh,
+                self._soc_drift_engaged,
             )
             _hedge = self.cfg.soc_hedge_fraction * _drift
             if _hedge > 0.0:
@@ -659,15 +682,8 @@ class Controller:
                 # so any over-buy lands at the cheapest tariff.
                 _now_h = resolution.hour_floor(now)
                 _hedge_deadline = scheduler.compute_deadline(now, sunset, slots, self.cfg)
-                _fwd = [
-                    s for s in slots
-                    if resolution.hour_floor(s.start) >= _now_h
-                    and s.start <= _hedge_deadline
-                ]
-                _trough_h = (
-                    resolution.hour_floor(min(_fwd, key=lambda s: s.price).start)
-                    if _fwd else _now_h
-                )
+                _fwd = [s for s in slots if resolution.hour_floor(s.start) >= _now_h and s.start <= _hedge_deadline]
+                _trough_h = resolution.hour_floor(min(_fwd, key=lambda s: s.price).start) if _fwd else _now_h
                 hedge_drain_by_hour = {_trough_h: _hedge}
         return hedge_drain_by_hour
 
@@ -677,14 +693,9 @@ class Controller:
         Identical cadence logic shared by the disabled/shadow and live tick
         paths (Task C5) — keeps the predictor warming even while disabled.
         """
-        if (
-            self._last_profile_refresh is None
-            or (now - self._last_profile_refresh) >= timedelta(hours=1)
-        ):
+        if self._last_profile_refresh is None or (now - self._last_profile_refresh) >= timedelta(hours=1):
             await self.refresh_profile()
-        if self._last_retrain is None or (now - self._last_retrain) >= timedelta(
-            hours=self.cfg.retrain_hours
-        ):
+        if self._last_retrain is None or (now - self._last_retrain) >= timedelta(hours=self.cfg.retrain_hours):
             await self.retrain(now)
             self._last_retrain = now
 
@@ -743,9 +754,18 @@ class Controller:
         return await self._hass.async_add_executor_job(
             functools.partial(
                 compute_decision,
-                plan, inputs, slots, pv_remaining, sunset,
-                predictor, cur_temp, self.cfg,
-                tomorrow_total, sun_times, today_arrays, tomorrow_arrays,
+                plan,
+                inputs,
+                slots,
+                pv_remaining,
+                sunset,
+                predictor,
+                cur_temp,
+                self.cfg,
+                tomorrow_total,
+                sun_times,
+                today_arrays,
+                tomorrow_arrays,
                 **kwargs,
             )
         )
@@ -820,12 +840,8 @@ class Controller:
         # uses try/except, but here we guard explicitly to keep the tick clean).
         if self._recorder is not None and now.hour != self._last_rollup_hour:
             self._last_rollup_hour = now.hour
-            _hourly_cutoff = (
-                now - timedelta(days=self.cfg.retention_hourly_days)
-            ).isoformat()
-            await self._hass.async_add_executor_job(
-                self._rollup_hourly_sync, now.isoformat(), _hourly_cutoff
-            )
+            _hourly_cutoff = (now - timedelta(days=self.cfg.retention_hourly_days)).isoformat()
+            await self._hass.async_add_executor_job(self._rollup_hourly_sync, now.isoformat(), _hourly_cutoff)
 
         # H3a: periodic WAL checkpoint so a read-only immutable reader (the addon,
         # mounted config:ro) sees recent rows. Once per clock-hour, off-loop.
@@ -861,18 +877,17 @@ class Controller:
             try:
                 _persons_by_ts = None
                 if self._recorder is not None:
-                    _ph_since = (
-                        now - timedelta(days=remote_forecast.PERSONS_HOW_LOOKBACK_DAYS)
-                    ).isoformat()
+                    _ph_since = (now - timedelta(days=remote_forecast.PERSONS_HOW_LOOKBACK_DAYS)).isoformat()
                     _ph_samples = await self._hass.async_add_executor_job(
                         self._recorder.read_persons_home_samples, _ph_since
                     )
                     _ph_means = remote_forecast.persons_home_hour_of_week_means(_ph_samples)
-                    _ph_hour_starts = [
-                        e["datetime"] for e in (_wf_list or []) if e.get("datetime") is not None
-                    ]
+                    _ph_hour_starts = [e["datetime"] for e in (_wf_list or []) if e.get("datetime") is not None]
                     _persons_by_ts = remote_forecast.project_persons_home(
-                        now, _persons_home_now, _ph_means, _ph_hour_starts,
+                        now,
+                        _persons_home_now,
+                        _ph_means,
+                        _ph_hour_starts,
                         persistence_hours=self.cfg.occ_persistence_h,
                     )
                 _payload = build_hours_payload(_wf_list, _persons_by_ts)
@@ -884,7 +899,7 @@ class Controller:
                 )
                 if _fetched_map is not None:
                     self._remote_forecast_map = _fetched_map
-            except Exception:  # noqa: BLE001 — belt-and-suspenders; fetch_forecast never raises
+            except Exception:
                 _LOGGER.debug("remote_forecast fetch raised unexpectedly", exc_info=True)
 
         if not self.enabled:
@@ -898,12 +913,14 @@ class Controller:
             # every later disabled tick fall back to the live actuator flag so we do
             # not clobber a user-set manual/modbus mode.
             _was_engaged = self._actuator.engaged or (
-                _first_tick
-                and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
+                _first_tick and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
             )
             # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
             await executor.safe_release(
-                self, now, "Actuator release_to_self failed (disabled path)", release=_was_engaged,
+                self,
+                now,
+                "Actuator release_to_self failed (disabled path)",
+                release=_was_engaged,
             )
             # Save the previous plan for state-machine continuity in the shadow compute,
             # then reset to PASSIVE so no committed slots are carried forward.
@@ -929,11 +946,7 @@ class Controller:
             today_watts, tomorrow_watts = self._read_forecast_bundle()
             sunset = coordinator.read_sunset(self._hass, self._data)
             _temp_ent = self._data.get(const.CONF_ENT_TEMP)
-            cur_temp = (
-                coordinator.read_attr(self._hass, _temp_ent, "temperature")
-                if _temp_ent is not None
-                else None
-            )
+            cur_temp = coordinator.read_attr(self._hass, _temp_ent, "temperature") if _temp_ent is not None else None
 
             # Read live feed-in tariff (same logic as the enabled path below).
             _shadow_export_price, _shadow_export_matches_import = self._resolve_export_price()
@@ -949,8 +962,19 @@ class Controller:
             if inputs is not None and slots and sunset is not None and pv_remaining is not None:
                 try:
                     shadow_plan, _, shadow_deadline, _, _shadow_hm, _ = await self._run_compute_decision(
-                        _prev_plan, self.predictor, inputs, slots, pv_remaining, sunset, cur_temp,
-                        tomorrow_total, sun_times, today_arrays, tomorrow_arrays, today_watts, tomorrow_watts,
+                        _prev_plan,
+                        self.predictor,
+                        inputs,
+                        slots,
+                        pv_remaining,
+                        sunset,
+                        cur_temp,
+                        tomorrow_total,
+                        sun_times,
+                        today_arrays,
+                        tomorrow_arrays,
+                        today_watts,
+                        tomorrow_watts,
                         export_price=_shadow_export_price,
                         export_price_matches_import=_shadow_export_matches_import,
                         temp_by_hour=_temp_by_hour,
@@ -963,8 +987,12 @@ class Controller:
 
             if inputs is not None:
                 await self._record_sample(
-                    now, inputs, setpoint=0.0, state="disabled",
-                    weather_entry=_weather_entry, persons_home=_persons_home_now,
+                    now,
+                    inputs,
+                    setpoint=0.0,
+                    state="disabled",
+                    weather_entry=_weather_entry,
+                    persons_home=_persons_home_now,
                 )
 
             # Keep the predictor warming while disabled so the SoC/load curve
@@ -1009,9 +1037,18 @@ class Controller:
             # card still renders PV + load + projected SoC while disabled.
             if inputs is not None and slots and pv_remaining is not None and sun_times is not None:
                 horizon = plan_mod.build_display_horizon(
-                    slots, now, today_arrays, tomorrow_arrays, sun_times,
-                    self.predictor, cur_temp, const.DEFAULT_FALLBACK_LOAD_W,
-                    inputs.soc, [], now, self.cfg,
+                    slots,
+                    now,
+                    today_arrays,
+                    tomorrow_arrays,
+                    sun_times,
+                    self.predictor,
+                    cur_temp,
+                    const.DEFAULT_FALLBACK_LOAD_W,
+                    inputs.soc,
+                    [],
+                    now,
+                    self.cfg,
                     today_watts=today_watts,
                     tomorrow_watts=tomorrow_watts,
                     temp_by_hour=_temp_by_hour,
@@ -1028,11 +1065,7 @@ class Controller:
             # dashboard shows DP intentions during the shadow period (T0.5c).
             # The DP ran purely for observation — no setpoint was ever issued.
             # Mirrors the enabled-path publication (T0.6a) with identical schema.
-            if (
-                _shadow_dp_out.get("dp_selected") is not None
-                and shadow_deadline is not None
-                and inputs is not None
-            ):
+            if _shadow_dp_out.get("dp_selected") is not None and shadow_deadline is not None and inputs is not None:
                 self._publish_fictive_plan(slots, _shadow_dp_out, inputs.soc, shadow_deadline)
             else:
                 # DP did not run or failed — remove any stale fictive_plan key.
@@ -1077,11 +1110,7 @@ class Controller:
 
         # Read temp the same way the recorder does (attribute, not state text).
         _temp_ent = self._data.get(const.CONF_ENT_TEMP)
-        cur_temp = (
-            coordinator.read_attr(self._hass, _temp_ent, "temperature")
-            if _temp_ent is not None
-            else None
-        )
+        cur_temp = coordinator.read_attr(self._hass, _temp_ent, "temperature") if _temp_ent is not None else None
 
         today_arrays = coordinator.read_pv_today_arrays(self._hass, self._data)
         tomorrow_arrays = coordinator.read_pv_tomorrow_arrays(self._hass, self._data)
@@ -1102,7 +1131,8 @@ class Controller:
         if self._price_store is not None:
             _tom = (dt_util.as_local(now) + timedelta(days=1)).date()
             _estimated_tomorrow = pricing_store.blend_price_prior(
-                self._price_store.history, _tom,
+                self._price_store.history,
+                _tom,
                 weight_today=self.cfg.price_blend_weight_today,
             )
         past_actuals = await self._get_past_actuals(now)
@@ -1116,8 +1146,19 @@ class Controller:
         hedge_drain_by_hour = self._apply_drift_hedge(now, inputs, slots, sunset)
 
         new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._run_compute_decision(
-            self.plan, _plan_predictor, inputs, slots, pv_remaining, sunset, cur_temp,
-            tomorrow_total, sun_times, today_arrays, tomorrow_arrays, today_watts, tomorrow_watts,
+            self.plan,
+            _plan_predictor,
+            inputs,
+            slots,
+            pv_remaining,
+            sunset,
+            cur_temp,
+            tomorrow_total,
+            sun_times,
+            today_arrays,
+            tomorrow_arrays,
+            today_watts,
+            tomorrow_watts,
             export_price=_export_price,
             export_price_matches_import=_export_matches_import,
             temp_by_hour=_temp_by_hour,
@@ -1189,17 +1230,30 @@ class Controller:
         # controller). Reads the OLD self.plan for the FORCING->PASSIVE
         # transition check; self.plan is reassigned to new_plan below.
         (
-            setpoint, _engage_failed, _export_setpoint_w, _export_kwh,
-            _reserve_kwh_val, _surplus_kwh_val,
+            setpoint,
+            _engage_failed,
+            _export_setpoint_w,
+            _export_kwh,
+            _reserve_kwh_val,
+            _surplus_kwh_val,
         ) = await executor.run_forcing_and_export(
-            self, now, new_plan, inputs, slots, _dp_out, _ivs_reserve,
-            _slot_minutes, _export_price, _house_load_now_w,
+            self,
+            now,
+            new_plan,
+            inputs,
+            slots,
+            _dp_out,
+            _ivs_reserve,
+            _slot_minutes,
+            _export_price,
+            _house_load_now_w,
         )
 
         self.plan = new_plan
         await self._persist()
         await self._record_sample(
-            now, inputs,
+            now,
+            inputs,
             setpoint=setpoint,
             state="passive" if _engage_failed else new_plan.state.value,
             weather_entry=_weather_entry,
@@ -1213,9 +1267,7 @@ class Controller:
 
         # Stash decision snapshot for persistence by the recorder writer (A3).
         _price_window_e = [
-            (s.start.isoformat(), s.price)
-            for s in slots
-            if deadline is not None and now <= s.start < deadline
+            (s.start.isoformat(), s.price) for s in slots if deadline is not None and now <= s.start < deadline
         ]
         self.last_decision = snapshot.build_decision_snapshot(
             now=now,
@@ -1246,9 +1298,7 @@ class Controller:
             # Purge stale decision rows on the same 6-hour schedule; else the
             # decisions table grows at ~1440 rows/day indefinitely.
             _cutoff = (now - timedelta(days=self.cfg.retention_days)).isoformat()
-            await self._hass.async_add_executor_job(
-                self._recorder.purge_decisions_older_than, _cutoff
-            )
+            await self._hass.async_add_executor_job(self._recorder.purge_decisions_older_than, _cutoff)
         required_kwh = max(0.0, (self.cfg.soc_target - inputs.soc) / 100.0 * self.cfg.capacity_kwh)
         # Full kWh required to reach soc_target from current SoC. Used as the
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
@@ -1318,7 +1368,10 @@ class Controller:
         computed_ts  : ISO-8601 UTC timestamp to store as computed_ts in the row.
         """
         updates = regret_job.run_daily_regret(
-            self._recorder, self.cfg, day, computed_ts,
+            self._recorder,
+            self.cfg,
+            day,
+            computed_ts,
             slot_minutes=self._detected_slot_minutes,
         )
         # Only apply keys the module function actually set — an early
@@ -1338,7 +1391,10 @@ class Controller:
         tick ever after startup).
         """
         updates = regret_job.backfill_regret(
-            self._recorder, self.cfg, today_str, computed_ts,
+            self._recorder,
+            self.cfg,
+            today_str,
+            computed_ts,
             slot_minutes=self._detected_slot_minutes,
         )
         if "last_regret" in updates:
@@ -1349,8 +1405,11 @@ class Controller:
     def _occ_status_attrs(self, now: datetime) -> dict:
         """Occupancy-corrector observability attrs (Layer B). See snapshot.occ_status_attrs."""
         return snapshot.occ_status_attrs(
-            self._occ_table, self._persons_home_now, now,
-            self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
+            self._occ_table,
+            self._persons_home_now,
+            now,
+            self.cfg.occ_persistence_h,
+            self.cfg.occ_adapt_fraction,
         )
 
     def _status(self, now, setpoint, deadline, reason, solar_charge: float = 0.0) -> dict:
@@ -1397,8 +1456,14 @@ class Controller:
     ) -> None:
         """Accumulate realized battery cash flows for this tick. See ledger.CashLedger.accumulate."""
         self._ledger.accumulate(
-            self._hass, self._data, self.cfg,
-            now, inputs, slots, slot_minutes, raw_export_price,
+            self._hass,
+            self._data,
+            self.cfg,
+            now,
+            inputs,
+            slots,
+            slot_minutes,
+            raw_export_price,
         )
 
     async def release(self) -> None:
@@ -1411,11 +1476,9 @@ class Controller:
         """
         acquired = False
         try:
-            await asyncio.wait_for(
-                self._tick_lock.acquire(), timeout=_SHUTDOWN_LOCK_TIMEOUT_S
-            )
+            await asyncio.wait_for(self._tick_lock.acquire(), timeout=_SHUTDOWN_LOCK_TIMEOUT_S)
             acquired = True
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — never block teardown
+        except (TimeoutError, Exception):
             _LOGGER.warning(
                 "release: tick lock not acquired within %ss; releasing anyway",
                 _SHUTDOWN_LOCK_TIMEOUT_S,
@@ -1514,11 +1577,7 @@ class Controller:
         import_price = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_PRICE, ""))
         irradiance = coordinator.read_float(self._hass, self._data.get(const.CONF_ENT_IRRADIANCE, ""))
         temp_ent = self._data.get(const.CONF_ENT_TEMP)
-        temp = (
-            coordinator.read_attr(self._hass, temp_ent, "temperature")
-            if temp_ent is not None
-            else None
-        )
+        temp = coordinator.read_attr(self._hass, temp_ent, "temperature") if temp_ent is not None else None
         # House load: use the value threaded from the active tick if provided
         # (single compute, consistent with actuation); otherwise compute it here
         # (disabled path, which does not pass house_load_w).
@@ -1532,11 +1591,7 @@ class Controller:
         # would over-credit export by the full energy-tax component of the import rate.
         # Post-hoc analysis of NULL rows simply skips export-revenue attribution.
         _rec_export_price_ent = self._data.get(const.CONF_ENT_EXPORT_PRICE, "")
-        rec_export_price = (
-            coordinator.read_float(self._hass, _rec_export_price_ent)
-            if _rec_export_price_ent
-            else None
-        )
+        rec_export_price = coordinator.read_float(self._hass, _rec_export_price_ent) if _rec_export_price_ent else None
         row = {
             "ts": now.isoformat(),
             "hour": now.hour,
@@ -1620,9 +1675,7 @@ class Controller:
                 const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS],
             ),
         )
-        house_load_w = max(
-            0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0)
-        )
+        house_load_w = max(0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0))
         self._last_house_load_w = house_load_w
         self._house_load_fresh = True
         return house_load_w
@@ -1675,15 +1728,11 @@ class Controller:
     async def _persist_decision_snapshot(self) -> None:
         """Persist self.last_decision to the decisions table (off-loop) if it has a ts."""
         if self.last_decision.get("ts"):
-            await self._hass.async_add_executor_job(
-                self._write_decision_sync, self.last_decision
-            )
+            await self._hass.async_add_executor_job(self._write_decision_sync, self.last_decision)
 
     async def _backfill_regret(self, now) -> None:
         """Run the daily-regret backfill on the first tick of a new local day / after restart."""
         today = dt_util.as_local(now).date().isoformat()
         if today != self._last_regret_day:
-            await self._hass.async_add_executor_job(
-                self._backfill_regret_sync, today, now.isoformat()
-            )
+            await self._hass.async_add_executor_job(self._backfill_regret_sync, today, now.isoformat())
         self._last_regret_day = today

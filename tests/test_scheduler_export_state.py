@@ -10,18 +10,20 @@ Tests:
 - decide_export_state: hurdle dropping mid-engage releases state
 - decide_export_state: surplus in dead zone with no prior engagement stays disengaged
 """
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timezone, timedelta, UTC
 
 
 from custom_components.anker_x1_smartgrid.models import Config, ExportState
 from custom_components.anker_x1_smartgrid import scheduler
 
-T = datetime(2026, 6, 25, 10, 0, tzinfo=timezone.utc)
+T = datetime(2026, 6, 25, 10, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def disengaged(since=T) -> ExportState:
     return ExportState(engaged=False, state_since=since)

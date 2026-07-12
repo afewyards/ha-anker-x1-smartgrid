@@ -50,6 +50,7 @@ build_feature_matrix(hourly_rows) -> (X, y, index)
     Excludes rows with None/NaN target; keeps NaN-feature rows.
     O(n) — builds lookups once, not per-row.
 """
+
 from __future__ import annotations
 
 import math
@@ -115,7 +116,7 @@ _FEATURE_NAMES: list[str] = [
 # ---------------------------------------------------------------------------
 
 
-def _parse_ts(ts: Union[datetime, str]) -> datetime:
+def _parse_ts(ts: datetime | str) -> datetime:
     """Return a UTC-aware datetime from a datetime or ISO-8601 string.
 
     Accepted forms:
@@ -131,9 +132,7 @@ def _parse_ts(ts: Union[datetime, str]) -> datetime:
         dt = ts
 
     if dt.tzinfo is None:
-        raise ValueError(
-            f"encode_calendar_features requires a timezone-aware datetime; got naive: {dt!r}"
-        )
+        raise ValueError(f"encode_calendar_features requires a timezone-aware datetime; got naive: {dt!r}")
     return dt
 
 
@@ -174,7 +173,7 @@ def _coerce_float(v: object) -> float:
 # ---------------------------------------------------------------------------
 
 
-def encode_calendar_features(ts: Union[datetime, str]) -> dict:
+def encode_calendar_features(ts: datetime | str) -> dict:
     """Encode calendar/time features for a single UTC timestamp.
 
     Parameters
@@ -204,7 +203,7 @@ def encode_calendar_features(ts: Union[datetime, str]) -> dict:
 
     local_hour: int = dt_local.hour
     local_doy: int = dt_local.timetuple().tm_yday  # 1-based (Jan 1 = 1)
-    local_dow: int = dt_local.weekday()             # 0=Monday … 6=Sunday
+    local_dow: int = dt_local.weekday()  # 0=Monday … 6=Sunday
     local_date = dt_local.date()
 
     hour_sin, hour_cos = _cyclical_encode(local_hour, 24.0)
@@ -288,6 +287,7 @@ def encode_lag_features_from_lookups(
     dict with 5 keys: ``load_lag_1h``, ``load_lag_24h``, ``load_lag_168h``,
     ``rolling_mean_24h``, ``prev_day_total_kwh``.  Missing values → NaN.
     """
+
     def _lkup(delta_h: int) -> float:
         v = utc_lookup.get(t - timedelta(hours=delta_h))
         return float(v) if v is not None else _NAN
@@ -296,11 +296,7 @@ def encode_lag_features_from_lookups(
     lag_24h = _lkup(24)
     lag_168h = _lkup(168)
 
-    window_vals = [
-        float(v)
-        for dh in range(1, 25)
-        if (v := utc_lookup.get(t - timedelta(hours=dh))) is not None
-    ]
+    window_vals = [float(v) for dh in range(1, 25) if (v := utc_lookup.get(t - timedelta(hours=dh))) is not None]
     rolling_mean: float = sum(window_vals) / len(window_vals) if window_vals else _NAN
 
     prev_local_date = t.astimezone(_TZ_AMS).date() - timedelta(days=1)

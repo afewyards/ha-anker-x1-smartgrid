@@ -17,6 +17,7 @@ most of them transitively pulls in Home Assistant via
 ``custom_components/anker_x1_smartgrid/__init__.py``, which is exactly
 what this file exists to prevent tests from needing.
 """
+
 from __future__ import annotations
 
 import ast
@@ -149,25 +150,19 @@ def _find_leaf_violations(tree: ast.Module) -> list[tuple[int, str]]:
     return violations
 
 
-@pytest.mark.parametrize(
-    "label, path", _ha_free_targets(), ids=[label for label, _ in _ha_free_targets()]
-)
+@pytest.mark.parametrize("label, path", _ha_free_targets(), ids=[label for label, _ in _ha_free_targets()])
 def test_planner_core_is_homeassistant_free(label, path):
     """Pure planner-core modules must never import homeassistant, at any
     nesting depth (module scope, functions, try/except, etc.).
     """
     tree = _parse(path)
     violations = _find_homeassistant_imports(tree)
-    assert not violations, (
-        f"{label} imports homeassistant, breaking HA-free planner core "
-        f"invariant:\n"
-        + "\n".join(f"  line {lineno}: {stmt}" for lineno, stmt in violations)
+    assert not violations, f"{label} imports homeassistant, breaking HA-free planner core invariant:\n" + "\n".join(
+        f"  line {lineno}: {stmt}" for lineno, stmt in violations
     )
 
 
-@pytest.mark.parametrize(
-    "label, path", _leaf_targets(), ids=[label for label, _ in _leaf_targets()]
-)
+@pytest.mark.parametrize("label, path", _leaf_targets(), ids=[label for label, _ in _leaf_targets()])
 def test_leaf_modules_do_not_import_upward(label, path):
     """const/models/resolution are leaves: they must not import
     controller, coordinator, or the package itself (whose __init__.py
@@ -177,6 +172,5 @@ def test_leaf_modules_do_not_import_upward(label, path):
     violations = _find_leaf_violations(tree)
     assert not violations, (
         f"{label} imports upward into controller/coordinator/package, "
-        f"breaking leaf isolation invariant:\n"
-        + "\n".join(f"  line {lineno}: {stmt}" for lineno, stmt in violations)
+        f"breaking leaf isolation invariant:\n" + "\n".join(f"  line {lineno}: {stmt}" for lineno, stmt in violations)
     )

@@ -3,6 +3,7 @@
 No fastapi import here (fastapi is not in the dev venv; the route itself is
 validated on-box where fastapi is installed inside the Docker container).
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

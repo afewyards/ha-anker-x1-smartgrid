@@ -1,4 +1,5 @@
 """Constants for Anker X1 SmartGrid."""
+
 from __future__ import annotations
 
 DOMAIN = "anker_x1_smartgrid"
@@ -29,7 +30,7 @@ CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
 CONF_ADDON_ENABLED = "addon_enabled"
 CONF_ADDON_URL = "addon_url"
 CONF_ADDON_TIMEOUT = "addon_timeout"
-CONF_FORECAST_SERVICE = "forecast_service"   # persisted list of forecast config-entry ids
+CONF_FORECAST_SERVICE = "forecast_service"  # persisted list of forecast config-entry ids
 
 # Entity-id config keys
 CONF_ENT_SETPOINT = "ent_setpoint"
@@ -43,7 +44,7 @@ CONF_ENT_INVERTER_LOSS = "ent_inverter_loss"
 CONF_ENT_PRICE = "ent_price"
 CONF_ENT_PV_TODAY = "ent_pv_today"  # list
 CONF_ENT_PV_TOMORROW = "ent_pv_tomorrow"  # list
-CONF_ENT_PV_PEAK_TODAY = "ent_pv_peak_today"        # list, index-aligned with CONF_ENT_PV_TODAY
+CONF_ENT_PV_PEAK_TODAY = "ent_pv_peak_today"  # list, index-aligned with CONF_ENT_PV_TODAY
 CONF_ENT_PV_PEAK_TOMORROW = "ent_pv_peak_tomorrow"  # list, index-aligned with CONF_ENT_PV_TOMORROW
 CONF_ENT_IRRADIANCE = "ent_irradiance"
 CONF_ENT_SUN = "ent_sun"
@@ -96,7 +97,7 @@ DEFAULT_MIN_TRAIN_SAMPLES = 2000
 DEFAULT_MIN_TRAIN_HOURS = 48
 DEFAULT_TRAIN_DAYS = 14
 DEFAULT_BACKTEST_TEST_DAYS = 3
-DEFAULT_ROUND_TRIP_EFF = 0.85       # battery charge+discharge round-trip
+DEFAULT_ROUND_TRIP_EFF = 0.85  # battery charge+discharge round-trip
 
 DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
 # Constant inverter/BMS standby DC drain taken from the battery while it
@@ -114,12 +115,12 @@ DEFAULT_ADDON_TIMEOUT = 5
 # Water-value planner defaults.  Deliberately const-only tunables: there is no
 # options-schema field for these (Config reads the constant directly, by design —
 # not exposed for end-user tuning via the UI).
-DEFAULT_TROUGH_PERCENTILE = 30.0       # percentile of lookahead prices a trough must beat
-DEFAULT_TROUGH_LOOKAHEAD_H = 48        # hours of forward prices scanned for the trough
-DEFAULT_MIN_HORIZON_H = 6              # trough must be at least this many hours out
-DEFAULT_WATER_VALUE_FACTOR = 1.0       # scales the terminal water value v
+DEFAULT_TROUGH_PERCENTILE = 30.0  # percentile of lookahead prices a trough must beat
+DEFAULT_TROUGH_LOOKAHEAD_H = 48  # hours of forward prices scanned for the trough
+DEFAULT_MIN_HORIZON_H = 6  # trough must be at least this many hours out
+DEFAULT_WATER_VALUE_FACTOR = 1.0  # scales the terminal water value v
 DEFAULT_CLAMP_WATER_VALUE_NONNEG = True
-DEFAULT_END_SOC_DEADBAND = 0.25        # kWh deadband on the current-hour committed grid charge
+DEFAULT_END_SOC_DEADBAND = 0.25  # kWh deadband on the current-hour committed grid charge
 DEFAULT_CHARGE_WINDOW_PRICE_BAND = 0.005  # €/kWh: max spread above trough price to allow charging
 # Hours of real-price look-back for the cheap-charge band trough.  trough[h] is the
 # min effective price over [h - lookback, horizon_edge) so an UP-SLOPE hour after the
@@ -153,12 +154,12 @@ DEFAULT_ENABLE_EXPORT = True
 # __init__.py, never a UI option.  Nominal discharge is 6600 W but the
 # net-export setpoint ceiling is ~6000 W — kept at 6000 for parity.
 DEFAULT_MAX_EXPORT_W = 6000.0
-DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0    # configurable grid-connection cap
+DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0  # configurable grid-connection cap
 DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.04  # battery cycle degradation cost (€/kWh stored)
 # Two-sided surplus hysteresis band (mirrors decide_state's eps_lo/eps_hi)
-DEFAULT_EXPORT_EPS_LO_KWH = 0.2        # disengage below this surplus
-DEFAULT_EXPORT_EPS_HI_KWH = 0.4        # engage above this surplus
-DEFAULT_EXPORT_DWELL_MIN = 15          # dwell before engage/disengage transition (minutes)
+DEFAULT_EXPORT_EPS_LO_KWH = 0.2  # disengage below this surplus
+DEFAULT_EXPORT_EPS_HI_KWH = 0.4  # engage above this surplus
+DEFAULT_EXPORT_DWELL_MIN = 15  # dwell before engage/disengage transition (minutes)
 DEFAULT_EXPORT_FEE_EUR_PER_KWH = 0.02  # €/kWh feed-in fee subtracted from export price
 # Export admitted only within this fraction below the horizon peak export price.
 # 0.12 = export when effective price >= peak * (1 - 0.12). Tune from first live day.
@@ -184,7 +185,7 @@ DEFAULT_EXPORT_LOAD_COMP_FACTOR = 1.0
 DEFAULT_EXPORT_DRAIN_WINDOW_H = 0.0
 
 # Persistence price prior defaults (Plan B)
-DEFAULT_PRICE_HISTORY_DAYS = 8          # rolling realized-price store depth (days)
+DEFAULT_PRICE_HISTORY_DAYS = 8  # rolling realized-price store depth (days)
 DEFAULT_PRICE_BLEND_WEIGHT_TODAY = 0.5  # today vs same-weekday-last-week blend weight
 DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT = 0.15  # discount on the estimated morning price
 DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH = 0.02  # estimate must beat tonight by this (€/kWh)
@@ -253,11 +254,11 @@ RESERVE_WINDOW_MAX_H = 24  # cap the ride-out walk so a recovery-free multi-clou
 # stretch cannot bleed the NEXT night's drawdown into today's reserve.
 
 # Ride-to-trough reserve (rev-2) — anchor selector + cheap-relief band
-RESERVE_ANCHOR_TROUGH = "trough"    # new default: early-break at first cheap grid hour
-RESERVE_ANCHOR_LEGACY = "legacy"    # rollback: old debit-to-signed-trough + price-prior
+RESERVE_ANCHOR_TROUGH = "trough"  # new default: early-break at first cheap grid hour
+RESERVE_ANCHOR_LEGACY = "legacy"  # rollback: old debit-to-signed-trough + price-prior
 DEFAULT_RESERVE_ANCHOR = RESERVE_ANCHOR_TROUGH
-DEFAULT_RESERVE_CHEAP_BAND = 0.20   # a later hour is "relief" within 20% of its OWN forward trough
-RESERVE_CHEAP_BAND_EPS = 0.02       # €/kWh floor on the band denominator (near-zero/neg NL prices)
+DEFAULT_RESERVE_CHEAP_BAND = 0.20  # a later hour is "relief" within 20% of its OWN forward trough
+RESERVE_CHEAP_BAND_EPS = 0.02  # €/kWh floor on the band denominator (near-zero/neg NL prices)
 SLOT_RESOLUTION_AUTO = "auto"
 DEFAULT_SLOT_RESOLUTION = SLOT_RESOLUTION_AUTO
 SETPOINT_MIN_W = -6000.0

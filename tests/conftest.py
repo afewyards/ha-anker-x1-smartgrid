@@ -1,4 +1,5 @@
 """Shared test fixtures."""
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import const

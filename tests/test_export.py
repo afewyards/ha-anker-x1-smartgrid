@@ -13,6 +13,7 @@ Verifies the ``feed_in`` parameter added to :func:`optimize_grid`:
 - High ``feed_in`` prices do **not** cause the optimizer to over-buy beyond what
   is needed to reach ``soc_target`` (battery cap is the physical guard).
 """
+
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
@@ -29,10 +30,10 @@ def make_cfg(**overrides) -> Config:
     """Return a Config with clean export-test defaults (eta=1.0 for exact arithmetic)."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=20.0,   # 2 kWh floor
+        soc_floor=20.0,  # 2 kWh floor
         soc_target=80.0,  # 8 kWh target
         max_charge_w=3000.0,  # 3 kWh/h
-        eta_charge=1.0,   # AC == DC (simplifies test arithmetic)
+        eta_charge=1.0,  # AC == DC (simplifies test arithmetic)
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -58,21 +59,31 @@ class TestFeedInNoneParityInvariant:
         price = [0.20] * 24
 
         result_default = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=24,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=24,
         )
         result_none = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=24,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=24,
             feed_in=None,
         )
 
         assert result_default["kwh"] == pytest.approx(result_none["kwh"], abs=1e-9)
         assert result_default["eur"] == pytest.approx(result_none["eur"], abs=1e-9)
         for h in range(24):
-            assert result_default["schedule"][h] == pytest.approx(
-                result_none["schedule"][h], abs=1e-9
-            ), f"Schedule mismatch at h={h}"
+            assert result_default["schedule"][h] == pytest.approx(result_none["schedule"][h], abs=1e-9), (
+                f"Schedule mismatch at h={h}"
+            )
 
     def test_parity_gate_still_green_with_none(self):
         """optimize_grid(feed_in=None) ≡ hindsight_optimal_grid (T0.1b gate holds).
@@ -93,8 +104,13 @@ class TestFeedInNoneParityInvariant:
         )
         hind = hindsight_optimal_grid(day, cfg)
         opt = optimize_grid(
-            pv, load, price, soc_start=60.0, cfg=cfg,
-            window_start_h=0, window_len=24,
+            pv,
+            load,
+            price,
+            soc_start=60.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=24,
             feed_in=None,
         )
 
@@ -118,12 +134,22 @@ class TestFeedInNoneParityInvariant:
         price = [0.20, 0.10, 0.15, 0.25, 0.18, 0.22]
 
         result_default = optimize_grid(
-            pv, load, price, soc_start=60.0, cfg=cfg,
-            window_start_h=8, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=60.0,
+            cfg=cfg,
+            window_start_h=8,
+            window_len=window_len,
         )
         result_none = optimize_grid(
-            pv, load, price, soc_start=60.0, cfg=cfg,
-            window_start_h=8, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=60.0,
+            cfg=cfg,
+            window_start_h=8,
+            window_len=window_len,
             feed_in=None,
         )
 
@@ -144,9 +170,13 @@ class TestFeedInLengthValidation:
         cfg = make_cfg()
         with pytest.raises(ValueError, match="feed_in"):
             optimize_grid(
-                [0.0] * 4, [0.0] * 4, [0.20] * 4,
-                soc_start=50.0, cfg=cfg,
-                window_start_h=0, window_len=4,
+                [0.0] * 4,
+                [0.0] * 4,
+                [0.20] * 4,
+                soc_start=50.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=4,
                 feed_in=[0.10, 0.10, 0.10],  # length 3 ≠ 4
             )
 
@@ -155,9 +185,13 @@ class TestFeedInLengthValidation:
         cfg = make_cfg()
         with pytest.raises(ValueError, match="feed_in"):
             optimize_grid(
-                [0.0] * 4, [0.0] * 4, [0.20] * 4,
-                soc_start=50.0, cfg=cfg,
-                window_start_h=0, window_len=4,
+                [0.0] * 4,
+                [0.0] * 4,
+                [0.20] * 4,
+                soc_start=50.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=4,
                 feed_in=[0.10] * 5,  # length 5 ≠ 4
             )
 
@@ -166,9 +200,13 @@ class TestFeedInLengthValidation:
         cfg = make_cfg()
         with pytest.raises(ValueError, match="feed_in"):
             optimize_grid(
-                [0.0] * 4, [0.0] * 4, [0.20] * 4,
-                soc_start=50.0, cfg=cfg,
-                window_start_h=0, window_len=4,
+                [0.0] * 4,
+                [0.0] * 4,
+                [0.20] * 4,
+                soc_start=50.0,
+                cfg=cfg,
+                window_start_h=0,
+                window_len=4,
                 feed_in=[],  # length 0 ≠ 4
             )
 
@@ -176,9 +214,13 @@ class TestFeedInLengthValidation:
         """Correct length → no error."""
         cfg = make_cfg()
         result = optimize_grid(
-            [0.0] * 4, [0.0] * 4, [0.20] * 4,
-            soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=4,
+            [0.0] * 4,
+            [0.0] * 4,
+            [0.20] * 4,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=4,
             feed_in=[0.10] * 4,
         )
         assert "schedule" in result
@@ -217,8 +259,13 @@ class TestSolarExportCreditedAtFullEffectivePrice:
         feed_in = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=feed_in,
         )
 
@@ -255,8 +302,13 @@ class TestSolarExportCreditedAtFullEffectivePrice:
         feed_in = [0.10] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=70.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=70.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=feed_in,
         )
 
@@ -281,12 +333,22 @@ class TestSolarExportCreditedAtFullEffectivePrice:
         price = [0.20] * window_len
 
         result_no_fi = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
         result_with_fi = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.50] * window_len,  # high feed_in, but no PV → zero credit
         )
 
@@ -313,8 +375,13 @@ class TestSolarExportCreditedAtFullEffectivePrice:
         feed_in = [0.10]
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=8, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=8,
+            window_len=window_len,
             feed_in=feed_in,
         )
 
@@ -326,8 +393,7 @@ class TestSolarExportCreditedAtFullEffectivePrice:
         # (was 2.0 × 0.7 × 0.10 = 0.14 under the retired 0.7 haircut).
         expected_credit = 2.0 * 0.10
         assert result["eur"] == pytest.approx(-expected_credit, abs=1e-6), (
-            f"Rate-limited export credit: expected eur={-expected_credit:.6f}, "
-            f"got {result['eur']:.6f}"
+            f"Rate-limited export credit: expected eur={-expected_credit:.6f}, got {result['eur']:.6f}"
         )
 
 
@@ -359,13 +425,23 @@ class TestHighFeedInNoBias:
         price = [0.20] * window_len
 
         result_low_fi = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.10] * window_len,
         )
         result_high_fi = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[1.00] * window_len,
         )
 
@@ -387,8 +463,13 @@ class TestHighFeedInNoBias:
         price = [0.20] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=50.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=50.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[100.0] * window_len,
         )
 
@@ -410,12 +491,22 @@ class TestHighFeedInNoBias:
         price = [0.20] * window_len
 
         result_no_fi = optimize_grid(
-            pv, load, price, soc_start=20.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=20.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
         result_high_fi = optimize_grid(
-            pv, load, price, soc_start=20.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=20.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[50.0] * window_len,
         )
 
@@ -448,19 +539,28 @@ class TestExportCreditReflectedInEur:
         price = [0.20] * window_len
 
         result_no_fi = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
         result_with_fi = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.10] * window_len,
         )
 
         assert result_no_fi["eur"] == pytest.approx(0.0, abs=1e-6)
         assert result_with_fi["eur"] < result_no_fi["eur"] - 1e-6, (
-            f"With feed_in, eur ({result_with_fi['eur']:.4f}) must be less than "
-            f"without ({result_no_fi['eur']:.4f})"
+            f"With feed_in, eur ({result_with_fi['eur']:.4f}) must be less than without ({result_no_fi['eur']:.4f})"
         )
 
     def test_doubling_feed_in_doubles_credit(self):
@@ -476,23 +576,32 @@ class TestExportCreditReflectedInEur:
         price = [0.20] * window_len
 
         result_fi_low = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.10] * window_len,
         )
         result_fi_high = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.20] * window_len,
         )
 
-        credit_low = -result_fi_low["eur"]    # positive (export revenue)
+        credit_low = -result_fi_low["eur"]  # positive (export revenue)
         credit_high = -result_fi_high["eur"]  # should be exactly double
 
         assert credit_low > 1e-6, "Low feed_in should produce non-zero credit"
         assert credit_high == pytest.approx(2 * credit_low, abs=1e-6), (
-            f"Doubled feed_in should double credit: "
-            f"credit_low={credit_low:.6f} credit_high={credit_high:.6f}"
+            f"Doubled feed_in should double credit: credit_low={credit_low:.6f} credit_high={credit_high:.6f}"
         )
 
     def test_export_credit_eur_key_present_when_feed_in_provided(self):
@@ -504,17 +613,19 @@ class TestExportCreditReflectedInEur:
         price = [0.20] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
             feed_in=[0.10] * window_len,
         )
 
-        assert "export_credit_eur" in result, (
-            "result should contain 'export_credit_eur' when feed_in is provided"
-        )
+        assert "export_credit_eur" in result, "result should contain 'export_credit_eur' when feed_in is provided"
         assert result["export_credit_eur"] > 0.0, (
-            f"export_credit_eur should be positive (solar was exported), "
-            f"got {result.get('export_credit_eur')}"
+            f"export_credit_eur should be positive (solar was exported), got {result.get('export_credit_eur')}"
         )
 
     def test_export_credit_eur_not_present_without_feed_in(self):
@@ -526,13 +637,17 @@ class TestExportCreditReflectedInEur:
         price = [0.20] * window_len
 
         result = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=0, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=window_len,
         )
 
         assert "export_credit_eur" not in result, (
-            "result must NOT contain 'export_credit_eur' when feed_in is None "
-            "(parity invariant: default-off, additive)"
+            "result must NOT contain 'export_credit_eur' when feed_in is None (parity invariant: default-off, additive)"
         )
 
 
@@ -555,8 +670,7 @@ def test_solar_spill_credited_at_full_effective_price():
     load = [0.0] * 24
     price = [0.20] * 24
     feed_in = [0.30] * 24
-    res = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg,
-                        window_start_h=0, window_len=24, feed_in=feed_in)
+    res = optimize_grid(pv, load, price, soc_start=80.0, cfg=cfg, window_start_h=0, window_len=24, feed_in=feed_in)
     # 5 kWh spilled × 1.0 (no haircut) × 0.30 = 1.50 € credit
     # (was 0.7 × 1.50 = 1.05 € under the retired 0.7 haircut).
     assert res["export_credit_eur"] == pytest.approx(1.50, abs=1e-6)
@@ -571,11 +685,11 @@ def _make_export_cfg_for_cap_test(**overrides) -> Config:
     """Config for combined-export-cap tests: unit etas, explicit export limits."""
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=20.0,       # 2 kWh floor
-        soc_target=80.0,      # 8 kWh target
+        soc_floor=20.0,  # 2 kWh floor
+        soc_target=80.0,  # 8 kWh target
         max_charge_w=3000.0,  # 3 kWh/h
-        eta_charge=1.0,       # AC == DC on charge side
-        round_trip_eff=1.0,   # eta_d = 1.0 (simplifies arithmetic)
+        eta_charge=1.0,  # AC == DC on charge side
+        round_trip_eff=1.0,  # eta_d = 1.0 (simplifies arithmetic)
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=3000.0,
         grid_export_limit_w=3000.0,
@@ -615,16 +729,22 @@ class TestCombinedSolarBatteryExportCap:
         """
         cfg = _make_export_cfg_for_cap_test()
         window_len = 1
-        pv = [5.0]      # all 5 kWh spills (battery full, can't absorb)
+        pv = [5.0]  # all 5 kWh spills (battery full, can't absorb)
         load = [0.0]
         price = [0.20]
         export_price = [0.50]  # profitable — DP would eagerly export without the cap
 
         result = optimize_grid(
-            pv, load, price, soc_start=80.0, cfg=cfg,
-            window_start_h=10, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=10,
+            window_len=window_len,
             export_price=export_price,
-            terminal_mode="water_value", water_value=0.0,
+            terminal_mode="water_value",
+            water_value=0.0,
         )
 
         # solar_export_ac = 5.0 kWh (verified from physics: battery full, all PV spills)
@@ -660,16 +780,22 @@ class TestCombinedSolarBatteryExportCap:
         """
         cfg = _make_export_cfg_for_cap_test()
         window_len = 1
-        pv = [4.0]      # 2 kWh absorbed by battery, 2 kWh spills
+        pv = [4.0]  # 2 kWh absorbed by battery, 2 kWh spills
         load = [0.0]
         price = [0.20]
         export_price = [0.50]
 
         result = optimize_grid(
-            pv, load, price, soc_start=60.0, cfg=cfg,
-            window_start_h=10, window_len=window_len,
+            pv,
+            load,
+            price,
+            soc_start=60.0,
+            cfg=cfg,
+            window_start_h=10,
+            window_len=window_len,
             export_price=export_price,
-            terminal_mode="water_value", water_value=0.0,
+            terminal_mode="water_value",
+            water_value=0.0,
         )
 
         # solar_export_ac = 2.0 kWh (2 kWh absorbed, 2 kWh spills from 4 kWh PV)

@@ -9,6 +9,7 @@ Checks:
   3. None of the vendored files contain `import homeassistant` / `from homeassistant`.
   4. Import smoke-test: each vendored module imports cleanly in this venv.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -52,18 +53,14 @@ def test_vendored_file_is_byte_identical_to_source(module: str) -> None:
     source_bytes = source.read_bytes()
     vendored_bytes = vendored.read_bytes()
 
-    assert source_bytes == vendored_bytes, (
-        f"{module}.py has drifted from source. Run ./sync_core.sh to re-sync."
-    )
+    assert source_bytes == vendored_bytes, f"{module}.py has drifted from source. Run ./sync_core.sh to re-sync."
 
 
 # ---------------------------------------------------------------------------
 # 2. SOURCE_SHA256 manifest matches source hashes
 # ---------------------------------------------------------------------------
 def test_manifest_exists() -> None:
-    assert _MANIFEST.exists(), (
-        f"SOURCE_SHA256 manifest missing — run sync_core.sh: {_MANIFEST}"
-    )
+    assert _MANIFEST.exists(), f"SOURCE_SHA256 manifest missing — run sync_core.sh: {_MANIFEST}"
 
 
 def test_manifest_covers_all_modules() -> None:
@@ -76,9 +73,7 @@ def test_manifest_covers_all_modules() -> None:
         sha, filename = line.split("  ", 1)
         recorded[filename] = sha
     for module in MODULES:
-        assert f"{module}.py" in recorded, (
-            f"{module}.py not found in SOURCE_SHA256 manifest"
-        )
+        assert f"{module}.py" in recorded, f"{module}.py not found in SOURCE_SHA256 manifest"
 
 
 @pytest.mark.parametrize("module", MODULES)
@@ -101,17 +96,14 @@ def test_manifest_hash_matches_source(module: str) -> None:
 
     actual = _sha256(source)
     assert recorded[filename] == actual, (
-        f"SOURCE_SHA256 entry for {filename} is stale. "
-        f"Expected {actual}, got {recorded[filename]}. Run ./sync_core.sh."
+        f"SOURCE_SHA256 entry for {filename} is stale. Expected {actual}, got {recorded[filename]}. Run ./sync_core.sh."
     )
 
 
 # ---------------------------------------------------------------------------
 # 3. No homeassistant imports in vendored files
 # ---------------------------------------------------------------------------
-_HA_IMPORT_PATTERN = re.compile(
-    r"^(import homeassistant|from homeassistant)", re.MULTILINE
-)
+_HA_IMPORT_PATTERN = re.compile(r"^(import homeassistant|from homeassistant)", re.MULTILINE)
 
 
 @pytest.mark.parametrize("module", MODULES)
@@ -121,9 +113,7 @@ def test_vendored_file_has_no_homeassistant_import(module: str) -> None:
 
     text = vendored.read_text(encoding="utf-8")
     matches = _HA_IMPORT_PATTERN.findall(text)
-    assert not matches, (
-        f"{module}.py contains homeassistant imports: {matches}"
-    )
+    assert not matches, f"{module}.py contains homeassistant imports: {matches}"
 
 
 # ---------------------------------------------------------------------------

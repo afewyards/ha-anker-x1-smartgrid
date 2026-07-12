@@ -18,8 +18,12 @@ def _charge_run(t0: datetime, resid_w: float = 10000.0):
     # 4 samples 60s apart, ΔSoC=4.8% over 3 intervals -> dc_power ~9.6kW (bin 5);
     # resid_w=10000W with dc_power=9600W gives eta=0.96, inside the plausibility envelope.
     return [
-        {"ts": (t0 + timedelta(seconds=60 * i)).isoformat(),
-         "soc": 50.0 + 1.6 * i, "batt_w": -resid_w, "residual_w": -resid_w}
+        {
+            "ts": (t0 + timedelta(seconds=60 * i)).isoformat(),
+            "soc": 50.0 + 1.6 * i,
+            "batt_w": -resid_w,
+            "residual_w": -resid_w,
+        }
         for i in range(4)
     ]
 
@@ -98,9 +102,12 @@ def test_time_gap_splits_run():
 
 def _run(soc0, soc1, resid_w, n=4, step_s=60):
     return [
-        {"ts": f"2026-07-01T00:{i*step_s//60:02d}:{i*step_s%60:02d}",
-         "soc": soc0 + (soc1 - soc0) * i / (n - 1),
-         "batt_w": resid_w, "residual_w": resid_w}
+        {
+            "ts": f"2026-07-01T00:{i * step_s // 60:02d}:{i * step_s % 60:02d}",
+            "soc": soc0 + (soc1 - soc0) * i / (n - 1),
+            "batt_w": resid_w,
+            "residual_w": resid_w,
+        }
         for i in range(n)
     ]
 
@@ -113,8 +120,7 @@ def test_run_eta_returns_valid_run_for_charge_and_discharge():
     """
     cfg = Config(capacity_kwh=10.0)
     charge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 + 2 * i, "batt_w": -13000, "residual_w": -13000}
-        for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 + 2 * i, "batt_w": -13000, "residual_w": -13000} for i in range(4)
     ]
     r = run_eta(charge_run, cfg)
     assert r is not None
@@ -124,8 +130,7 @@ def test_run_eta_returns_valid_run_for_charge_and_discharge():
     assert math.isclose(r.eta, 0.6 / 0.65, rel_tol=1e-9)
 
     discharge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000}
-        for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000} for i in range(4)
     ]
     r2 = run_eta(discharge_run, cfg)
     assert r2 is not None
@@ -186,8 +191,7 @@ def test_idle_zero_matches_b1():
     """
     cfg = Config(capacity_kwh=10.0, idle_drain_w=0.0)
     discharge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000}
-        for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 - 2 * i, "batt_w": 9000, "residual_w": 9000} for i in range(4)
     ]
     r = run_eta(discharge_run, cfg)
     assert r is not None
@@ -202,8 +206,7 @@ def test_charge_eta_unaffected_by_idle():
     RunEta must be bit-identical whether idle drain is 0 or 135 W.
     """
     charge_run = [
-        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 + 2 * i, "batt_w": -13000, "residual_w": -13000}
-        for i in range(4)
+        {"ts": f"2026-07-01T00:0{i}:00", "soc": 50 + 2 * i, "batt_w": -13000, "residual_w": -13000} for i in range(4)
     ]
     r0 = run_eta(charge_run, Config(capacity_kwh=10.0, idle_drain_w=0.0))
     r135 = run_eta(charge_run, Config(capacity_kwh=10.0, idle_drain_w=135.0))

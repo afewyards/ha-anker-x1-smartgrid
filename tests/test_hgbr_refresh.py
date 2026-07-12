@@ -1,16 +1,14 @@
 """Layer B: serve-time lag-lookup refresh (intraday adaptation of the ML tier)."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 
-T0 = datetime(2026, 7, 4, 0, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 7, 4, 0, 0, tzinfo=UTC)
 
 
 def _rows(n_hours: int, load: float = 500.0) -> list[dict]:
-    return [
-        {"hour_ts": (T0 + timedelta(hours=i)).isoformat(), "house_load_mean": load}
-        for i in range(n_hours)
-    ]
+    return [{"hour_ts": (T0 + timedelta(hours=i)).isoformat(), "house_load_mean": load} for i in range(n_hours)]
 
 
 def test_refresh_populates_lookups_and_returns_true():
@@ -32,7 +30,7 @@ def test_refresh_empty_rows_returns_false_keeps_existing():
     m = HGBRQuantileModel()
     m.refresh_lookups(_rows(24))
     assert m.refresh_lookups([]) is False
-    assert len(m._utc_lookup) == 24      # untouched
+    assert len(m._utc_lookup) == 24  # untouched
 
 
 def test_refresh_garbage_rows_never_raises():

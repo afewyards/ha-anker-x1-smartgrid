@@ -1,7 +1,9 @@
 """C4: the plan card's arbitrage_pnl reflects the DP's planned export revenue."""
+
 import types
 
 from custom_components.anker_x1_smartgrid.sensor import X1PlanSensor
+from datetime import UTC
 
 
 def test_plan_sensor_arbitrage_pnl_reads_planned_revenue():
@@ -28,7 +30,7 @@ def test_dp_select_slots_returns_export_revenue():
         PriceSlot,
     )
 
-    now = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 26, 12, 0, tzinfo=UTC)
     cfg = Config(
         capacity_kwh=10.0,
         soc_floor=20.0,

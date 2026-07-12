@@ -1,4 +1,5 @@
 """Controller status sensors."""
+
 from __future__ import annotations
 
 from typing import NamedTuple
@@ -48,12 +49,8 @@ SENSOR_SPECS: list[_SensorSpec] = [
     _SensorSpec("setpoint_w", "SmartGrid setpoint", "W", SensorStateClass.MEASUREMENT),
     _SensorSpec("export_setpoint_w", "SmartGrid export setpoint", "W", SensorStateClass.MEASUREMENT),
     _SensorSpec("load_mae", "SmartGrid load forecast MAE", "W", SensorStateClass.MEASUREMENT),
-    _SensorSpec(
-        "horizon_energy_mae_24h", "SmartGrid 24h horizon energy MAE", "kWh", SensorStateClass.MEASUREMENT
-    ),
-    _SensorSpec(
-        "horizon_energy_mae_12h", "SmartGrid 12h horizon energy MAE", "kWh", SensorStateClass.MEASUREMENT
-    ),
+    _SensorSpec("horizon_energy_mae_24h", "SmartGrid 24h horizon energy MAE", "kWh", SensorStateClass.MEASUREMENT),
+    _SensorSpec("horizon_energy_mae_12h", "SmartGrid 12h horizon energy MAE", "kWh", SensorStateClass.MEASUREMENT),
     _SensorSpec("pinball_p50", "SmartGrid load forecast pinball p50", "W", SensorStateClass.MEASUREMENT),
     _SensorSpec("pinball_p80", "SmartGrid load forecast pinball p80", "W", SensorStateClass.MEASUREMENT),
     _SensorSpec("active_model", "SmartGrid active load model"),
@@ -63,9 +60,7 @@ SENSOR_SPECS: list[_SensorSpec] = [
     # CHEAPER; None = insufficient data (< 1 day with both DP and heuristic
     # regret scored). Key deliberately distinct from regret_eur above to
     # prevent HA entity-ID collisions.
-    _SensorSpec(
-        "dp_regret_7d", "SmartGrid 7d DP-vs-heuristic regret delta", "EUR", SensorStateClass.MEASUREMENT
-    ),
+    _SensorSpec("dp_regret_7d", "SmartGrid 7d DP-vs-heuristic regret delta", "EUR", SensorStateClass.MEASUREMENT),
     _SensorSpec("over_buy_kwh", "SmartGrid over-buy", "kWh", SensorStateClass.MEASUREMENT),
     _SensorSpec("under_buy_kwh", "SmartGrid under-buy", "kWh", SensorStateClass.MEASUREMENT),
     # Realized battery cash result for the current local day (EUR). Cash
@@ -108,10 +103,7 @@ class X1StatusSensor(_Base):
     def extra_state_attributes(self):
         if not self._attrs_keys:
             return None
-        return {
-            attr_name: self._controller.last_status.get(status_key)
-            for attr_name, status_key in self._attrs_keys
-        }
+        return {attr_name: self._controller.last_status.get(status_key) for attr_name, status_key in self._attrs_keys}
 
 
 _SPECS_BY_KEY: dict[str, _SensorSpec] = {spec.key: spec for spec in SENSOR_SPECS}
@@ -241,9 +233,7 @@ class X1HouseLoadSensor(_Base):
         return self._value
 
     def _recompute(self) -> None:
-        pv = coordinator.read_pv_power_w(
-            self.hass, {const.CONF_ENT_PV_POWER: self._pv_entities}
-        )
+        pv = coordinator.read_pv_power_w(self.hass, {const.CONF_ENT_PV_POWER: self._pv_entities})
         meter = coordinator.read_float(self.hass, self._meter_entity)
         batt = coordinator.read_float(self.hass, self._batt_entity)
         if pv is None or meter is None or batt is None:
@@ -340,9 +330,7 @@ class X1FictivePlanSensor(_Base):
         return {"horizon": plan.get("horizon", []), "deadline": plan.get("deadline")}
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-) -> None:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]["controller"]
     # Merged entry data (post Anker-device resolution) — same dict the
     # controller reads from at tick time.  BATTERY_POWER is guaranteed
@@ -356,18 +344,12 @@ async def async_setup_entry(
     # DEFAULT_ENTITIES like every other soft-role read in this integration.
     entry_data = controller._data
     pv_entities = const.resolve_pv_power_entities(entry_data)
-    meter_entity = entry_data.get(
-        const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]
-    )
+    meter_entity = entry_data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER])
     batt_entity = entry_data[const.CONF_ENT_BATTERY_POWER]
-    loss_entity = entry_data.get(
-        const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]
-    )
+    loss_entity = entry_data.get(const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS])
     # Keyed by spec.key so the entities list below can interleave spec-driven
     # sensors with the real (non-boilerplate) classes in their original order.
-    spec_sensors = {
-        spec.key: X1StatusSensor(controller, entry.entry_id, spec) for spec in SENSOR_SPECS
-    }
+    spec_sensors = {spec.key: X1StatusSensor(controller, entry.entry_id, spec) for spec in SENSOR_SPECS}
     async_add_entities(
         [
             spec_sensors["state"],

@@ -22,8 +22,10 @@ note if an independent AC house-load sensor becomes available again (it
 would let the curve additionally validate the residual itself, rather than
 only calibrate against it).
 """
+
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import median
@@ -71,12 +73,9 @@ def bin_index(power_w: float) -> int:
 
 def _fallback_bins(direction: str, eta: float, reason: str = "no_data") -> list[BinStat]:
     edges = _bin_edges()
-    los = [0.0] + edges
-    his = edges + [float("inf")]
-    return [
-        BinStat(lo, hi, direction, eta, None, 0, 0.0, False, reason)
-        for lo, hi in zip(los, his)
-    ]
+    los = [0.0, *edges]
+    his = [*edges, float("inf")]
+    return [BinStat(lo, hi, direction, eta, None, 0, 0.0, False, reason) for lo, hi in zip(los, his)]
 
 
 class EfficiencyCurve:
@@ -102,10 +101,7 @@ class EfficiencyCurve:
         return {
             "charge": [b.as_dict() for b in self._charge],
             "discharge": [b.as_dict() for b in self._discharge],
-            "any_over_unity": any(
-                b.fallback_reason == "over_unity"
-                for b in (*self._charge, *self._discharge)
-            ),
+            "any_over_unity": any(b.fallback_reason == "over_unity" for b in (*self._charge, *self._discharge)),
         }
 
     @staticmethod
@@ -115,7 +111,7 @@ class EfficiencyCurve:
         return eta_c, eta_d
 
     @classmethod
-    def static(cls, cfg: Config) -> "EfficiencyCurve":
+    def static(cls, cfg: Config) -> EfficiencyCurve:
         eta_c, eta_d = cls._static_scalars(cfg)
         return cls(
             _fallback_bins("charge", eta_c),
@@ -125,7 +121,7 @@ class EfficiencyCurve:
         )
 
     @classmethod
-    def build(cls, rows: list[dict], cfg: Config, now: datetime) -> "EfficiencyCurve":
+    def build(cls, rows: list[dict], cfg: Config, now: datetime) -> EfficiencyCurve:
         """Aggregate per-run etas (from ``rows``) into a per-bin median curve.
 
         ``rows`` must be chronologically ordered (oldest first) — episode
@@ -164,8 +160,8 @@ class EfficiencyCurve:
     ) -> list[BinStat]:
         """Per-bin median with a confidence gate; low-confidence bins fall back."""
         edges = _bin_edges()
-        los = [0.0] + edges
-        his = edges + [float("inf")]
+        los = [0.0, *edges]
+        his = [*edges, float("inf")]
         lo_env = const.EFFICIENCY_ENVELOPE[0]
         out: list[BinStat] = []
         for i, (lo, hi) in enumerate(zip(los, his)):
@@ -179,17 +175,20 @@ class EfficiencyCurve:
             if med > 1.0:
                 out.append(BinStat(lo, hi, direction, fallback, med, n, dc_kwh, False, "over_unity"))
                 continue
-            confident = (
-                n >= const.EFFICIENCY_MIN_RUNS
-                and dc_kwh >= const.EFFICIENCY_MIN_DC_KWH
-                and med >= lo_env
+            confident = n >= const.EFFICIENCY_MIN_RUNS and dc_kwh >= const.EFFICIENCY_MIN_DC_KWH and med >= lo_env
+            out.append(
+                BinStat(
+                    lo,
+                    hi,
+                    direction,
+                    med if confident else fallback,
+                    med,
+                    n,
+                    dc_kwh,
+                    confident,
+                    "" if confident else "low_confidence",
+                )
             )
-            out.append(BinStat(
-                lo, hi, direction,
-                med if confident else fallback,
-                med, n, dc_kwh, confident,
-                "" if confident else "low_confidence",
-            ))
         return out
 
 
@@ -202,8 +201,8 @@ def _same_band(prev_w: float, cur_w: float) -> bool:
     h = const.EFFICIENCY_HYSTERESIS_W
     i = bin_index(abs(prev_w))
     edges = _bin_edges()
-    lo = ([0.0] + edges)[i] - h
-    hi = (edges + [float("inf")])[i]
+    lo = ([0.0, *edges])[i] - h
+    hi = ([*edges, float("inf")])[i]
     hi = hi + h if hi != float("inf") else hi
     return lo - 1e-9 <= abs(cur_w) < hi
 
@@ -246,7 +245,7 @@ class RunEta:
     dc_kwh: float
 
 
-def run_eta(run: list[dict], cfg: Config) -> "RunEta | None":
+def run_eta(run: list[dict], cfg: Config) -> RunEta | None:
     """Per-run efficiency from ΔSoC (DC, BMS coulomb counter) vs. the
     energy-balance residual (AC).
 
@@ -263,7 +262,7 @@ def run_eta(run: list[dict], cfg: Config) -> "RunEta | None":
     return _run_eta_impl(run, cfg)
 
 
-def _run_eta_impl(run: list[dict], cfg: Config) -> "RunEta | None":
+def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     """Gated on a minimum |ΔSoC| (noise floor) and clamped to a physically
     plausible envelope; returns None when the run can't yield a
     trustworthy sample rather than a garbage value.
@@ -292,7 +291,7 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> "RunEta | None":
         return None
     dc_power_w = dc_kwh * 1000.0 / duration_h
     ac_wh = 0.0
-    for a, b in zip(run, run[1:]):
+    for a, b in itertools.pairwise(run):
         dt_h = (_parse_ts(b["ts"]) - _parse_ts(a["ts"])).total_seconds() / 3600.0
         ac_wh += 0.5 * (a["residual_w"] + b["residual_w"]) * dt_h
     ac_kwh = ac_wh / 1000.0

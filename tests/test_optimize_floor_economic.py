@@ -14,6 +14,7 @@ floor-survival charge: ``B full`` morning(05-10) = 54 W vs ``B FLOOR off`` = 0 W
 The economic-only fix must drive that morning charge to exactly zero while still
 charging at the cheap midday trough.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -36,12 +37,23 @@ from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
 
 # (hour, all-in price, pv_w, load50_w) — a real forecast window 05:00..21:00.
 _TABLE = [
-    (5, 0.263, 134, 773), (6, 0.259, 204, 383), (7, 0.222, 287, 312),
-    (8, 0.174, 400, 257), (9, 0.146, 651, 318), (10, 0.133, 233, 258),
-    (11, 0.131, 554, 203), (12, 0.135, 1446, 344), (13, 0.146, 1655, 343),
-    (14, 0.191, 1614, 401), (15, 0.250, 1404, 470), (16, 0.282, 1095, 467),
-    (17, 0.341, 638, 550), (18, 0.412, 175, 451), (19, 0.419, 48, 418),
-    (20, 0.348, 0, 397), (21, 0.310, 0, 278),
+    (5, 0.263, 134, 773),
+    (6, 0.259, 204, 383),
+    (7, 0.222, 287, 312),
+    (8, 0.174, 400, 257),
+    (9, 0.146, 651, 318),
+    (10, 0.133, 233, 258),
+    (11, 0.131, 554, 203),
+    (12, 0.135, 1446, 344),
+    (13, 0.146, 1655, 343),
+    (14, 0.191, 1614, 401),
+    (15, 0.250, 1404, 470),
+    (16, 0.282, 1095, 467),
+    (17, 0.341, 638, 550),
+    (18, 0.412, 175, 451),
+    (19, 0.419, 48, 418),
+    (20, 0.348, 0, 397),
+    (21, 0.310, 0, 278),
 ]
 _N = len(_TABLE)
 _PRICE = [r[1] for r in _TABLE]
@@ -50,11 +62,20 @@ _LOAD50 = [r[3] / 1000.0 for r in _TABLE]
 _SOC_START = 22.0
 
 _BASE = dict(
-    capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0, eta_charge=0.92,
-    max_charge_w=6000.0, max_export_w=6000.0, grid_export_limit_w=6000.0,
-    enable_export=True, export_fee_eur_per_kwh=0.02, export_peak_band_frac=0.12,
-    round_trip_eff=0.85, cycle_cost_eur_per_kwh=0.04,
-    water_value_factor=1.0, clamp_water_value_nonneg=True,
+    capacity_kwh=10.0,
+    soc_floor=5.0,
+    soc_target=100.0,
+    eta_charge=0.92,
+    max_charge_w=6000.0,
+    max_export_w=6000.0,
+    grid_export_limit_w=6000.0,
+    enable_export=True,
+    export_fee_eur_per_kwh=0.02,
+    export_peak_band_frac=0.12,
+    round_trip_eff=0.85,
+    cycle_cost_eur_per_kwh=0.04,
+    water_value_factor=1.0,
+    clamp_water_value_nonneg=True,
 )
 
 
@@ -78,7 +99,7 @@ def test_no_morning_force_charge_rides_to_floor():
     """
     cfg = Config.from_dict(_BASE)
     # P80 drain = P50 x 1.6, clamped to the 6 kW rate ceiling (as in decisive.py).
-    load = [min(l * 1.6, 6.0) for l in _LOAD50]
+    load = [min(p50 * 1.6, 6.0) for p50 in _LOAD50]
 
     ceiling_price = max(_PRICE) * cfg.round_trip_eff
     chargeable = build_charge_mask(_PRICE, ceiling_price)
@@ -91,11 +112,20 @@ def test_no_morning_force_charge_rides_to_floor():
     reserve = _reserve_by_hour(load, cfg)
 
     res = optimize_grid(
-        _PV, load, _PRICE, soc_start=_SOC_START, cfg=cfg,
-        window_start_h=5, window_len=_N, chargeable=chargeable,
-        feed_in=feed_in, export_price=export_price,
-        terminal_mode="water_value", water_value=wv,
-        reserve_by_hour=reserve, grid_charge_ceiling=gcc,
+        _PV,
+        load,
+        _PRICE,
+        soc_start=_SOC_START,
+        cfg=cfg,
+        window_start_h=5,
+        window_len=_N,
+        chargeable=chargeable,
+        feed_in=feed_in,
+        export_price=export_price,
+        terminal_mode="water_value",
+        water_value=wv,
+        reserve_by_hour=reserve,
+        grid_charge_ceiling=gcc,
     )
 
     trough_idx = _PRICE.index(min(_PRICE))  # == 6 (11:00, 0.131)
@@ -139,8 +169,11 @@ def test_below_floor_drain_priced_as_load_import():
     all-zero (no force-charge to hold either floor).
     """
     cfg = Config(
-        capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0,
-        max_charge_w=3000.0, eta_charge=0.92,
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=3000.0,
+        eta_charge=0.92,
     )
     n = 6
     pv = [0.0] * n
@@ -149,9 +182,15 @@ def test_below_floor_drain_priced_as_load_import():
     soc_start = 30.0  # 3 kWh
 
     res = optimize_grid(
-        pv, load, price, soc_start=soc_start, cfg=cfg,
-        window_start_h=0, window_len=n,
-        terminal_mode="water_value", water_value=0.0,
+        pv,
+        load,
+        price,
+        soc_start=soc_start,
+        cfg=cfg,
+        window_start_h=0,
+        window_len=n,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
 
     # Independently compute the expected below-firmware-floor direct-import cost.
@@ -187,6 +226,6 @@ def _reserve_by_hour(load: list[float], cfg: Config) -> list[float]:
     n = len(load)
     out: list[float] = []
     for h in range(n):
-        remaining = sum(load[h + 1:])
+        remaining = sum(load[h + 1 :])
         out.append(min(cfg.capacity_kwh, max(floor_kwh, remaining)))
     return out

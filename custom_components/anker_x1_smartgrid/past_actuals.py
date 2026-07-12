@@ -23,6 +23,7 @@ are never extrapolated to a full-hour total, and the mean-W fallback is
 coverage-scaled so it doesn't over-count a partial hour as a full hour's
 worth of energy either.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

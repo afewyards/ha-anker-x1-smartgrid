@@ -26,6 +26,7 @@ Circular-import safety
 ``export_filter`` imports from ``optimize`` (one direction only).  ``optimize``
 does not import ``export_filter``, so there is no cycle.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 def apply_min_export_block(
     export_ac: list[float],
     export_price: list[float] | None,
-    cfg: "Config",
+    cfg: Config,
     exempt_index: int,
     dt_h: float = 1.0,
     *,
@@ -128,7 +129,7 @@ def apply_min_export_block(
           per-kWh cycle degradation cost.
     """
     # Lazy import — circular-safe because optimize does not import this module.
-    from . import optimize  # noqa: PLC0415
+    from . import optimize
 
     # ------------------------------------------------------------------
     # Guard: no export price → can't compute revenue, return unchanged.
@@ -218,17 +219,12 @@ def apply_min_export_block(
     if eta_curve is None:
         eta_d = optimize.eta_discharge(cfg)
         net_revenue = sum(
-            filtered[h] * export_price[h] - (filtered[h] / eta_d) * cycle_cost
-            for h in range(len(filtered))
+            filtered[h] * export_price[h] - (filtered[h] / eta_d) * cycle_cost for h in range(len(filtered))
         )
     else:
         net_revenue = sum(
             filtered[h] * export_price[h]
-            - (
-                filtered[h]
-                / eta_curve.eta_discharge(filtered[h] / dt_h * 1000.0)
-            )
-            * cycle_cost
+            - (filtered[h] / eta_curve.eta_discharge(filtered[h] / dt_h * 1000.0)) * cycle_cost
             for h in range(len(filtered))
         )
 

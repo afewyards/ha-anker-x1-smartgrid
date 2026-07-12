@@ -5,6 +5,7 @@ eta_curve=None (default) MUST be byte-identical to today's behaviour — this is
 the parity invariant. When a curve is supplied, load-driven discharge bears
 eta_d (the headline physics change).
 """
+
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 from custom_components.anker_x1_smartgrid import regret

@@ -1,4 +1,5 @@
 """Anker X1 SmartGrid integration setup."""
+
 from __future__ import annotations
 
 from datetime import timedelta

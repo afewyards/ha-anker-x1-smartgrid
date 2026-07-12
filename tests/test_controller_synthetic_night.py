@@ -5,12 +5,13 @@ Covers ``controller._next_synthetic_pickup`` and ``controller._synthetic_night_r
 ``_build_reserve_by_hour`` and ``compute_decision`` (all anchored on
 ``const.FALLBACK_SOLAR_PICKUP_HOUR_UTC``).
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl
 
-UTC = timezone.utc
+UTC = UTC
 PICKUP_H = const.FALLBACK_SOLAR_PICKUP_HOUR_UTC
 
 

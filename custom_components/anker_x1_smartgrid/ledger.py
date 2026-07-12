@@ -7,6 +7,7 @@ properties of the same name so ``_PERSIST_GROUPS`` (table-driven persist/
 restore, Task A9) keeps working unchanged: the store payload/format is
 byte-identical to before this extraction.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -83,16 +84,12 @@ class CashLedger:
         house first; PV-spill export out of scope).  See
         optimize.cash_flows_eur for the math.
         """
-        batt_w = coordinator.read_float(
-            hass, data.get(const.CONF_ENT_BATTERY_POWER, "")
-        )
+        batt_w = coordinator.read_float(hass, data.get(const.CONF_ENT_BATTERY_POWER, ""))
         if batt_w is None:
             return
         import_price = resolution.price_at(slots, now, slot_minutes)
         export_price_eff = (
-            optimize_mod.effective_export_price(raw_export_price, cfg)
-            if raw_export_price is not None
-            else None
+            optimize_mod.effective_export_price(raw_export_price, cfg) if raw_export_price is not None else None
         )
         cost, credit = optimize_mod.cash_flows_eur(
             inputs.meter_w,

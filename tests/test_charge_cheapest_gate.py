@@ -10,9 +10,10 @@ The existing ceiling gate (peak * round_trip_eff - margin) was too permissive:
 a mid-morning slot at 0.174 passed the ceiling (~0.356) even though the day's
 trough was 0.131.  The new band ANDs the trough condition on top of the ceiling.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 
@@ -22,16 +23,32 @@ from custom_components.anker_x1_smartgrid.optimize import build_charge_mask
 
 # Real window prices from test_optimize_floor_economic.py _TABLE (05:00..21:00)
 _PRICES = [
-    0.263, 0.259, 0.222, 0.174, 0.146, 0.133, 0.131, 0.135,
-    0.146, 0.191, 0.250, 0.282, 0.341, 0.412, 0.419, 0.348, 0.310,
+    0.263,
+    0.259,
+    0.222,
+    0.174,
+    0.146,
+    0.133,
+    0.131,
+    0.135,
+    0.146,
+    0.191,
+    0.250,
+    0.282,
+    0.341,
+    0.412,
+    0.419,
+    0.348,
+    0.310,
 ]
-_TROUGH = 0.131           # min(_PRICES)
-_CEILING = 0.419 * 0.85   # peak * round_trip_eff ≈ 0.356
+_TROUGH = 0.131  # min(_PRICES)
+_CEILING = 0.419 * 0.85  # peak * round_trip_eff ≈ 0.356
 
 
 # ===========================================================================
 # 1. build_charge_mask with price_band parameter
 # ===========================================================================
+
 
 class TestBuildChargeMaskWithPriceBand:
     """Unit tests for the new price_band trough-gate in build_charge_mask."""
@@ -46,15 +63,9 @@ class TestBuildChargeMaskWithPriceBand:
         mask = build_charge_mask(_PRICES, ceiling=_CEILING, price_band=0.005)
         for i, (p, chargeable) in enumerate(zip(_PRICES, mask)):
             if p <= _TROUGH + 0.005:
-                assert chargeable, (
-                    f"h{i} (price={p}) should be chargeable "
-                    f"(trough+band={_TROUGH + 0.005:.4f})"
-                )
+                assert chargeable, f"h{i} (price={p}) should be chargeable (trough+band={_TROUGH + 0.005:.4f})"
             else:
-                assert not chargeable, (
-                    f"h{i} (price={p}) should NOT be chargeable "
-                    f"(trough+band={_TROUGH + 0.005:.4f})"
-                )
+                assert not chargeable, f"h{i} (price={p}) should NOT be chargeable (trough+band={_TROUGH + 0.005:.4f})"
 
     def test_profitable_but_non_trough_hour_excluded(self):
         """0.174 is below the ~0.356 ceiling but excluded by the 0.005 band.
@@ -64,9 +75,7 @@ class TestBuildChargeMaskWithPriceBand:
         """
         prices = [0.263, 0.174, 0.131]  # trough=0.131; 0.174 >> 0.131+0.005=0.136
         mask = build_charge_mask(prices, ceiling=_CEILING, price_band=0.005)
-        assert not mask[1], (
-            "0.174 should be excluded by trough band (0.131+0.005=0.136 < 0.174)"
-        )
+        assert not mask[1], "0.174 should be excluded by trough band (0.131+0.005=0.136 < 0.174)"
         assert mask[2], "0.131 should be chargeable (== trough)"
 
     def test_wider_band_admits_more_hours(self):
@@ -100,7 +109,7 @@ class TestBuildChargeMaskWithPriceBand:
         Existing callers that pass no price_band must get the same result as before.
         """
         prices = [0.10, 0.20, 0.30]
-        mask_no_band = build_charge_mask(prices, ceiling=0.25)            # old call style
+        mask_no_band = build_charge_mask(prices, ceiling=0.25)  # old call style
         mask_explicit_none = build_charge_mask(prices, ceiling=0.25, price_band=None)
         # Both should be ceiling-only: [True, True, False]
         assert mask_no_band == [True, True, False]
@@ -125,6 +134,7 @@ class TestBuildChargeMaskWithPriceBand:
 # ===========================================================================
 # 2. Config.charge_window_price_band field + DEFAULT_CHARGE_WINDOW_PRICE_BAND
 # ===========================================================================
+
 
 class TestConfigChargeWindowPriceBand:
     """Config must expose charge_window_price_band with the correct default."""
@@ -159,6 +169,7 @@ class TestConfigChargeWindowPriceBand:
 # 3. Heuristic _worthy path — via compute_decision with DP fallback
 # ===========================================================================
 
+
 class TestHeuristicWorthyTroughBand:
     """The heuristic _worthy gate must also apply the trough-band.
 
@@ -184,28 +195,27 @@ class TestHeuristicWorthyTroughBand:
       Expected: plan.state == PASSIVE (h0 is the current hour, not chargeable)
     """
 
-    _BASE = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)  # 10:00 UTC
+    _BASE = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)  # 10:00 UTC
 
     def _slots(self, prices: list[float]) -> list:
         from custom_components.anker_x1_smartgrid.models import PriceSlot
-        return [
-            PriceSlot(self._BASE + timedelta(hours=i), p)
-            for i, p in enumerate(prices)
-        ]
+
+        return [PriceSlot(self._BASE + timedelta(hours=i), p) for i, p in enumerate(prices)]
 
     def _make_cfg(self, **overrides) -> Config:
-        return Config.from_dict({
-            "capacity_kwh": 10.0,
-            "soc_target": 97.0,
-            "eta_charge": 0.92,
-            "eps_hi_kwh": 0.4,
-            "eps_lo_kwh": 0.2,
-            "min_dwell_min": 0,
-            "max_charge_w": 500.0,    # small → many hours needed → h0 in candidate list
-            "round_trip_eff": 0.85,
-
-            **overrides,
-        })
+        return Config.from_dict(
+            {
+                "capacity_kwh": 10.0,
+                "soc_target": 97.0,
+                "eta_charge": 0.92,
+                "eps_hi_kwh": 0.4,
+                "eps_lo_kwh": 0.2,
+                "min_dwell_min": 0,
+                "max_charge_w": 500.0,  # small → many hours needed → h0 in candidate list
+                "round_trip_eff": 0.85,
+                **overrides,
+            }
+        )
 
     def test_heuristic_path_blocks_mid_price_current_slot(self):
         """On the DP fallback path, h0=0.174 (mid-price) is NOT selected.
@@ -232,13 +242,19 @@ class TestHeuristicWorthyTroughBand:
             side_effect=RuntimeError("forced DP fallback for test"),
         ):
             new_plan, _setpoint, *_ = compute_decision(
-                plan, inputs, slots, 0.0, sunset, predictor, None, cfg,
+                plan,
+                inputs,
+                slots,
+                0.0,
+                sunset,
+                predictor,
+                None,
+                cfg,
             )
 
         # h0 (0.174) is the current slot but should be blocked by the trough band.
         assert new_plan.state is ControllerState.PASSIVE, (
-            f"h0=0.174 is above trough+band=0.136, must not trigger FORCING; "
-            f"got state={new_plan.state}"
+            f"h0=0.174 is above trough+band=0.136, must not trigger FORCING; got state={new_plan.state}"
         )
 
     def test_heuristic_path_is_passive_on_dp_fallback(self):
@@ -270,7 +286,14 @@ class TestHeuristicWorthyTroughBand:
             side_effect=RuntimeError("forced DP fallback for test"),
         ):
             new_plan, _setpoint, *_ = compute_decision(
-                plan, inputs, slots, 0.0, sunset, predictor, None, cfg,
+                plan,
+                inputs,
+                slots,
+                0.0,
+                sunset,
+                predictor,
+                None,
+                cfg,
             )
 
         # Fallback is PASSIVE: heuristic deleted, selected=[] (Task 2).
@@ -282,6 +305,7 @@ class TestHeuristicWorthyTroughBand:
 # ===========================================================================
 # 4. window_min parameter — A7 correctness bug fix
 # ===========================================================================
+
 
 class TestBuildChargeMaskWindowMin:
     """Tests for the window_min parameter that guards against 0.0-padding collapse.
@@ -313,9 +337,7 @@ class TestBuildChargeMaskWindowMin:
             "BUG: 0.131 should fail when min([..., 0.0])=0.0 → threshold=0.005 "
             "(this documents why window_min is needed)"
         )
-        assert not mask_bug[2], (
-            "BUG: 0.133 should fail when min([..., 0.0])=0.0 → threshold=0.005"
-        )
+        assert not mask_bug[2], "BUG: 0.133 should fail when min([..., 0.0])=0.0 → threshold=0.005"
 
     def test_window_min_overrides_zero_padding_for_real_trough(self):
         """With window_min=0.131, real trough hours are correctly marked chargeable.
@@ -326,9 +348,7 @@ class TestBuildChargeMaskWindowMin:
         prices_padded = [0.174, 0.131, 0.133, 0.0, 0.0]
         ceiling = 0.40
         # With window_min=0.131 (real trough from slots): threshold = 0.136
-        mask_fixed = build_charge_mask(
-            prices_padded, ceiling=ceiling, price_band=0.005, window_min=0.131
-        )
+        mask_fixed = build_charge_mask(prices_padded, ceiling=ceiling, price_band=0.005, window_min=0.131)
         assert not mask_fixed[0], "0.174 > 0.131+0.005=0.136 → not chargeable"
         assert mask_fixed[1], "0.131 == trough → chargeable"
         assert mask_fixed[2], "0.133 ≤ 0.136 → chargeable"
@@ -342,9 +362,7 @@ class TestBuildChargeMaskWindowMin:
         prices = [0.263, 0.174, 0.131, 0.133, 0.135]
         ceiling = 0.40
         # Explicit None and absent parameter must give identical results
-        mask_explicit_none = build_charge_mask(
-            prices, ceiling=ceiling, price_band=0.005, window_min=None
-        )
+        mask_explicit_none = build_charge_mask(prices, ceiling=ceiling, price_band=0.005, window_min=None)
         mask_no_param = build_charge_mask(prices, ceiling=ceiling, price_band=0.005)
         assert mask_explicit_none == mask_no_param
 
@@ -353,9 +371,7 @@ class TestBuildChargeMaskWindowMin:
         prices = [0.131, 0.174, 0.263]
         ceiling = 0.20
         # price_band=None → ceiling-only, window_min irrelevant
-        mask_with_wm = build_charge_mask(
-            prices, ceiling=ceiling, price_band=None, window_min=0.05
-        )
+        mask_with_wm = build_charge_mask(prices, ceiling=ceiling, price_band=None, window_min=0.05)
         mask_without = build_charge_mask(prices, ceiling=ceiling)
         assert mask_with_wm == mask_without
 
@@ -367,9 +383,7 @@ class TestBuildChargeMaskWindowMin:
         """
         prices = [0.174, 0.131, 0.133]
         mask_auto = build_charge_mask(prices, ceiling=0.40, price_band=0.005)
-        mask_explicit = build_charge_mask(
-            prices, ceiling=0.40, price_band=0.005, window_min=0.131
-        )
+        mask_explicit = build_charge_mask(prices, ceiling=0.40, price_band=0.005, window_min=0.131)
         assert mask_auto == mask_explicit
 
     def test_window_min_tighter_than_actual_min(self):
@@ -379,9 +393,7 @@ class TestBuildChargeMaskWindowMin:
         Passing window_min=0.131 gives threshold=0.136 (not 0.005).
         """
         prices = [0.174, 0.131, 0.0]  # 0.0 is padding
-        mask = build_charge_mask(
-            prices, ceiling=0.40, price_band=0.005, window_min=0.131
-        )
+        mask = build_charge_mask(prices, ceiling=0.40, price_band=0.005, window_min=0.131)
         # trough_threshold = 0.131 + 0.005 = 0.136
         assert not mask[0], "0.174 > 0.136 → not chargeable"
         assert mask[1], "0.131 ≤ 0.136 → chargeable"

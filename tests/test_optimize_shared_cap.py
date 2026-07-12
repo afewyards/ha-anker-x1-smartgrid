@@ -1,12 +1,12 @@
 """Shared rate-cap: grid charge is bounded by the rate left after solar."""
+
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid import optimize as opt
 from custom_components.anker_x1_smartgrid.regret import _max_grid_dc
 
 
 def _cfg(**kw):
-    base = dict(capacity_kwh=10.0, soc_floor=10.0, soc_target=100.0,
-                max_charge_w=6000.0, eta_charge=1.0)
+    base = dict(capacity_kwh=10.0, soc_floor=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
     base.update(kw)
     return Config(**base)
 
@@ -41,7 +41,6 @@ def test_optimize_grid_caps_solar_plus_grid_at_rate():
     pv = [4.0, 0.0]
     load = [0.0, 0.0]
     price = [0.10, 0.50]
-    out = opt.optimize_grid(pv, load, price, soc_start=0.0, cfg=cfg,
-                            window_start_h=0, window_len=2)
+    out = opt.optimize_grid(pv, load, price, soc_start=0.0, cfg=cfg, window_start_h=0, window_len=2)
     # grid in hour 0 (AC) <= rate - solar_ac = 6 - 4 = 2
     assert out["schedule"][0] <= 2.0 + 1e-6

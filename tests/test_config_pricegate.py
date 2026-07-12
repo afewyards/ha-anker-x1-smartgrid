@@ -1,4 +1,5 @@
 """Tests: price-gate config defaults and override."""
+
 from custom_components.anker_x1_smartgrid.models import Config
 
 

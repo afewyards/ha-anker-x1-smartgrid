@@ -1,4 +1,5 @@
 """refresh_model_lookups: serve-time lag refresh glue (never-raise contract)."""
+
 import trainer
 
 
@@ -35,6 +36,7 @@ def test_refresh_model_without_method_is_false(monkeypatch):
 def test_refresh_load_rows_exception_never_raises(monkeypatch):
     def _boom(db_path, *, since_iso=None):
         raise RuntimeError("db gone")
+
     monkeypatch.setattr(trainer, "load_rows", _boom)
     assert trainer.refresh_model_lookups(_StubModel(), "/config/x.db") is False
 

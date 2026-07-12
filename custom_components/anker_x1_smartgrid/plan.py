@@ -1,4 +1,5 @@
 """Pure builder for the forward plan horizon (display only)."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -51,8 +52,10 @@ def build_display_intervals(
         h_temp = temp_by_hour.get(hour_floor(slot.start), cur_temp) if temp_by_hour else cur_temp
         out.append(
             ForecastInterval(
-                h, pv_by_slot.get(h, 0.0),
-                predictor.predict(h, h_temp, fallback_w, quantile=quantile), dt_h,
+                h,
+                pv_by_slot.get(h, 0.0),
+                predictor.predict(h, h_temp, fallback_w, quantile=quantile),
+                dt_h,
             )
         )
     return out
@@ -336,15 +339,30 @@ def build_display_horizon(
     else:
         # Fallback: synthetic quarter-sine from daily kWh totals (tests + degraded data).
         curve = build_two_day_pv_curve(
-            today_arrays, tomorrow_arrays, now,
-            today_sunset, tomorrow_sunrise, tomorrow_sunset,
+            today_arrays,
+            tomorrow_arrays,
+            now,
+            today_sunset,
+            tomorrow_sunrise,
+            tomorrow_sunset,
             step_h=1.0,
         )
     ivals = build_display_intervals(
-        slots, now, curve, predictor, cur_temp, fallback_w, temp_by_hour=temp_by_hour,
+        slots,
+        now,
+        curve,
+        predictor,
+        cur_temp,
+        fallback_w,
+        temp_by_hour=temp_by_hour,
     )
     return build_plan_horizon(
-        slots, ivals, selected, soc, horizon_edge, cfg,
+        slots,
+        ivals,
+        selected,
+        soc,
+        horizon_edge,
+        cfg,
         grid_request_by_hour=grid_request_by_hour,
         export_request_by_hour=export_request_by_hour,
         reserve_by_hour=reserve_by_hour,

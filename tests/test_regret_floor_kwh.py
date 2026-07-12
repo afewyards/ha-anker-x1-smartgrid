@@ -19,6 +19,7 @@ inflating the user-facing ``over_buy_kwh`` / ``over_buy_eur`` sensors and the
 These tests pin the fix: on an optimal drain-to-floor day the oracle ``kwh`` now
 folds the floor-import volume, so ``over_buy_kwh`` and ``over_buy_eur`` are 0.
 """
+
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
@@ -41,7 +42,7 @@ def _make_cfg() -> Config:
     """
     return Config(
         capacity_kwh=10.0,
-        soc_floor=20.0,   # 2 kWh soft floor (firmware floor is 0.5 kWh)
+        soc_floor=20.0,  # 2 kWh soft floor (firmware floor is 0.5 kWh)
         soc_target=80.0,  # 8 kWh
         max_charge_w=3000.0,
         eta_charge=0.92,
@@ -64,8 +65,10 @@ def _drain_to_floor_day() -> DayData:
     load = [1.0] * 24
     price = [0.20] * 24
     return DayData(
-        pv_kwh=tuple(pv), load_kwh=tuple(load),
-        price=tuple(price), soc_start=30.0,
+        pv_kwh=tuple(pv),
+        load_kwh=tuple(load),
+        price=tuple(price),
+        soc_start=30.0,
     )
 
 
@@ -76,7 +79,10 @@ def test_oracle_kwh_folds_floor_import_no_phantom_over_buy():
     # Oracle: water-value terminal mode with value 0 -> no incentive to charge,
     # so the optimal play is to ride to the floor with a zero charge schedule.
     optimal = hindsight_optimal_grid(
-        day, cfg, terminal_mode="water_value", water_value=0.0,
+        day,
+        cfg,
+        terminal_mode="water_value",
+        water_value=0.0,
     )
     # Sanity: the oracle does NOT force-charge to hold the floor (economic-only).
     assert sum(optimal["schedule"]) == pytest.approx(0.0, abs=1e-9)

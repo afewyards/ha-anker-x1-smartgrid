@@ -28,16 +28,17 @@ copies of the richest existing implementation, not new behavior):
 - make_controller / seed_valid_inputs: tests/test_controller.py::
   _make_controller / _seed_valid_inputs
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const, controller
 from custom_components.anker_x1_smartgrid.models import Config
 
 # Anchor used by seed_valid_inputs for forecast/sunset timestamps — matches
 # tests/test_controller.py's module-level BASE verbatim.
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +204,7 @@ class StubRecorder:
 
 class StubHass:
     """Minimal hass stub with a state registry."""
+
     def __init__(self):
         self._states = {}
 
@@ -217,6 +219,7 @@ class StubHass:
     class _States:
         def __init__(self, parent):
             self._parent = parent
+
         def get(self, entity_id):
             return self._parent._states.get(entity_id)
 
@@ -242,10 +245,10 @@ def make_config(**overrides) -> Config:
     """
     defaults = dict(
         capacity_kwh=10.0,
-        soc_floor=20.0,   # 2 kWh floor
+        soc_floor=20.0,  # 2 kWh floor
         soc_target=80.0,  # 8 kWh target / end-reserve
         max_charge_w=3000.0,  # 3 kWh/h AC
-        eta_charge=1.0,   # AC == DC (exact bin arithmetic)
+        eta_charge=1.0,  # AC == DC (exact bin arithmetic)
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -301,12 +304,19 @@ def seed_valid_inputs(hass, *, soc="20.0"):
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
     # Price: provide a simple forecast list so slots are non-empty
-    hass.set_state("sensor.price", "0.05", {
-        "forecast": [
-            {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.05 * const.PRICE_SCALE)}
-            for i in range(9)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.05",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.05 * const.PRICE_SCALE),
+                }
+                for i in range(9)
+            ]
+        },
+    )
     # Phase-2 data entities
     hass.set_state("sensor.pv_power", "1200.0")
     hass.set_state("sensor.battery_power", "-500.0")

@@ -44,9 +44,20 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011"]
-"tests_addon/**" = ["N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011"]
+# N801/RUF012/B905/B023/RUF015: pre-existing test-only style debt (naming,
+# ClassVar annotations, zip() strict=, loop-var closures in synchronous
+# monkeypatch spies, next()-vs-IndexError semantics) — not behavior-affecting,
+# not worth churning test files for. See docs/superpowers/plans/2026-07-12-refactor-audit-execution.md Task E1b.
+"tests/**" = ["N801", "N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011", "RUF012", "B905", "B023", "RUF015"]
+"tests_addon/**" = ["N802", "N803", "N806", "F841", "E402", "RUF059", "F401", "F811", "B007", "B024", "E731", "B011", "N818"]
 "tests/conftest.py" = ["E402", "F811"]
+# B905 (zip without strict=): these zip independently-constructed same-length
+# lists/args; adding strict=True would be a live-path behavior change (raises
+# instead of silently truncating on a length mismatch that "should never
+# happen" today) — out of scope for a behavior-identical lint sweep.
+"custom_components/anker_x1_smartgrid/efficiency.py" = ["B905"]
+"custom_components/anker_x1_smartgrid/optimize.py" = ["B905"]
+"custom_components/anker_x1_smartgrid/parsers.py" = ["B905"]
 
 [tool.pyright]
 include = ["custom_components"]

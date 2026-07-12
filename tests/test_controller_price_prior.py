@@ -1,22 +1,29 @@
 """Plan B (B3+B4): _apply_price_prior raises the per-hour reserve UPSIDE-ONLY,
 defers to real prices, and never touches intervals_reserve / slots."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
 
-NOW_H = datetime(2026, 6, 26, 18, 0, tzinfo=timezone.utc)
-REAL_END = datetime(2026, 6, 27, 0, 0, tzinfo=timezone.utc)
-PICKUP = datetime(2026, 6, 27, 8, 0, tzinfo=timezone.utc)   # winter-late: peak sits before pickup
+NOW_H = datetime(2026, 6, 26, 18, 0, tzinfo=UTC)
+REAL_END = datetime(2026, 6, 27, 0, 0, tzinfo=UTC)
+PICKUP = datetime(2026, 6, 27, 8, 0, tzinfo=UTC)  # winter-late: peak sits before pickup
 
 
 def _cfg(**kw) -> Config:
     d = dict(
-        capacity_kwh=10.0, soc_target=97.0, soc_floor=5.0, export_fee_eur_per_kwh=0.0,
-        export_peak_band_frac=0.5, max_export_w=3000.0, grid_export_limit_w=3000.0,
-        anticipation_confidence_haircut=0.15, anticipation_margin_eur_per_kwh=0.02,
+        capacity_kwh=10.0,
+        soc_target=97.0,
+        soc_floor=5.0,
+        export_fee_eur_per_kwh=0.0,
+        export_peak_band_frac=0.5,
+        max_export_w=3000.0,
+        grid_export_limit_w=3000.0,
+        anticipation_confidence_haircut=0.15,
+        anticipation_margin_eur_per_kwh=0.02,
     )
     d.update(kw)
     return Config(**d)  # type: ignore[arg-type]
@@ -28,10 +35,9 @@ def _slots():  # 18:00..23:00 tonight (real export hours)
 
 
 def _intervals():  # 14 h of overnight load then tomorrow's PV ramp at +14h (08:00 pickup)
-    return (
-        [ForecastInterval(NOW_H + timedelta(hours=i), 0.0, 400.0, 1.0) for i in range(14)]
-        + [ForecastInterval(PICKUP, 2000.0, 300.0, 1.0)]
-    )
+    return [ForecastInterval(NOW_H + timedelta(hours=i), 0.0, 400.0, 1.0) for i in range(14)] + [
+        ForecastInterval(PICKUP, 2000.0, 300.0, 1.0)
+    ]
 
 
 def _base_reserve():  # one entry per hour incl. one at/after pickup
@@ -48,6 +54,7 @@ def _pricey_estimate():  # local-hour-indexed; high 07:00 peak inside [00:00, 08
 
 def test_prior_raises_reserve_upside_only_on_pre_pickup_hours():
     from unittest.mock import patch
+
     cfg = _cfg()
     rsv = _base_reserve()
     ivs = _intervals()
@@ -71,7 +78,7 @@ def test_prior_no_change_when_estimate_below_tonight():
     before = dict(rsv)
     cheap = [0.10] * 24
     ctrl._apply_price_prior(rsv, cheap, _slots(), NOW_H, REAL_END, _intervals(), cfg)
-    assert rsv == before     # byte-identical to no-prior
+    assert rsv == before  # byte-identical to no-prior
 
 
 def test_prior_defers_when_real_prices_extend_past_pickup():
@@ -80,7 +87,7 @@ def test_prior_defers_when_real_prices_extend_past_pickup():
     cfg = _cfg()
     rsv = _base_reserve()
     before = dict(rsv)
-    real_end_past = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)  # past PICKUP
+    real_end_past = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)  # past PICKUP
     ctrl._apply_price_prior(rsv, _pricey_estimate(), _slots(), NOW_H, real_end_past, _intervals(), cfg)
     assert rsv == before
 
@@ -95,7 +102,7 @@ def test_prior_noop_when_estimated_tomorrow_none():
 
 def test_prior_noop_when_pack_headroom_zero():
     """Pack-headroom cap: soc_target ≈ base reserve → headroom ≈ 0 → nothing held."""
-    cfg = _cfg(soc_target=10.0)   # 10% of 10 kWh = 1.0 kWh == base reserve -> headroom 0
+    cfg = _cfg(soc_target=10.0)  # 10% of 10 kWh = 1.0 kWh == base reserve -> headroom 0
     rsv = _base_reserve()
     before = dict(rsv)
     ctrl._apply_price_prior(rsv, _pricey_estimate(), _slots(), NOW_H, REAL_END, _intervals(), cfg)
@@ -105,7 +112,8 @@ def test_prior_noop_when_pack_headroom_zero():
 def test_prior_noop_when_no_solar_pickup():
     """Real cloudy no-op: pricey estimate but no solar PV in intervals → pickup=None → no hold."""
     from unittest.mock import patch
-    cfg = _cfg()   # normal soc_target=97%, plenty of headroom
+
+    cfg = _cfg()  # normal soc_target=97%, plenty of headroom
     rsv = _base_reserve()
     before = dict(rsv)
     # Intervals with zero PV — find_next_solar_pickup returns None.
@@ -124,6 +132,7 @@ def test_prior_does_not_contaminate_dp_price_path():
     optimizer's price inputs — a hard containment violation.
     """
     from unittest.mock import patch
+
     slots = _slots()
     slot_prices_before = [s.price for s in slots]
     slot_starts_before = [s.start for s in slots]

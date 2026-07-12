@@ -8,9 +8,10 @@ Covers:
   (d) fetch fires at most once per clock-hour (guard).
   (e) C2 alignment: build_hours_payload → map → predict(HH:23:07) resolves to HH:00 entry.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -28,7 +29,7 @@ from tests.helpers import StubStore as _StubStore
 # ---------------------------------------------------------------------------
 # Base timestamp: hour 11 UTC on a clean day (not multiple of 6 → no purge guard)
 # ---------------------------------------------------------------------------
-_NOW = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -42,24 +43,54 @@ _NOW = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
 # difference, not a copy-paste duplicate.
 # ---------------------------------------------------------------------------
 
+
 class _StubRecorder:
     """Minimal recorder stub — returns empty data on all read paths."""
 
-    def append(self, row): pass
-    def append_decision(self, **kwargs): pass
-    def purge_older_than(self, ts, days): pass
-    def purge_decisions_older_than(self, cutoff): pass
-    def rollup_hours(self, now_iso): return 0
-    def purge_hourly_older_than(self, cutoff): return 0
-    def wal_checkpoint(self) -> None: pass
-    def read_load_samples(self, since_iso=None): return []
-    def read_persons_home_samples(self, since_iso=None): return []
-    def read_feature_rows(self, since_iso=None): return []
-    def read_hourly_rows(self, since_iso=None): return []
-    def upsert_daily_regret(self, **kwargs): pass
-    def read_latest_daily_regret(self): return None
-    def read_daily_regret_range(self, *a, **kw): return []
-    def read_decisions(self, *a, **kw): return []
+    def append(self, row):
+        pass
+
+    def append_decision(self, **kwargs):
+        pass
+
+    def purge_older_than(self, ts, days):
+        pass
+
+    def purge_decisions_older_than(self, cutoff):
+        pass
+
+    def rollup_hours(self, now_iso):
+        return 0
+
+    def purge_hourly_older_than(self, cutoff):
+        return 0
+
+    def wal_checkpoint(self) -> None:
+        pass
+
+    def read_load_samples(self, since_iso=None):
+        return []
+
+    def read_persons_home_samples(self, since_iso=None):
+        return []
+
+    def read_feature_rows(self, since_iso=None):
+        return []
+
+    def read_hourly_rows(self, since_iso=None):
+        return []
+
+    def upsert_daily_regret(self, **kwargs):
+        pass
+
+    def read_latest_daily_regret(self):
+        return None
+
+    def read_daily_regret_range(self, *a, **kw):
+        return []
+
+    def read_decisions(self, *a, **kw):
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +130,14 @@ def _make_controller(*, addon_enabled: bool = False) -> Controller:
 
 def _sample_forecast_map(hour: datetime) -> dict:
     """Build a minimal non-empty forecast map with one entry at *hour* (top-of-hour UTC)."""
-    hour_key = hour.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    hour_key = hour.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     return {hour_key: (300.0, 450.0)}
 
 
 # ---------------------------------------------------------------------------
 # (a) addon_enabled=True + non-empty map → Tier-0 selected
 # ---------------------------------------------------------------------------
+
 
 def test_retrain_sync_tier0_selects_remote_predictor():
     """When addon_enabled and a non-empty map is cached, _retrain_sync picks Tier-0."""
@@ -115,9 +147,7 @@ def test_retrain_sync_tier0_selects_remote_predictor():
     # _retrain_sync is synchronous; call directly.
     ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
 
-    assert ctrl.active_model_name == "remote", (
-        f"Expected 'remote', got '{ctrl.active_model_name}'"
-    )
+    assert ctrl.active_model_name == "remote", f"Expected 'remote', got '{ctrl.active_model_name}'"
     assert isinstance(ctrl.predictor, RemoteForecastPredictor), (
         f"Expected RemoteForecastPredictor, got {type(ctrl.predictor)}"
     )
@@ -127,6 +157,7 @@ def test_retrain_sync_tier0_selects_remote_predictor():
 # (b) addon_enabled=False → Tier-0 skipped; falls through to bucketed/profile
 # ---------------------------------------------------------------------------
 
+
 def test_retrain_sync_skips_remote_when_addon_disabled():
     """When addon_enabled=False, _retrain_sync ignores the cached map entirely."""
     ctrl = _make_controller(addon_enabled=False)
@@ -135,15 +166,14 @@ def test_retrain_sync_skips_remote_when_addon_disabled():
 
     ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
 
-    assert ctrl.active_model_name != "remote", (
-        "Remote tier must be skipped when addon_enabled=False"
-    )
+    assert ctrl.active_model_name != "remote", "Remote tier must be skipped when addon_enabled=False"
     assert not isinstance(ctrl.predictor, RemoteForecastPredictor)
 
 
 # ---------------------------------------------------------------------------
 # (c) fetch returns None (add-on down) → falls through to existing chain
 # ---------------------------------------------------------------------------
+
 
 def test_retrain_sync_skips_remote_when_map_is_none():
     """When _remote_forecast_map is None (fetch never succeeded), Tier-0 is bypassed."""
@@ -169,6 +199,7 @@ def test_retrain_sync_skips_remote_when_map_is_empty():
 # ---------------------------------------------------------------------------
 # (d) fetch fires at most once per clock-hour
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_tick_fetch_fires_at_most_once_per_clock_hour():
@@ -207,9 +238,7 @@ async def test_tick_fetch_fires_at_most_once_per_clock_hour():
         await ctrl.tick()
 
     # fetch_forecast must have been called exactly once despite two ticks.
-    assert mock_fetch.call_count == 1, (
-        f"Expected 1 fetch_forecast call, got {mock_fetch.call_count}"
-    )
+    assert mock_fetch.call_count == 1, f"Expected 1 fetch_forecast call, got {mock_fetch.call_count}"
 
 
 @pytest.mark.asyncio
@@ -217,8 +246,8 @@ async def test_tick_fetch_fires_again_on_new_clock_hour():
     """A tick at a new clock-hour must trigger a second fetch."""
     ctrl = _make_controller(addon_enabled=True)
 
-    hour_a = _NOW                                # hour 11
-    hour_b = _NOW.replace(hour=12)              # hour 12
+    hour_a = _NOW  # hour 11
+    hour_b = _NOW.replace(hour=12)  # hour 12
 
     dummy_map = _sample_forecast_map(hour_a)
 
@@ -250,19 +279,18 @@ async def test_tick_fetch_fires_again_on_new_clock_hour():
         with patch("homeassistant.util.dt.utcnow", return_value=hour_b):
             await ctrl.tick()
 
-    assert call_count == 2, (
-        f"Expected 2 fetch calls (one per clock-hour), got {call_count}"
-    )
+    assert call_count == 2, f"Expected 2 fetch calls (one per clock-hour), got {call_count}"
 
 
 # ---------------------------------------------------------------------------
 # (e) C2 alignment: build_hours_payload + predict with minute/second offset
 # ---------------------------------------------------------------------------
 
+
 def test_build_hours_payload_normalises_to_top_of_hour():
     """build_hours_payload always emits ts at HH:00:00, regardless of input sub-hour."""
     # Provide a forecast entry with a non-zero minute (simulating an off-hour source).
-    entry_dt = datetime(2026, 6, 20, 14, 23, 7, tzinfo=timezone.utc)
+    entry_dt = datetime(2026, 6, 20, 14, 23, 7, tzinfo=UTC)
     weather_forecast = [
         {
             "datetime": entry_dt,
@@ -292,7 +320,7 @@ def test_c2_alignment_predict_with_offset_resolves_to_top_of_hour_entry():
     down and hit the HH:00 key built by build_hours_payload.
     """
     # Build a weather forecast for 14:00 UTC (top-of-hour already, as HA emits it).
-    base_hour = datetime(2026, 6, 20, 14, 0, tzinfo=timezone.utc)
+    base_hour = datetime(2026, 6, 20, 14, 0, tzinfo=UTC)
     weather_forecast = [
         {
             "datetime": base_hour,
@@ -310,30 +338,24 @@ def test_c2_alignment_predict_with_offset_resolves_to_top_of_hour_entry():
     # with ts at HH:00.  We construct the map as fetch_forecast would decode it.
     key_dt = datetime.fromisoformat(payload[0]["ts"])
     if key_dt.tzinfo is None:
-        key_dt = key_dt.replace(tzinfo=timezone.utc)
+        key_dt = key_dt.replace(tzinfo=UTC)
     forecast_map = {key_dt: (350.0, 500.0)}  # (p50, p80)
 
     predictor = RemoteForecastPredictor(forecast_map)
 
     # Call predict with the same hour but with minutes/seconds carried from live clock.
-    when_with_offset = datetime(2026, 6, 20, 14, 23, 7, tzinfo=timezone.utc)
+    when_with_offset = datetime(2026, 6, 20, 14, 23, 7, tzinfo=UTC)
 
     p50 = predictor.predict(when_with_offset, temp=None, fallback_w=999.0, quantile=0.5)
     p80 = predictor.predict(when_with_offset, temp=None, fallback_w=999.0, quantile=0.8)
 
-    assert p50 == 350.0, (
-        f"P50 should resolve to map entry 350.0, got {p50} — C2 alignment broken"
-    )
-    assert p80 == 500.0, (
-        f"P80 should resolve to map entry 500.0, got {p80} — C2 alignment broken"
-    )
+    assert p50 == 350.0, f"P50 should resolve to map entry 350.0, got {p50} — C2 alignment broken"
+    assert p80 == 500.0, f"P80 should resolve to map entry 500.0, got {p80} — C2 alignment broken"
 
     # Also verify that a different hour does NOT hit the map (fallback returned).
-    when_wrong_hour = datetime(2026, 6, 20, 15, 23, 7, tzinfo=timezone.utc)
+    when_wrong_hour = datetime(2026, 6, 20, 15, 23, 7, tzinfo=UTC)
     result_miss = predictor.predict(when_wrong_hour, temp=None, fallback_w=999.0, quantile=0.5)
-    assert result_miss == 999.0, (
-        f"Different hour must fall back to 999.0, got {result_miss}"
-    )
+    assert result_miss == 999.0, f"Different hour must fall back to 999.0, got {result_miss}"
 
 
 def test_build_hours_payload_empty_input():
@@ -349,21 +371,19 @@ def test_build_hours_payload_missing_datetime_skipped():
 
 def test_build_hours_payload_irradiance_always_none():
     """irradiance is always None in the payload (supplied by the add-on from its own data)."""
-    entry_dt = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
-    payload = build_hours_payload([
-        {"datetime": entry_dt, "temp_forecast": 15.0, "cloud_cover": 50.0,
-         "humidity": 70.0, "wind_speed": 4.0}
-    ])
+    entry_dt = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    payload = build_hours_payload(
+        [{"datetime": entry_dt, "temp_forecast": 15.0, "cloud_cover": 50.0, "humidity": 70.0, "wind_speed": 4.0}]
+    )
     assert payload[0]["irradiance"] is None
 
 
 def test_build_hours_payload_passes_weather_fields():
     """All four weather fields are passed through from the forecast entry."""
-    entry_dt = datetime(2026, 6, 20, 9, 0, tzinfo=timezone.utc)
-    payload = build_hours_payload([
-        {"datetime": entry_dt, "temp_forecast": 12.5, "cloud_cover": 25.0,
-         "humidity": 55.0, "wind_speed": 7.5}
-    ])
+    entry_dt = datetime(2026, 6, 20, 9, 0, tzinfo=UTC)
+    payload = build_hours_payload(
+        [{"datetime": entry_dt, "temp_forecast": 12.5, "cloud_cover": 25.0, "humidity": 55.0, "wind_speed": 7.5}]
+    )
     assert payload[0]["temp_forecast"] == 12.5
     assert payload[0]["cloud_cover"] == 25.0
     assert payload[0]["humidity"] == 55.0

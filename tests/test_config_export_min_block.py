@@ -1,4 +1,5 @@
 """T1: Config plumbing for export_min_block_kwh."""
+
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 from custom_components.anker_x1_smartgrid.models import Config

@@ -3,8 +3,12 @@ import pytest
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder, _VERSION_TARGET
 
 ENERGY_COLS = {
-    "grid_import_kwh", "grid_export_kwh", "house_load_kwh",
-    "pv_kwh", "batt_charge_kwh", "batt_discharge_kwh",
+    "grid_import_kwh",
+    "grid_export_kwh",
+    "house_load_kwh",
+    "pv_kwh",
+    "batt_charge_kwh",
+    "batt_discharge_kwh",
 }
 
 
@@ -19,11 +23,12 @@ def _samples_columns(db_path):
 # E1 — v9 migration
 # ---------------------------------------------------------------------------
 
+
 def test_v9_fresh_db_has_energy_columns_and_version(tmp_path):
     db = str(tmp_path / "t.db")
     rec = DataRecorder(db)
     rec.close()
-    assert ENERGY_COLS <= _samples_columns(db)
+    assert _samples_columns(db) >= ENERGY_COLS
     conn = sqlite3.connect(db)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET
     conn.close()
@@ -49,6 +54,7 @@ def test_v9_crash_idempotent_rerun(tmp_path):
 # ---------------------------------------------------------------------------
 # E2 — append() energy deltas
 # ---------------------------------------------------------------------------
+
 
 def _last_row(db_path):
     conn = sqlite3.connect(db_path)
@@ -81,8 +87,7 @@ def test_sign_splits_and_rectangle_rule(tmp_path):
     db = str(tmp_path / "t.db")
     rec = DataRecorder(db)
     rec.append({"ts": "2026-07-06T10:00:00+00:00", "pv_w": 0.0})
-    rec.append({"ts": "2026-07-06T10:01:00+00:00", "pv_w": 1200.0,
-                "p1_w": -500.0, "batt_w": 800.0, "load_w": 300.0})
+    rec.append({"ts": "2026-07-06T10:01:00+00:00", "pv_w": 1200.0, "p1_w": -500.0, "batt_w": 800.0, "load_w": 300.0})
     rec.close()
     row = _last_row(db)
     dt_h = 60.0 / 3600.0
@@ -119,7 +124,7 @@ def test_none_reading_nulls_only_that_flow(tmp_path):
     assert row["grid_import_kwh"] is None
     assert row["grid_export_kwh"] is None
     assert row["pv_kwh"] == pytest.approx(0.6 * 60.0 / 3600.0)
-    assert row["house_load_kwh"] is None   # load_w absent → None
+    assert row["house_load_kwh"] is None  # load_w absent → None
     assert row["batt_charge_kwh"] is None  # batt_w absent → None
 
 
@@ -149,7 +154,7 @@ def test_out_of_order_ts_does_not_overcount_next_row(tmp_path):
     should see a normal 60 s dt, not an inflated one."""
     db = str(tmp_path / "t.db")
     rec = DataRecorder(db)
-    rec.append({"ts": "2026-07-06T10:00:00+00:00"})          # seed
+    rec.append({"ts": "2026-07-06T10:00:00+00:00"})  # seed
     rec.append({"ts": "2026-07-06T10:02:00+00:00", "pv_w": 1000.0})  # normal
     rec.append({"ts": "2026-07-06T10:01:00+00:00", "pv_w": 1000.0})  # out-of-order
     rec.append({"ts": "2026-07-06T10:03:00+00:00", "pv_w": 1000.0})  # follow-on

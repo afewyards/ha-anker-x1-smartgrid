@@ -1,4 +1,5 @@
 """End-to-end dry-run integration tests: seed live HA states, call tick(), assert decision."""
+
 from datetime import timedelta
 
 from homeassistant.util import dt as dt_util
@@ -25,13 +26,16 @@ def _seed_states(hass, data, soc, pv_remaining, cheap_now=True):
     hour0 = now.replace(minute=0, second=0, microsecond=0)
     price = 0.05 if cheap_now else 0.40
     forecast = [
-        {"datetime": (hour0 + timedelta(hours=i)).isoformat(),
-         "electricity_price": int((price if i == 0 else 0.40) * 1e7)}
+        {
+            "datetime": (hour0 + timedelta(hours=i)).isoformat(),
+            "electricity_price": int((price if i == 0 else 0.40) * 1e7),
+        }
         for i in range(6)
     ]
     hass.states.async_set(data["ent_price"], str(price), {"forecast": forecast})
     hass.states.async_set(
-        data["ent_sun"], "above_horizon",
+        data["ent_sun"],
+        "above_horizon",
         {"next_setting": (now + timedelta(hours=5)).isoformat()},
     )
 

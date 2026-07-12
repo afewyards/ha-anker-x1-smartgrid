@@ -126,8 +126,8 @@ def test_derive_house_load_missing_batt_and_pv_default_zero():
 def test_clean_rows_filters_and_parses():
     rows = [
         {"ts": "2026-06-20T08:00:00+00:00", "p1_w": 500.0, "batt_w": 0.0, "pv_w": 0.0, "temp": 12.0},
-        {"ts": None, "p1_w": 500.0},                 # dropped: no ts
-        {"ts": "2026-06-21T08:00:00+00:00"},          # dropped: no load
+        {"ts": None, "p1_w": 500.0},  # dropped: no ts
+        {"ts": "2026-06-21T08:00:00+00:00"},  # dropped: no load
         {"ts": "2026-06-20T09:00:00+00:00", "p1_w": 99999.0, "batt_w": 0.0, "pv_w": 0.0, "temp": 12.0},  # clamped
     ]
     out = dq.clean_rows(rows)
@@ -143,16 +143,19 @@ def test_clean_rows_filters_and_parses():
 
 
 def test_clean_hourly_prefers_kwh_sum():
-    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5,
-             "house_load_mean": 700.0, "temp_mean": 18.5}]
+    rows = [
+        {"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5, "house_load_mean": 700.0, "temp_mean": 18.5}
+    ]
     out = dq.clean_hourly_rows(rows)
     assert out[0].load_w == 500.0 and out[0].temp == 18.5 and out[0].hour == 10
 
 
 def test_clean_hourly_fallback_and_skips():
-    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_mean": 700.0},
-            {"hour_ts": "2026-07-09T11:00:00+00:00"},
-            {"house_load_kwh_sum": 1.0}]
+    rows = [
+        {"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_mean": 700.0},
+        {"hour_ts": "2026-07-09T11:00:00+00:00"},
+        {"house_load_kwh_sum": 1.0},
+    ]
     out = dq.clean_hourly_rows(rows)
     assert len(out) == 1 and out[0].load_w == 700.0
 
@@ -166,12 +169,10 @@ def test_clean_hourly_clamps_to_load_max():
 def test_clean_hourly_partial_coverage_rescaled_by_count():
     # 30 of 60 expected ticks: 20.0 kWh * 1000 * 60/30 = 40000 W, then clamped
     # to _LOAD_MAX_W (25000.0). Clamp must apply AFTER rescaling.
-    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 20.0,
-             "house_load_count": 30}]
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 20.0, "house_load_count": 30}]
     assert dq.clean_hourly_rows(rows)[0].load_w == 25000.0
 
 
 def test_clean_hourly_full_coverage_unscaled():
-    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5,
-             "house_load_count": 60}]
+    rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5, "house_load_count": 60}]
     assert dq.clean_hourly_rows(rows)[0].load_w == 500.0

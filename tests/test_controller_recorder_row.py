@@ -8,16 +8,17 @@ computed, not sensor-read) house load — either threaded in from the live
 tick or, on the disabled path where house_load_w isn't passed, computed by
 _record_sample itself via the same _compute_house_load_w formula.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import PlantInputs
 from tests.helpers import StubRecorder as _Recorder
 
-NOW = datetime(2026, 7, 9, 12, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
 
 
 # _StateObj/_States/_Hass kept local (not migrated to helpers.StubHass): tests
@@ -72,7 +73,11 @@ async def test_recorder_row_uses_meter_w_and_nulls_legacy_phase_columns():
     inputs = PlantInputs(soc=55.0, meter_w=321.5, now=NOW)
 
     await ctrl._record_sample(
-        NOW, inputs, setpoint=0.0, state="passive", house_load_w=777.0,
+        NOW,
+        inputs,
+        setpoint=0.0,
+        state="passive",
+        house_load_w=777.0,
     )
 
     row = ctrl._recorder.rows[0]

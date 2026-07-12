@@ -18,6 +18,7 @@ def hass_stub():
         def __init__(self):
             self.services = _Recorder()
             self.services.async_call = self.services._svc
+
     return _H()
 
 
@@ -66,6 +67,7 @@ async def test_engaged_false_after_release_to_self(hass_stub):
 # ---------------------------------------------------------------------------
 # engage_export tests (A4)
 # ---------------------------------------------------------------------------
+
 
 async def test_engage_export_orders_calls(hass_stub):
     """engage_export: VPP/modbus on → setpoint=+P (positive) in order."""
@@ -117,6 +119,7 @@ async def test_engage_and_charge_still_works_unchanged(hass_stub):
 # H3: engaged flag set before set_value (partial-failure releasability)
 # ---------------------------------------------------------------------------
 
+
 async def test_engaged_true_when_set_value_fails():
     """set_value raises (turn_on ok) → engaged MUST already be True so the next
     disabled/failsafe tick can release (no stuck-in-VPP)."""
@@ -141,6 +144,7 @@ async def test_engaged_true_when_set_value_fails():
 
 async def test_engaged_false_when_turn_on_fails():
     """turn_on raises → exception precedes the flag → engaged stays False (no false-engage)."""
+
     class _Svc:
         async def async_call(self, domain, service, data, blocking=True):
             if domain == "switch" and service == "turn_on":
@@ -160,6 +164,7 @@ async def test_engaged_false_when_turn_on_fails():
 # N1: last_setpoint_w recorded only after the write lands (partial-failure
 # telemetry accuracy — do not claim a setpoint we never actually commanded)
 # ---------------------------------------------------------------------------
+
 
 async def test_last_setpoint_w_keeps_previous_value_when_set_value_fails():
     """set_value raises → last_setpoint_w must NOT change to the new value (we

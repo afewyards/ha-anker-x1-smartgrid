@@ -19,28 +19,39 @@ at ``dt_h=0.25`` / ``slot_minutes=15``:
   not the legacy hourly 4) and that the ceiling array is built at the full
   96-slot length.
 """
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.optimize import solar_cycle_end_idx, solar_reservation_ceiling
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot, PlantInputs
 
-UTC = timezone.utc
+UTC = UTC
 NOW = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
 
 
 def _cfg():
-    return Config(capacity_kwh=10.0, soc_floor=20.0, soc_target=80.0,
-                  max_charge_w=4000.0, eta_charge=1.0, round_trip_eff=0.9,
-                  max_export_w=4000.0, grid_export_limit_w=6000.0, enable_export=True,
-                  export_peak_band_frac=0.10, export_peak_lookback_h=4,
-                  charge_window_price_band=0.03, charge_trough_lookback_h=8)
+    return Config(
+        capacity_kwh=10.0,
+        soc_floor=20.0,
+        soc_target=80.0,
+        max_charge_w=4000.0,
+        eta_charge=1.0,
+        round_trip_eff=0.9,
+        max_export_w=4000.0,
+        grid_export_limit_w=6000.0,
+        enable_export=True,
+        export_peak_band_frac=0.10,
+        export_peak_lookback_h=4,
+        charge_window_price_band=0.03,
+        charge_trough_lookback_h=8,
+    )
 
 
 def _day96():
     prices = [0.25] * 96
-    prices[13] = 0.05   # 03:15 cheapest quarter
-    prices[74] = 0.60   # 18:30 priciest quarter
+    prices[13] = 0.05  # 03:15 cheapest quarter
+    prices[74] = 0.60  # 18:30 priciest quarter
     slots = [PriceSlot(NOW + timedelta(minutes=15 * i), prices[i]) for i in range(96)]
     ivs = [ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 200.0, 0.25) for i in range(96)]
     return slots, ivs
@@ -50,14 +61,20 @@ def test_dp_charges_cheapest_quarter_and_exports_priciest_quarter():
     slots, ivs = _day96()
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
     sel, grid, infeasible, exp, rev, ceil_ = ctrl._dp_select_slots(
-        inputs=inputs, slots=slots, deadline=NOW + timedelta(hours=24),
-        ceiling=0.30, cfg=_cfg(), export_price=0.60,
-        export_price_matches_import=True, intervals=ivs,
-        slot_minutes=15, dt_h=0.25,
+        inputs=inputs,
+        slots=slots,
+        deadline=NOW + timedelta(hours=24),
+        ceiling=0.30,
+        cfg=_cfg(),
+        export_price=0.60,
+        export_price_matches_import=True,
+        intervals=ivs,
+        slot_minutes=15,
+        dt_h=0.25,
     )
-    cheap_q = NOW + timedelta(minutes=15 * 13)     # 03:15
-    neighbor = NOW + timedelta(minutes=15 * 12)    # 03:00 (0.25) — same hour as cheap_q
-    pricey_q = NOW + timedelta(minutes=15 * 74)    # 18:30
+    cheap_q = NOW + timedelta(minutes=15 * 13)  # 03:15
+    neighbor = NOW + timedelta(minutes=15 * 12)  # 03:00 (0.25) — same hour as cheap_q
+    pricey_q = NOW + timedelta(minutes=15 * 74)  # 18:30
     pricey_neighbor = NOW + timedelta(minutes=15 * 73)  # 18:15 (0.25) — same hour as pricey_q
 
     # DP grid-charged the cheap quarter, NOT the whole hour it sits in.
@@ -76,10 +93,16 @@ def test_dp_charges_cheapest_quarter_and_exports_priciest_quarter():
     # fail under this hourly call, proving they exercise real sub-hour DP
     # resolution rather than being vacuously true.
     _, grid_hourly, _, exp_hourly, _, _ = ctrl._dp_select_slots(
-        inputs=inputs, slots=slots, deadline=NOW + timedelta(hours=24),
-        ceiling=0.30, cfg=_cfg(), export_price=0.60,
-        export_price_matches_import=True, intervals=ivs,
-        slot_minutes=60, dt_h=1.0,
+        inputs=inputs,
+        slots=slots,
+        deadline=NOW + timedelta(hours=24),
+        ceiling=0.30,
+        cfg=_cfg(),
+        export_price=0.60,
+        export_price_matches_import=True,
+        intervals=ivs,
+        slot_minutes=60,
+        dt_h=1.0,
     )
     assert cheap_q not in grid_hourly
     assert exp_hourly.get(pricey_q, 0.0) == 0.0
@@ -94,6 +117,6 @@ def test_grid_charge_ceiling_dawn_boundary_at_correct_slot():
     # ceiling built with that boundary reserves today's solar only before the boundary
     pv = [0.0] * 96
     load = [0.0] * 96
-    pv[20] = 3.0   # a post-dawn solar slot
+    pv[20] = 3.0  # a post-dawn solar slot
     ceil_ = solar_reservation_ceiling(pv, load, _cfg(), cycle_end_idx=cyc, dt_h=0.25)
     assert len(ceil_) == 96

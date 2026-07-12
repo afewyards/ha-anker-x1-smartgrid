@@ -4,6 +4,7 @@ NOTE: scikit-learn is intentionally NOT in requirements. There is no cp314/musl/
 wheel and HA's sandbox blocks the source build, which aborts integration setup on the
 deploy box. sklearn is lazy-imported in hgbr.py with a BucketedLoadModel/profile fallback.
 """
+
 import json
 from pathlib import Path
 
@@ -25,17 +26,13 @@ def test_manifest_does_not_require_scikit_learn():
 
 def test_manifest_contains_holidays():
     reqs = load_manifest()["requirements"]
-    assert any("holidays" in r for r in reqs), (
-        f"holidays not found in requirements: {reqs}"
-    )
+    assert any("holidays" in r for r in reqs), f"holidays not found in requirements: {reqs}"
 
 
 def test_manifest_does_not_pin_numpy():
     reqs = load_manifest()["requirements"]
     numpy_entries = [r for r in reqs if r.startswith("numpy")]
-    assert not numpy_entries, (
-        f"numpy must not be pinned in requirements (HA ships its own): {numpy_entries}"
-    )
+    assert not numpy_entries, f"numpy must not be pinned in requirements (HA ships its own): {numpy_entries}"
 
 
 def test_manifest_declares_single_config_entry():

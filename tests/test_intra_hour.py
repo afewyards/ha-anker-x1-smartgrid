@@ -1,9 +1,10 @@
 """Current-hour kWh accumulator + blend wrapper."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import intra_hour
 
-H = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+H = datetime(2026, 6, 3, 12, 0, tzinfo=UTC)
 
 
 def _fill(acc, start, minutes, load_w, step_s=60):
@@ -32,10 +33,10 @@ def test_accumulator_skips_gaps_and_none():
     acc.add(H, 1200.0)
     acc.add(H + timedelta(minutes=10), 1200.0)  # 600 s gap > MAX_STEP_S → dropped
     assert acc.kwh == 0.0 and acc.covered_s == 0.0
-    acc.add(H + timedelta(minutes=11), None)     # None breaks the chain
-    acc.add(H + timedelta(minutes=12), 1200.0)   # no prior ts → no step
+    acc.add(H + timedelta(minutes=11), None)  # None breaks the chain
+    acc.add(H + timedelta(minutes=12), 1200.0)  # no prior ts → no step
     assert acc.covered_s == 0.0
-    acc.add(H + timedelta(minutes=13), 1200.0)   # 60 s step counts
+    acc.add(H + timedelta(minutes=13), 1200.0)  # 60 s step counts
     assert abs(acc.covered_s - 60.0) < 1e-6
 
 

@@ -7,6 +7,7 @@ Prefers house_load_kwh_sum (energy integral, scaled x1000 to W) over the
 count-weighted house_load_mean, falling back to house_load_mean when the
 kwh_sum column is missing/None.
 """
+
 from __future__ import annotations
 
 from custom_components.anker_x1_smartgrid.featureset import hourly_load_w

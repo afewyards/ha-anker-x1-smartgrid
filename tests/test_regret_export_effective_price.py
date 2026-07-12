@@ -7,9 +7,10 @@ scored at ``raw - cfg.export_fee_eur_per_kwh`` biases regret in the
 heuristic's favor on every exporting day, corrupting the HGBR promotion-gate
 metric fed by ``_run_daily_regret_sync``.
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -37,34 +38,33 @@ def test_regret_scorer_heuristic_realized_export_scored_at_effective_price():
 
     day = "2026-06-21"
     raw_price = 0.40
-    _seed_export_rows_for_day(
-        rec, day, export_hour=14, export_w=2000.0, export_price_eur=raw_price
-    )
+    _seed_export_rows_for_day(rec, day, export_hour=14, export_w=2000.0, export_price_eur=raw_price)
 
     captured_realized: list[dict] = []
     captured_oracle: list[dict] = []
 
     def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
-        captured_realized.append({
-            "day_data": day_data,
-            "realized_charge_by_hour": list(realized_charge_by_hour),
-            "realized_export_by_hour": (
-                list(kwargs["realized_export_by_hour"])
-                if kwargs.get("realized_export_by_hour") is not None else None
-            ),
-            "export_price": (
-                list(kwargs["export_price"]) if kwargs.get("export_price") is not None else None
-            ),
-            "dt_h": kwargs.get("dt_h", 1.0),
-        })
+        captured_realized.append(
+            {
+                "day_data": day_data,
+                "realized_charge_by_hour": list(realized_charge_by_hour),
+                "realized_export_by_hour": (
+                    list(kwargs["realized_export_by_hour"])
+                    if kwargs.get("realized_export_by_hour") is not None
+                    else None
+                ),
+                "export_price": (list(kwargs["export_price"]) if kwargs.get("export_price") is not None else None),
+                "dt_h": kwargs.get("dt_h", 1.0),
+            }
+        )
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
     def _spy_hindsight(day_data, cfg, **kwargs):
-        captured_oracle.append({
-            "export_price": (
-                list(kwargs["export_price"]) if kwargs.get("export_price") is not None else None
-            ),
-        })
+        captured_oracle.append(
+            {
+                "export_price": (list(kwargs["export_price"]) if kwargs.get("export_price") is not None else None),
+            }
+        )
         return _ORIG_HINDSIGHT_OPTIMAL_GRID(day_data, cfg, **kwargs)
 
     # pytest_homeassistant_custom_component's hass fixture sets
@@ -73,13 +73,11 @@ def test_regret_scorer_heuristic_realized_export_scored_at_effective_price():
     # verify_cleanup teardown — see test_pricing_store.py's established
     # idiom) so every seeded UTC hour buckets 1:1 into the local day this
     # test reasons about.
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=_spy_realized
-    ), patch(
-        "custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid", side_effect=_spy_hindsight
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
+    with (
+        patch("custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=_spy_realized),
+        patch("custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid", side_effect=_spy_hindsight),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 
@@ -104,8 +102,7 @@ def test_regret_scorer_heuristic_realized_export_scored_at_effective_price():
     # --- 2. That shared vector must be the EFFECTIVE (post-fee) price. ---
     expected_eff = pytest.approx(raw_price - fee)
     assert all(p == expected_eff for p in main_call["export_price"]), (
-        f"export_price must be raw ({raw_price}) minus fee ({fee}); "
-        f"got {main_call['export_price']}"
+        f"export_price must be raw ({raw_price}) minus fee ({fee}); got {main_call['export_price']}"
     )
 
     # --- 3. Hand-computed check: re-run the REAL physics with the RAW price
@@ -118,7 +115,9 @@ def test_regret_scorer_heuristic_realized_export_scored_at_effective_price():
     n = len(main_call["realized_charge_by_hour"])
     raw_tuple = [raw_price] * n
     eur_raw = _ORIG_REALIZED_GRID_COST(
-        main_call["day_data"], main_call["realized_charge_by_hour"], ctrl.cfg,
+        main_call["day_data"],
+        main_call["realized_charge_by_hour"],
+        ctrl.cfg,
         realized_export_by_hour=main_call["realized_export_by_hour"],
         export_price=raw_tuple,
         dt_h=main_call["dt_h"],
@@ -136,7 +135,9 @@ def test_regret_scorer_heuristic_realized_export_scored_at_effective_price():
     #     EFFECTIVE price tuple (raw - fee), matching the plan's exact ask. ---
     eff_tuple = [raw_price - fee] * n
     eur_eff_direct = _ORIG_REALIZED_GRID_COST(
-        main_call["day_data"], main_call["realized_charge_by_hour"], ctrl.cfg,
+        main_call["day_data"],
+        main_call["realized_charge_by_hour"],
+        ctrl.cfg,
         realized_export_by_hour=main_call["realized_export_by_hour"],
         export_price=eff_tuple,
         dt_h=main_call["dt_h"],
@@ -151,6 +152,7 @@ def test_regret_scorer_eff_export_none_when_export_disabled():
     hass = _StubHass()
     ctrl, _, rec = _make_controller(hass)
     import dataclasses
+
     ctrl.cfg = dataclasses.replace(ctrl.cfg, enable_export=False)
 
     day = "2026-06-21"
@@ -160,22 +162,22 @@ def test_regret_scorer_eff_export_none_when_export_disabled():
     captured_oracle: list[dict] = []
 
     def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
-        captured_realized.append({
-            "export_price": kwargs.get("export_price"),
-        })
+        captured_realized.append(
+            {
+                "export_price": kwargs.get("export_price"),
+            }
+        )
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
     def _spy_hindsight(day_data, cfg, **kwargs):
         captured_oracle.append({"export_price": kwargs.get("export_price")})
         return _ORIG_HINDSIGHT_OPTIMAL_GRID(day_data, cfg, **kwargs)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=_spy_realized
-    ), patch(
-        "custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid", side_effect=_spy_hindsight
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
+    with (
+        patch("custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=_spy_realized),
+        patch("custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid", side_effect=_spy_hindsight),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 
@@ -214,26 +216,28 @@ def _seed_spill_day_rows(
     be tested against battery discharge alone rather than total metered export.
     """
     day_date = date.fromisoformat(day_str)
-    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=timezone.utc)
+    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=UTC)
     for h in range(24):
         ts = base_ts + timedelta(hours=h - 12)
         if h == export_hour:
-            p1_w = -export_w              # negative = net-export at the meter
-            batt_w = batt_discharge_w      # >0 = discharging; independent of export_w
+            p1_w = -export_w  # negative = net-export at the meter
+            batt_w = batt_discharge_w  # >0 = discharging; independent of export_w
             pv_w = 3000.0
         else:
-            p1_w = 500.0                   # normal import
-            batt_w = -200.0                # charging
+            p1_w = 500.0  # normal import
+            batt_w = -200.0  # charging
             pv_w = 1000.0 if 8 <= h <= 18 else 0.0
-        rec.rows.append({
-            "ts": ts.isoformat(),
-            "soc": 50.0 + h * 0.3,
-            "pv_w": pv_w,
-            "batt_w": batt_w,
-            "p1_w": p1_w,
-            "import_price": 0.20 if h < 8 else 0.35,
-            "export_price": export_price_eur,
-        })
+        rec.rows.append(
+            {
+                "ts": ts.isoformat(),
+                "soc": 50.0 + h * 0.3,
+                "pv_w": pv_w,
+                "batt_w": batt_w,
+                "p1_w": p1_w,
+                "import_price": 0.20 if h < 8 else 0.35,
+                "export_price": export_price_eur,
+            }
+        )
 
 
 def _spy_capture_realized_export():
@@ -244,12 +248,15 @@ def _spy_capture_realized_export():
     captured: list[dict] = []
 
     def _spy(day_data, realized_charge_by_hour, cfg, **kwargs):
-        captured.append({
-            "realized_export_by_hour": (
-                list(kwargs["realized_export_by_hour"])
-                if kwargs.get("realized_export_by_hour") is not None else None
-            ),
-        })
+        captured.append(
+            {
+                "realized_export_by_hour": (
+                    list(kwargs["realized_export_by_hour"])
+                    if kwargs.get("realized_export_by_hour") is not None
+                    else None
+                ),
+            }
+        )
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
     return _spy, captured
@@ -267,15 +274,18 @@ def test_regret_scorer_excludes_pv_spill_when_battery_idle():
     day = "2026-06-21"
     export_hour = 14
     _seed_spill_day_rows(
-        rec, day, export_hour=export_hour, export_w=1500.0, batt_discharge_w=0.0,
+        rec,
+        day,
+        export_hour=export_hour,
+        export_w=1500.0,
+        batt_discharge_w=0.0,
     )
 
     spy, captured_realized = _spy_capture_realized_export()
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=spy
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
+    with (
+        patch("custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=spy),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 
@@ -307,16 +317,18 @@ def test_regret_scorer_battery_discharge_export_capped_at_battery_power():
     export_w = 1500.0
     batt_discharge_w = 1000.0  # < metered export -> credited export must be capped
     _seed_spill_day_rows(
-        rec, day, export_hour=export_hour, export_w=export_w,
+        rec,
+        day,
+        export_hour=export_hour,
+        export_w=export_w,
         batt_discharge_w=batt_discharge_w,
     )
 
     spy, captured_realized = _spy_capture_realized_export()
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=spy
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
+    with (
+        patch("custom_components.anker_x1_smartgrid.regret.realized_grid_cost", side_effect=spy),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 

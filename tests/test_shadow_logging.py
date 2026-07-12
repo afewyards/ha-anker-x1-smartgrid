@@ -10,9 +10,10 @@ Key invariants under test:
 5. ``X1DpRegretSensor`` has a DISTINCT key (``dp_regret_7d``) that does NOT
    collide with ``X1RegretEurSensor`` (``regret_eur``).
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, UTC
 from unittest.mock import patch
 
 import pytest
@@ -41,7 +42,7 @@ from tests.helpers import (
 # Constants
 # ---------------------------------------------------------------------------
 
-BASE = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)  # 10:00 UTC, Mon
+BASE = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)  # 10:00 UTC, Mon
 _PREDICTOR = LoadPredictor.from_profile({})
 
 # Captured BEFORE any test patches them, so the R1 spies below (which record
@@ -56,18 +57,19 @@ _ORIG_REALIZED_GRID_COST = regret_mod.realized_grid_cost
 
 
 def _cfg(**overrides) -> Config:
-    return Config.from_dict({
-        "capacity_kwh": 10.0,
-        "soc_target": 97.0,
-        "eta_charge": 0.92,
-        "eps_hi_kwh": 0.4,
-        "eps_lo_kwh": 0.2,
-        "min_dwell_min": 0,
-        "max_charge_w": 6000.0,
-        "round_trip_eff": 0.85,
-
-        **overrides,
-    })
+    return Config.from_dict(
+        {
+            "capacity_kwh": 10.0,
+            "soc_target": 97.0,
+            "eta_charge": 0.92,
+            "eps_hi_kwh": 0.4,
+            "eps_lo_kwh": 0.2,
+            "min_dwell_min": 0,
+            "max_charge_w": 6000.0,
+            "round_trip_eff": 0.85,
+            **overrides,
+        }
+    )
 
 
 def _slots(prices: list[float], base: datetime = BASE) -> list[PriceSlot]:
@@ -80,10 +82,12 @@ def _plan(age_h: float = 2.0) -> PlanState:
 
 def _make_dp_mock_first_hour(charge_kwh: float = 5.0):
     """DP mock that puts all charge in hour 0 (current slot)."""
-    def _side(  *args, **kwargs):
+
+    def _side(*args, **kwargs):
         wl = kwargs.get("window_len", len(args[0]) if args else 1)
         schedule = [charge_kwh] + [0.0] * (wl - 1)
         return {"schedule": schedule, "kwh": charge_kwh, "eur": charge_kwh * 0.05}
+
     return _side
 
 
@@ -95,6 +99,7 @@ def _make_dp_mock_first_hour(charge_kwh: float = 5.0):
 # data dict (adds sensor.inverter_loss, omits export-price entity) — not a
 # drop-in match for the shared factory.
 # ---------------------------------------------------------------------------
+
 
 def _make_controller(hass, data_overrides=None):
     data = {
@@ -133,15 +138,19 @@ def _seed_valid_inputs(hass, *, soc="20.0"):
     hass.set_state("sensor.inverter_loss", "0.0")
     sunset_iso = (BASE + timedelta(hours=8)).isoformat()
     hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-    hass.set_state("sensor.price", "0.05", {
-        "forecast": [
-            {
-                "datetime": (BASE + timedelta(hours=i)).isoformat(),
-                "electricity_price": int(0.05 * const.PRICE_SCALE),
-            }
-            for i in range(9)
-        ]
-    })
+    hass.set_state(
+        "sensor.price",
+        "0.05",
+        {
+            "forecast": [
+                {
+                    "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                    "electricity_price": int(0.05 * const.PRICE_SCALE),
+                }
+                for i in range(9)
+            ]
+        },
+    )
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
     hass.set_state("sensor.irradiance", "0.0")
@@ -166,14 +175,20 @@ def test_shadow_dp_true_replaces_selected():
         side_effect=_make_dp_mock_first_hour(5.0),
     ):
         new_plan, _, _, _, _, _ = compute_decision(
-            _plan(), inputs, slots, 0.0, sunset, _PREDICTOR, None, cfg,
-            _out=_out, _shadow_dp=True,
+            _plan(),
+            inputs,
+            slots,
+            0.0,
+            sunset,
+            _PREDICTOR,
+            None,
+            cfg,
+            _out=_out,
+            _shadow_dp=True,
         )
 
     # Flag-on: DP should still drive the plan state to FORCING
-    assert new_plan.state is ControllerState.FORCING, (
-        "Flag-on: DP replaces selected → FORCING (with cheap hour 0)"
-    )
+    assert new_plan.state is ControllerState.FORCING, "Flag-on: DP replaces selected → FORCING (with cheap hour 0)"
     assert "dp_selected" in _out
 
 
@@ -205,11 +220,13 @@ async def test_disabled_tick_publishes_fictive_plan_in_shadow():
     ctrl.enabled = False
     _seed_valid_inputs(hass)
 
-    with patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0), \
-         patch(
-             "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-             side_effect=_make_dp_mock_first_hour(5.0),
-         ):
+    with (
+        patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0),
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+            side_effect=_make_dp_mock_first_hour(5.0),
+        ),
+    ):
         result = await ctrl.tick()
 
     assert result["reason"] == "disabled"
@@ -217,9 +234,7 @@ async def test_disabled_tick_publishes_fictive_plan_in_shadow():
     engage_calls = [c for c in act.calls if c[0] == "engage_and_charge"]
     assert not engage_calls, f"Shadow tick must never actuate; got: {engage_calls}"
     # fictive_plan present (DP ran in shadow)
-    assert "fictive_plan" in ctrl.last_status, (
-        "fictive_plan must be published in last_status when shadow DP succeeds"
-    )
+    assert "fictive_plan" in ctrl.last_status, "fictive_plan must be published in last_status when shadow DP succeeds"
     fp = ctrl.last_status["fictive_plan"]
     assert "horizon" in fp
     assert "planned_grid_hours" in fp
@@ -236,16 +251,16 @@ async def test_disabled_tick_clears_fictive_plan_when_shadow_dp_fails():
     # Pre-seed a stale fictive_plan to verify it gets cleared
     ctrl.last_status["fictive_plan"] = {"stale": True}
 
-    with patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0), \
-         patch(
-             "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-             side_effect=RuntimeError("intentional shadow DP failure"),
-         ):
+    with (
+        patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0),
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+            side_effect=RuntimeError("intentional shadow DP failure"),
+        ),
+    ):
         await ctrl.tick()
 
-    assert "fictive_plan" not in ctrl.last_status, (
-        "Stale fictive_plan must be cleared when shadow DP fails"
-    )
+    assert "fictive_plan" not in ctrl.last_status, "Stale fictive_plan must be cleared when shadow DP fails"
 
 
 # ===========================================================================
@@ -257,18 +272,20 @@ def _seed_sample_rows_for_day(rec: _StubRecorder, day_str: str, n_hours: int = 2
     """Seed sample rows covering n_hours of the given LOCAL day (at noon UTC, safe for any TZ)."""
     day_date = date.fromisoformat(day_str)
     # Noon UTC on the target day → local date is the same for UTC offsets -12h..+12h
-    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=timezone.utc)
+    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=UTC)
     for h in range(n_hours):
         ts = base_ts + timedelta(hours=h - 12)  # span from midnight to midnight (UTC-12 safe)
         # Each row: moderate load, some PV, price, charging
-        rec.rows.append({
-            "ts": ts.isoformat(),
-            "soc": 50.0 + h * 0.5,
-            "pv_w": 1000.0 if 8 <= h <= 18 else 0.0,
-            "batt_w": -200.0,   # charging
-            "p1_w": 500.0,
-            "import_price": 0.20 if h < 8 else 0.35,
-        })
+        rec.rows.append(
+            {
+                "ts": ts.isoformat(),
+                "soc": 50.0 + h * 0.5,
+                "pv_w": 1000.0 if 8 <= h <= 18 else 0.0,
+                "batt_w": -200.0,  # charging
+                "p1_w": 500.0,
+                "import_price": 0.20 if h < 8 else 0.35,
+            }
+        )
 
 
 def test_dp_regret_stored_alongside_heuristic():
@@ -279,14 +296,12 @@ def test_dp_regret_stored_alongside_heuristic():
     day = "2026-06-21"
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
     assert stored is not None, f"daily_regret row for {day} must be stored"
-    assert "dp_regret_eur" in stored, (
-        "dp_regret_eur must be present in the stored daily_regret row"
-    )
+    assert "dp_regret_eur" in stored, "dp_regret_eur must be present in the stored daily_regret row"
     assert "regret_eur" in stored, "heuristic regret_eur must still be present"
 
 
@@ -298,15 +313,13 @@ def test_dp_regret_is_numeric_or_none():
     day = "2026-06-21"
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
     assert stored is not None
     dp_val = stored.get("dp_regret_eur")
-    assert dp_val is None or isinstance(dp_val, float), (
-        f"dp_regret_eur must be float or None; got {type(dp_val)}"
-    )
+    assert dp_val is None or isinstance(dp_val, float), f"dp_regret_eur must be float or None; got {type(dp_val)}"
 
 
 def test_7d_rolling_delta_computed_after_regret_sync():
@@ -317,7 +330,7 @@ def test_7d_rolling_delta_computed_after_regret_sync():
     day = "2026-06-21"
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
@@ -340,7 +353,8 @@ def test_status_includes_dp_regret_7d_key():
     ctrl, _, _ = _make_controller(hass)
 
     from datetime import timezone
-    now = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)
+
+    now = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)
     status = ctrl._status(now, 0.0, None, "test")
 
     assert "dp_regret_7d" in status, "_status() must expose dp_regret_7d key"
@@ -352,7 +366,7 @@ def test_status_dp_regret_7d_reflects_last_dp_regret_7d():
     ctrl, _, _ = _make_controller(hass)
     ctrl.last_dp_regret_7d = -0.42
 
-    now = datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 22, 10, 0, tzinfo=UTC)
     status = ctrl._status(now, 0.0, None, "test")
 
     assert status["dp_regret_7d"] == -0.42
@@ -376,13 +390,12 @@ def test_sensor_keys_are_distinct():
 def test_dp_regret_sensor_key():
     """X1DpRegretSensor key is exactly 'dp_regret_7d'."""
     sensor = X1DpRegretSensor(None, "test_entry")
-    assert sensor._key == "dp_regret_7d", (
-        f"Expected key 'dp_regret_7d', got {sensor._key!r}"
-    )
+    assert sensor._key == "dp_regret_7d", f"Expected key 'dp_regret_7d', got {sensor._key!r}"
 
 
 def test_dp_regret_sensor_unit():
     """X1DpRegretSensor reports in EUR (checked via instance native_unit_of_measurement)."""
+
     class _MockController:
         last_status: dict = {}
 
@@ -402,6 +415,7 @@ def test_dp_regret_sensor_unique_id():
 
 def test_dp_regret_sensor_reads_from_last_status():
     """X1DpRegretSensor reads dp_regret_7d from controller.last_status."""
+
     class _MockController:
         last_status = {"dp_regret_7d": -0.123}
 
@@ -411,6 +425,7 @@ def test_dp_regret_sensor_reads_from_last_status():
 
 def test_dp_regret_sensor_returns_none_when_absent():
     """X1DpRegretSensor returns None when dp_regret_7d not yet computed."""
+
     class _MockController:
         last_status = {}
 
@@ -437,20 +452,18 @@ async def test_enabled_dp_runs_exactly_once():
         dp_call_count["n"] += 1
         return orig_mock(*args, **kwargs)
 
-    with patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0), \
-         patch(
-             "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
-             side_effect=_counting_mock,
-         ):
+    with (
+        patch.object(coord_mod, "read_pv_remaining_kwh", return_value=5.0),
+        patch(
+            "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+            side_effect=_counting_mock,
+        ),
+    ):
         result = await ctrl.tick()
 
     assert result["reason"] == "ok"
-    assert dp_call_count["n"] == 1, (
-        f"DP must run exactly once per enabled tick; ran {dp_call_count['n']} time(s)"
-    )
-    assert "fictive_plan" in ctrl.last_status, (
-        "fictive_plan must be published from the live DP run (T0.6a)"
-    )
+    assert dp_call_count["n"] == 1, f"DP must run exactly once per enabled tick; ran {dp_call_count['n']} time(s)"
+    assert "fictive_plan" in ctrl.last_status, "fictive_plan must be published from the live DP run (T0.6a)"
 
 
 # ===========================================================================
@@ -474,33 +487,35 @@ def _seed_export_rows_for_day(
     to verify the realized leg does NOT use it.
     """
     day_date = date.fromisoformat(day_str)
-    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=timezone.utc)
+    base_ts = datetime(day_date.year, day_date.month, day_date.day, 12, 0, tzinfo=UTC)
     for h in range(24):
         ts = base_ts + timedelta(hours=h - 12)
-        is_export_hour = (h == export_hour)
+        is_export_hour = h == export_hour
         # Actual export: p1_w < 0 means net-export to grid.
         # During export: battery discharges (batt_w > 0), PV running, p1_w < 0.
         if is_export_hour:
-            p1_w = -export_w          # negative = export to grid
-            batt_w = export_w         # discharging
+            p1_w = -export_w  # negative = export to grid
+            batt_w = export_w  # discharging
             pv_w = 3000.0
             # Commanded setpoint deliberately != actual export (2× to verify we use actual)
             export_setpoint_w = export_w * 2.0
         else:
-            p1_w = 500.0              # normal import
-            batt_w = -200.0           # charging
+            p1_w = 500.0  # normal import
+            batt_w = -200.0  # charging
             pv_w = 1000.0 if 8 <= h <= 18 else 0.0
             export_setpoint_w = 0.0
-        rec.rows.append({
-            "ts": ts.isoformat(),
-            "soc": 50.0 + h * 0.3,
-            "pv_w": pv_w,
-            "batt_w": batt_w,
-            "p1_w": p1_w,
-            "import_price": 0.20 if h < 8 else 0.35,
-            "export_price": export_price_eur,
-            "export_setpoint_w": export_setpoint_w,   # deliberately != actual
-        })
+        rec.rows.append(
+            {
+                "ts": ts.isoformat(),
+                "soc": 50.0 + h * 0.3,
+                "pv_w": pv_w,
+                "batt_w": batt_w,
+                "p1_w": p1_w,
+                "import_price": 0.20 if h < 8 else 0.35,
+                "export_price": export_price_eur,
+                "export_setpoint_w": export_setpoint_w,  # deliberately != actual
+            }
+        )
 
 
 def test_regret_reflects_export_revenue_on_both_sides():
@@ -515,7 +530,7 @@ def test_regret_reflects_export_revenue_on_both_sides():
     day = "2026-06-21"
     _seed_export_rows_for_day(rec, day, export_hour=14, export_w=2000.0, export_price_eur=0.40)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
@@ -542,7 +557,7 @@ def test_regret_realized_uses_actual_export_not_commanded_setpoint():
     # Actual export = 1000 W; commanded setpoint = 2000 W (double).
     _seed_export_rows_for_day(rec, day, export_hour=14, export_w=1000.0, export_price_eur=0.40)
 
-    ts_now = datetime(2026, 6, 21, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 21, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
@@ -577,16 +592,14 @@ def test_regret_charge_only_day_unchanged():
     day = "2026-06-19"
     _seed_sample_rows_for_day(rec, day, n_hours=24)  # charge-only, no export fields
 
-    ts_now = datetime(2026, 6, 20, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 20, 0, 5, tzinfo=UTC).isoformat()
     ctrl._run_daily_regret_sync(day, ts_now)
 
     stored = rec.daily_regret_rows.get(day)
     assert stored is not None
     assert "regret_eur" in stored
     regret_eur = stored["regret_eur"]
-    assert regret_eur is None or isinstance(regret_eur, float), (
-        "regret_eur must be float or None on charge-only day"
-    )
+    assert regret_eur is None or isinstance(regret_eur, float), "regret_eur must be float or None on charge-only day"
 
 
 # ===========================================================================
@@ -629,11 +642,12 @@ def _capture_day_data(ctrl: Controller, day: str, ts_now: str):
         captured.append(day_data)
         return _ORIG_HINDSIGHT_OPTIMAL_GRID(day_data, cfg, **kwargs)
 
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid",
-        side_effect=_spy,
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.regret.hindsight_optimal_grid",
+            side_effect=_spy,
+        ),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
     assert captured, "hindsight_optimal_grid must have been called"
@@ -651,20 +665,25 @@ def test_daydata_pv_kwh_uses_measured_delta_sum_when_all_ticks_present():
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
     test_hour = 14
-    _replace_hour_rows(rec, day, test_hour, [
-        {
-            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
-            "soc": 60.0,
-            "pv_w": 1000.0,   # legacy fallback trap value — must NOT be used
-            "batt_w": -200.0,
-            "p1_w": 500.0,
-            "import_price": 0.30,
-            "pv_kwh": 0.02,
-        }
-        for m in (10, 20, 30)
-    ])
+    _replace_hour_rows(
+        rec,
+        day,
+        test_hour,
+        [
+            {
+                "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=UTC).isoformat(),
+                "soc": 60.0,
+                "pv_w": 1000.0,  # legacy fallback trap value — must NOT be used
+                "batt_w": -200.0,
+                "p1_w": 500.0,
+                "import_price": 0.30,
+                "pv_kwh": 0.02,
+            }
+            for m in (10, 20, 30)
+        ],
+    )
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     day_data = _capture_day_data(ctrl, day, ts_now)
 
     assert day_data.pv_kwh[test_hour] == pytest.approx(0.06, abs=1e-9)
@@ -678,7 +697,7 @@ def test_daydata_falls_back_to_legacy_mean_when_hour_has_no_deltas():
     day = "2026-06-21"
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     day_data = _capture_day_data(ctrl, day, ts_now)
 
     # Hand-computed legacy values from _seed_sample_rows_for_day's fixture:
@@ -701,25 +720,36 @@ def test_daydata_mixed_hour_sums_only_usable_ticks():
     test_hour = 15
     rows = [
         {
-            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
-            "soc": 60.0, "pv_w": 1000.0, "batt_w": -200.0, "p1_w": 500.0,
-            "import_price": 0.30, "pv_kwh": 0.02,
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=UTC).isoformat(),
+            "soc": 60.0,
+            "pv_w": 1000.0,
+            "batt_w": -200.0,
+            "p1_w": 500.0,
+            "import_price": 0.30,
+            "pv_kwh": 0.02,
         },
         {
-            "ts": datetime(2026, 6, 21, test_hour, 20, tzinfo=timezone.utc).isoformat(),
-            "soc": 60.0, "pv_w": 1000.0, "batt_w": -200.0, "p1_w": 500.0,
-            "import_price": 0.30, "pv_kwh": 0.02,
+            "ts": datetime(2026, 6, 21, test_hour, 20, tzinfo=UTC).isoformat(),
+            "soc": 60.0,
+            "pv_w": 1000.0,
+            "batt_w": -200.0,
+            "p1_w": 500.0,
+            "import_price": 0.30,
+            "pv_kwh": 0.02,
         },
         {
             # NULL delta tick (no "pv_kwh" key at all) with a trap pv_w value.
-            "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=timezone.utc).isoformat(),
-            "soc": 60.0, "pv_w": 5000.0, "batt_w": -200.0, "p1_w": 500.0,
+            "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=UTC).isoformat(),
+            "soc": 60.0,
+            "pv_w": 5000.0,
+            "batt_w": -200.0,
+            "p1_w": 500.0,
             "import_price": 0.30,
         },
     ]
     _replace_hour_rows(rec, day, test_hour, rows)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     day_data = _capture_day_data(ctrl, day, ts_now)
 
     assert day_data.pv_kwh[test_hour] == pytest.approx(0.04, abs=1e-9)
@@ -735,38 +765,49 @@ def test_daydata_export_uses_min_rule_on_measured_energy_deltas():
     _seed_sample_rows_for_day(rec, day, n_hours=24)
 
     test_hour = 16
-    _replace_hour_rows(rec, day, test_hour, [{
-        "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=timezone.utc).isoformat(),
-        "soc": 60.0,
-        "pv_w": 3000.0,
-        "batt_w": 2000.0,       # legacy fallback trap value — must NOT be used
-        "p1_w": -2500.0,        # legacy fallback trap value — must NOT be used
-        "import_price": 0.30,
-        "export_price": 0.40,
-        "grid_export_kwh": 0.05,
-        "batt_discharge_kwh": 0.03,
-    }])
+    _replace_hour_rows(
+        rec,
+        day,
+        test_hour,
+        [
+            {
+                "ts": datetime(2026, 6, 21, test_hour, 30, tzinfo=UTC).isoformat(),
+                "soc": 60.0,
+                "pv_w": 3000.0,
+                "batt_w": 2000.0,  # legacy fallback trap value — must NOT be used
+                "p1_w": -2500.0,  # legacy fallback trap value — must NOT be used
+                "import_price": 0.30,
+                "export_price": 0.40,
+                "grid_export_kwh": 0.05,
+                "batt_discharge_kwh": 0.03,
+            }
+        ],
+    )
 
     captured_realized: list[dict] = []
 
     def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
-        captured_realized.append({
-            "realized_export_by_hour": (
-                list(kwargs["realized_export_by_hour"])
-                if kwargs.get("realized_export_by_hour") is not None else None
-            ),
-        })
+        captured_realized.append(
+            {
+                "realized_export_by_hour": (
+                    list(kwargs["realized_export_by_hour"])
+                    if kwargs.get("realized_export_by_hour") is not None
+                    else None
+                ),
+            }
+        )
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     # See _capture_day_data's docstring: the autouse enable_custom_integrations
     # fixture sets DEFAULT_TIME_ZONE to US/Pacific session-wide, so as_local
     # must be patched to identity to keep UTC hour == local hour bucketing.
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
-        side_effect=_spy_realized,
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+            side_effect=_spy_realized,
+        ),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 
@@ -785,11 +826,12 @@ def _capture_realized_charge(ctrl: Controller, day: str, ts_now: str) -> list[fl
         captured.append(list(realized_charge_by_hour))
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
-        side_effect=_spy_realized,
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+            side_effect=_spy_realized,
+        ),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
     assert captured, "realized_grid_cost must have been called"
@@ -819,11 +861,11 @@ def test_daydata_solar_charge_hour_realized_charge_is_zero():
     test_hour = 12
     rows = [
         {
-            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
+            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=UTC).isoformat(),
             "soc": 60.0,
             "pv_w": 3000.0,
-            "batt_w": -2000.0,      # charging
-            "p1_w": -500.0,         # exporting surplus
+            "batt_w": -2000.0,  # charging
+            "p1_w": -500.0,  # exporting surplus
             "import_price": 0.30,
             "export_price": 0.10,
             "pv_kwh": 0.05,
@@ -837,7 +879,7 @@ def test_daydata_solar_charge_hour_realized_charge_is_zero():
     ]
     _replace_hour_rows(rec, day, test_hour, rows)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     realized_charge = _capture_realized_charge(ctrl, day, ts_now)
 
     assert realized_charge[test_hour] == pytest.approx(0.0, abs=1e-9)
@@ -856,11 +898,11 @@ def test_daydata_charge_uses_min_rule_on_measured_energy_deltas():
     test_hour = 3
     rows = [
         {
-            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=timezone.utc).isoformat(),
+            "ts": datetime(2026, 6, 21, test_hour, m, tzinfo=UTC).isoformat(),
             "soc": 60.0,
             "pv_w": 0.0,
-            "batt_w": -1800.0,      # legacy fallback trap value — must NOT be used
-            "p1_w": 2400.0,         # legacy fallback trap value — must NOT be used
+            "batt_w": -1800.0,  # legacy fallback trap value — must NOT be used
+            "p1_w": 2400.0,  # legacy fallback trap value — must NOT be used
             "import_price": 0.25,
             "batt_charge_kwh": 0.03,
             "grid_import_kwh": 0.04,
@@ -869,7 +911,7 @@ def test_daydata_charge_uses_min_rule_on_measured_energy_deltas():
     ]
     _replace_hour_rows(rec, day, test_hour, rows)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     realized_charge = _capture_realized_charge(ctrl, day, ts_now)
 
     assert realized_charge[test_hour] == pytest.approx(0.06, abs=1e-9)
@@ -890,10 +932,10 @@ def test_daydata_charge_mixed_usability_excludes_null_grid_import_tick():
         {
             # batt_charge_kwh present, grid_import_kwh NULL (key absent) ->
             # not usable, excluded from the delta sum.
-            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=UTC).isoformat(),
             "soc": 60.0,
             "pv_w": 0.0,
-            "batt_w": -1200.0,      # -> legacy grid_charge_w = 1200 W
+            "batt_w": -1200.0,  # -> legacy grid_charge_w = 1200 W
             "p1_w": 1200.0,
             "import_price": 0.25,
             "batt_charge_kwh": 0.02,
@@ -901,7 +943,7 @@ def test_daydata_charge_mixed_usability_excludes_null_grid_import_tick():
     ]
     _replace_hour_rows(rec, day, test_hour, rows)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
     realized_charge = _capture_realized_charge(ctrl, day, ts_now)
 
     # Legacy fallback: grid_charge_w = max(0, 1200 - 0) = 1200 W -> 1.2 kWh at
@@ -924,10 +966,10 @@ def test_daydata_export_mixed_usability_excludes_null_batt_discharge_tick():
         {
             # grid_export_kwh present, batt_discharge_kwh NULL (key absent)
             # -> not usable, excluded from the export delta sum.
-            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=timezone.utc).isoformat(),
+            "ts": datetime(2026, 6, 21, test_hour, 10, tzinfo=UTC).isoformat(),
             "soc": 60.0,
             "pv_w": 500.0,
-            "batt_w": 800.0,        # discharging -> legacy actual_export_w = min(900,800)=800 W
+            "batt_w": 800.0,  # discharging -> legacy actual_export_w = min(900,800)=800 W
             "p1_w": -900.0,
             "import_price": 0.25,
             "export_price": 0.10,
@@ -939,20 +981,24 @@ def test_daydata_export_mixed_usability_excludes_null_batt_discharge_tick():
     captured_realized: list[dict] = []
 
     def _spy_realized(day_data, realized_charge_by_hour, cfg, **kwargs):
-        captured_realized.append({
-            "realized_export_by_hour": (
-                list(kwargs["realized_export_by_hour"])
-                if kwargs.get("realized_export_by_hour") is not None else None
-            ),
-        })
+        captured_realized.append(
+            {
+                "realized_export_by_hour": (
+                    list(kwargs["realized_export_by_hour"])
+                    if kwargs.get("realized_export_by_hour") is not None
+                    else None
+                ),
+            }
+        )
         return _ORIG_REALIZED_GRID_COST(day_data, realized_charge_by_hour, cfg, **kwargs)
 
-    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=timezone.utc).isoformat()
-    with patch(
-        "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
-        side_effect=_spy_realized,
-    ), patch(
-        "homeassistant.util.dt.as_local", side_effect=lambda d: d
+    ts_now = datetime(2026, 6, 22, 0, 5, tzinfo=UTC).isoformat()
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.regret.realized_grid_cost",
+            side_effect=_spy_realized,
+        ),
+        patch("homeassistant.util.dt.as_local", side_effect=lambda d: d),
     ):
         ctrl._run_daily_regret_sync(day, ts_now)
 

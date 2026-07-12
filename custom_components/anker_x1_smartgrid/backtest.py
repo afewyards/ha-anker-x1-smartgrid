@@ -1,4 +1,5 @@
 """Walk-forward backtest comparing the load model to an hour-mean baseline."""
+
 from __future__ import annotations
 
 import logging
@@ -121,7 +122,9 @@ def should_promote(metrics: dict | None) -> bool:
     _LOGGER.info(
         "should_promote: 24h horizon-energy MAE absent (gappy data); promoting "
         "on MAE-only fallback (model_mae=%.1f baseline_mae=%.1f n_test=%d).",
-        m_mae, b_mae, int(n_test),
+        m_mae,
+        b_mae,
+        int(n_test),
     )
     return True
 
@@ -154,12 +157,17 @@ def walk_forward(
     ``baseline_horizon_energy_mae_24h``, ``pinball_p50``, ``pinball_p80``.
     """
     empty = {
-        "model_mae": None, "baseline_mae": None,
-        "model_rmse": None, "baseline_rmse": None,
-        "n_test": 0, "improvement_pct": 0.0,
-        "horizon_energy_mae_24h": None, "horizon_energy_mae_12h": None,
+        "model_mae": None,
+        "baseline_mae": None,
+        "model_rmse": None,
+        "baseline_rmse": None,
+        "n_test": 0,
+        "improvement_pct": 0.0,
+        "horizon_energy_mae_24h": None,
+        "horizon_energy_mae_12h": None,
         "baseline_horizon_energy_mae_24h": None,
-        "pinball_p50": None, "pinball_p80": None,
+        "pinball_p50": None,
+        "pinball_p80": None,
     }
     if not rows:
         return empty
@@ -174,9 +182,7 @@ def walk_forward(
     baseline_horizon_errs: dict[int, list[float]] = {h: [] for h in horizon_hours}
 
     # pinball pairs: None signals the model doesn't accept the quantile kwarg
-    pinball_pairs: dict[float, list[tuple[float, float]] | None] = {
-        q: [] for q in quantiles
-    }
+    pinball_pairs: dict[float, list[tuple[float, float]] | None] = {q: [] for q in quantiles}
 
     origin = start + timedelta(days=train_days)
     while origin < end:
@@ -190,9 +196,7 @@ def walk_forward(
             for r in test:
                 pred = model.predict_load_w(r.ts, r.temp, fallback_w)
                 model_pairs.append((pred, r.load_w))
-                base_pairs.append(
-                    (base.get((r.is_weekend, r.hour), fallback_w), r.load_w)
-                )
+                base_pairs.append((base.get((r.is_weekend, r.hour), fallback_w), r.load_w))
                 for q in list(quantiles):
                     if pinball_pairs.get(q) is None:
                         continue  # already determined not supported
@@ -206,13 +210,9 @@ def walk_forward(
             for h in horizon_hours:
                 window = test[:h]
                 if len(window) >= h:
-                    pred_kwh = sum(
-                        model.predict_load_w(r.ts, r.temp, fallback_w) for r in window
-                    ) / 1000.0
+                    pred_kwh = sum(model.predict_load_w(r.ts, r.temp, fallback_w) for r in window) / 1000.0
                     act_kwh = sum(r.load_w for r in window) / 1000.0
-                    base_kwh = sum(
-                        base.get((r.is_weekend, r.hour), fallback_w) for r in window
-                    ) / 1000.0
+                    base_kwh = sum(base.get((r.is_weekend, r.hour), fallback_w) for r in window) / 1000.0
                     horizon_errs[h].append(abs(pred_kwh - act_kwh))
                     baseline_horizon_errs[h].append(abs(base_kwh - act_kwh))
 
@@ -283,12 +283,17 @@ def walk_forward_hgbr(
     installed.  **Never raises.**
     """
     empty = {
-        "model_mae": None, "baseline_mae": None,
-        "model_rmse": None, "baseline_rmse": None,
-        "n_test": 0, "improvement_pct": 0.0,
-        "horizon_energy_mae_24h": None, "horizon_energy_mae_12h": None,
+        "model_mae": None,
+        "baseline_mae": None,
+        "model_rmse": None,
+        "baseline_rmse": None,
+        "n_test": 0,
+        "improvement_pct": 0.0,
+        "horizon_energy_mae_24h": None,
+        "horizon_energy_mae_12h": None,
         "baseline_horizon_energy_mae_24h": None,
-        "pinball_p50": None, "pinball_p80": None,
+        "pinball_p50": None,
+        "pinball_p80": None,
     }
     try:
         if not hourly_rows:
@@ -318,16 +323,13 @@ def walk_forward_hgbr(
 
         origin = start_ts + timedelta(days=train_days)
         while origin < end_ts:
-            train_rows = [
-                row for ts, row in parsed
-                if origin - timedelta(days=train_days) <= ts < origin
-            ]
+            train_rows = [row for ts, row in parsed if origin - timedelta(days=train_days) <= ts < origin]
             # Only include test entries that have a real target (energy-derived
             # hourly load: house_load_kwh_sum×1000, house_load_mean fallback).
             test_entries = [
-                (ts, row) for ts, row in parsed
-                if origin <= ts < origin + timedelta(days=test_days)
-                and featureset.hourly_load_w(row) is not None
+                (ts, row)
+                for ts, row in parsed
+                if origin <= ts < origin + timedelta(days=test_days) and featureset.hourly_load_w(row) is not None
             ]
 
             if train_rows and test_entries:
@@ -361,17 +363,23 @@ def walk_forward_hgbr(
                     for h in _horizon_hours:
                         window = test_entries[:h]
                         if len(window) >= h:
-                            pred_kwh = sum(
-                                model.predict_load_w(ts, row.get("temp_forecast_mean"), fallback_w)
-                                for ts, row in window
-                            ) / 1000.0
-                            act_kwh = sum(
-                                featureset.hourly_load_w(row) for _, row in window
-                            ) / 1000.0
-                            base_kwh = sum(
-                                base.get((ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour), fallback_w)
-                                for ts, _ in window
-                            ) / 1000.0
+                            pred_kwh = (
+                                sum(
+                                    model.predict_load_w(ts, row.get("temp_forecast_mean"), fallback_w)
+                                    for ts, row in window
+                                )
+                                / 1000.0
+                            )
+                            act_kwh = sum(featureset.hourly_load_w(row) for _, row in window) / 1000.0
+                            base_kwh = (
+                                sum(
+                                    base.get(
+                                        (ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour), fallback_w
+                                    )
+                                    for ts, _ in window
+                                )
+                                / 1000.0
+                            )
                             horizon_errs[h].append(abs(pred_kwh - act_kwh))
                             baseline_horizon_errs[h].append(abs(base_kwh - act_kwh))
 
@@ -403,5 +411,5 @@ def walk_forward_hgbr(
             "pinball_p50": _pinball(0.5),
             "pinball_p80": _pinball(0.8),
         }
-    except Exception:  # noqa: BLE001 — never let backtest errors surface to caller
+    except Exception:
         return empty

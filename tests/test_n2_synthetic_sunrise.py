@@ -16,9 +16,10 @@ fallback-load intervals from tonight's horizon edge to ``FALLBACK_SOLAR_PICKUP_H
 
 The firmware 5% hard floor backstops this estimate.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
@@ -31,23 +32,25 @@ from custom_components.anker_x1_smartgrid.models import (
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 
 # 22:00 UTC — overnight, sun entity unavailable
-NOW = datetime(2026, 6, 26, 22, 0, tzinfo=timezone.utc)
-SUNSET = datetime(2026, 6, 26, 20, 0, tzinfo=timezone.utc)   # already past
+NOW = datetime(2026, 6, 26, 22, 0, tzinfo=UTC)
+SUNSET = datetime(2026, 6, 26, 20, 0, tzinfo=UTC)  # already past
 
-_PREDICTOR = LoadPredictor.from_profile({})   # all hours → fallback_load (400 W)
+_PREDICTOR = LoadPredictor.from_profile({})  # all hours → fallback_load (400 W)
 
 
 def _cfg(**kw) -> Config:
-    return Config(**{
-        "capacity_kwh": 10.0,
-        "soc_floor": 5.0,
-        "eta_charge": 1.0,
-        # Trough finder needs at least 1h lookahead (2 slots are fine).
-        "trough_percentile": 30.0,
-        "trough_lookahead_h": 48,
-        "min_horizon_h": 1,
-        **kw,
-    })
+    return Config(
+        **{
+            "capacity_kwh": 10.0,
+            "soc_floor": 5.0,
+            "eta_charge": 1.0,
+            # Trough finder needs at least 1h lookahead (2 slots are fine).
+            "trough_percentile": 30.0,
+            "trough_lookahead_h": 48,
+            "min_horizon_h": 1,
+            **kw,
+        }
+    )
 
 
 def _overnight_result(cfg: Config):
@@ -56,13 +59,15 @@ def _overnight_result(cfg: Config):
     plan = PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=2), ())
     inputs = PlantInputs(soc=80.0, meter_w=0.0, now=NOW)
     return ctrl.compute_decision(
-        plan, inputs, slots,
+        plan,
+        inputs,
+        slots,
         pv_remaining=0.0,
         sunset=SUNSET,
         predictor=_PREDICTOR,
         cur_temp=None,
         cfg=cfg,
-        sun_times=None,   # ← no sun entity → triggers N2 code path
+        sun_times=None,  # ← no sun entity → triggers N2 code path
     )
 
 
@@ -79,14 +84,12 @@ def test_n2_missing_sun_entity_reserve_covers_overnight():
     cfg = _cfg()
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.15) for i in range(2)]
 
-    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = (
-        _overnight_result(cfg)
-    )
+    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = _overnight_result(cfg)
 
     # Compute the per-hour ride-out reserve from the returned intervals_reserve.
     rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
 
-    floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh   # 5% × 10 kWh = 0.5 kWh
+    floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 5% × 10 kWh = 0.5 kWh
     reserve_at_22 = rsv.get(NOW, floor_kwh)
 
     # BEFORE fix: reserve_at_22 ≈ 0.8 kWh (only 2 h of load to tonight's edge).
@@ -109,9 +112,7 @@ def test_n2_reserve_substantially_larger_than_tonight_only():
     cfg = _cfg()
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.15) for i in range(2)]
 
-    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = (
-        _overnight_result(cfg)
-    )
+    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = _overnight_result(cfg)
     rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
 
     floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
@@ -120,9 +121,7 @@ def test_n2_reserve_substantially_larger_than_tonight_only():
     # 2-interval (tonight-only) reserve: 2 × 0.4 kWh = 0.8 kWh.
     # Full-night reserve (08:00 pickup): 10 × 0.4 kWh = 4.0 kWh.
     # 3.0 kWh threshold: must be MORE than 7 hours of synthetic load (8 intervals × 0.4).
-    assert reserve_at_22 >= 3.0, (
-        f"Reserve must cover most of the night (≥ 3.0 kWh); got {reserve_at_22:.3f} kWh"
-    )
+    assert reserve_at_22 >= 3.0, f"Reserve must cover most of the night (≥ 3.0 kWh); got {reserve_at_22:.3f} kWh"
 
 
 def test_n2_intervals_reserve_extended_past_horizon_edge():
@@ -133,9 +132,7 @@ def test_n2_intervals_reserve_extended_past_horizon_edge():
     """
     cfg = _cfg()
 
-    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = (
-        _overnight_result(cfg)
-    )
+    _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = _overnight_result(cfg)
 
     # The price horizon ends at 00:00 (2 slots: 22:00, 23:00 → horizon_edge = 00:00).
     # intervals covers [22:00, 23:00] only.
@@ -143,6 +140,5 @@ def test_n2_intervals_reserve_extended_past_horizon_edge():
     midnight = NOW.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     last_start = max(iv.start for iv in intervals_reserve)
     assert last_start >= midnight, (
-        f"After fix, intervals_reserve must reach past midnight; "
-        f"last interval start = {last_start}"
+        f"After fix, intervals_reserve must reach past midnight; last interval start = {last_start}"
     )

@@ -1,4 +1,5 @@
 """Static-tariff wiring in the controller (export price + recorder tolerance)."""
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import controller, const
@@ -13,18 +14,24 @@ from tests.test_controller_dp import _call_dp_select_slots, _cfg
 
 
 def test_resolve_export_price_static_constant():
-    ctrl, _ = _make_controller(_StubHass(), data_overrides={
-        const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-        const.CONF_STATIC_PRICE_EXPORT: 0.12,
-    })
+    ctrl, _ = _make_controller(
+        _StubHass(),
+        data_overrides={
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_EXPORT: 0.12,
+        },
+    )
     assert ctrl._resolve_export_price() == (0.12, False)
 
 
 def test_resolve_export_price_static_zero_is_none():
-    ctrl, _ = _make_controller(_StubHass(), data_overrides={
-        const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-        const.CONF_STATIC_PRICE_EXPORT: 0.0,
-    })
+    ctrl, _ = _make_controller(
+        _StubHass(),
+        data_overrides={
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_EXPORT: 0.0,
+        },
+    )
     assert ctrl._resolve_export_price() == (None, False)
 
 
@@ -40,7 +47,7 @@ async def test_record_sample_tolerates_absent_price_and_irradiance(monkeypatch):
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
     ctrl.enabled = False
-    ctrl._data.pop(const.CONF_ENT_PRICE, None)       # new-install shape (post NL removal)
+    ctrl._data.pop(const.CONF_ENT_PRICE, None)  # new-install shape (post NL removal)
     ctrl._data.pop(const.CONF_ENT_IRRADIANCE, None)
     _seed_valid_inputs(hass, soc="20.0")
     result = await ctrl.tick()
@@ -59,20 +66,22 @@ async def test_tick_static_mode_zero_price_entities_runs_dp(monkeypatch):
     """Static mode with NO price sensor still ticks (reason ok) and populates a plan."""
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
     hass = _StubHass()
-    ctrl, act = _make_controller(hass, data_overrides={
-        const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
-        const.CONF_STATIC_PRICE_IMPORT: 0.30,
-        const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
-        const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
-        const.CONF_ENT_PRICE: "",          # no dynamic price sensor
-        const.CONF_ENT_PV_TODAY: [],
-        const.CONF_ENT_PV_TOMORROW: [],
-    })
+    ctrl, act = _make_controller(
+        hass,
+        data_overrides={
+            const.CONF_PRICE_MODE: const.PRICE_MODE_STATIC,
+            const.CONF_STATIC_PRICE_IMPORT: 0.30,
+            const.CONF_STATIC_PRICE_OFFPEAK: 0.10,
+            const.CONF_STATIC_OFFPEAK_HOURS: "01:00-06:00",
+            const.CONF_ENT_PRICE: "",  # no dynamic price sensor
+            const.CONF_ENT_PV_TODAY: [],
+            const.CONF_ENT_PV_TOMORROW: [],
+        },
+    )
     # Seed plant inputs + sun ONLY — no price forecast entity exists.
     hass.set_state("sensor.soc", "20.0")
     hass.set_state("sensor.meter_power", "0.0")
-    hass.set_state("sun.sun", "above_horizon",
-                   {"next_setting": (BASE + timedelta(hours=8)).isoformat()})
+    hass.set_state("sun.sun", "above_horizon", {"next_setting": (BASE + timedelta(hours=8)).isoformat()})
     hass.set_state("sensor.pv_power", "0.0")
     hass.set_state("sensor.battery_power", "0.0")
 
@@ -92,22 +101,34 @@ async def test_tick_static_mode_zero_price_entities_runs_dp(monkeypatch):
 # ratio-scale by the (HP/HC) import curve's shape.
 # ===========================================================================
 
+
 def _dp_export_window(cfg, prices):
     """Capture the per-hour export-price array _dp_select_slots hands to the DP."""
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+
     captured = {}
 
     def _fake(*args, **kwargs):
         captured["export_price"] = kwargs.get("export_price")
         wl = kwargs["window_len"]
-        return {"schedule": [0.0] * wl, "kwh": 0.0, "eur": 0.0,
-                "export_schedule": [0.0] * wl, "export_kwh": 0.0, "export_revenue_eur": 0.0}
+        return {
+            "schedule": [0.0] * wl,
+            "kwh": 0.0,
+            "eur": 0.0,
+            "export_schedule": [0.0] * wl,
+            "export_kwh": 0.0,
+            "export_revenue_eur": 0.0,
+        }
 
     import unittest.mock as mock
+
     with mock.patch.object(ctrl_mod.optimize_mod, "optimize_grid", side_effect=_fake):
         _call_dp_select_slots(
-            cfg, soc=80.0, export_price=cfg.static_price_export,
-            export_price_matches_import=False, prices=prices,
+            cfg,
+            soc=80.0,
+            export_price=cfg.static_price_export,
+            export_price_matches_import=False,
+            prices=prices,
         )
     return captured["export_price"]
 

@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
 from custom_components.anker_x1_smartgrid import controller, forecast, const
 from tests.helpers import StubActuator, StubHass as _T6Hass, StubRecorder, StubStore
@@ -9,24 +9,44 @@ from tests.helpers import StubActuator, StubHass as _T6Hass, StubRecorder, StubS
 # P1-T6: shared infrastructure for hourly-rollup tick() tests
 # ---------------------------------------------------------------------------
 
+
 class _RollupRecorder:
     """Tracks rollup_hours and purge_hourly_older_than calls; stubs all other recorder API."""
 
     def __init__(self):
-        self.rollup_calls: list = []        # now_iso args received
+        self.rollup_calls: list = []  # now_iso args received
         self.purge_hourly_calls: list = []  # cutoff_iso args received
 
     # --- required stubs (called by tick / regret / retrain paths) ---
-    def append(self, row): pass
-    def append_decision(self, **kwargs): pass
-    def purge_older_than(self, ts, days): pass
-    def purge_decisions_older_than(self, cutoff): pass
-    def read_load_samples(self, since_iso=None): return []
-    def read_feature_rows(self, since_iso=None): return []
-    def upsert_daily_regret(self, **kwargs): pass
-    def read_daily_regret_range(self, *a, **kw): return []
-    def read_latest_daily_regret(self): return None
-    def read_decisions(self, *a, **kw): return []
+    def append(self, row):
+        pass
+
+    def append_decision(self, **kwargs):
+        pass
+
+    def purge_older_than(self, ts, days):
+        pass
+
+    def purge_decisions_older_than(self, cutoff):
+        pass
+
+    def read_load_samples(self, since_iso=None):
+        return []
+
+    def read_feature_rows(self, since_iso=None):
+        return []
+
+    def upsert_daily_regret(self, **kwargs):
+        pass
+
+    def read_daily_regret_range(self, *a, **kw):
+        return []
+
+    def read_latest_daily_regret(self):
+        return None
+
+    def read_decisions(self, *a, **kw):
+        return []
 
     # --- methods under test ---
     def rollup_hours(self, now_iso: str) -> int:
@@ -44,7 +64,7 @@ class _RollupRecorder:
 
 # The test hour must NOT be a multiple of 6 to avoid the 6-hourly raw-purge
 # guard also firing and potentially masking issues.  Hour 11 is clean.
-_T6_NOW = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+_T6_NOW = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 def _make_t6_controller(hass, rec):
@@ -75,7 +95,8 @@ def _make_t6_controller(hass, rec):
     ctrl.enabled = False
     return ctrl
 
-BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
+
+BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
 
 def _slots(prices):
@@ -90,8 +111,14 @@ def test_compute_decision_accepts_predictor():
     predictor = forecast.LoadPredictor.from_profile({})
     plan = PlanState.initial(BASE - timedelta(hours=1))
     new_plan, setpoint, _, _horizon, _, _ = controller.compute_decision(
-        plan, inputs, slots, pv_remaining=0.0, sunset=sunset,
-        predictor=predictor, cur_temp=None, cfg=cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=0.0,
+        sunset=sunset,
+        predictor=predictor,
+        cur_temp=None,
+        cfg=cfg,
     )
     assert new_plan.state is ControllerState.FORCING
 
@@ -104,6 +131,7 @@ def test_compute_decision_propagates_cur_temp_to_predictor():
     verifies the fix: compute_decision builds temp_by_start from its own pv_curve,
     guaranteeing all keys match and cur_temp propagates through.
     """
+
     class _SpyPredictor:
         def __init__(self):
             self.temps_seen = []
@@ -120,13 +148,17 @@ def test_compute_decision_propagates_cur_temp_to_predictor():
     plan = PlanState.initial(BASE - timedelta(hours=1))
     # pv_remaining>0 so synth_pv_curve produces a non-empty curve → predictor.predict IS called.
     controller.compute_decision(
-        plan, inputs, slots, pv_remaining=5.0, sunset=sunset,
-        predictor=spy, cur_temp=4.0, cfg=cfg,
+        plan,
+        inputs,
+        slots,
+        pv_remaining=5.0,
+        sunset=sunset,
+        predictor=spy,
+        cur_temp=4.0,
+        cfg=cfg,
     )
     assert spy.temps_seen, "predictor.predict was never called (pv_curve was empty?)"
-    assert all(t == 4.0 for t in spy.temps_seen), (
-        f"Expected all temps to be 4.0 (not None), got {spy.temps_seen}"
-    )
+    assert all(t == 4.0 for t in spy.temps_seen), f"Expected all temps to be 4.0 (not None), got {spy.temps_seen}"
 
 
 # _Rec kept local (not migrated to helpers.StubRecorder): constructor-seeded
@@ -136,27 +168,40 @@ def test_compute_decision_propagates_cur_temp_to_predictor():
 class _Rec:
     def __init__(self, rows):
         self._rows = rows
+
     def read_feature_rows(self, since_iso=None):
         return self._rows
+
     def read_hourly_rows(self, since_iso=None):
         # Tier 2 (bucketed) now trains on hourly rollups: >=48 rows clears
         # DEFAULT_MIN_TRAIN_HOURS while staying far under HGBR's ~28-day
         # coverage gate, so is_ready() still returns False naturally and the
         # bucketed tier is the one that engages below.
         return _cold_warm_hourly_rows()
-    def append(self, row): pass
-    def purge_older_than(self, *a): return 0
+
+    def append(self, row):
+        pass
+
+    def purge_older_than(self, *a):
+        return 0
 
 
 def _cold_warm_rows(n_per=1500):
     rows = []
-    base = datetime(2026, 6, 1, 8, tzinfo=timezone.utc)
+    base = datetime(2026, 6, 1, 8, tzinfo=UTC)
     for d in range(20):
         for _ in range(n_per // 20 + 1):
             ts = base + timedelta(days=d)
             cold = d % 2 == 0
-            rows.append({"ts": ts.isoformat(), "p1_w": 1000.0 if cold else 300.0,
-                         "batt_w": 0.0, "pv_w": 0.0, "temp": 2.0 if cold else 18.0})
+            rows.append(
+                {
+                    "ts": ts.isoformat(),
+                    "p1_w": 1000.0 if cold else 300.0,
+                    "batt_w": 0.0,
+                    "pv_w": 0.0,
+                    "temp": 2.0 if cold else 18.0,
+                }
+            )
     return rows
 
 
@@ -169,21 +214,24 @@ def _cold_warm_hourly_rows(days=20):
     min_days=21 default, so the HGBR coverage gate still fails naturally.
     """
     rows = []
-    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 6, 1, tzinfo=UTC)
     for d in range(days):
         cold = d % 2 == 0
         for h in range(24):
             ts = base + timedelta(days=d, hours=h)
-            rows.append({
-                "hour_ts": ts.isoformat(),
-                "house_load_kwh_sum": 1.0 if cold else 0.3,
-                "temp_mean": 2.0 if cold else 18.0,
-            })
+            rows.append(
+                {
+                    "hour_ts": ts.isoformat(),
+                    "house_load_kwh_sum": 1.0 if cold else 0.3,
+                    "temp_mean": 2.0 if cold else 18.0,
+                }
+            )
     return rows
 
 
 async def test_retrain_switches_to_model_with_enough_data():
     from custom_components.anker_x1_smartgrid.controller import Controller
+
     data = {"use_learned_model": True, "min_train_samples": 100, "train_days": 14, "backtest_test_days": 3}
     ctl = Controller.__new__(Controller)
     # minimal manual init for the unit under test
@@ -214,6 +262,7 @@ async def test_retrain_switches_to_model_with_enough_data():
 def _make_recording_controller():
     """Build a Controller instance with just enough wiring for _record_sample."""
     from custom_components.anker_x1_smartgrid.controller import Controller
+
     ctl = Controller.__new__(Controller)
     ctl._hass = _T6Hass()
     ctl._data = {
@@ -234,10 +283,10 @@ def _make_recording_controller():
 async def test_record_sample_with_weather_entry_persists_four_columns():
     """_record_sample with a matching forecast entry stores all 4 weather columns."""
     ctl = _make_recording_controller()
-    now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 22, 10, 30, tzinfo=UTC)
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
     entry = {
-        "datetime": datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc),
+        "datetime": datetime(2026, 6, 22, 10, 0, tzinfo=UTC),
         "temp_forecast": 19.5,
         "cloud_cover": 25.0,
         "humidity": 70.0,
@@ -257,7 +306,7 @@ async def test_record_sample_with_weather_entry_persists_four_columns():
 async def test_record_sample_with_no_weather_entry_stores_none_for_all_four():
     """_record_sample with weather_entry=None (empty forecast) stores None for all 4 columns."""
     ctl = _make_recording_controller()
-    now = datetime(2026, 6, 22, 10, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 22, 10, 30, tzinfo=UTC)
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=now)
 
     await ctl._record_sample(now, inputs, setpoint=0.0, state="passive", weather_entry=None)
@@ -273,6 +322,7 @@ async def test_record_sample_with_no_weather_entry_stores_none_for_all_four():
 # ---------------------------------------------------------------------------
 # P1-T6: tick() wires hourly rollup + purge into controller maintenance
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_rollup_fires_once_then_not_again_in_same_hour(monkeypatch):
@@ -353,8 +403,7 @@ async def test_rollup_runs_via_executor_path(monkeypatch):
     # At least one executor call must be the rollup sync method.
     rollup_dispatches = [name for name, _ in executor_calls if "rollup" in name]
     assert rollup_dispatches, (
-        f"_rollup_hourly_sync was not dispatched via async_add_executor_job; "
-        f"executor calls: {executor_calls}"
+        f"_rollup_hourly_sync was not dispatched via async_add_executor_job; executor calls: {executor_calls}"
     )
     # The recorder must have registered both calls (proving the executor ran them).
     assert len(rec.rollup_calls) == 1
@@ -364,6 +413,7 @@ async def test_rollup_runs_via_executor_path(monkeypatch):
 # ---------------------------------------------------------------------------
 # P3-T3: HGBR → bucketed → profile retrain chain
 # ---------------------------------------------------------------------------
+
 
 # _HGBRRec kept local (not migrated to helpers.StubRecorder): same reason as
 # _Rec above — constructor-seeded fixed rows, since_iso ignored, needed to
@@ -381,13 +431,17 @@ class _HGBRRec:
     def read_hourly_rows(self, since_iso=None):
         return self._hourly_rows
 
-    def append(self, row): pass
-    def purge_older_than(self, *a): return 0
+    def append(self, row):
+        pass
+
+    def purge_older_than(self, *a):
+        return 0
 
 
 def _make_retrain_ctl(rec, *, use_learned_model=True, min_train_samples=100):
     """Build a minimal Controller wired only for _retrain_sync tests."""
     from custom_components.anker_x1_smartgrid.controller import Controller
+
     data = {
         "use_learned_model": use_learned_model,
         "min_train_samples": min_train_samples,
@@ -480,8 +534,7 @@ def test_retrain_hgbr_promotion_fits_only_p50_quantile(monkeypatch):
     assert ctl.active_model_name == "hgbr"
     fitted = ctl.predictor._model
     assert set(fitted._models.keys()) == {0.5}, (
-        f"promoted HGBR must fit only q=0.5 (live control never reads 0.8); "
-        f"got {sorted(fitted._models.keys())}"
+        f"promoted HGBR must fit only q=0.5 (live control never reads 0.8); got {sorted(fitted._models.keys())}"
     )
 
 

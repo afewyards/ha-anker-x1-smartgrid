@@ -8,9 +8,10 @@ This is a characterisation / acceptance test: the production code (Tasks 1–5) 
 implements the behaviour.  The test locks the invariant so a regression cannot silently
 re-introduce forced charging.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.controller import compute_decision
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
@@ -23,7 +24,7 @@ from custom_components.anker_x1_smartgrid.models import (
 )
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 
-BASE = datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 6, 25, 7, 0, tzinfo=UTC)
 _ALL_EXPENSIVE_PRICE = 0.90  # €/kWh — far above any sane gate ceiling
 _PREDICTOR = LoadPredictor.from_profile({})
 
@@ -36,7 +37,6 @@ def _cfg(**overrides) -> Config:
         max_charge_w=6000.0,
         eta_charge=0.92,
         round_trip_eff=0.85,
-
     )
     base.update(overrides)
     return Config(**base)
@@ -60,9 +60,9 @@ def test_real_dp_rides_at_floor_returns_zero_schedule():
     """
     n = 8
     pv = [0.0] * n
-    load = [300.0] * n           # light drain; firmware holds at 5%
-    price = [0.90] * n           # all far above any sane gate ceiling
-    chargeable = [False] * n     # price-gate mask: nothing worthy
+    load = [300.0] * n  # light drain; firmware holds at 5%
+    price = [0.90] * n  # all far above any sane gate ceiling
+    chargeable = [False] * n  # price-gate mask: nothing worthy
     result = optimize_grid(
         pv,
         load,
@@ -76,9 +76,7 @@ def test_real_dp_rides_at_floor_returns_zero_schedule():
         terminal_mode="reserve",
         water_value=None,
     )
-    assert sum(result["schedule"]) == 0.0, (
-        f"Expected zero schedule (idle at floor), got {result['schedule']}"
-    )
+    assert sum(result["schedule"]) == 0.0, f"Expected zero schedule (idle at floor), got {result['schedule']}"
 
 
 def test_compute_decision_passive_at_floor_all_expensive():
@@ -94,14 +92,18 @@ def test_compute_decision_passive_at_floor_all_expensive():
     _out: dict = {}
 
     new_plan, setpoint, *_ = compute_decision(
-        _plan(), inputs, slots, 0.0, sunset,
-        _PREDICTOR, None, cfg,
+        _plan(),
+        inputs,
+        slots,
+        0.0,
+        sunset,
+        _PREDICTOR,
+        None,
+        cfg,
         _out=_out,
     )
 
     assert new_plan.state is ControllerState.PASSIVE, (
         f"Expected PASSIVE at floor with all-expensive prices, got {new_plan.state}"
     )
-    assert setpoint == 0.0, (
-        f"Expected setpoint=0 (no force-charge) at floor, got {setpoint}"
-    )
+    assert setpoint == 0.0, f"Expected setpoint=0 (no force-charge) at floor, got {setpoint}"
