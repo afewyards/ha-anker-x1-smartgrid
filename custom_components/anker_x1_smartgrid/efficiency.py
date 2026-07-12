@@ -110,8 +110,8 @@ class EfficiencyCurve:
 
     @staticmethod
     def _static_scalars(cfg: Config) -> tuple[float, float]:
-        eta_c = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
-        eta_d = min(cfg.round_trip_eff / eta_c, 1.0)
+        eta_c = cfg.eta_charge_safe()
+        eta_d = cfg.eta_discharge_static()
         return eta_c, eta_d
 
     @classmethod
