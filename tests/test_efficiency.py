@@ -360,3 +360,30 @@ def test_agreement_gate_applies_to_charge_direction():
     for i, row in enumerate(run):
         row["soc"] = 60.0 + 5.0 * i / (len(run) - 1)
     assert run_eta(run, cfg) is None
+
+
+def test_bin_median_is_dc_kwh_weighted():
+    # One long clean run (eta 0.96, 0.48 kWh) vs two short noisy runs
+    # (eta ~0.86, 0.3 kWh each): plain median would pick 0.86; the
+    # dc_kwh-weighted median must pick the run at the 50% energy point.
+    # Build 12 long runs + 2 short ones in charge bin 5 so the bin is
+    # confident; median must equal the long runs' 0.96.
+    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    now = datetime(2026, 7, 4, 12, 0, 0)
+    rows = []
+    for k in range(12):
+        rows += _charge_run(now - timedelta(hours=k + 1))  # eta 0.96, 0.48 kWh each
+    for k in range(2):
+        rows += _charge_run(now - timedelta(hours=k + 20), resid_w=11500.0)  # eta ~0.835, 0.48 kWh
+    rows.sort(key=lambda r: r["ts"])
+    c = EfficiencyCurve.build(rows, cfg, now)
+    top = c._charge[5]
+    assert top.confident is True
+    assert math.isclose(top.eta, 0.96, rel_tol=1e-9)
+
+
+def test_weighted_median_picks_energy_midpoint():
+    from custom_components.anker_x1_smartgrid.efficiency import _weighted_median
+
+    assert _weighted_median([(0.6, 0.3), (0.62, 0.3), (0.95, 2.0)]) == 0.95
+    assert _weighted_median([(0.9, 1.0)]) == 0.9

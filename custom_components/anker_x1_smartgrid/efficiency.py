@@ -28,7 +28,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from statistics import fmean, median
+from statistics import fmean
 
 from . import const
 from .models import Config
@@ -69,6 +69,18 @@ def bin_index(power_w: float) -> int:
         if p < hi:
             return i
     return len(_bin_edges())
+
+
+def _weighted_median(pairs: list[tuple[float, float]]) -> float:
+    """dc_kwh-weighted median eta: long clean runs outvote short noisy ones."""
+    ordered = sorted(pairs)
+    half = sum(w for _, w in ordered) / 2.0
+    acc = 0.0
+    for eta, w in ordered:
+        acc += w
+        if acc >= half:
+            return eta
+    return ordered[-1][0]
 
 
 def _fallback_bins(direction: str, eta: float, reason: str = "no_data") -> list[BinStat]:
@@ -132,7 +144,7 @@ class EfficiencyCurve:
         cutoff = (now - timedelta(days=const.EFFICIENCY_WINDOW_DAYS)).isoformat()
         windowed = [r for r in rows if r.get("ts") and r["ts"] >= cutoff]
         n_bins = len(_bin_edges()) + 1
-        etas: dict[str, list[list[float]]] = {
+        etas: dict[str, list[list[tuple[float, float]]]] = {
             "charge": [[] for _ in range(n_bins)],
             "discharge": [[] for _ in range(n_bins)],
         }
@@ -145,7 +157,7 @@ class EfficiencyCurve:
             if r is None:
                 continue
             i = bin_index(r.dc_power_w)
-            etas[r.direction][i].append(r.eta)
+            etas[r.direction][i].append((r.eta, r.dc_kwh))
             dc[r.direction][i] += r.dc_kwh
         charge_bins = cls._aggregate("charge", etas, dc, eta_c_fb)
         discharge_bins = cls._aggregate("discharge", etas, dc, eta_d_fb)
@@ -154,11 +166,11 @@ class EfficiencyCurve:
     @staticmethod
     def _aggregate(
         direction: str,
-        etas: dict[str, list[list[float]]],
+        etas: dict[str, list[list[tuple[float, float]]]],
         dc: dict[str, list[float]],
         fallback: float,
     ) -> list[BinStat]:
-        """Per-bin median with a confidence gate; low-confidence bins fall back."""
+        """Per-bin dc_kwh-weighted median with a confidence gate; low-confidence bins fall back."""
         edges = _bin_edges()
         los = [0.0, *edges]
         his = [*edges, float("inf")]
@@ -168,7 +180,7 @@ class EfficiencyCurve:
             samples = etas[direction][i]
             dc_kwh = dc[direction][i]
             n = len(samples)
-            med = median(samples) if samples else None
+            med = _weighted_median(samples) if samples else None
             if med is None:
                 out.append(BinStat(lo, hi, direction, fallback, None, 0, 0.0, False, "no_data"))
                 continue
