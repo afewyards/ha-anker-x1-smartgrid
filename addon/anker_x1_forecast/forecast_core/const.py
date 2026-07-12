@@ -236,10 +236,14 @@ EFFICIENCY_DC_BIN_EDGES_W = [400.0, 800.0, 1500.0, 2500.0, 4000.0]
 EFFICIENCY_MIN_RUNS = 10
 EFFICIENCY_MIN_DC_KWH = 2.0
 EFFICIENCY_DSOC_GATE_PCT = 3.0
-# Per-run instrumentation-agreement gate: |ΔSoC-derived DC power| must agree
-# with the run's mean |batt_w| within this factor (both directions).  Integer
-# SoC (1% = 0.1 kWh) inflates ΔSoC on short runs, deflating eta AND promoting
-# runs into higher power bins; clean runs measure 0.96-1.18, poisoned 1.3-1.9.
+# Per-run instrumentation-agreement gate: the ΔSoC-derived DC power must agree
+# with the run's mean |batt_w| (the measured DC-side power integral) within
+# this factor, both directions.  This is a coulomb-count vs power-integration
+# CONSISTENCY tolerance, not an efficiency floor — a clean run sits near 1.0
+# regardless of its eta (residual_w, not batt_w, carries the inverter loss).
+# Integer SoC (1% = 0.1 kWh) inflates ΔSoC on short runs, deflating eta AND
+# promoting runs into higher power bins; on lab data clean runs measured
+# 0.96-1.18 and quantization-poisoned runs 1.3-1.9.
 EFFICIENCY_POWER_AGREEMENT_MAX = 1.25
 EFFICIENCY_ENVELOPE = (0.50, 1.02)
 EFFICIENCY_WINDOW_DAYS = 30

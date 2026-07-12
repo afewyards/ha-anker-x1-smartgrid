@@ -72,7 +72,12 @@ def bin_index(power_w: float) -> int:
 
 
 def _weighted_median(pairs: list[tuple[float, float]]) -> float:
-    """dc_kwh-weighted median eta: long clean runs outvote short noisy ones."""
+    """dc_kwh-weighted median eta: long clean runs outvote short noisy ones.
+
+    Lower weighted median — always returns an observed eta, never interpolates
+    between two central samples (unlike ``statistics.median`` for even counts).
+    A single run holding >50% of a bin's total dc_kwh sets the bin's median.
+    """
     ordered = sorted(pairs)
     half = sum(w for _, w in ordered) / 2.0
     acc = 0.0

@@ -363,11 +363,11 @@ def test_agreement_gate_applies_to_charge_direction():
 
 
 def test_bin_median_is_dc_kwh_weighted():
-    # One long clean run (eta 0.96, 0.48 kWh) vs two short noisy runs
-    # (eta ~0.86, 0.3 kWh each): plain median would pick 0.86; the
-    # dc_kwh-weighted median must pick the run at the 50% energy point.
-    # Build 12 long runs + 2 short ones in charge bin 5 so the bin is
-    # confident; median must equal the long runs' 0.96.
+    # Integration path: build() feeds (eta, dc_kwh) pairs through
+    # _weighted_median and still promotes a confident bin.  All runs here
+    # share dc_kwh=0.48, so this pins the build()->weighted-median plumbing;
+    # the weighting semantics themselves are pinned by
+    # test_weighted_median_picks_energy_midpoint below.
     cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
     now = datetime(2026, 7, 4, 12, 0, 0)
     rows = []
