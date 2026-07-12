@@ -3,7 +3,12 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import controller, const
 from custom_components.anker_x1_smartgrid import optimize as optimize_mod
-from tests.test_controller import _StubHass, _make_controller, _seed_valid_inputs, BASE
+from tests.helpers import (
+    BASE,
+    StubHass as _StubHass,
+    make_controller as _make_controller,
+    seed_valid_inputs as _seed_valid_inputs,
+)
 from tests.test_controller_dp import _call_dp_select_slots, _cfg
 
 

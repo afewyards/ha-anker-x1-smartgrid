@@ -22,7 +22,7 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import soc_drift
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
-from tests.test_optimize_parity import make_cfg
+from tests.helpers import make_config as make_cfg
 from tests.test_optimize_hedge import _resim
 
 

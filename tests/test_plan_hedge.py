@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from custom_components.anker_x1_smartgrid.plan import build_plan_horizon
 from custom_components.anker_x1_smartgrid.models import PriceSlot, ForecastInterval
-from tests.test_optimize_parity import make_cfg
+from tests.helpers import make_config as make_cfg
 
 UTC = timezone.utc
 

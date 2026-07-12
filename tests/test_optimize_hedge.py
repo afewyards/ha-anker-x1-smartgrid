@@ -13,7 +13,7 @@ import pytest
 
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 from custom_components.anker_x1_smartgrid.regret import _BIN_KWH, _apply_solar_load
-from tests.test_optimize_parity import make_cfg
+from tests.helpers import make_config as make_cfg
 
 
 # ---------------------------------------------------------------------------
