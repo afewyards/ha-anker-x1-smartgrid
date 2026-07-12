@@ -541,6 +541,45 @@ def _build_is_cheap_by_hour(
     }
 
 
+def _next_synthetic_pickup(after: datetime) -> datetime:
+    """Next occurrence of ``const.FALLBACK_SOLAR_PICKUP_HOUR_UTC`` strictly after ``after``.
+
+    Zeroes minute/second/microsecond. Rolls to the next day when the pickup
+    hour on ``after``'s own day is not strictly later than ``after``.
+    """
+    pickup = after.replace(
+        hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
+        minute=0, second=0, microsecond=0,
+    )
+    if pickup <= after:
+        pickup += timedelta(days=1)
+    return pickup
+
+
+def _synthetic_night_rows(
+    start: datetime,
+    end: datetime,
+    load_w_by_hod: dict[int, float] | None,
+    fallback_w: float,
+) -> list[ForecastInterval]:
+    """Hourly zero-PV rows from ``start`` (inclusive) to ``end`` (exclusive).
+
+    Each row's load is looked up by hour-of-day in ``load_w_by_hod`` (falling
+    back to ``fallback_w`` when the dict is ``None`` or missing that hour) —
+    this is how synthetic overnight ride-out rows reuse the same predicted
+    load the real forecast curve uses.
+    """
+    rows: list[ForecastInterval] = []
+    t = start
+    while t < end:
+        load_w = (
+            load_w_by_hod.get(t.hour, fallback_w) if load_w_by_hod is not None else fallback_w
+        )
+        rows.append(ForecastInterval(t, 0.0, load_w, 1.0))
+        t += timedelta(hours=1)
+    return rows
+
+
 def _build_reserve_by_hour(
     now: datetime,
     slots: list[PriceSlot],
@@ -638,23 +677,10 @@ def _build_reserve_by_hour(
             # so the tail does NOT collapse to the floor and free-drain via export.
             if not _has_solar:
                 continue
-            synthetic_pickup = h.replace(
-                hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
-                minute=0, second=0, microsecond=0,
+            synthetic_pickup = _next_synthetic_pickup(h)
+            syn_suffix = _synthetic_night_rows(
+                h, synthetic_pickup, load_by_hod, const.DEFAULT_FALLBACK_LOAD_W
             )
-            if synthetic_pickup <= h:
-                synthetic_pickup += timedelta(days=1)
-            syn_suffix = []
-            t = h
-            while t < synthetic_pickup:
-                syn_suffix.append(
-                    ForecastInterval(
-                        t, 0.0,
-                        load_by_hod.get(t.hour, const.DEFAULT_FALLBACK_LOAD_W),
-                        1.0,
-                    )
-                )
-                t += timedelta(hours=1)
             reserve_by_hour[h] = energy.ride_out_reserve_kwh(
                 h, syn_suffix, cfg, is_cheap=is_cheap, slot_minutes=slot_minutes,
                 eta_curve=eta_curve,
@@ -674,29 +700,16 @@ def _build_reserve_by_hour(
             # same 08:00 UTC morning — the while-loop below simply won't fire.
             # Bounds the ride-out to ONE night (reserve_kwh also caps at pack
             # capacity) so day-2 export is reserve-bounded, not suppressed.
-            synthetic_pickup = h.replace(
-                hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
-                minute=0, second=0, microsecond=0,
-            )
-            if synthetic_pickup <= h:
-                synthetic_pickup += timedelta(days=1)
+            synthetic_pickup = _next_synthetic_pickup(h)
             # Find where the real (+ already-synthetic) intervals end.
             last_iv = suffix[-1]
             suffix_end = last_iv.start + timedelta(hours=last_iv.dt_h)
             syn_start = suffix_end.replace(minute=0, second=0, microsecond=0)
             if suffix_end > syn_start:
                 syn_start += timedelta(hours=1)
-            suffix = list(suffix)
-            t = syn_start
-            while t < synthetic_pickup:
-                suffix.append(
-                    ForecastInterval(
-                        t, 0.0,
-                        load_by_hod.get(t.hour, const.DEFAULT_FALLBACK_LOAD_W),
-                        1.0,
-                    )
-                )
-                t += timedelta(hours=1)
+            suffix = list(suffix) + _synthetic_night_rows(
+                syn_start, synthetic_pickup, load_by_hod, const.DEFAULT_FALLBACK_LOAD_W
+            )
             next_opp = synthetic_pickup
         reserve_by_hour[h] = energy.ride_out_reserve_kwh(
             h, suffix, cfg, is_cheap=is_cheap, slot_minutes=slot_minutes,
@@ -876,12 +889,7 @@ def compute_decision(
         # so the ride-out reserve computed by _build_reserve_by_hour always covers
         # the full overnight load.  The firmware's 5% hard floor backstops this.
         intervals_reserve = list(intervals)
-        _synthetic_pickup = now_h.replace(
-            hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
-            minute=0, second=0, microsecond=0,
-        )
-        if _synthetic_pickup <= now_h:
-            _synthetic_pickup += timedelta(days=1)
+        _synthetic_pickup = _next_synthetic_pickup(now_h)
         # End of the last real interval (= start of the synthetic gap).
         _iv_horizon = (
             intervals[-1].start
@@ -908,11 +916,9 @@ def compute_decision(
             # If the real interval ends mid-hour, advance to the next full hour.
             if _iv_horizon > _syn_start:
                 _syn_start += timedelta(hours=1)
-            while _syn_start < _synthetic_pickup:
-                intervals_reserve.append(
-                    ForecastInterval(_syn_start, 0.0, fallback_load, 1.0)
-                )
-                _syn_start += timedelta(hours=1)
+            intervals_reserve.extend(
+                _synthetic_night_rows(_syn_start, _synthetic_pickup, None, fallback_load)
+            )
 
     horizon_mode = "water-value"
 
