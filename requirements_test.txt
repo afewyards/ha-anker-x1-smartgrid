@@ -1,5 +1,5 @@
 pytest>=8
-pytest-asyncio>=0.23
+pytest-asyncio==0.24.0
 pytest-homeassistant-custom-component>=0.13
 holidays==0.99
-scikit-learn>=1.5
+scikit-learn==1.5.2

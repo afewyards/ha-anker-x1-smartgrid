@@ -16,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Vendor drift check
+        run: |
+          ./addon/anker_x1_forecast/sync_core.sh
+          git diff --exit-code addon/
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -31,7 +36,7 @@ jobs:
           python -m pytest tests/ -v --tb=short
 
       - name: Install add-on test dependencies
-        run: pip install holidays==0.99 fastapi==0.115.6 uvicorn==0.34.0 pydantic
+        run: pip install -r addon/anker_x1_forecast/requirements.txt
 
       - name: Run add-on tests
         run: |
@@ -54,7 +59,7 @@ jobs:
           pip install -r requirements_test.txt
 
       - name: Install add-on test dependencies
-        run: pip install holidays==0.99 fastapi==0.115.6 uvicorn==0.34.0 pydantic
+        run: pip install -r addon/anker_x1_forecast/requirements.txt
 
       - name: Install lint tools
         run: |
