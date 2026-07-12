@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import const
-from .dp_common import select_end_state, soc_bins
+from .dp_common import export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 
 # Discretisation resolution for the SoC DP (kWh per bin).
@@ -406,31 +406,9 @@ def hindsight_optimal_grid(
 
     # Export leg pre-computations (F1).  All zero / off when export_price is None.
     _do_export = export_price is not None
-    if _do_export:
-        # Discharge efficiency: eta_d = min(round_trip_eff / eta_charge, 1.0)
-        # on the None path (reuses `eta`, already computed above with the same
-        # zero-guard); looked up on the curve at the max export rate otherwise.
-        if eta_curve is None:
-            eta_d: float = min(cfg.round_trip_eff / eta, 1.0)
-        else:
-            eta_d = _eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
-        cycle_cost: float = cfg.cycle_cost_eur_per_kwh
-        # Max DC kWh per hour that can be exported through the inverter.
-        # max_export_w is the AC-side export rate cap; DC discharged = AC / eta_d.
-        max_export_ac_h: float = cfg.max_export_w / 1000.0 * dt_h
-        max_export_dc_h: float = max_export_ac_h / eta_d if eta_d > 1e-9 else max_export_ac_h
-        # Combined AC grid export cap (battery + solar spill must not exceed this).
-        # Mirrors optimize.optimize_grid:510 — tighter of inverter rating + grid limit.
-        ac_cap: float = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0 * dt_h
-        _band = cfg.export_peak_band_frac
-        peak_from = windowed_peak_prices(list(export_price), round(cfg.export_peak_lookback_h / dt_h))  # type: ignore[arg-type]
-    else:
-        eta_d = 1.0
-        cycle_cost = 0.0
-        max_export_dc_h = 0.0
-        ac_cap = 0.0
-        _band = 0.0
-        peak_from = []
+    eta_d, cycle_cost, max_export_dc_h, ac_cap, _band, peak_from = export_leg_precompute(
+        export_price, cfg, eta, eta_curve, dt_h,
+    )
 
     bin_kwh = _BIN_KWH
     n_states, to_bin, from_bin = soc_bins(cap_kwh)

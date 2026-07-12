@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .models import Config
+
 
 def soc_bins(
     cap_kwh: float,
@@ -136,3 +138,69 @@ def select_end_state(
                     break
 
     return best_end_b, best_cost, infeasible
+
+
+def export_leg_precompute(
+    export_price: list[float] | None,
+    cfg: Config,
+    eta: float,
+    eta_curve,
+    dt_h: float,
+    *,
+    day_index: list[int] | None = None,
+) -> tuple[float, float, float, float, float, list[float]]:
+    """Export-leg pre-computations: ``(eta_d, cycle_cost, max_export_dc_h,
+    ac_cap, band, peak_from)``.  All zero/off when ``export_price`` is None.
+
+    Shared by ``optimize.optimize_grid`` and ``regret.hindsight_optimal_grid``.
+    ``day_index`` is the ONE real difference between the two callers:
+    ``optimize.optimize_grid`` threads a per-hour day index (derived from its
+    ``window_start_h``/``slots_per_day``, or a caller-supplied override) into
+    :func:`regret.windowed_peak_prices` so the look-back peak never reaches
+    across a day boundary in a multi-day rolling window.
+    ``regret.hindsight_optimal_grid`` operates on a single realized day and
+    always calls with ``day_index=None`` (global, single-day suffix-max —
+    see ``windowed_peak_prices``'s docstring). Callers resolve their own
+    ``day_index`` value BEFORE calling this function; this function only
+    forwards it.
+    """
+    from .regret import _eta_discharge_at, windowed_peak_prices  # local: avoids a module-level cycle
+
+    if export_price is not None:
+        # Discharge efficiency: eta_d = min(round_trip_eff / eta_charge, 1.0)
+        # on the None path (reuses `eta`, already computed by the caller with
+        # the same zero-guard); looked up on the curve at the max export rate
+        # otherwise.
+        if eta_curve is None:
+            eta_d: float = min(cfg.round_trip_eff / eta, 1.0)
+        else:
+            eta_d = _eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
+        cycle_cost: float = cfg.cycle_cost_eur_per_kwh
+        # Max DC kWh per hour that can be exported through the inverter.
+        # max_export_w is the AC-side export rate cap; DC discharged = AC / eta_d.
+        max_export_ac_h = cfg.max_export_w / 1000.0 * dt_h
+        max_export_dc_h: float = (
+            max_export_ac_h / eta_d if eta_d > 1e-9 else max_export_ac_h
+        )
+        # Combined AC grid export cap (battery + solar spill must not exceed
+        # this) — the tighter of the inverter export rating and the grid
+        # connection limit.
+        ac_cap: float = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0 * dt_h
+        # C2: peak-only gate. Export is admitted in hour h only when
+        # export_price[h] is within export_peak_band_frac of the windowed
+        # peak (look-back-windowed — see windowed_peak_prices).
+        band = cfg.export_peak_band_frac
+        peak_from = windowed_peak_prices(
+            list(export_price),
+            round(cfg.export_peak_lookback_h / dt_h),  # wall-clock lookback -> slots (T8)
+            day_index=day_index,
+        )
+    else:
+        eta_d = 1.0
+        cycle_cost = 0.0
+        max_export_dc_h = 0.0
+        ac_cap = 0.0
+        band = 0.0
+        peak_from = []
+
+    return eta_d, cycle_cost, max_export_dc_h, ac_cap, band, peak_from

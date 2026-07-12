@@ -61,7 +61,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from . import const
-from .dp_common import select_end_state, soc_bins
+from .dp_common import export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -69,7 +69,6 @@ from .regret import (
     _eta_charge_at,
     _eta_discharge_at,
     _max_grid_dc,
-    windowed_peak_prices,
 )
 
 def compute_water_value(trough_price: float, cfg: Config) -> float:
@@ -590,47 +589,23 @@ def optimize_grid(
 
     # Export leg pre-computations — all off when export_price is None (parity).
     _do_export = export_price is not None
-    if _do_export:
-        if eta_curve is None:
-            eta_d: float = min(cfg.round_trip_eff / eta, 1.0)
-        else:
-            eta_d = _eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
-        cycle_cost: float = cfg.cycle_cost_eur_per_kwh
-        _max_export_ac_slot = cfg.max_export_w / 1000.0 * dt_h
-        max_export_dc_h: float = (
-            _max_export_ac_slot / eta_d if eta_d > 1e-9 else _max_export_ac_slot
-        )
-        # Combined AC grid export cap (battery + solar spill must not exceed this).
-        # Uses the tighter of the inverter export rating and the grid connection limit.
-        ac_cap: float = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0 * dt_h
-        # C2: peak-only gate. Export is admitted in hour h only when
-        # export_price[h] is within export_peak_band_frac of the windowed peak.
-        _band = cfg.export_peak_band_frac
-        # Look-back-windowed peak: an hour on the DOWN-SLOPE after a peak is
-        # judged against that recent peak (export_peak_lookback_h hours) and
-        # blocked by the band, instead of the forward-only suffix-max forgetting
-        # it.  lookback=0 reproduces the legacy gate.
-        # Day boundaries are derived from slots_per_day arithmetic on
-        # window_start_h (== 24h arithmetic at the legacy hourly resolution).
-        # On a DST-transition day (23h or 25h wall-clock) the boundary can land
-        # one hour off true local midnight; this is benign (one hour, twice/year)
-        # and moot when the internal clock is UTC (the common HA default).
-        _di = (
+    # Day boundaries are derived from slots_per_day arithmetic on
+    # window_start_h (== 24h arithmetic at the legacy hourly resolution), so
+    # the look-back-windowed peak (see export_leg_precompute) never reaches
+    # into a prior day within a multi-day rolling window.  On a
+    # DST-transition day (23h or 25h wall-clock) the boundary can land one
+    # hour off true local midnight; this is benign (one hour, twice/year)
+    # and moot when the internal clock is UTC (the common HA default).
+    _di = (
+        (
             day_index if day_index is not None
             else [(window_start_h + h) // slots_per_day for h in range(len(export_price))]
         )
-        peak_from = windowed_peak_prices(
-            list(export_price),
-            round(cfg.export_peak_lookback_h / dt_h),   # wall-clock lookback -> slots (T8)
-            day_index=_di,
-        )  # type: ignore[arg-type]
-    else:
-        eta_d = 1.0
-        cycle_cost = 0.0
-        max_export_dc_h = 0.0
-        ac_cap = 0.0
-        _band = 0.0
-        peak_from = []
+        if _do_export else None
+    )
+    eta_d, cycle_cost, max_export_dc_h, ac_cap, _band, peak_from = export_leg_precompute(
+        export_price, cfg, eta, eta_curve, dt_h, day_index=_di,
+    )
 
     # C3: solar-only baseline spill (AC kWh) per hour — the spill that occurs with
     # NO grid charging.  The curtailed-solar credit is capped at this baseline so
