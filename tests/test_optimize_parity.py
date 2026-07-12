@@ -24,12 +24,25 @@ import random
 
 import pytest
 
+from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid, solar_reservation_ceiling
 from custom_components.anker_x1_smartgrid.regret import (
     DayData,
     hindsight_optimal_grid,
 )
+
+
+# ---------------------------------------------------------------------------
+# T4 (review): pin dt_h/slot_minutes explicitly wherever this file sweeps
+# optimize_grid/hindsight_optimal_grid, rather than relying on the functions'
+# dt_h=1.0 default.  A future default change (e.g. to support 15-min-native
+# resolution by default) must not silently narrow this file's hourly coverage.
+# ---------------------------------------------------------------------------
+
+HOURLY_DT_H = 1.0
+HOURLY_SLOT_MINUTES = 60
+assert round(HOURLY_DT_H * 60) == HOURLY_SLOT_MINUTES
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +83,14 @@ def call_both(
         price=tuple(price),
         soc_start=soc_start,
     )
-    hind = hindsight_optimal_grid(day, cfg)
+    hind = hindsight_optimal_grid(day, cfg, dt_h=HOURLY_DT_H)
     opt = optimize_grid(
         pv, load, price,
         soc_start=soc_start,
         cfg=cfg,
         window_start_h=0,
         window_len=24,
+        dt_h=HOURLY_DT_H,
     )
     return opt, hind
 
@@ -489,6 +503,101 @@ class TestParityRandomDays:
             opt, hind = call_both(pv, load, price, soc_start, cfg)
             assert_parity(opt, hind, tol=1e-6, label=f"infeasible_random_{i:02d}")
 
+    # -----------------------------------------------------------------
+    # D0 gate (review T3): reserve_by_hour SHAPE parity across the sweep.
+    #
+    # cfg.reserve_anchor itself never reaches optimize_grid/hindsight_optimal_grid
+    # -- see test_parity_holds_across_live_cfg_permutations below, which locks
+    # that field as a DP-invariant no-op.  The anchor's ONLY DP-facing artifact
+    # is the per-hour-VARYING reserve_by_hour array that decision.py's
+    # _build_reserve_by_hour constructs under the live cfg.reserve_anchor ==
+    # const.RESERVE_ANCHOR_TROUGH default (decision.py:945-952).  reserve_by_hour
+    # is itself only read inside the export action-class branch (gated on
+    # export_price is not None -- optimize.py:814-826 / regret.py mirror), so it
+    # must be swept through the EXPORT leg, not the plain charge-leg call_both.
+    #
+    # Every EXISTING reserve_by_hour test in this file (TestExportOnParity,
+    # TestSolarReservationParity) uses a FLAT array ([4.0]*24 / [3.0]*24) --
+    # trivial for a DP to get right even if the reserve-floor / terminal
+    # selection logic (optimize.py:875-931 vs regret.py:595-647 -- exactly what
+    # Phase D2's planned select_end_state extraction will touch) mishandles a
+    # genuinely varying floor.  This drives 20 random pv/load/price/export_price/
+    # soc_start days through a hand-built ride-to-trough-shaped (varying) reserve
+    # AND a legacy-shaped (flat, floor-anchored) reserve and asserts byte
+    # export-parity for both -- the real coverage the D1-D5 extractions need to
+    # exist before touching that shared code.
+    # -----------------------------------------------------------------
+
+    def _random_export_day(self, rng: random.Random) -> tuple:
+        """Random valid 24h day plus an independently-randomized export_price.
+
+        reserve_by_hour is a dead parameter unless export_price is not None
+        (optimize.py:814/regret.py mirror only read it inside the export
+        action-class branch), so this file's plain call_both/_random_day pair
+        cannot exercise it -- the export leg is required.
+        """
+        pv, load, price, soc_start = self._random_day(rng)
+        export_price = [rng.uniform(0.0, 0.55) for _ in range(24)]
+        return pv, load, price, export_price, soc_start
+
+    def _trough_shaped_reserve(self, rng: random.Random, floor_kwh: float, target_kwh: float) -> list:
+        """Hand-built ride-to-trough-style reserve_by_hour: a per-hour-VARYING
+        floor that decays from target_kwh toward floor_kwh as a randomized
+        next-solar-pickup hour approaches, then rises again after it -- the
+        general SHAPE decision._build_reserve_by_hour produces under the live
+        cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH default.  Hand-built
+        (not imported from decision.py) so this DP-only parity file stays
+        decoupled from the controller-side reserve builder while still
+        exercising DP<->oracle parity under a REALISTIC non-flat reserve floor.
+        """
+        pickup_h = rng.randint(6, 18)
+        reserve = []
+        for h in range(24):
+            hours_to_pickup = (pickup_h - h) % 24
+            frac = hours_to_pickup / 24.0
+            reserve.append(floor_kwh + frac * (target_kwh - floor_kwh))
+        return reserve
+
+    def test_random_days_reserve_by_hour_shape_parity(self):
+        """D0 gate: DP<->oracle export-leg parity under a REALISTIC (non-flat)
+        reserve_by_hour, swept across 20 seeded random days -- see class
+        docstring above for why this is the real (non-vacuous) stand-in for
+        "sweep the live reserve_anchor default" at this file's DP-only altitude.
+        """
+        assert HOURLY_DT_H == 1.0 and HOURLY_SLOT_MINUTES == 60  # T4 pin
+
+        rng = random.Random(self.SEED + 4)
+        cfg = _make_export_cfg()
+        floor_kwh = cfg.capacity_kwh * cfg.soc_floor / 100.0
+        target_kwh = cfg.capacity_kwh * cfg.soc_target / 100.0
+        any_export = False
+
+        for i in range(self.N_DAYS):
+            pv, load, price, export_price, soc_start = self._random_export_day(rng)
+            trough_reserve = self._trough_shaped_reserve(rng, floor_kwh, target_kwh)
+            legacy_reserve = [floor_kwh] * 24  # legacy anchor: flat floor-anchored reserve
+
+            for shape_label, reserve in (("trough", trough_reserve), ("legacy", legacy_reserve)):
+                # _call_both_export doesn't accept reserve_by_hour -- call the
+                # DPs directly so both shapes are actually exercised.
+                day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=soc_start)
+                hind = hindsight_optimal_grid(
+                    day, cfg, export_price=export_price, reserve_by_hour=reserve, dt_h=HOURLY_DT_H,
+                )
+                opt = optimize_grid(
+                    pv, load, price, soc_start=soc_start, cfg=cfg,
+                    window_start_h=0, window_len=24, export_price=export_price,
+                    reserve_by_hour=reserve, dt_h=HOURLY_DT_H,
+                )
+                if sum(opt["export_schedule"]) > 0.0:
+                    any_export = True
+                assert_export_parity(opt, hind, label=f"reserve_shape_{shape_label}_day_{i:02d}")
+
+        assert any_export, (
+            "fixture sanity: at least one of the 20x2 random reserve-shape days "
+            "must actually export, or this sweep is vacuous"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Parity-critical branch tests: tie-break and floor-boundary
@@ -632,11 +741,14 @@ def _call_both_export(pv, load, price, export_price, soc_start, cfg, *, terminal
     """Invoke both optimizers with export_price and return (opt, hind)."""
     assert len(pv) == len(load) == len(price) == len(export_price) == 24
     day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=soc_start)
-    hind = hindsight_optimal_grid(day, cfg, terminal_mode=terminal_mode, water_value=water_value, export_price=export_price)
+    hind = hindsight_optimal_grid(
+        day, cfg, terminal_mode=terminal_mode, water_value=water_value,
+        export_price=export_price, dt_h=HOURLY_DT_H,
+    )
     opt = optimize_grid(
         pv, load, price, soc_start=soc_start, cfg=cfg,
         window_start_h=0, window_len=24, export_price=export_price,
-        terminal_mode=terminal_mode, water_value=water_value,
+        terminal_mode=terminal_mode, water_value=water_value, dt_h=HOURLY_DT_H,
     )
     return opt, hind
 
@@ -1123,29 +1235,55 @@ class TestExportEtaCurveParity:
 
 
 @pytest.mark.parametrize("overrides,dt_h", [
-    ({"reserve_anchor": "ride_to_trough"}, 1.0),   # live default anchor (DP-invariant)
-    ({"export_peak_lookback_h": 4.0}, 1.0),         # windowed peak w/ day_index
-    ({"soc_hedge_fraction": 0.5}, 1.0),             # controller-level; DP-invariant
+    ({"reserve_anchor": const.RESERVE_ANCHOR_TROUGH}, HOURLY_DT_H),  # live default anchor (DP-invariant)
+    ({"reserve_anchor": const.RESERVE_ANCHOR_LEGACY}, HOURLY_DT_H),  # legacy anchor (DP-invariant)
+    ({"export_peak_lookback_h": 4.0}, HOURLY_DT_H),   # windowed peak w/ day_index
+    ({"soc_hedge_fraction": 0.5}, HOURLY_DT_H),        # controller-level; DP-invariant
     ({}, 0.25),                                      # 15-min slot resolution
 ])
 def test_parity_holds_across_live_cfg_permutations(overrides, dt_h):
     """T3: parity must hold across live cfg permutations that reach production
-    but were never swept together: the live-default reserve_anchor, a non-zero
-    export peak look-back, a non-zero SoC drift-hedge fraction, and 15-min slot
-    resolution.
+    but were never swept together: the live-default reserve_anchor (AND the
+    legacy rollback value), a non-zero export peak look-back, a non-zero SoC
+    drift-hedge fraction, and 15-min slot resolution.
+
+    D0 (2026-07-12): the original sweep here used the string literal
+    "ride_to_trough", which does not match either real Config.reserve_anchor
+    value (const.RESERVE_ANCHOR_TROUGH == "trough",
+    const.RESERVE_ANCHOR_LEGACY == "legacy" -- see models.py/const.py). An
+    unrecognized value silently falls through decision.py's
+    `== RESERVE_ANCHOR_TROUGH` / `!= RESERVE_ANCHOR_TROUGH` checks into the
+    non-legacy branch, so the row happened to exercise trough-adjacent
+    behavior anyway wherever it mattered -- but nowhere in THIS file does it
+    matter, so the mislabeling was silent. Fixed to the real constants + added
+    the legacy row so both live values are pinned by name.
 
     reserve_anchor / soc_hedge_fraction are controller-level knobs that never
     enter optimize_grid / hindsight_optimal_grid directly -- swept here to PIN
     that DP-invariance (a future wiring of either into the DP must not
-    silently break parity). export_peak_lookback_h and dt_h=0.25 ARE
-    substantive: both DPs derive the windowed export-peak band from
-    cfg.export_peak_lookback_h / dt_h (optimize.py's export routing and
-    regret.py:413).
+    silently break parity). See TestParityRandomDays.
+    test_random_days_reserve_by_hour_shape_parity for the REAL (non-vacuous)
+    DP-facing artifact of the reserve_anchor default: the per-hour-varying
+    reserve_by_hour array it drives, swept there across 20 random days.
+    export_peak_lookback_h and dt_h=0.25 ARE substantive: both DPs derive the
+    windowed export-peak band from cfg.export_peak_lookback_h / dt_h
+    (optimize.py's export routing and regret.py:413).
 
     Base cfg is _make_export_cfg (has max_export_w / cycle_cost) so every
     permutation is a non-vacuous export scenario -- a make_cfg-based scenario
     would pass parity trivially on an empty export schedule.
     """
+    # T4 pin: every hourly row in the table above must be exactly HOURLY_DT_H
+    # (1.0) / HOURLY_SLOT_MINUTES (60); only the explicit 15-min row may
+    # differ. A future edit that silently narrows the hourly rows (e.g. to
+    # 0.5) would still "work" numerically but would no longer be the dt=60
+    # end-to-end pin T4 asked for -- this assertion makes that regression loud.
+    if dt_h != 0.25:
+        assert dt_h == HOURLY_DT_H
+        assert round(dt_h * 60) == HOURLY_SLOT_MINUTES
+    else:
+        assert round(dt_h * 60) == 15
+
     cfg = _make_export_cfg(**overrides)
     pv    = [0.0] * 24
     load  = [0.0] * 24
