@@ -32,6 +32,7 @@ from custom_components.anker_x1_smartgrid.models import (
     ForecastInterval,
     PlanState,
 )
+from tests.helpers import StubHass as _StubHass
 
 UTC = timezone.utc
 # 14:00 UTC on 2026-06-29 — keeps local date June 29 even in deeply-west zones.
@@ -39,7 +40,14 @@ BASE = datetime(2026, 6, 29, 14, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
-# Stubs (mirror test_controller_export_executor.py pattern)
+# Stubs (mirror test_controller_export_executor.py pattern) — _StubHass
+# imported from tests/helpers.py (B2a). _StubActuator/_StubStore/_StubRecorder
+# stay local: _StubActuator has no .engaged tracking and engage_export skips
+# the setpoint>0 validation helpers.StubActuator enforces; _StubStore
+# captures the saved payload (helpers.StubStore is a no-op); _StubRecorder's
+# read_load_samples/read_decisions/read_feature_rows/read_hourly_rows are
+# hardcoded to return [] regardless of appended rows. Genuine behavior
+# differences, not copy-paste dupes.
 # ---------------------------------------------------------------------------
 
 
@@ -116,33 +124,6 @@ class _StubRecorder:
 
     def read_daily_regret_range(self, since_day, until_day=None):
         return []
-
-
-class _StubHass:
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
 
 
 # ---------------------------------------------------------------------------

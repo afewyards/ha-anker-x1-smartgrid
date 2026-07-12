@@ -30,6 +30,12 @@ from custom_components.anker_x1_smartgrid.models import (
     PriceSlot,
 )
 from custom_components.anker_x1_smartgrid.sensor import X1DpRegretSensor, X1RegretEurSensor
+from tests.helpers import (
+    StubActuator as _StubActuator,
+    StubStore as _StubStore,
+    StubRecorder as _StubRecorder,
+    StubHass as _StubHass,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -82,115 +88,13 @@ def _make_dp_mock_first_hour(charge_kwh: float = 5.0):
 
 
 # ---------------------------------------------------------------------------
-# Stubs for Controller tick tests
+# Stubs for Controller tick tests — StubActuator/StubStore/StubRecorder/
+# StubHass imported from tests/helpers.py (B2a). _make_controller here stays
+# local: it returns a (ctrl, act, rec) 3-tuple (helpers.make_controller
+# returns 2-tuple), has no actuator-override param, and seeds a different
+# data dict (adds sensor.inverter_loss, omits export-price entity) — not a
+# drop-in match for the shared factory.
 # ---------------------------------------------------------------------------
-
-class _StubActuator:
-    def __init__(self):
-        self.calls: list = []
-        self.last_setpoint_w: float = 0.0
-        self.engaged: bool = False
-
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_and_charge", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def release_to_self(self) -> None:
-        self.calls.append(("release_to_self",))
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-
-
-class _StubStore:
-    async def async_save(self, data):
-        pass
-
-
-class _StubRecorder:
-    """Captures appended rows (samples + decisions + daily_regret)."""
-    def __init__(self):
-        self.rows: list[dict] = []
-        self.decision_rows: list[dict] = []
-        self.daily_regret_rows: dict[str, dict] = {}
-        self._load_samples: list[tuple[str, float]] = []
-
-    def append(self, row):
-        self.rows.append(row)
-
-    def append_decision(self, **kwargs):
-        self.decision_rows.append(kwargs)
-
-    def purge_older_than(self, ts, days):
-        pass
-
-    def purge_decisions_older_than(self, cutoff_iso):
-        return 0
-
-    def rollup_hours(self, now_iso):
-        return 0
-
-    def purge_hourly_older_than(self, cutoff_iso):
-        return 0
-
-    def wal_checkpoint(self) -> None:
-        pass
-
-    def read_load_samples(self, since_iso=None):
-        if since_iso is None:
-            return list(self._load_samples)
-        return [(ts, w) for ts, w in self._load_samples if ts >= since_iso]
-
-    def read_feature_rows(self, since_iso=None):
-        if since_iso is None:
-            return list(self.rows)
-        return [r for r in self.rows if r.get("ts", "") >= since_iso]
-
-    def read_hourly_rows(self, since_iso=None):
-        return []
-
-    def upsert_daily_regret(self, **kwargs):
-        day = kwargs["day"]
-        self.daily_regret_rows[day] = kwargs
-
-    def read_latest_daily_regret(self):
-        if not self.daily_regret_rows:
-            return None
-        latest_day = max(self.daily_regret_rows.keys())
-        return self.daily_regret_rows[latest_day]
-
-    def read_daily_regret_range(self, since_day, until_day=None):
-        rows = [v for k, v in self.daily_regret_rows.items() if k >= since_day]
-        if until_day is not None:
-            rows = [r for r in rows if r["day"] < until_day]
-        return sorted(rows, key=lambda r: r["day"])
-
-
-class _StubHass:
-    def __init__(self):
-        self._states = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
-
 
 def _make_controller(hass, data_overrides=None):
     data = {

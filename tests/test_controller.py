@@ -4,190 +4,23 @@ from custom_components.anker_x1_smartgrid.models import Config, PlanState, Plant
 from custom_components.anker_x1_smartgrid import controller, const, forecast
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
+from tests.helpers import (
+    StubActuator as _StubActuator,
+    StubStore as _StubStore,
+    StubRecorder as _StubRecorder,
+    StubHass as _StubHass,
+    CapturingStore as _CapturingStore,
+    make_controller as _make_controller,
+    seed_valid_inputs as _seed_valid_inputs,
+)
 
 BASE = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
-# Helpers for tick() tests
+# Helpers for tick() tests — canonical stubs/factories live in tests/helpers.py
+# (this module is their provenance; see tests/helpers.py's docstring). B2a.
 # ---------------------------------------------------------------------------
-
-class _StubActuator:
-    """Records calls to engage_and_charge / release_to_self."""
-    def __init__(self):
-        self.calls = []
-        self.last_setpoint_w = 0.0
-        self.engaged: bool = False
-
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_and_charge", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def release_to_self(self) -> None:
-        self.calls.append(("release_to_self",))
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-
-
-class _StubStore:
-    """No-op store."""
-    async def async_save(self, data):
-        pass
-
-
-class _StubRecorder:
-    """Captures appended rows (samples + decisions + daily_regret)."""
-    def __init__(self):
-        self.rows: list[dict] = []
-        self.decision_rows: list[dict] = []
-        self.daily_regret_rows: dict[str, dict] = {}
-        self._load_samples: list[tuple[str, float]] = []
-        self._hourly_rows: list[dict] = []
-
-    def append(self, row):
-        self.rows.append(row)
-
-    def append_decision(self, **kwargs):
-        self.decision_rows.append(kwargs)
-
-    def purge_older_than(self, ts, days):
-        pass
-
-    def purge_decisions_older_than(self, cutoff_iso):
-        return 0
-
-    def rollup_hours(self, now_iso):
-        return 0
-
-    def wal_checkpoint(self):
-        pass
-
-    def purge_hourly_older_than(self, cutoff_iso):
-        return 0
-
-    def read_load_samples(self, since_iso=None):
-        if since_iso is None:
-            return list(self._load_samples)
-        return [(ts, w) for ts, w in self._load_samples if ts >= since_iso]
-
-    def read_decisions(self, since_iso, until_iso=None):
-        rows = [r for r in self.decision_rows if r.get("ts", "") >= since_iso]
-        if until_iso:
-            rows = [r for r in rows if r.get("ts", "") < until_iso]
-        return rows
-
-    def read_feature_rows(self, since_iso=None):
-        if since_iso is None:
-            return list(self.rows)
-        return [r for r in self.rows if r.get("ts", "") >= since_iso]
-
-    def read_hourly_rows(self, since_iso=None):
-        """Stub for HGBR/bucketed/profile paths — empty unless a test seeds _hourly_rows."""
-        if since_iso is None:
-            return list(self._hourly_rows)
-        return [r for r in self._hourly_rows if r.get("hour_ts", "") >= since_iso]
-
-    def read_efficiency_samples(self, since_iso=None):
-        self.efficiency_calls = getattr(self, "efficiency_calls", 0) + 1
-        return []
-
-    def upsert_daily_regret(self, **kwargs):
-        day = kwargs["day"]
-        self.daily_regret_rows[day] = kwargs
-
-    def read_latest_daily_regret(self):
-        if not self.daily_regret_rows:
-            return None
-        latest_day = max(self.daily_regret_rows.keys())
-        return self.daily_regret_rows[latest_day]
-
-    def read_daily_regret_range(self, since_day, until_day=None):
-        rows = [v for k, v in self.daily_regret_rows.items() if k >= since_day]
-        if until_day is not None:
-            rows = [r for r in rows if r["day"] < until_day]
-        return sorted(rows, key=lambda r: r["day"])
-
-
-class _StubHass:
-    """Minimal hass stub with a state registry."""
-    def __init__(self):
-        self._states = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        """Run synchronous callables directly (no thread pool in tests)."""
-        return fn(*args)
-
-
-def _make_controller(hass, actuator=None, data_overrides=None):
-    """Build a Controller with minimal data config."""
-    data = {
-        const.CONF_ENT_SOC: "sensor.soc",
-        const.CONF_ENT_METER_POWER: "sensor.meter_power",
-        const.CONF_ENT_PRICE: "sensor.price",
-        const.CONF_ENT_PV_TODAY: [],
-        const.CONF_ENT_PV_TOMORROW: [],
-        const.CONF_ENT_SUN: "sun.sun",
-        const.CONF_ENT_BATTERY_POWER: "sensor.battery_power",
-        const.CONF_ENT_PV_POWER: "sensor.pv_power",
-        const.CONF_ENT_INVERTER_LOSS: "sensor.inverter_loss",
-        const.CONF_ENT_SETPOINT: "number.setpoint",
-        const.CONF_ENT_ENGAGE: "switch.engage",
-        const.CONF_ENT_WORKMODE: "select.workmode",
-        const.CONF_ENT_IRRADIANCE: "sensor.irradiance",
-        const.CONF_ENT_TEMP: "weather.home",
-    }
-    if data_overrides:
-        data.update(data_overrides)
-    act = actuator or _StubActuator()
-    rec = _StubRecorder()
-    ctrl = controller.Controller(
-        hass=hass,
-        data=data,
-        recorder=rec,
-        actuator=act,
-        store=_StubStore(),
-    )
-    return ctrl, act
-
-
-def _seed_valid_inputs(hass, *, soc="20.0"):
-    """Seed HA states so read_plant_inputs succeeds."""
-    hass.set_state("sensor.soc", soc)
-    hass.set_state("sensor.meter_power", "0.0")
-    # Price with a forecast attribute so parse_price_curve gets called
-    sunset_iso = (BASE + timedelta(hours=8)).isoformat()
-    hass.set_state("sun.sun", "above_horizon", {"next_setting": sunset_iso})
-    # Price: provide a simple forecast list so slots are non-empty
-    hass.set_state("sensor.price", "0.05", {
-        "forecast": [
-            {"datetime": (BASE + timedelta(hours=i)).isoformat(), "electricity_price": int(0.05 * const.PRICE_SCALE)}
-            for i in range(9)
-        ]
-    })
-    # Phase-2 data entities
-    hass.set_state("sensor.pv_power", "1200.0")
-    hass.set_state("sensor.battery_power", "-500.0")
-    hass.set_state("sensor.irradiance", "350.0")
-    hass.set_state("weather.home", "cloudy", {"temperature": 18.5})
 
 
 # ---------------------------------------------------------------------------
@@ -797,13 +630,6 @@ def test_compute_decision_display_horizon_shoulder_lift_with_arrays():
 # ---------------------------------------------------------------------------
 # Task 2 — persist enabled flag across restarts
 # ---------------------------------------------------------------------------
-
-class _CapturingStore:
-    def __init__(self):
-        self.saved = None
-    async def async_save(self, data):
-        self.saved = data
-
 
 @pytest.mark.asyncio
 async def test_persist_writes_wrapped_payload():

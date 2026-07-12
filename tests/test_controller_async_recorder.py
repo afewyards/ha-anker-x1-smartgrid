@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 from custom_components.anker_x1_smartgrid.models import PlantInputs
+from tests.helpers import StubHass as _StubHass
 from tests.test_controller_export_executor import (
-    _StubHass, _make_controller, _patched_compute_decision,
+    _make_controller, _patched_compute_decision,
 )
 
 PURGE_BASE = datetime(2026, 6, 25, 18, 0, tzinfo=timezone.utc)  # 18 % 6 == 0 → purge fires

@@ -26,6 +26,10 @@ from custom_components.anker_x1_smartgrid.models import (
     PlanState,
     PriceSlot,
 )
+from tests.helpers import (
+    StubActuator as _StubActuator,
+    StubHass as _StubHass,
+)
 
 # ---------------------------------------------------------------------------
 # Time anchor
@@ -35,34 +39,14 @@ BASE = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)  # 14:00 UTC mid-peak
 
 
 # ---------------------------------------------------------------------------
-# Stubs (mirrors test_controller.py pattern)
+# Stubs — StubActuator/StubHass imported from tests/helpers.py (B2a).
+# _StubStore/_StubRecorder stay local: _StubStore captures the saved payload
+# (helpers.StubStore is a no-op — this file inspects store.saved directly),
+# and _StubRecorder's read_load_samples/read_decisions/read_feature_rows/
+# read_hourly_rows are hardcoded to return [] regardless of appended rows
+# (helpers.StubRecorder actually filters/replays them) — a genuine behavior
+# difference, not a copy-paste dupe.
 # ---------------------------------------------------------------------------
-
-
-class _StubActuator:
-    """Records engage_export / engage_and_charge / release_to_self calls."""
-
-    def __init__(self):
-        self.calls: list[tuple] = []
-        self.last_setpoint_w: float = 0.0
-        self.engaged: bool = False
-
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_and_charge", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def engage_export(self, setpoint_w: float) -> None:
-        if setpoint_w <= 0:
-            raise ValueError(f"export-only: setpoint must be > 0, got {setpoint_w}")
-        self.calls.append(("engage_export", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def release_to_self(self) -> None:
-        self.calls.append(("release_to_self",))
-        self.last_setpoint_w = 0.0
-        self.engaged = False
 
 
 class _StubStore:
@@ -130,35 +114,6 @@ class _StubRecorder:
         if until_day is not None:
             rows = [r for r in rows if r["day"] < until_day]
         return sorted(rows, key=lambda r: r["day"])
-
-
-class _StubHass:
-    """Minimal HA stub with a state registry."""
-
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
 
 
 # ---------------------------------------------------------------------------
