@@ -14,7 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret_job, remote_forecast, resolution, scheduler, soc_drift
+from . import const, coordinator, energy, featureset, forecast as forecast_mod, guard, intra_hour, load_adapt, occupancy, optimize as optimize_mod, past_actuals as past_actuals_mod, plan as plan_mod, pricing_store, regret_job, remote_forecast, resolution, scheduler, snapshot, soc_drift
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
@@ -926,7 +926,7 @@ class Controller:
                     for s in slots
                     if shadow_deadline is not None and now <= s.start < shadow_deadline
                 ]
-                self.last_decision = self._build_decision_snapshot(
+                self.last_decision = snapshot.build_decision_snapshot(
                     now=now,
                     active=False,
                     soc=inputs.soc,
@@ -1388,7 +1388,7 @@ class Controller:
             for s in slots
             if deadline is not None and now <= s.start < deadline
         ]
-        self.last_decision = self._build_decision_snapshot(
+        self.last_decision = snapshot.build_decision_snapshot(
             now=now,
             active=new_plan.state is ControllerState.FORCING and not _engage_failed,
             soc=inputs.soc,
@@ -1539,114 +1539,41 @@ class Controller:
         if "last_dp_regret_7d" in updates:
             self.last_dp_regret_7d = updates["last_dp_regret_7d"]
 
-    def _build_decision_snapshot(
-        self,
-        *,
-        now: datetime,
-        active: bool,
-        soc: float,
-        deadline: datetime | None,
-        committed_slots: tuple,
-        pv_remaining: float | None,
-        tomorrow_total: float | None,
-        price_window: list,
-        setpoint: float,
-        state: str,
-        horizon_mode: str,
-    ) -> dict:
-        """Build the self.last_decision dict with identical 12-key schema for both paths.
-
-        Called from the disabled (shadow) path and the enabled path so the keys/types
-        can never silently diverge — A3 calls append_decision(**self.last_decision).
-        """
-        return {
-            "ts": now.isoformat(),
-            "active": active,
-            "start_soc": float(soc),
-            "deadline": deadline.isoformat() if deadline else None,
-            "committed_hours": [h.isoformat() for h in committed_slots],
-            "horizon_mode": horizon_mode,
-            "pv_today_forecast_kwh": float(pv_remaining) if pv_remaining is not None else None,
-            "pv_tomorrow_forecast_kwh": float(tomorrow_total) if tomorrow_total is not None else None,
-            "predicted_load_json": None,
-            "price_window_json": json.dumps(price_window) if price_window else None,
-            "setpoint_w": float(setpoint),
-            "state": state,
-        }
-
     def _occ_status_attrs(self, now: datetime) -> dict:
-        """Occupancy-corrector observability attrs (Layer B)."""
-        return {
-            # Clamped to the same state bin multiplier() uses (0..STATE_MAX), so
-            # occ_state_now and occ_expected_state are directly comparable.
-            "occ_state_now": (
-                min(occupancy.STATE_MAX, max(0, int(self._persons_home_now)))
-                if self._persons_home_now is not None else None
-            ),
-            "occ_expected_state": (
-                self._occ_table.climo_state.get(occupancy.band_of(now))
-                if self._occ_table is not None else None
-            ),
-            "occ_multiplier": round(
-                occupancy.multiplier(
-                    self._occ_table, self._persons_home_now, now, now,
-                    self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
-                ), 3,
-            ),
-            "occ_cells_ready": (
-                self._occ_table.cells_ready if self._occ_table is not None else 0
-            ),
-        }
+        """Occupancy-corrector observability attrs (Layer B). See snapshot.occ_status_attrs."""
+        return snapshot.occ_status_attrs(
+            self._occ_table, self._persons_home_now, now,
+            self.cfg.occ_persistence_h, self.cfg.occ_adapt_fraction,
+        )
 
     def _status(self, now, setpoint, deadline, reason, solar_charge: float = 0.0) -> dict:
-        _regret = self.last_regret or {}
-        _bt = self.backtest_result or {}
-        self.last_status = {
-            "state": self.plan.state.value,
-            "solar_charge_kwh": round(solar_charge, 3),
-            "setpoint_w": setpoint,
-            "deadline": deadline.isoformat() if deadline else None,
-            "reason": reason,
-            "load_mae": _bt.get("model_mae"),
-            "horizon_energy_mae_24h": _bt.get("horizon_energy_mae_24h"),
-            "horizon_energy_mae_12h": _bt.get("horizon_energy_mae_12h"),
-            "pinball_p50": _bt.get("pinball_p50"),
-            "pinball_p80": _bt.get("pinball_p80"),
-            "active_model": self.active_model_name,
-            "load_adapt_ratio": (
-                round(self._load_adapt_ratio, 3)
-                if self._load_adapt_ratio is not None else None
-            ),
-            "load_adapt_matched_hours": self._load_adapt_matched,
-            **self._occ_status_attrs(now),
-            "regret_eur": _regret.get("regret_eur"),
-            "over_buy_kwh": _regret.get("over_buy_kwh"),
-            "under_buy_kwh": _regret.get("under_buy_kwh"),
-            # 7-day rolling DP-vs-heuristic regret delta (T0.5c).
-            # Negative = DP was cheaper over past 7 days; None until first day scored.
-            "dp_regret_7d": self.last_dp_regret_7d,
-            # E3: realized export PnL for the current local day (€).
-            # Accumulated per tick when the C3 export executor fires.
-            # Resets to 0.0 on local-day rollover.  G2 reads this key.
-            "today_export_pnl_eur": round(self.today_export_pnl_eur, 6),
-            # Cash ledger (spec 2026-07-10): realized battery cash flows.
-            # battery_net_today/total drive the two €-sensors; components are
-            # exposed for the today-sensor's attributes.
-            "today_charge_cost_eur": round(self.today_charge_cost_eur, 6),
-            "today_export_revenue_eur": round(self.today_export_revenue_eur, 6),
-            "battery_net_today_eur": round(
-                self.today_export_revenue_eur - self.today_charge_cost_eur, 6
-            ),
-            "battery_net_total_eur": round(self.total_net_eur, 6),
-            # C4: the DP's PLANNED export revenue (€) for the current horizon. Drives
-            # the card's arbitrage_pnl so it reflects the plan, not just realized ticks.
-            "planned_export_revenue_eur": round(self.planned_export_revenue_eur, 6),
-            "slot_minutes": self._detected_slot_minutes,
-            # T18: measured efficiency curve bin table, for observability only
-            # (does not drive behaviour — that's gated by use_measured_eta below).
-            "efficiency_curve": self._eta_curve.as_attributes(),
-            "use_measured_eta": self.cfg.use_measured_eta,
-        }
+        """Build + stash self.last_status for this tick. See snapshot.build_status."""
+        self.last_status = snapshot.build_status(
+            now=now,
+            setpoint=setpoint,
+            deadline=deadline,
+            reason=reason,
+            solar_charge=solar_charge,
+            plan_state=self.plan.state.value,
+            backtest_result=self.backtest_result,
+            active_model_name=self.active_model_name,
+            load_adapt_ratio=self._load_adapt_ratio,
+            load_adapt_matched=self._load_adapt_matched,
+            occ_table=self._occ_table,
+            persons_home_now=self._persons_home_now,
+            occ_persistence_h=self.cfg.occ_persistence_h,
+            occ_adapt_fraction=self.cfg.occ_adapt_fraction,
+            regret=self.last_regret,
+            dp_regret_7d=self.last_dp_regret_7d,
+            today_export_pnl_eur=self.today_export_pnl_eur,
+            today_charge_cost_eur=self.today_charge_cost_eur,
+            today_export_revenue_eur=self.today_export_revenue_eur,
+            total_net_eur=self.total_net_eur,
+            planned_export_revenue_eur=self.planned_export_revenue_eur,
+            slot_minutes=self._detected_slot_minutes,
+            efficiency_curve_attrs=self._eta_curve.as_attributes(),
+            use_measured_eta=self.cfg.use_measured_eta,
+        )
         return self.last_status
 
     def _rollover_daily_ledgers(self, now: datetime) -> None:
