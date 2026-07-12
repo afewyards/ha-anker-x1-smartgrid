@@ -849,6 +849,136 @@ def test_restore_legacy_bare_plan_defaults_enabled_true():
 
 
 # ---------------------------------------------------------------------------
+# A9 review fix — restore() must apply the SoC-drift and PnL fields as
+# GROUPED try/except blocks (matching the original hand-written restore, see
+# git show 560e918), not one try/except per field. A corrupt value in one
+# field of a group must revert the WHOLE group to its __init__ defaults, not
+# just that one field (no partial hybrid restores within a group).
+# ---------------------------------------------------------------------------
+
+def test_restore_soc_drift_group_all_or_nothing_on_corrupt_first_field():
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "soc_drift_kwh": "not-a-number",  # first field in the group: garbage
+        "soc_drift_day": "2026-07-12",
+        "soc_drift_last_update": BASE.isoformat(),
+        "soc_drift_last_soc_pct": 55.0,
+        "soc_drift_engaged": True,
+        "soc_drift_last_export_kwh_dc": 1.5,
+    }
+    ctrl.restore(saved)
+    # soc_drift_kwh fails to parse -> the whole group aborts at that point,
+    # so every drift field (including the ones with valid values later in
+    # the group) is left at its __init__ default.
+    assert ctrl._soc_drift_kwh == 0.0
+    assert ctrl._soc_drift_day is None
+    assert ctrl._soc_drift_last_update is None
+    assert ctrl._soc_drift_last_soc_pct is None
+    assert ctrl._soc_drift_engaged is False
+    assert ctrl._soc_drift_last_export_kwh_dc == 0.0
+
+
+def test_restore_soc_drift_group_valid_payload_restores_all_six():
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "soc_drift_kwh": 0.25,
+        "soc_drift_day": "2026-07-12",
+        "soc_drift_last_update": BASE.isoformat(),
+        "soc_drift_last_soc_pct": 55.0,
+        "soc_drift_engaged": True,
+        "soc_drift_last_export_kwh_dc": 1.5,
+    }
+    ctrl.restore(saved)
+    assert ctrl._soc_drift_kwh == 0.25
+    assert ctrl._soc_drift_day == "2026-07-12"
+    assert ctrl._soc_drift_last_update == BASE
+    assert ctrl._soc_drift_last_soc_pct == 55.0
+    assert ctrl._soc_drift_engaged is True
+    assert ctrl._soc_drift_last_export_kwh_dc == 1.5
+
+
+def test_restore_soc_drift_last_update_none_skips_without_aborting_group():
+    """Explicit is-not-None guard: a stored ``None`` on soc_drift_last_update
+    must be skipped (leaving it at its default), WITHOUT aborting the rest of
+    the drift group — matching the original's ``and ... is not None`` guard,
+    not a bare ``dt_util.parse_datetime(None)`` TypeError."""
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "soc_drift_kwh": 0.25,
+        "soc_drift_last_update": None,
+        "soc_drift_last_soc_pct": 55.0,
+        "soc_drift_engaged": True,
+        "soc_drift_last_export_kwh_dc": 1.5,
+    }
+    ctrl.restore(saved)
+    assert ctrl._soc_drift_kwh == 0.25
+    assert ctrl._soc_drift_last_update is None
+    # fields AFTER the None-guarded field in the group must still restore.
+    assert ctrl._soc_drift_last_soc_pct == 55.0
+    assert ctrl._soc_drift_engaged is True
+    assert ctrl._soc_drift_last_export_kwh_dc == 1.5
+
+
+def test_restore_pnl_group_all_or_nothing_on_corrupt_first_field():
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "today_export_pnl_eur": "not-a-number",  # first field: garbage
+        "export_pnl_day": "2026-07-12",
+    }
+    ctrl.restore(saved)
+    assert ctrl.today_export_pnl_eur == 0.0
+    assert ctrl._export_pnl_day is None
+
+
+def test_restore_pnl_group_valid_payload_restores_both():
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "today_export_pnl_eur": 1.23,
+        "export_pnl_day": "2026-07-12",
+    }
+    ctrl.restore(saved)
+    assert ctrl.today_export_pnl_eur == 1.23
+    assert ctrl._export_pnl_day == "2026-07-12"
+
+
+def test_restore_cash_ledger_group_all_or_nothing_on_corrupt_middle_field():
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "today_charge_cost_eur": 2.0,
+        "today_export_revenue_eur": "garbage",  # second field: garbage
+        "total_net_eur": 5.0,
+    }
+    ctrl.restore(saved)
+    # Sequential assign-then-abort (matches original): the first field in the
+    # group, which runs before the corrupt one, DOES take effect; the group's
+    # try/except then aborts on the corrupt field, so total_net_eur (after
+    # it) never gets applied.
+    assert ctrl.today_charge_cost_eur == 2.0
+    assert ctrl.today_export_revenue_eur == 0.0
+    assert ctrl.total_net_eur == 0.0
+
+
+def test_restore_export_state_group_isolated_from_other_groups():
+    """export_state has its own try/except in the original — a corrupt
+    soc-drift field must not affect it, and vice versa."""
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
+    saved = {
+        "export_state": {"engaged": True, "state_since": BASE.isoformat()},
+        "soc_drift_kwh": "not-a-number",
+    }
+    ctrl.restore(saved)
+    assert ctrl.export_state.engaged is True
+    assert ctrl._soc_drift_kwh == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Task 1 — record physical sample while disabled
 # ---------------------------------------------------------------------------
 

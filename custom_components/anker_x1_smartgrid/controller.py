@@ -1163,48 +1163,66 @@ def compute_decision(
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve
 
 
-def _restore_str_or_none(value):
-    """``str()`` conversion for restore that treats a stored ``None`` as "field
-    absent" (raises so the caller's except leaves the __init__ default in place),
-    matching the original hand-written ``and saved[key] is not None`` guards."""
-    if value is None:
-        raise TypeError("null value: leave existing default in place")
-    return str(value)
-
-
 def _persist_iso_or_none(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
 # Table-driven persist/restore for the simple scalar/composite Controller fields
-# (Task A9). Each entry is (store_key, attr_name, to_json, from_json):
+# (Task A9). Each entry is (store_key, attr_name, to_json, from_json, none_guard):
 #   to_json(getattr(self, attr_name))  -> value written into the store payload
 #   from_json(saved[store_key])        -> value assigned to self.<attr_name>
-# restore() applies each entry in its own try/except (KeyError, ValueError,
-# TypeError) so one corrupt/garbage field never blocks the others.
-# "plan"/"enabled" are NOT in this table — they have legacy back-compat
-# fallback behavior (bare plan dict with no wrapper) and stay hand-written.
-_PERSIST_FIELDS = [
-    ("export_state", "export_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v)),
-    # E3: per-day export PnL accumulator — a mid-day HA restart must not zero it.
-    ("today_export_pnl_eur", "today_export_pnl_eur", lambda v: v, float),
-    ("export_pnl_day", "_export_pnl_day", lambda v: v, _restore_str_or_none),
-    # Cash ledger: today's figures + the lifetime total must survive a restart.
-    ("today_charge_cost_eur", "today_charge_cost_eur", lambda v: v, float),
-    ("today_export_revenue_eur", "today_export_revenue_eur", lambda v: v, float),
-    ("total_net_eur", "total_net_eur", lambda v: v, float),
+#   none_guard                         -> True if the original hand-written code
+#                                          skipped this field on a stored ``None``
+#                                          (``... and saved[key] is not None``)
+#                                          instead of passing it to from_json
+#
+# _PERSIST_GROUPS mirrors the ORIGINAL restore()'s grouped try/except blocks
+# exactly (see git show 560e918, Controller.restore): each inner list is one
+# try/except group. restore() applies a group's fields sequentially inside a
+# single try/except, so a genuine parse error on one field aborts the
+# REMAINING fields in that group (fields already assigned earlier in the same
+# group stay assigned — this is a "sequential assign-then-abort", not an
+# atomic all-or-nothing commit). Fields in different groups are fully
+# independent of one another. "plan"/"enabled" are NOT in this table — they
+# have legacy back-compat fallback behavior (bare plan dict with no wrapper)
+# and stay hand-written.
+_PERSIST_GROUPS = [
+    # export_state: isolated (its own try/except in the original).
+    [
+        ("export_state", "export_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v), False),
+    ],
+    # E3: per-day export PnL accumulator — a mid-day HA restart must not zero
+    # it. Grouped exactly as the original: a corrupt today_export_pnl_eur also
+    # blocks export_pnl_day from restoring in the same pass.
+    [
+        ("today_export_pnl_eur", "today_export_pnl_eur", lambda v: v, float, False),
+        ("export_pnl_day", "_export_pnl_day", lambda v: v, str, True),
+    ],
+    # Cash ledger: today's figures + the lifetime total must survive a
+    # restart; grouped as one try/except in the original.
+    [
+        ("today_charge_cost_eur", "today_charge_cost_eur", lambda v: v, float, False),
+        ("today_export_revenue_eur", "today_export_revenue_eur", lambda v: v, float, False),
+        ("total_net_eur", "total_net_eur", lambda v: v, float, False),
+    ],
     # SoC drift-hedge accumulator: a restart must resume from the same
-    # closed-loop state rather than re-accumulating from scratch.
-    ("soc_drift_kwh", "_soc_drift_kwh", lambda v: v, float),
-    ("soc_drift_day", "_soc_drift_day", lambda v: v, _restore_str_or_none),
-    (
-        "soc_drift_last_update", "_soc_drift_last_update",
-        _persist_iso_or_none, dt_util.parse_datetime,
-    ),
-    ("soc_drift_last_soc_pct", "_soc_drift_last_soc_pct", lambda v: v, float),
-    ("soc_drift_engaged", "_soc_drift_engaged", lambda v: v, bool),
-    ("soc_drift_last_export_kwh_dc", "_soc_drift_last_export_kwh_dc", lambda v: v, float),
+    # closed-loop state rather than re-accumulating from scratch; all six
+    # fields share one try/except in the original.
+    [
+        ("soc_drift_kwh", "_soc_drift_kwh", lambda v: v, float, False),
+        ("soc_drift_day", "_soc_drift_day", lambda v: v, str, True),
+        (
+            "soc_drift_last_update", "_soc_drift_last_update",
+            _persist_iso_or_none, dt_util.parse_datetime, True,
+        ),
+        ("soc_drift_last_soc_pct", "_soc_drift_last_soc_pct", lambda v: v, float, True),
+        ("soc_drift_engaged", "_soc_drift_engaged", lambda v: v, bool, False),
+        ("soc_drift_last_export_kwh_dc", "_soc_drift_last_export_kwh_dc", lambda v: v, float, False),
+    ],
 ]
+
+# Flat view used by _persist() (payload order/content is unaffected by grouping).
+_PERSIST_FIELDS = [field for group in _PERSIST_GROUPS for field in group]
 
 
 class Controller:
@@ -3188,7 +3206,7 @@ class Controller:
             "plan": self.plan.to_dict(),
             "enabled": self.enabled,
         }
-        for store_key, attr_name, to_json, _from_json in _PERSIST_FIELDS:
+        for store_key, attr_name, to_json, _from_json, _none_guard in _PERSIST_FIELDS:
             payload[store_key] = to_json(getattr(self, attr_name))
         await self._store.async_save(payload)
 
@@ -3214,13 +3232,21 @@ class Controller:
                 self.plan = PlanState.from_dict(saved)
         except (KeyError, ValueError, TypeError):
             pass
-        # Table-driven restore (Task A9): each field applies independently so one
-        # corrupt/garbage value never blocks the others (see _PERSIST_FIELDS).
-        for store_key, attr_name, _to_json, from_json in _PERSIST_FIELDS:
-            if store_key not in saved:
-                continue
+        # Table-driven restore (Task A9), grouped exactly as the original
+        # hand-written try/except blocks (see _PERSIST_GROUPS): a genuine
+        # parse error on one field aborts the remaining fields in its group
+        # (fields already assigned earlier in the same group stay assigned),
+        # while a stored ``None`` on a none_guard field is skipped without
+        # aborting the group. Groups are independent of one another.
+        for group in _PERSIST_GROUPS:
             try:
-                setattr(self, attr_name, from_json(saved[store_key]))
+                for store_key, attr_name, _to_json, from_json, none_guard in group:
+                    if store_key not in saved:
+                        continue
+                    value = saved[store_key]
+                    if none_guard and value is None:
+                        continue
+                    setattr(self, attr_name, from_json(value))
             except (KeyError, ValueError, TypeError):
                 pass
 
