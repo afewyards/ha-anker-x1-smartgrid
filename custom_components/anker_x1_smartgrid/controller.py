@@ -22,6 +22,7 @@ from .export_filter import apply_min_export_block
 from .dataquality import clean_hourly_rows
 from .forecast import build_intervals, LoadPredictor
 from .hgbr import HGBRQuantileModel
+from .ledger import CashLedger
 from .loadmodel import BucketedLoadModel
 from .models import Config, ControllerState, ExportState, ForecastInterval, PlanState, PlantInputs, PriceSlot
 from .parsers import build_pv_curve_from_arrays, build_pv_curve_from_watts, build_two_day_pv_curve, synth_pv_curve
@@ -185,22 +186,16 @@ class Controller:
         # E3 — realized-arbitrage PnL ledger.
         # Accumulated export PnL for the current local day (euros).
         # Reset to 0.0 on local-day rollover; G2 reads this for the sensor attribute.
-        self.today_export_pnl_eur: float = 0.0
+        # Cash ledger (spec 2026-07-10-battery-cash-ledger, Task C4): realized
+        # battery €-flows — the cash-basis fields plus E3's economic PnL,
+        # which share one day-stamp (see ledger.CashLedger.rollover). Exposed
+        # on self via properties below so _PERSIST_GROUPS's getattr/setattr
+        # keeps working unchanged.
+        self._ledger = CashLedger()
         # C4: planned export revenue (€) from the current DP horizon — refreshed
         # every tick the DP runs.  Drives the card's arbitrage_pnl attribute so it
         # shows the plan, not just realized ticks (which stay 0.0 until export fires).
         self.planned_export_revenue_eur: float = 0.0
-        # Local-date string of the day the accumulator covers (YYYY-MM-DD).
-        # None on first tick so the day-rollover logic fires immediately to initialise.
-        self._export_pnl_day: str | None = None
-        # Cash ledger (spec 2026-07-10-battery-cash-ledger): realized battery
-        # €-flows on a cash basis — no cycle-cost / opportunity deductions
-        # (deliberately distinct from the economic today_export_pnl_eur).
-        # Daily fields reset via _rollover_daily_ledgers (shared day key);
-        # total_net_eur never resets.
-        self.today_charge_cost_eur: float = 0.0
-        self.today_export_revenue_eur: float = 0.0
-        self.total_net_eur: float = 0.0
         # Past-actuals cache: per-clock-hour measured values for the display horizon.
         # Refreshed at most once per clock-hour (past hours never change).
         self._past_actuals_cache: dict | None = None
@@ -243,6 +238,50 @@ class Controller:
         # refreshed at most once per EFFICIENCY_CACHE_SECONDS (see _refresh_efficiency_curve).
         self._eta_curve: EfficiencyCurve = EfficiencyCurve.static(self.cfg)
         self._eta_curve_built_at: datetime | None = None
+
+    # ── Cash ledger delegating properties (Task C4) ────────────────────────────
+    # Preserve the pre-extraction attribute surface (direct get/set, and
+    # _PERSIST_GROUPS's generic getattr/setattr) while the state itself now
+    # lives on self._ledger (ledger.CashLedger).
+    @property
+    def today_export_pnl_eur(self) -> float:
+        return self._ledger.today_export_pnl_eur
+
+    @today_export_pnl_eur.setter
+    def today_export_pnl_eur(self, value: float) -> None:
+        self._ledger.today_export_pnl_eur = value
+
+    @property
+    def _export_pnl_day(self) -> str | None:
+        return self._ledger.day
+
+    @_export_pnl_day.setter
+    def _export_pnl_day(self, value: str | None) -> None:
+        self._ledger.day = value
+
+    @property
+    def today_charge_cost_eur(self) -> float:
+        return self._ledger.today_charge_cost_eur
+
+    @today_charge_cost_eur.setter
+    def today_charge_cost_eur(self, value: float) -> None:
+        self._ledger.today_charge_cost_eur = value
+
+    @property
+    def today_export_revenue_eur(self) -> float:
+        return self._ledger.today_export_revenue_eur
+
+    @today_export_revenue_eur.setter
+    def today_export_revenue_eur(self, value: float) -> None:
+        self._ledger.today_export_revenue_eur = value
+
+    @property
+    def total_net_eur(self) -> float:
+        return self._ledger.total_net_eur
+
+    @total_net_eur.setter
+    def total_net_eur(self, value: float) -> None:
+        self._ledger.total_net_eur = value
 
     async def _refresh_efficiency_curve(self, now: datetime) -> None:
         """Rebuild the measured efficiency curve from recent recorder samples.
@@ -1611,21 +1650,8 @@ class Controller:
         return self.last_status
 
     def _rollover_daily_ledgers(self, now: datetime) -> None:
-        """Reset ALL per-day € ledgers on local-day rollover (single day key).
-
-        E3 (today_export_pnl_eur) and the cash ledger share _export_pnl_day:
-        every daily field MUST be reset here, in one pass, before the key is
-        advanced — a second key-comparison block elsewhere would never fire.
-        _export_pnl_day is None on first-ever tick (or pre-key stores) —
-        treated as rollover; a mid-day restart restores the key from the
-        persisted blob and same-day accumulation continues.
-        """
-        _today = dt_util.as_local(now).date().isoformat()
-        if _today != self._export_pnl_day:
-            self.today_export_pnl_eur = 0.0
-            self.today_charge_cost_eur = 0.0
-            self.today_export_revenue_eur = 0.0
-            self._export_pnl_day = _today
+        """Reset ALL per-day € ledgers on local-day rollover. See ledger.CashLedger.rollover."""
+        self._ledger.rollover(now)
 
     def _accumulate_cash_ledger(
         self,
@@ -1635,44 +1661,11 @@ class Controller:
         slot_minutes: int,
         raw_export_price: float | None,
     ) -> None:
-        """Accumulate realized battery cash flows for this tick (cash basis).
-
-        Two independent legs; each is skipped when its own price is missing,
-        and a missing battery reading skips both:
-
-        - cost leg   — grid import feeding the battery × current import-slot
-          price.  Price comes from the DP's ``slots`` list via
-          resolution.price_at (static-tariff safe) — NEVER from a direct
-          CONF_ENT_PRICE read, which is empty under static tariff mode and
-          would silently zero this leg.
-        - credit leg — battery-sourced grid export × effective (post-fee)
-          feed-in price, as in the C3 path.
-
-        Attribution mirrors the C3 battery-sourced-export rule (PV covers the
-        house first; PV-spill export out of scope).  See
-        optimize.cash_flows_eur for the math.
-        """
-        batt_w = coordinator.read_float(
-            self._hass, self._data.get(const.CONF_ENT_BATTERY_POWER, "")
+        """Accumulate realized battery cash flows for this tick. See ledger.CashLedger.accumulate."""
+        self._ledger.accumulate(
+            self._hass, self._data, self.cfg,
+            now, inputs, slots, slot_minutes, raw_export_price,
         )
-        if batt_w is None:
-            return
-        import_price = resolution.price_at(slots, now, slot_minutes)
-        export_price_eff = (
-            optimize_mod.effective_export_price(raw_export_price, self.cfg)
-            if raw_export_price is not None
-            else None
-        )
-        cost, credit = optimize_mod.cash_flows_eur(
-            inputs.meter_w,
-            batt_w,
-            import_price,
-            export_price_eff,
-            const.TICK_SECONDS / 3600.0,
-        )
-        self.today_charge_cost_eur += cost
-        self.today_export_revenue_eur += credit
-        self.total_net_eur += credit - cost
 
     async def release(self) -> None:
         """Release actuator control back to self (best-effort; never raises).
