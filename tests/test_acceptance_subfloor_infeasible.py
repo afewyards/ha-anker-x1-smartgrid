@@ -179,8 +179,13 @@ class TestSubFloorStartInfeasible:
 # Minimal stubs for Controller.tick() tests (no HA runtime needed)
 # ---------------------------------------------------------------------------
 # StubActuator/StubStore/StubRecorder/StubHass imported from tests.helpers
-# above (aliased to the local names used throughout this module) — this
-# file's variants were plain/byte-identical subsets of the shared doubles.
+# above (aliased to the local names used throughout this module). The local
+# StubRecorder this replaced only implemented append/append_decision/
+# purge_older_than/purge_decisions_older_than — helpers.StubRecorder is a
+# superset that also accumulates rows and exposes filtered read_* methods
+# (read_load_samples, read_feature_rows, read_hourly_rows, etc.). Safe here
+# because this module's tests never call those read paths or assert on
+# rec.rows/rec.decision_rows.
 
 
 def _make_floor_controller(hass, *, soc_pct: float = 5.0):

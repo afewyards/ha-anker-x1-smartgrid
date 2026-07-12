@@ -281,8 +281,13 @@ async def test_house_load_sensor_subscribes_to_all_pv_entities_in_list(monkeypat
 # T16: controller tick() publishes the computed house load into last_status
 # ---------------------------------------------------------------------------
 # StubActuator/StubStore/StubRecorder/StubHass/make_controller/BASE imported
-# from tests.helpers above — this file's local variants were plain/
-# byte-identical duplicates. _seed_valid_inputs stays local below: it
+# from tests.helpers above. The local StubRecorder this replaced was a
+# no-op sink (append/append_decision discarded rows; read_load_samples/
+# read_feature_rows/read_hourly_rows hard-coded `return []`); helpers.
+# StubRecorder actually stores appended rows and filters those read methods
+# by since_iso. Safe here because this module's tests never seed rows or
+# assert on the recorder's accumulated/read state — only sensor read/write
+# behavior is exercised. _seed_valid_inputs stays local below: it
 # genuinely differs from helpers.seed_valid_inputs (meter_power="100.0" vs
 # "0.0", and it seeds sensor.inverter_loss which the shared helper omits) —
 # both values are baked into this file's house-load-arithmetic assertions.

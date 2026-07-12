@@ -26,6 +26,12 @@ jobs:
           # Pin to the exact commit Tests validated; falls back to github.sha for workflow_dispatch.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Attach branch at tested commit
+        # Checking out a bare SHA leaves a detached HEAD; python-semantic-release v9
+        # requires a real branch ref (DetachedHeadGitError otherwise) since it pushes
+        # the version bump/tag back to `main`.
+        run: git checkout -B main ${{ github.event.workflow_run.head_sha || github.sha }}
+
       - name: Python Semantic Release
         id: release
         uses: python-semantic-release/python-semantic-release@v9

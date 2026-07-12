@@ -831,7 +831,7 @@ def compute_decision(
         _out["slot_minutes"] = slot_minutes
     fallback_load = const.DEFAULT_FALLBACK_LOAD_W
 
-    trough_dt, trough_price = scheduler.find_next_trough(inputs.now, slots, cfg)
+    _, trough_price = scheduler.find_next_trough(inputs.now, slots, cfg)
     # KEEP find_next_trough alive for the terminal water-value reference only.
     # The optimization horizon is the FULL forecast, not [now, trough]: tomorrow's
     # evening peak (best export hour) sits past the trough and must be in-window.
