@@ -2,6 +2,7 @@
 import pytest
 
 from custom_components.anker_x1_smartgrid import const
+from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -30,3 +31,11 @@ ANKER_TEST_ENTITIES = {
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable loading custom integrations in all tests."""
     yield
+
+
+@pytest.fixture
+def recorder_db(tmp_path):
+    """Real DataRecorder backed by a throwaway sqlite file under tmp_path."""
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    yield rec
+    rec.close()
