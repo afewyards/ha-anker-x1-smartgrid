@@ -121,6 +121,29 @@ class Config:
         """
         return min(self.round_trip_eff / self.eta_charge_safe(), 1.0)
 
+    def pct_to_kwh(self, pct: float) -> float:
+        """Convert a SoC percentage to DC kWh at this pack's capacity."""
+        return pct / 100.0 * self.capacity_kwh
+
+    def kwh_to_pct(self, kwh: float) -> float:
+        """Convert DC kWh to a SoC percentage at this pack's capacity."""
+        return kwh / self.capacity_kwh * 100.0
+
+    @property
+    def floor_kwh(self) -> float:
+        """Soft decision-margin SoC floor (DC kWh); see ``soc_floor``."""
+        return self.pct_to_kwh(self.soc_floor)
+
+    @property
+    def target_kwh(self) -> float:
+        """SoC target ceiling (DC kWh); see ``soc_target``."""
+        return self.pct_to_kwh(self.soc_target)
+
+    @property
+    def firmware_floor_kwh(self) -> float:
+        """Hard firmware discharge floor (DC kWh); see const.FIRMWARE_SOC_FLOOR."""
+        return self.pct_to_kwh(const.FIRMWARE_SOC_FLOOR)
+
 
 @dataclass(frozen=True)
 class PriceSlot:

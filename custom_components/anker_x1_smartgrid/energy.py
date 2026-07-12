@@ -80,7 +80,7 @@ def ride_out_reserve_kwh(
       signal doesn't see). ``0.0`` reproduces the walk byte-identically.
     """
     cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
+    floor_kwh = cfg.floor_kwh
     eta_c = cfg.eta_charge_safe()
     eta_d = cfg.eta_discharge_static()
 
@@ -124,8 +124,8 @@ def export_surplus_kwh(soc: float, reserve: float, cfg: Config) -> float:
     If the battery SoC is at or below ``cfg.soc_floor``, returns 0 — there is
     nothing to export when already at the safety floor.
     """
-    floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
-    soc_kwh = soc / 100.0 * cfg.capacity_kwh
+    floor_kwh = cfg.floor_kwh
+    soc_kwh = cfg.pct_to_kwh(soc)
 
     if soc_kwh <= floor_kwh:
         return 0.0

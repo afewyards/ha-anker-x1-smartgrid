@@ -151,8 +151,8 @@ def build_plan_horizon(
             # Past slot: emit recorded actuals verbatim and DO NOT advance soc_sim,
             # so the forward projection from the current SoC at now_h is unchanged.
             if rsv_by_hour:
-                rsv_kwh = rsv_by_hour.get(hour, cfg.soc_floor / 100.0 * cfg.capacity_kwh)
-                reserve_soc = rsv_kwh / cfg.capacity_kwh * 100.0 if cfg.capacity_kwh > 0 else cfg.soc_floor
+                rsv_kwh = rsv_by_hour.get(hour, cfg.floor_kwh)
+                reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else cfg.soc_floor
             else:
                 reserve_soc = cfg.soc_floor
             solar_charge_w = act["solar_charge_w"]
@@ -226,19 +226,19 @@ def build_plan_horizon(
                 # whenever the battery passively discharges to cover a net AC deficit.
                 # DC-side term: NOT divided by eta_discharge. Not paid on charge/export
                 # slots (self_discharge_w is 0 there). idle_drain_w=0.0 default -> no-op.
-                soc_sim -= cfg.idle_drain_w * dt_h / 1000.0 / cfg.capacity_kwh * 100.0
+                soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * dt_h / 1000.0)
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
             soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * dt_h / cap_wh * 100.0
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         if hedge_by_hour and cfg.capacity_kwh > 0:
-            soc_sim -= hedge_by_hour.get(hour, 0.0) / cfg.capacity_kwh * 100.0
+            soc_sim -= cfg.kwh_to_pct(hedge_by_hour.get(hour, 0.0))
         soc_sim = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
         # reserve_soc: ride-out reserve as % on the SoC axis, or cfg.soc_floor as default.
         if rsv_by_hour:
-            rsv_kwh = rsv_by_hour.get(hour, cfg.soc_floor / 100.0 * cfg.capacity_kwh)
-            reserve_soc = rsv_kwh / cfg.capacity_kwh * 100.0 if cfg.capacity_kwh > 0 else cfg.soc_floor
+            rsv_kwh = rsv_by_hour.get(hour, cfg.floor_kwh)
+            reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else cfg.soc_floor
         else:
             reserve_soc = cfg.soc_floor
         if is_grid:

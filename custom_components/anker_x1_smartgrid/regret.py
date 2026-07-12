@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import const
 from .dp_common import export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 
@@ -123,7 +122,7 @@ def _apply_solar_load(
     New SoC in kWh after the solar/load step (before any grid charge).
     May be below soc_floor (callers must handle the floor constraint).
     """
-    target_kwh = cfg.soc_target / 100.0 * cfg.capacity_kwh
+    target_kwh = cfg.target_kwh
     rate_kwh_slot = cfg.max_charge_w / 1000.0 * dt_h
     if net_kwh > 0.0:
         eta = _eta_charge_at(net_kwh / dt_h * 1000.0, cfg, eta_curve)
@@ -160,7 +159,7 @@ def _max_grid_dc(
     """
     rate_kwh_slot = cfg.max_charge_w / 1000.0 * dt_h
     eta = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
-    target_kwh = cfg.soc_target / 100.0 * cfg.capacity_kwh
+    target_kwh = cfg.target_kwh
     solar_ac_used = max(0.0, soc_after_kwh - soc_kwh) / eta  # AC absorbed by solar
     remaining_ac = max(0.0, rate_kwh_slot - solar_ac_used)
     return max(0.0, min(remaining_ac * eta, target_kwh - soc_after_kwh))
@@ -392,15 +391,15 @@ def hindsight_optimal_grid(
         )
 
     cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
+    floor_kwh = cfg.floor_kwh
     # Firmware hard discharge floor (const.FIRMWARE_SOC_FLOOR, 5%) — the actual
     # physical wall the pack sags to.  cfg.soc_floor is a pure DECISION margin
     # above this (export floor + terminal water-value credit anchor); it no
     # longer forces a fake physical clamp.  Byte-identical to floor_kwh when
     # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default).  MUST mirror
     # optimize.optimize_grid byte-for-byte (parity-critical pair).
-    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
-    target_kwh = cfg.soc_target / 100.0 * cap_kwh
+    firmware_floor_kwh = cfg.firmware_floor_kwh
+    target_kwh = cfg.target_kwh
     eta = cfg.eta_charge_safe()
 
     # Export leg pre-computations (F1).  All zero / off when export_price is None.
@@ -416,7 +415,7 @@ def hindsight_optimal_grid(
 
     # dp[b] = minimum cost to reach SoC bin b at current hour boundary.
     dp: list[float] = [INF] * n_states
-    init_b = to_bin(day.soc_start / 100.0 * cap_kwh)
+    init_b = to_bin(cfg.pct_to_kwh(day.soc_start))
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_dc_kwh) for path reconstruction.
@@ -777,9 +776,8 @@ def realized_grid_cost(
     if realized_export_by_hour is not None:
         _validate_day_len(realized_export_by_hour, "realized_export_by_hour", _expected)
 
-    cap_kwh = cfg.capacity_kwh
-    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
-    target_kwh = cfg.soc_target / 100.0 * cap_kwh
+    firmware_floor_kwh = cfg.firmware_floor_kwh
+    target_kwh = cfg.target_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
     eta = cfg.eta_charge_safe()
     rate_dc = rate_kwh_h * eta  # max DC per hour from grid (parity with DP)
@@ -794,7 +792,7 @@ def realized_grid_cost(
         eta_d = 1.0
         cycle_cost = 0.0
 
-    soc = day.soc_start / 100.0 * cap_kwh
+    soc = cfg.pct_to_kwh(day.soc_start)
     forced_imports: list[float] = [0.0] * _expected
     total_charge_dc = 0.0
 

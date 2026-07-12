@@ -60,7 +60,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from . import const
 from .dp_common import export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 from .regret import (
@@ -248,9 +247,8 @@ def solar_reservation_ceiling(
     both DPs receive an identical array (parity-safe).
     """
     n = len(window_pv)
-    cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
-    target_kwh = cfg.soc_target / 100.0 * cap_kwh
+    floor_kwh = cfg.floor_kwh
+    target_kwh = cfg.target_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
     eta = cfg.eta_charge_safe()
     solar_dc = [
@@ -576,14 +574,14 @@ def optimize_grid(
     # Derived constants (mirror hindsight_optimal_grid)
     # ------------------------------------------------------------------
     cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
+    floor_kwh = cfg.floor_kwh
     # Firmware hard discharge floor (const.FIRMWARE_SOC_FLOOR, 5%) — the actual
     # physical wall the pack sags to.  cfg.soc_floor is a pure DECISION margin
     # above this (export floor + terminal water-value credit anchor); it no
     # longer forces a fake physical clamp.  Byte-identical to floor_kwh when
     # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default).
-    firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
-    target_kwh = cfg.soc_target / 100.0 * cap_kwh
+    firmware_floor_kwh = cfg.firmware_floor_kwh
+    target_kwh = cfg.target_kwh
     eta = cfg.eta_charge_safe()
 
     # Export leg pre-computations — all off when export_price is None (parity).
@@ -613,7 +611,7 @@ def optimize_grid(
     # provided; otherwise unused (and the credit is 0 anyway -> parity preserved).
     baseline_spill_ac: list[float] = [0.0] * window_len
     if feed_in is not None:
-        _soc_b = soc_start / 100.0 * cap_kwh
+        _soc_b = cfg.pct_to_kwh(soc_start)
         for _h in range(window_len):
             _net_b = window_pv[_h] - window_load[_h]
             _soc_after_b = _apply_solar_load(_soc_b, _net_b, cfg, dt_h, eta_curve=eta_curve)
@@ -632,7 +630,7 @@ def optimize_grid(
     # ------------------------------------------------------------------
     # dp[b] = minimum cost to reach SoC bin b at the current hour boundary.
     dp: list[float] = [INF] * n_states
-    init_b = to_bin(soc_start / 100.0 * cap_kwh)
+    init_b = to_bin(cfg.pct_to_kwh(soc_start))
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_credit_eur, export_dc_kwh,
