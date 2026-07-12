@@ -1163,6 +1163,50 @@ def compute_decision(
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve
 
 
+def _restore_str_or_none(value):
+    """``str()`` conversion for restore that treats a stored ``None`` as "field
+    absent" (raises so the caller's except leaves the __init__ default in place),
+    matching the original hand-written ``and saved[key] is not None`` guards."""
+    if value is None:
+        raise TypeError("null value: leave existing default in place")
+    return str(value)
+
+
+def _persist_iso_or_none(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+# Table-driven persist/restore for the simple scalar/composite Controller fields
+# (Task A9). Each entry is (store_key, attr_name, to_json, from_json):
+#   to_json(getattr(self, attr_name))  -> value written into the store payload
+#   from_json(saved[store_key])        -> value assigned to self.<attr_name>
+# restore() applies each entry in its own try/except (KeyError, ValueError,
+# TypeError) so one corrupt/garbage field never blocks the others.
+# "plan"/"enabled" are NOT in this table — they have legacy back-compat
+# fallback behavior (bare plan dict with no wrapper) and stay hand-written.
+_PERSIST_FIELDS = [
+    ("export_state", "export_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v)),
+    # E3: per-day export PnL accumulator — a mid-day HA restart must not zero it.
+    ("today_export_pnl_eur", "today_export_pnl_eur", lambda v: v, float),
+    ("export_pnl_day", "_export_pnl_day", lambda v: v, _restore_str_or_none),
+    # Cash ledger: today's figures + the lifetime total must survive a restart.
+    ("today_charge_cost_eur", "today_charge_cost_eur", lambda v: v, float),
+    ("today_export_revenue_eur", "today_export_revenue_eur", lambda v: v, float),
+    ("total_net_eur", "total_net_eur", lambda v: v, float),
+    # SoC drift-hedge accumulator: a restart must resume from the same
+    # closed-loop state rather than re-accumulating from scratch.
+    ("soc_drift_kwh", "_soc_drift_kwh", lambda v: v, float),
+    ("soc_drift_day", "_soc_drift_day", lambda v: v, _restore_str_or_none),
+    (
+        "soc_drift_last_update", "_soc_drift_last_update",
+        _persist_iso_or_none, dt_util.parse_datetime,
+    ),
+    ("soc_drift_last_soc_pct", "_soc_drift_last_soc_pct", lambda v: v, float),
+    ("soc_drift_engaged", "_soc_drift_engaged", lambda v: v, bool),
+    ("soc_drift_last_export_kwh_dc", "_soc_drift_last_export_kwh_dc", lambda v: v, float),
+]
+
+
 class Controller:
     def __init__(
         self,
@@ -3140,31 +3184,13 @@ class Controller:
                 self._tick_lock.release()
 
     async def _persist(self) -> None:
-        await self._store.async_save({
+        payload = {
             "plan": self.plan.to_dict(),
             "enabled": self.enabled,
-            "export_state": self.export_state.to_dict(),
-            # E3: persist the per-day PnL accumulator so a mid-day HA restart
-            # does not silently zero today's total.
-            "today_export_pnl_eur": self.today_export_pnl_eur,
-            "export_pnl_day": self._export_pnl_day,
-            # Cash ledger: persist so a mid-day restart does not zero today's
-            # figures, and so the lifetime total actually survives.
-            "today_charge_cost_eur": self.today_charge_cost_eur,
-            "today_export_revenue_eur": self.today_export_revenue_eur,
-            "total_net_eur": self.total_net_eur,
-            # SoC drift-hedge accumulator: persist so a restart resumes from the
-            # same closed-loop state rather than re-accumulating from scratch.
-            "soc_drift_kwh": self._soc_drift_kwh,
-            "soc_drift_day": self._soc_drift_day,
-            "soc_drift_last_update": (
-                self._soc_drift_last_update.isoformat()
-                if self._soc_drift_last_update is not None else None
-            ),
-            "soc_drift_last_soc_pct": self._soc_drift_last_soc_pct,
-            "soc_drift_engaged": self._soc_drift_engaged,
-            "soc_drift_last_export_kwh_dc": self._soc_drift_last_export_kwh_dc,
-        })
+        }
+        for store_key, attr_name, to_json, _from_json in _PERSIST_FIELDS:
+            payload[store_key] = to_json(getattr(self, attr_name))
+        await self._store.async_save(payload)
 
     async def set_enabled(self, value: bool) -> None:
         """Set the master enable flag and persist it immediately."""
@@ -3188,50 +3214,15 @@ class Controller:
                 self.plan = PlanState.from_dict(saved)
         except (KeyError, ValueError, TypeError):
             pass
-        # Restore export_state if present; silently skip if absent (back-compat).
-        try:
-            if "export_state" in saved:
-                self.export_state = ExportState.from_dict(saved["export_state"])
-        except (KeyError, ValueError, TypeError):
-            pass
-        # E3: restore per-day PnL accumulator if present (silently skip on upgrade
-        # from pre-E3 stores — leaves the defaults from __init__ in place).
-        try:
-            if "today_export_pnl_eur" in saved:
-                self.today_export_pnl_eur = float(saved["today_export_pnl_eur"])
-            if "export_pnl_day" in saved and saved["export_pnl_day"] is not None:
-                self._export_pnl_day = str(saved["export_pnl_day"])
-        except (KeyError, ValueError, TypeError):
-            pass
-        # Cash ledger accumulators (silently skip on upgrade from older stores
-        # — leaves the 0.0 defaults from __init__ in place).
-        try:
-            if "today_charge_cost_eur" in saved:
-                self.today_charge_cost_eur = float(saved["today_charge_cost_eur"])
-            if "today_export_revenue_eur" in saved:
-                self.today_export_revenue_eur = float(saved["today_export_revenue_eur"])
-            if "total_net_eur" in saved:
-                self.total_net_eur = float(saved["total_net_eur"])
-        except (KeyError, ValueError, TypeError):
-            pass
-        # SoC drift-hedge accumulator (silently skip on upgrade from pre-drift stores).
-        try:
-            if "soc_drift_kwh" in saved:
-                self._soc_drift_kwh = float(saved["soc_drift_kwh"])
-            if "soc_drift_day" in saved and saved["soc_drift_day"] is not None:
-                self._soc_drift_day = str(saved["soc_drift_day"])
-            if "soc_drift_last_update" in saved and saved["soc_drift_last_update"] is not None:
-                self._soc_drift_last_update = dt_util.parse_datetime(
-                    saved["soc_drift_last_update"]
-                )
-            if "soc_drift_last_soc_pct" in saved and saved["soc_drift_last_soc_pct"] is not None:
-                self._soc_drift_last_soc_pct = float(saved["soc_drift_last_soc_pct"])
-            if "soc_drift_engaged" in saved:
-                self._soc_drift_engaged = bool(saved["soc_drift_engaged"])
-            if "soc_drift_last_export_kwh_dc" in saved:
-                self._soc_drift_last_export_kwh_dc = float(saved["soc_drift_last_export_kwh_dc"])
-        except (KeyError, ValueError, TypeError):
-            pass
+        # Table-driven restore (Task A9): each field applies independently so one
+        # corrupt/garbage value never blocks the others (see _PERSIST_FIELDS).
+        for store_key, attr_name, _to_json, from_json in _PERSIST_FIELDS:
+            if store_key not in saved:
+                continue
+            try:
+                setattr(self, attr_name, from_json(saved[store_key]))
+            except (KeyError, ValueError, TypeError):
+                pass
 
     async def _record_sample(
         self,
