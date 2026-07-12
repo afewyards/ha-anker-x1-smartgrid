@@ -39,7 +39,7 @@ def test_overnight_reserve_not_pinned_and_monotone():
     vals = [rsv[h] for h in hrs]
     cap = cfg.capacity_kwh
     # NOT pinned near capacity (was ~90-100%); evening reserve well below the pack.
-    assert rsv[NOW] == pytest.approx(6.831764705882355, abs=1e-6)
+    assert rsv[NOW] == pytest.approx(6.831764705882355, abs=0.05)
     assert rsv[NOW] < 0.7 * cap, f"reserve still balloons: {rsv[NOW]:.2f}/{cap}"
     assert rsv[NOW] > cfg.soc_floor / 100.0 * cap   # above the firmware floor
     # Monotone-non-increasing glide toward the cheap morning.

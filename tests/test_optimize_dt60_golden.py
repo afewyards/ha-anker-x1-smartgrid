@@ -1,4 +1,7 @@
-"""C3: end-to-end dt=60 golden + rollup-vs-15min boundary doc test."""
+"""C3: end-to-end dt=60 golden + rollup-vs-15min boundary doc test.
+
+REGEN: python -m tests.regen_goldens
+"""
 import pytest
 
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
