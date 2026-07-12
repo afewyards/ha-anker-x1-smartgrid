@@ -81,10 +81,8 @@ def ride_out_reserve_kwh(
     """
     cap_kwh = cfg.capacity_kwh
     floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
-    eta_c = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
-    # Discharge half of the round-trip; mirrors optimize.eta_discharge / plan.py.
-    # Inlined to avoid an energy -> optimize import cycle.
-    eta_d = min(cfg.round_trip_eff / eta_c, 1.0)
+    eta_c = cfg.eta_charge_safe()
+    eta_d = cfg.eta_discharge_static()
 
     horizon_end = now + timedelta(hours=max_window_h)
     signed_cum = 0.0         # signed DC trajectory vs *now* (credit only locates trough)
@@ -147,14 +145,13 @@ def export_net_target_w(surplus_kwh: float, cfg: Config, *, eta_curve=None) -> f
     ``export_drain_window_h = 1.0`` reproduces the legacy ~1-hour
     exponential. Capped by ``max_export_w`` / ``grid_export_limit_w``.
 
-    ``eta_d`` is inlined (mirrors ``optimize.eta_discharge``) to avoid an
-    ``energy -> optimize`` import cycle, matching ``ride_out_reserve_kwh``.
+    ``eta_d`` uses ``Config.eta_discharge_static()`` (mirrors
+    ``optimize.eta_discharge``), matching ``ride_out_reserve_kwh``.
     ``eta_curve``, when given, supplies a power-dependent
     ``eta_discharge(w)`` (duck-typed); ``None`` reproduces the static
     ``eta_d`` scalar byte-identically.
     """
-    eta_c = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
-    eta_d = min(cfg.round_trip_eff / eta_c, 1.0)
+    eta_d = cfg.eta_discharge_static()
     drain_h = max(cfg.export_drain_window_h, const.TICK_SECONDS / 3600.0)
     if eta_curve is None:
         surplus_w = surplus_kwh * eta_d * 1000.0 / drain_h

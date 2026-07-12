@@ -78,7 +78,7 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
     ``clamp_water_value_nonneg`` is True a negative or zero trough price clamps
     v to 0.0, pushing the optimal end SoC down toward the survival floor.
     """
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
     v = (trough_price / eta) * cfg.water_value_factor
     if cfg.clamp_water_value_nonneg:
         v = max(0.0, v)
@@ -119,8 +119,7 @@ def eta_discharge(cfg: Config) -> float:
 
     Guards against zero or near-zero ``eta_charge`` to avoid division by zero.
     """
-    eta_c = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
-    return min(cfg.round_trip_eff / eta_c, 1.0)
+    return cfg.eta_discharge_static()
 
 
 def export_pnl_eur(
@@ -253,7 +252,7 @@ def solar_reservation_ceiling(
     floor_kwh = cfg.soc_floor / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
     solar_dc = [
         min(max(0.0, window_pv[j] - window_load[j]), rate_kwh_h) * eta
         for j in range(n)
@@ -585,7 +584,7 @@ def optimize_grid(
     # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default).
     firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
 
     # Export leg pre-computations — all off when export_price is None (parity).
     _do_export = export_price is not None

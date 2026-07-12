@@ -76,7 +76,7 @@ def _eta_charge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
     static config scalar (eta_curve=None keeps today's behaviour)."""
     if eta_curve is not None:
         return eta_curve.eta_charge(dc_power_w)
-    return cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    return cfg.eta_charge_safe()
 
 
 def _eta_discharge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
@@ -85,8 +85,7 @@ def _eta_discharge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
     behaviour)."""
     if eta_curve is not None:
         return eta_curve.eta_discharge(dc_power_w)
-    eta_c = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
-    return min(cfg.round_trip_eff / eta_c, 1.0)
+    return cfg.eta_discharge_static()
 
 
 def _apply_solar_load(
@@ -402,7 +401,7 @@ def hindsight_optimal_grid(
     # optimize.optimize_grid byte-for-byte (parity-critical pair).
     firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
 
     # Export leg pre-computations (F1).  All zero / off when export_price is None.
     _do_export = export_price is not None
@@ -782,14 +781,14 @@ def realized_grid_cost(
     firmware_floor_kwh = const.FIRMWARE_SOC_FLOOR / 100.0 * cap_kwh
     target_kwh = cfg.soc_target / 100.0 * cap_kwh
     rate_kwh_h = cfg.max_charge_w / 1000.0 * dt_h
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
     rate_dc = rate_kwh_h * eta  # max DC per hour from grid (parity with DP)
 
     # Export leg pre-computations (F3 — mirrors hindsight_optimal_grid F1 convention).
     _do_export = realized_export_by_hour is not None and export_price is not None
     if _do_export:
         # Discharge efficiency: same formula as oracle (F1).
-        eta_d: float = min(cfg.round_trip_eff / eta, 1.0)
+        eta_d: float = cfg.eta_discharge_static()
         cycle_cost: float = cfg.cycle_cost_eur_per_kwh
     else:
         eta_d = 1.0

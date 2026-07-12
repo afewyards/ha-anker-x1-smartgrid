@@ -108,6 +108,19 @@ class Config:
         fields = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in fields})
 
+    def eta_charge_safe(self) -> float:
+        """Charge efficiency guarded against zero/near-zero (avoids div-by-zero)."""
+        return self.eta_charge if self.eta_charge > 1e-9 else 1.0
+
+    def eta_discharge_static(self) -> float:
+        """Static discharge efficiency: ``min(round_trip_eff / eta_charge_safe(), 1.0)``.
+
+        Canonical DP-parity formula shared by optimize.py and regret.py; see
+        ``optimize.eta_discharge`` (thin delegate) for the full derivation and
+        the physical clamp-to-1.0 rationale.
+        """
+        return min(self.round_trip_eff / self.eta_charge_safe(), 1.0)
+
 
 @dataclass(frozen=True)
 class PriceSlot:

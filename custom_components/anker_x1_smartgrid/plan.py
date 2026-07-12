@@ -136,7 +136,11 @@ def build_plan_horizon(
     ceil_by_hour = {hour_floor(k): v for k, v in (ceiling_by_hour or {}).items()}
     hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
     cap_wh = cfg.capacity_kwh * 1000.0
-    eta = cfg.eta_charge if cfg.eta_charge > 1e-9 else 1.0
+    eta = cfg.eta_charge_safe()
+    # NOTE: guard applied to the whole expression (not just eta_charge in the
+    # divisor) — diverges from Config.eta_discharge_static() in the
+    # eta_charge<=1e-9 degenerate case, so intentionally left un-unified
+    # (byte-identical parity rule; see D4/D5 refactor report).
     eta_discharge = min(cfg.round_trip_eff / cfg.eta_charge, 1.0) if cfg.eta_charge > 1e-9 else 1.0
     soc_sim = soc
     out: list[dict] = []
