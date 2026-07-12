@@ -21,6 +21,9 @@ from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
     build_hours_payload,
 )
+from tests.helpers import StubActuator as _StubActuator
+from tests.helpers import StubHass as _StubHass
+from tests.helpers import StubStore as _StubStore
 
 # ---------------------------------------------------------------------------
 # Base timestamp: hour 11 UTC on a clean day (not multiple of 6 → no purge guard)
@@ -30,19 +33,14 @@ _NOW = datetime(2026, 6, 20, 11, 0, tzinfo=timezone.utc)
 
 # ---------------------------------------------------------------------------
 # Minimal stub infrastructure (mirrors test_controller.py / test_controller_phase2.py)
+#
+# _StubActuator/_StubHass/_StubStore migrated to helpers (aliased to keep call
+# sites unchanged). _StubRecorder is kept local: unlike helpers.StubRecorder,
+# every read method here unconditionally returns empty/None regardless of
+# append() calls, deliberately decoupling these tick()-based fetch-guard tests
+# from retrain/model-selection side effects — a genuine behavioural
+# difference, not a copy-paste duplicate.
 # ---------------------------------------------------------------------------
-
-class _StubActuator:
-    last_setpoint_w = 0.0
-    engaged: bool = False
-
-    async def engage_and_charge(self, w): pass
-    async def release_to_self(self): pass
-
-
-class _StubStore:
-    async def async_save(self, data): pass
-
 
 class _StubRecorder:
     """Minimal recorder stub — returns empty data on all read paths."""
@@ -62,38 +60,6 @@ class _StubRecorder:
     def read_latest_daily_regret(self): return None
     def read_daily_regret_range(self, *a, **kw): return []
     def read_decisions(self, *a, **kw): return []
-
-
-class _StubHass:
-    """Minimal hass stub without services (weather forecast → empty list)."""
-
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
-
-    # async_get_clientsession needs a hass-like object — provide a stub session factory.
-    # In tick(), async_get_clientsession(self._hass) is called; we intercept via patch
-    # rather than this stub providing a real session.
 
 
 # ---------------------------------------------------------------------------

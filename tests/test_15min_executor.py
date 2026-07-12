@@ -29,6 +29,9 @@ from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config, ControllerState, PlanState, PlantInputs, PriceSlot,
 )
+from tests.helpers import CapturingStore as _StubStore
+from tests.helpers import StubActuator as _StubActuator
+from tests.helpers import StubHass as _StubHass
 
 UTC = timezone.utc
 
@@ -306,36 +309,16 @@ def test_charge_ceiling_soc_slot_floors_lookup_mid_hour():
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
 
-class _StubActuator:
-    def __init__(self):
-        self.calls: list[tuple] = []
-        self.last_setpoint_w: float = 0.0
-        self.engaged: bool = False
-
-    async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_and_charge", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def engage_export(self, setpoint_w: float) -> None:
-        self.calls.append(("engage_export", setpoint_w))
-        self.last_setpoint_w = setpoint_w
-        self.engaged = True
-
-    async def release_to_self(self) -> None:
-        self.calls.append(("release_to_self",))
-        self.last_setpoint_w = 0.0
-        self.engaged = False
-
-
-class _StubStore:
-    def __init__(self):
-        self.saved: dict = {}
-
-    async def async_save(self, data: dict) -> None:
-        self.saved = data
-
-
+# _StubActuator/_StubStore migrated to helpers (aliased above, imports keep
+# call sites unchanged). Both §4 tests below pass enable_export=False via
+# _cfg(), so helpers.StubActuator's added engage_export(setpoint_w<=0) guard
+# (absent from the old bespoke stub) is never exercised — the export path
+# (controller.py's ``if self.cfg.enable_export`` gates) is skipped entirely.
+#
+# _StubRecorder kept local: every read method here unconditionally returns
+# empty/None regardless of append() calls (same rationale as
+# test_controller_remote.py's local _StubRecorder) — a genuine behavioural
+# difference from helpers.StubRecorder's accumulate-and-filter semantics.
 class _StubRecorder:
     def __init__(self):
         self.rows: list[dict] = []
@@ -389,35 +372,6 @@ class _StubRecorder:
         if until_day is not None:
             rows = [r for r in rows if r["day"] < until_day]
         return sorted(rows, key=lambda r: r["day"])
-
-
-class _StubHass:
-    """Minimal HA stub with a state registry."""
-
-    def __init__(self):
-        self._states: dict = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
 
 
 def _cfg(**overrides) -> Config:

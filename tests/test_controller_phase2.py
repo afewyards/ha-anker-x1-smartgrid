@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
 from custom_components.anker_x1_smartgrid import controller, forecast, const
+from tests.helpers import StubActuator, StubHass as _T6Hass, StubRecorder, StubStore
 
 
 # ---------------------------------------------------------------------------
@@ -37,38 +38,9 @@ class _RollupRecorder:
         return 0
 
 
-class _T6Hass:
-    """Minimal hass stub for P1-T6 tick() tests.
-
-    async_add_executor_job calls the callable directly (no thread pool) so the
-    tracker on _RollupRecorder picks up the calls synchronously in tests.
-    """
-
-    def __init__(self):
-        self._states = {}
-
-    class _StateObj:
-        def __init__(self, state, attributes=None):
-            self.state = state
-            self.attributes = attributes or {}
-
-    def set_state(self, entity_id, state, attributes=None):
-        self._states[entity_id] = self._StateObj(state, attributes)
-
-    class _States:
-        def __init__(self, parent):
-            self._parent = parent
-
-        def get(self, entity_id):
-            return self._parent._states.get(entity_id)
-
-    @property
-    def states(self):
-        return self._States(self)
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
-
+# _T6Hass = helpers.StubHass (imported above): async_add_executor_job calls
+# the callable directly (no thread pool) so the tracker on _RollupRecorder
+# picks up the calls synchronously in tests.
 
 # The test hour must NOT be a multiple of 6 to avoid the 6-hourly raw-purge
 # guard also firing and potentially masking issues.  Hour 11 is clean.
@@ -91,22 +63,12 @@ def _make_t6_controller(hass, rec):
         const.CONF_ENT_IRRADIANCE: "sensor.irr",
     }
 
-    class _NoopActuator:
-        last_setpoint_w = 0.0
-        engaged: bool = False
-
-        async def release_to_self(self): pass
-        async def engage_and_charge(self, w): pass
-
-    class _NoopStore:
-        async def async_save(self, d): pass
-
     ctrl = Controller(
         hass=hass,
         data=data,
         recorder=rec,
-        actuator=_NoopActuator(),
-        store=_NoopStore(),
+        actuator=StubActuator(),
+        store=StubStore(),
     )
     # Use disabled path so we avoid needing full coordinator state seeding;
     # the rollup guard runs before the enabled/disabled branch.
@@ -167,6 +129,10 @@ def test_compute_decision_propagates_cur_temp_to_predictor():
     )
 
 
+# _Rec kept local (not migrated to helpers.StubRecorder): constructor-seeded
+# with fixed feature/hourly rows and ignores since_iso entirely — a different
+# contract than StubRecorder's accumulate-then-filter-by-since_iso semantics,
+# needed here to pin exact retrain-tier selection.
 class _Rec:
     def __init__(self, rows):
         self._rows = rows
@@ -238,31 +204,18 @@ async def test_retrain_switches_to_model_with_enough_data():
 # P1-T2: _record_sample writes 4 weather-forecast columns
 # ---------------------------------------------------------------------------
 
-class _MinimalHass:
-    """Hass stub that returns None for all states — enough for _record_sample."""
-    class _States:
-        def get(self, entity_id):
-            return None
-    states = _States()
-
-    async def async_add_executor_job(self, fn, *args):
-        return fn(*args)
-
-
-class _CaptureRecorder:
-    """Captures appended sample rows."""
-    def __init__(self):
-        self.rows: list[dict] = []
-
-    def append(self, row: dict) -> None:
-        self.rows.append(row)
+# _MinimalHass = a fresh, unseeded helpers.StubHass(): its ``_states`` dict
+# starts empty, so states.get(entity_id) returns None for everything —
+# identical behaviour to the old bespoke stub.
+# _CaptureRecorder = helpers.StubRecorder(): append()/`.rows` surface matches
+# exactly (only .rows is ever inspected below).
 
 
 def _make_recording_controller():
     """Build a Controller instance with just enough wiring for _record_sample."""
     from custom_components.anker_x1_smartgrid.controller import Controller
     ctl = Controller.__new__(Controller)
-    ctl._hass = _MinimalHass()
+    ctl._hass = _T6Hass()
     ctl._data = {
         const.CONF_ENT_PV_POWER: "sensor.pv",
         const.CONF_ENT_BATTERY_POWER: "sensor.batt",
@@ -270,10 +223,10 @@ def _make_recording_controller():
         const.CONF_ENT_IRRADIANCE: "sensor.irr",
         # No CONF_ENT_TEMP → temp=None (tests the optional-entity path too)
     }
-    ctl._recorder = _CaptureRecorder()
+    ctl._recorder = StubRecorder()
     # __new__ bypasses __init__: seed the N2 house-load cache __init__ would set,
     # since _compute_house_load_w falls back to it when pv/batt read None
-    # (this fixture's _MinimalHass always returns None for every state).
+    # (this fixture's unseeded StubHass always returns None for every state).
     ctl._last_house_load_w = 0.0
     return ctl
 
@@ -412,6 +365,9 @@ async def test_rollup_runs_via_executor_path(monkeypatch):
 # P3-T3: HGBR → bucketed → profile retrain chain
 # ---------------------------------------------------------------------------
 
+# _HGBRRec kept local (not migrated to helpers.StubRecorder): same reason as
+# _Rec above — constructor-seeded fixed rows, since_iso ignored, needed to
+# pin exact HGBR/bucketed/profile tier selection per test.
 class _HGBRRec:
     """Recorder stub for HGBR chain tests; returns configurable feature + hourly rows."""
 

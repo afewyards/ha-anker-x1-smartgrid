@@ -15,10 +15,16 @@ from datetime import datetime, timezone
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import PlantInputs
+from tests.helpers import StubRecorder as _Recorder
 
 NOW = datetime(2026, 7, 9, 12, 30, tzinfo=timezone.utc)
 
 
+# _StateObj/_States/_Hass kept local (not migrated to helpers.StubHass): tests
+# below drive states via ``hass.states.set(entity_id, state)`` (no attributes
+# arg), whereas helpers.StubHass exposes ``hass.set_state(entity_id, state,
+# attributes=None)`` at the hass level instead — a different call convention,
+# not an equivalent stub.
 class _StateObj:
     def __init__(self, state):
         self.state = state
@@ -41,14 +47,6 @@ class _Hass:
 
     async def async_add_executor_job(self, fn, *args):
         return fn(*args)
-
-
-class _Recorder:
-    def __init__(self):
-        self.rows: list[dict] = []
-
-    def append(self, row):
-        self.rows.append(row)
 
 
 def _make_ctrl(hass, *, last_house_load_w: float = 0.0) -> Controller:

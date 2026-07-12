@@ -13,6 +13,7 @@ from custom_components.anker_x1_smartgrid.models import (
     PlanState,
     PriceSlot,
 )
+from tests.helpers import StubHass as _Hass
 
 
 def _slot(h):
@@ -52,14 +53,15 @@ async def test_get_past_actuals_caches_per_hour_and_filters_future():
              "pv_w": 500.0, "load_w": 200.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 40.0}]
     calls = {"n": 0}
 
+    # _Rec kept local (not migrated to helpers.StubRecorder): this test asserts
+    # caching behaviour of Controller._get_past_actuals itself — it needs a
+    # call-counter on read_feature_rows and must ignore since_iso (always
+    # return the same fixed rows), which is a different contract than
+    # StubRecorder's accumulate-and-filter-by-since_iso semantics.
     class _Rec:
         def read_feature_rows(self, since_iso=None):
             calls["n"] += 1
             return rows
-
-    class _Hass:
-        async def async_add_executor_job(self, fn, *a):
-            return fn(*a)
 
     c = ctrl.Controller.__new__(ctrl.Controller)
     c._hass = _Hass()
