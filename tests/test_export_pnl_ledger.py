@@ -16,12 +16,14 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+from custom_components.anker_x1_smartgrid import scheduler as sch_mod
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     ExportState,
+    PriceSlot,
 )
-from custom_components.anker_x1_smartgrid.optimize import export_pnl_eur
+from custom_components.anker_x1_smartgrid.optimize import compute_water_value, export_pnl_eur
 from tests.helpers import (
     CapturingStore as _StubStore,
     StubActuator as _StubActuator,
@@ -514,4 +516,80 @@ class TestExportPnlMeasuredNotSetpoint:
             f"PnL must equal the metered min-rule revenue ({expected_pnl}), "
             f"not something derived from the wild setpoint ({wild_setpoint_w}); "
             f"got {ctrl.today_export_pnl_eur}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# C3 keep_value anchor: MINIMUM price over the remaining horizon, not the
+# next LOCAL price trough (find_next_trough picks the EARLIEST qualifying
+# local minimum, which can be far shallower than a deeper refill sitting
+# later in the same horizon — the same defect fixed in decision.py's
+# terminal water value).
+# ---------------------------------------------------------------------------
+
+
+class TestExportKeepValueHorizonMinAnchor:
+    """The live C3 executor's ``_keep_value`` (opportunity-cost term fed into
+    the PnL ledger) must use ``compute_water_value(min(remaining_prices), cfg)``
+    — the same anchor as the DP's terminal water value — not
+    ``find_next_trough``'s earliest-qualifying local minimum."""
+
+    @pytest.mark.asyncio
+    async def test_keep_value_uses_horizon_min_not_local_trough(self, monkeypatch):
+        """Shallow local trough at +6h (0.09) vs. a much deeper true minimum
+        at +11h (0.02). ``find_next_trough`` (old anchor) picks 0.09, the
+        earliest qualifying candidate; the fix must use min(prices) = 0.02.
+        """
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass)
+        # Freeze time so the price forecast (anchored to BASE) is in-window —
+        # matches the C3 executor test harness pattern (test_controller_export_executor.py).
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        _seed_export_inputs(hass, soc="80.0", export_price="0.30")
+        prices = [0.30, 0.30, 0.10, 0.10, 0.10, 0.10, 0.09, 0.12, 0.12, 0.12, 0.12, 0.02, 0.10]
+        hass.set_state(
+            "sensor.price",
+            "0.30",
+            {
+                "forecast": [
+                    {
+                        "datetime": (BASE + timedelta(hours=i)).isoformat(),
+                        "electricity_price": int(prices[i] * const.PRICE_SCALE),
+                    }
+                    for i in range(len(prices))
+                ]
+            },
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        cfg = ctrl.cfg
+        slots = [PriceSlot(BASE + timedelta(hours=i), p) for i, p in enumerate(prices)]
+        _, old_trough_price = sch_mod.find_next_trough(BASE, slots, cfg)
+        keep_old = compute_water_value(old_trough_price, cfg)
+        keep_new = compute_water_value(min(prices), cfg)
+        assert old_trough_price == pytest.approx(0.09) and min(prices) == pytest.approx(0.02), (
+            "fixture precondition: find_next_trough must disagree with the horizon min"
+        )
+        assert keep_old != pytest.approx(keep_new), "fixture must actually distinguish the two anchors"
+
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        # eta_charge=1.0/round_trip_eff=1.0 in _make_export_cfg -> eta_discharge=1.0,
+        # so DC kWh == AC kWh and no conversion factor is needed here.
+        expected_pnl_new = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - keep_new * ac_kwh
+        expected_pnl_old = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - keep_old * ac_kwh
+
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl_new, rel=1e-6), (
+            f"today_export_pnl_eur must use the horizon-min keep_value ({keep_new}); "
+            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl_new}; "
+            f"old next-local-trough anchor would give {expected_pnl_old})"
+        )
+        assert ctrl.today_export_pnl_eur != pytest.approx(expected_pnl_old, rel=1e-6), (
+            "PnL must not match the stale next-local-trough anchor"
         )

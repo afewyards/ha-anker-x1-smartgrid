@@ -810,14 +810,25 @@ def compute_decision(
         _out["slot_minutes"] = slot_minutes
     fallback_load = const.DEFAULT_FALLBACK_LOAD_W
 
-    _, trough_price = scheduler.find_next_trough(inputs.now, slots, cfg)
-    # KEEP find_next_trough alive for the terminal water-value reference only.
+    # Terminal water value is anchored to the MINIMUM price over the REMAINING
+    # horizon (same convention as the oracle in regret_job.py), NOT the next
+    # LOCAL price trough: find_next_trough returns the EARLIEST qualifying
+    # local minimum, which can be far shallower than a deeper refill sitting
+    # later in the same horizon. That mismatch let the DP value holding
+    # energy above selling it even at the horizon's own top price hour (the
+    # DP had already scheduled the deeper refill for charging, but priced the
+    # terminal SoC off the shallower, earlier dip instead).
+    # find_next_trough (scheduler.py) has no production callers left after
+    # this change; it is retained for its unit-test coverage and possible
+    # future reuse only.
+    _remaining_prices = [s.price for s in slots if s.start >= now_h]
+    _horizon_min_price = min(_remaining_prices) if _remaining_prices else 0.0
     # The optimization horizon is the FULL forecast, not [now, trough]: tomorrow's
-    # evening peak (best export hour) sits past the trough and must be in-window.
+    # evening peak (best export hour) sits past any local trough and must be in-window.
     _last_slot = max((s.start for s in slots), default=now_h)
     horizon_edge = resolution.hour_floor(_last_slot) + timedelta(hours=1)
     terminal_mode = "water_value"
-    water_value: float | None = optimize_mod.compute_water_value(trough_price, cfg)
+    water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg)
 
     # --- Water-value curve/interval build over [now, horizon_edge] ---
     # build_display_intervals emits one interval per price-slot hour >= now_h

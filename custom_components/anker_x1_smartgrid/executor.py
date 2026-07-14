@@ -179,10 +179,17 @@ async def run_forcing_and_export(
             _surplus = energy.export_surplus_kwh(inputs.soc, _reserve, controller.cfg)
 
             # Economic hurdle: does exporting now beat holding for later use?
+            # Anchored to the MINIMUM price over the remaining horizon — the
+            # same convention as the DP's terminal water value (decision.py)
+            # and the oracle (regret_job.py) — NOT find_next_trough's earliest
+            # qualifying local minimum, which can be far shallower than a
+            # deeper refill sitting later in the same horizon (that mismatch
+            # would price this ledger's opportunity cost differently than the
+            # plan it's supposed to be scoring against).
+            _now_h_keep = resolution.hour_floor(now)
+            _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
             _keep_value = optimize_mod.compute_water_value(
-                # Use trough price as keep_value proxy (reuse existing helper).
-                # find_next_trough returns (dt, price); price is in €/kWh.
-                scheduler.find_next_trough(now, slots, controller.cfg)[1],
+                min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
                 controller.cfg,
             )
             # Economic decision (which hours, how much) = the DP's committed plan.

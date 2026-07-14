@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone, UTC
 
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
+from custom_components.anker_x1_smartgrid import decision as dec_mod
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     PlanState,
@@ -147,4 +148,108 @@ def test_new_mode_shield_does_not_inflate_safe_schedule():
     assert expensive_grid_wh == 0.0, (
         f"Force-inflation detected: {expensive_grid_wh:.0f} Wh charged at expensive slots "
         f"(≥0.25 EUR/kWh) despite ample SoC — shield incorrectly fired"
+    )
+
+
+# ===========================================================================
+# Terminal water-value anchor: MINIMUM remaining-horizon price, not the next
+# LOCAL price trough (regression for the "sells nothing at the horizon's own
+# peak" defect — the earliest qualifying local minimum can be far shallower
+# than a deeper refill sitting later in the same horizon; find_next_trough
+# picks the EARLIEST qualifying candidate, not the deepest).
+# ===========================================================================
+
+
+def _flat_export_kwargs(now, slots, cfg):
+    return dict(
+        plan=PlanState.initial(now),
+        inputs=PlantInputs(soc=80.0, meter_w=0.0, now=now),
+        slots=slots,
+        pv_remaining=0.0,
+        sunset=now + timedelta(hours=2),
+        predictor=_FlatPredictor(),
+        cur_temp=10.0,
+        cfg=cfg,
+        export_price=slots[0].price,
+        export_price_matches_import=True,
+    )
+
+
+def test_terminal_water_value_anchored_to_horizon_min(monkeypatch):
+    """Direct pin: the terminal water value must be computed from
+    ``compute_water_value(min(remaining_prices), cfg)``, NOT from
+    ``find_next_trough``'s earliest-qualifying local minimum.
+
+    Fixture: a shallow local trough at +6h (0.29, easily found by
+    ``find_next_trough`` since most of the horizon sits at 0.34) versus a much
+    deeper true minimum at +17h (0.15). The old anchor picks 0.29 (the
+    earliest qualifying candidate); the fix must pick 0.15 (the true horizon
+    minimum).
+    """
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
+    prices = [0.34] * 6 + [0.29] + [0.34] * 10 + [0.15] + [0.34] * 6
+    slots = _price_slots(now, prices)
+    cfg = Config(enable_export=True)
+
+    real_compute_water_value = dec_mod.optimize_mod.compute_water_value
+    captured: dict = {}
+
+    def _spy(trough_price, cfg_arg):
+        captured["price"] = trough_price
+        return real_compute_water_value(trough_price, cfg_arg)
+
+    monkeypatch.setattr(dec_mod.optimize_mod, "compute_water_value", _spy)
+
+    ctrl.compute_decision(**_flat_export_kwargs(now, slots, cfg), _out={})
+
+    assert captured["price"] == 0.15, (
+        f"terminal water value must be anchored to the horizon minimum (0.15), "
+        f"got {captured['price']} (0.29 would mean the stale next-local-trough anchor is still live)"
+    )
+
+
+def test_export_scheduled_at_peak_when_horizon_min_beats_local_trough():
+    """A cheaper refill later in the horizon must not be shadowed by an
+    earlier, shallower local trough: with the horizon-min anchor, exporting
+    at the horizon's top price hour beats holding for the (shallow) local
+    trough, so the DP must schedule export there.
+
+    Under the OLD next-local-trough anchor, the shallow +6h dip (0.29) prices
+    the terminal water value at ~0.315 (0.29 / eta_charge=0.92), which beats
+    the net top-price-hour revenue (0.40 − fee 0.02 − wear 0.10 = 0.28) → the
+    DP holds and exports nothing, even at the horizon's own peak.
+    """
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
+    prices = [0.34] * 6 + [0.29] + [0.34] * 10 + [0.15] + [0.34] * 2 + [0.40] + [0.34] * 3
+    slots = _price_slots(now, prices)
+    cfg = Config(enable_export=True)
+    out: dict = {}
+
+    ctrl.compute_decision(**_flat_export_kwargs(now, slots, cfg), _out=out)
+
+    peak_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=20)
+    assert peak_hour in out.get("export_request", {}), (
+        "export_request must include the horizon's top price hour (+20h, 0.40 EUR/kWh) once the "
+        "terminal water value is anchored to the horizon minimum (0.15), not the shallow local "
+        f"trough (0.29); got {sorted(out.get('export_request', {}))}"
+    )
+
+
+def test_export_still_held_when_horizon_min_is_not_cheap_enough():
+    """Converse guard: when nothing in the remaining horizon is cheap enough
+    to make replacement attractive, the DP must still hold — the fix must not
+    turn into an "always export" bias.
+    """
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
+    # No deep refill anywhere in the horizon; only a modest peak at +20h.
+    prices = [0.30] * 20 + [0.34] + [0.30] * 3
+    slots = _price_slots(now, prices)
+    cfg = Config(enable_export=True)
+    out: dict = {}
+
+    ctrl.compute_decision(**_flat_export_kwargs(now, slots, cfg), _out=out)
+
+    assert out.get("export_request", {}) == {}, (
+        "DP must hold when the horizon minimum (0.30) is not cheap enough to beat the net "
+        f"top-price-hour revenue; got export_request={out.get('export_request')}"
     )
