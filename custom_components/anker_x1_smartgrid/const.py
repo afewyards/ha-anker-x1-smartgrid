@@ -155,7 +155,7 @@ DEFAULT_ENABLE_EXPORT = True
 # net-export setpoint ceiling is ~6000 W — kept at 6000 for parity.
 DEFAULT_MAX_EXPORT_W = 6000.0
 DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0  # configurable grid-connection cap
-DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.04  # battery cycle degradation cost (€/kWh stored)
+DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.10  # battery cycle degradation cost (€/kWh stored)
 # Two-sided surplus hysteresis band (mirrors decide_state's eps_lo/eps_hi)
 DEFAULT_EXPORT_EPS_LO_KWH = 0.2  # disengage below this surplus
 DEFAULT_EXPORT_EPS_HI_KWH = 0.4  # engage above this surplus

@@ -99,7 +99,7 @@ def test_export_default_values():
     assert const.DEFAULT_ENABLE_EXPORT is True
     assert const.DEFAULT_MAX_EXPORT_W == 6000.0
     assert const.DEFAULT_GRID_EXPORT_LIMIT_W == 6000.0
-    assert const.DEFAULT_CYCLE_COST_EUR_PER_KWH == 0.04
+    assert const.DEFAULT_CYCLE_COST_EUR_PER_KWH == 0.10
     # eps/dwell shared with standalone constants above
     assert const.DEFAULT_EXPORT_EPS_LO_KWH == 0.2
     assert const.DEFAULT_EXPORT_EPS_HI_KWH == 0.4
