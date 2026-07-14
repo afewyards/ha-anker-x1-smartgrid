@@ -1,5 +1,5 @@
 name: "Anker X1 Forecast (HGBR)"
-version: "0.9.1"
+version: "0.10.0"
 slug: anker_x1_forecast
 description: "Local HGBR load-forecast service for Anker X1 SmartGrid: trains a P50/P80 house-load model on the recorder DB and serves per-hour predictions to the integration over the internal add-on network."
 arch:
