@@ -1369,8 +1369,11 @@ async def test_disabled_path_resets_export_state(monkeypatch):
 @pytest.mark.asyncio
 async def test_forcing_engage_failure_publishes_honest_state(monkeypatch):
     """A FORCING engage failure must publish setpoint 0 + state 'passive' for
-    THIS tick (not phantom 'forcing'+max_charge_w), WITHOUT releasing hardware
-    and WITHOUT resetting self.plan (intent retries next tick)."""
+    THIS tick (not phantom 'forcing'+max_charge_w), and it now releases the
+    hardware back to firmware control in the SAME tick (best-effort, same
+    release_to_self mechanism as the FORCING→PASSIVE transition) so the
+    battery isn't left VPP-idle/frozen — WITHOUT resetting self.plan (intent
+    retries next tick)."""
     from custom_components.anker_x1_smartgrid.models import PlanState
     from custom_components.anker_x1_smartgrid.controller import ControllerState
 
@@ -1394,5 +1397,52 @@ async def test_forcing_engage_failure_publishes_honest_state(monkeypatch):
     result = await ctrl.tick()
     assert result["state"] == "passive"  # not "forcing"
     assert result["setpoint_w"] == 0.0  # not max_charge_w
-    assert not any(c[0] == "release_to_self" for c in act.calls)  # no hardware release
+    assert any(c[0] == "release_to_self" for c in act.calls)  # hardware released this tick
+    assert act.last_setpoint_w == 0.0  # release zeroed the setpoint
+    assert act.engaged is False
     assert ctrl.plan.state is ControllerState.FORCING  # intent preserved for retry
+
+
+class _LiveClampChargeActuator(_StubActuator):
+    """Simulates Actuator._clamp_to_live_limits tightening the requested
+    setpoint before it's actually written to hardware (e.g. a live setpoint-
+    entity min of -5910 floors -6000 to -5900 on the 100W step grid). Engage
+    succeeds, but last_setpoint_w ends up DIFFERENT from the requested value —
+    exactly what the real Actuator does when the live BMS limit is tighter
+    than the static guard clamp."""
+
+    def __init__(self, clamped_setpoint_w: float):
+        super().__init__()
+        self._clamped_setpoint_w = clamped_setpoint_w
+
+    async def engage_and_charge(self, setpoint_w):
+        self.calls.append(("engage_and_charge", setpoint_w))
+        self.last_setpoint_w = self._clamped_setpoint_w
+        self.engaged = True
+
+
+@pytest.mark.asyncio
+async def test_forcing_engage_success_reports_actuator_written_setpoint(monkeypatch):
+    """FORCING engage: guard.command_setpoint requests -6000, but the
+    actuator's live-limit clamp (simulated here) tightens what's ACTUALLY
+    WRITTEN to -5900 (e.g. a live min of -5910, floored to the 100W step
+    grid). run_forcing_and_export must report/publish the setpoint the
+    actuator actually wrote (actuator.last_setpoint_w), not the pre-clamp
+    request — else _record_sample/status would lie about what hardware did."""
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    hass = _StubHass()
+    act = _LiveClampChargeActuator(clamped_setpoint_w=-5900.0)
+    ctrl, act, _ = _make_controller(hass, actuator=act, cfg_overrides={"max_charge_w": 6000.0})
+    _seed_passive_inputs(hass, soc="30.0", export_price="0.10")
+    deadline = BASE + timedelta(hours=2)
+    monkeypatch.setattr(
+        ctrl_mod,
+        "compute_decision",
+        lambda *a, **k: (PlanState(ControllerState.FORCING, BASE, ()), 0.0, deadline, [], "single-day", []),
+    )
+
+    result = await ctrl.tick()
+    assert act.calls[0] == ("engage_and_charge", -6000.0)  # requested (pre-clamp)
+    assert act.last_setpoint_w == -5900.0  # actually written (clamped)
+    assert result["state"] == "forcing"  # normal success path, not engage-failure
+    assert result["setpoint_w"] == -5900.0  # published value MUST match what was written

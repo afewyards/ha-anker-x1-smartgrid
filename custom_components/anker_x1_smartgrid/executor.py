@@ -109,12 +109,33 @@ async def run_forcing_and_export(
         try:
             await controller._actuator.engage_and_charge(setpoint)
         except Exception:
-            # Publish truth for THIS tick without a hardware release or plan
-            # reset: the inverter never engaged, so setpoint 0 + PASSIVE is
-            # honest; controller.plan stays FORCING so the next tick retries.
+            # Engage failed → the inverter may be half-engaged (modbus switch
+            # already turned on, setpoint never written or the write itself
+            # raised, e.g. a live-limit ServiceValidationError). Release the
+            # hardware back to firmware control in THIS tick — same
+            # release_to_self mechanism as the FORCING→PASSIVE transition
+            # below — so the battery isn't left VPP-idle/frozen retrying
+            # every tick. Publish truth for THIS tick regardless of whether
+            # the release itself succeeds (best-effort): setpoint 0 + PASSIVE
+            # is honest; controller.plan stays FORCING so the next tick
+            # retries the engage.
             _LOGGER.error("Actuator engage_and_charge failed (FORCING path); publishing passive/0", exc_info=True)
             _engage_failed = True
             setpoint = 0.0
+            await safe_release(
+                controller,
+                now,
+                "Actuator release_to_self failed (FORCING engage-failure recovery)",
+                reset_export=False,
+            )
+        else:
+            # Actuator._engage may have further tightened `setpoint` via its
+            # live-limit clamp (the setpoint entity's min/max are LIVE
+            # inverter BMS limits that float and can be tighter than the
+            # static guard.command_setpoint clamp above). Report what was
+            # ACTUALLY WRITTEN to hardware, not the pre-clamp request, so
+            # _record_sample / the published status stay truthful.
+            setpoint = controller._actuator.last_setpoint_w
         # Mutual exclusion: export executor is skipped entirely while force-charging.
         # Release export state so we transition cleanly after force-charge ends.
         await safe_release(controller, now, release=False)

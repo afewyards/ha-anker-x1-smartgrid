@@ -12,12 +12,43 @@ class _Recorder:
         self.calls.append((domain, service, data))
 
 
+class _State:
+    def __init__(self, state, attributes=None):
+        self.state = state
+        self.attributes = attributes or {}
+
+
+class _States:
+    def __init__(self, parent):
+        self._parent = parent
+
+    def get(self, entity_id):
+        return self._parent._states.get(entity_id)
+
+
+class _NoStates:
+    """Minimal ``hass.states`` stand-in for bespoke test doubles that don't
+    otherwise track entity state: ``.get()`` always reports "missing", which
+    is the live-limit clamp's unchanged-value path."""
+
+    def get(self, entity_id):
+        return None
+
+
 @pytest.fixture
 def hass_stub():
     class _H:
         def __init__(self):
             self.services = _Recorder()
             self.services.async_call = self.services._svc
+            self._states = {}
+
+        def set_state(self, entity_id, state, attributes=None):
+            self._states[entity_id] = _State(state, attributes)
+
+        @property
+        def states(self):
+            return _States(self)
 
     return _H()
 
@@ -134,6 +165,7 @@ async def test_engaged_true_when_set_value_fails():
     class _H:
         def __init__(self):
             self.services = _Svc()
+            self.states = _NoStates()
 
     act = Actuator(_H(), {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     with pytest.raises(RuntimeError):
@@ -153,6 +185,7 @@ async def test_engaged_false_when_turn_on_fails():
     class _H:
         def __init__(self):
             self.services = _Svc()
+            self.states = _NoStates()
 
     act = Actuator(_H(), {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     with pytest.raises(RuntimeError):
@@ -180,6 +213,7 @@ async def test_last_setpoint_w_keeps_previous_value_when_set_value_fails():
     class _H:
         def __init__(self):
             self.services = _Svc()
+            self.states = _NoStates()
 
     act = Actuator(_H(), {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     act.last_setpoint_w = -1500.0  # previous known-good commanded setpoint
@@ -190,3 +224,137 @@ async def test_last_setpoint_w_keeps_previous_value_when_set_value_fails():
         f"(the new setpoint was never actually written); got {act.last_setpoint_w}"
     )
     assert act.engaged is True
+
+
+# ---------------------------------------------------------------------------
+# Live-limit clamp: the setpoint entity's min/max attributes are LIVE
+# inverter BMS limits that float over time and can be tighter than the
+# static SETPOINT_MIN_W/SETPOINT_MAX_W guard constants. Writing outside the
+# live range raises ServiceValidationError and half-engages the inverter
+# (modbus on, setpoint never written) — see executor.py's FORCING recovery.
+# ---------------------------------------------------------------------------
+
+_SETPOINT_ENTITY = ANKER_TEST_ENTITIES[const.CONF_ENT_SETPOINT]
+
+
+async def test_engage_and_charge_clamped_to_live_min(hass_stub):
+    """-6000 W with live min -5910 -> clamped to -5910, then floored toward
+    zero onto the 100 W step grid -> -5900."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -5900.0
+    assert act.last_setpoint_w == -5900.0
+
+
+async def test_engage_and_charge_in_range_setpoint_unchanged(hass_stub):
+    """A setpoint already within the live min/max (and already grid-aligned)
+    passes through unchanged."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-3000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -3000.0
+    assert act.last_setpoint_w == -3000.0
+
+
+async def test_engage_and_charge_missing_entity_state_leaves_value_unchanged(hass_stub):
+    """No state registered for the setpoint entity (missing/never seen) ->
+    the static guard clamp already applied upstream is left as-is."""
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -6000.0
+    assert act.last_setpoint_w == -6000.0
+
+
+async def test_engage_and_charge_unavailable_entity_state_leaves_value_unchanged(hass_stub):
+    """Entity state present but 'unavailable' -> value unchanged."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "unavailable", {"min": -5910.0, "max": 6600.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -6000.0
+    assert act.last_setpoint_w == -6000.0
+
+
+async def test_engage_and_charge_missing_min_max_attributes_leaves_value_unchanged(hass_stub):
+    """State present but min/max attributes absent -> value unchanged."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -6000.0
+    assert act.last_setpoint_w == -6000.0
+
+
+async def test_engage_and_charge_non_numeric_min_max_attributes_leaves_value_unchanged(hass_stub):
+    """State present but min/max attributes are non-numeric -> value unchanged."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": "n/a", "max": None})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == -6000.0
+    assert act.last_setpoint_w == -6000.0
+
+
+async def test_engage_export_clamped_to_live_max(hass_stub):
+    """+7000 W with live max 6600 -> clamped to 6600 (already grid-aligned)."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_export(7000.0)
+    assert hass_stub.services.calls[1][2]["value"] == 6600.0
+    assert act.last_setpoint_w == 6600.0
+
+
+async def test_engage_export_clamped_to_live_max_floored_to_step(hass_stub):
+    """+7000 W with a live max of 6550 (not grid-aligned) -> clamped to 6550,
+    then floored toward zero onto the 100 W step grid -> 6500."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6550.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_export(7000.0)
+    assert hass_stub.services.calls[1][2]["value"] == 6500.0
+    assert act.last_setpoint_w == 6500.0
+
+
+async def test_engage_and_charge_clamp_logs_warning_when_value_changes(hass_stub, caplog):
+    """A clamp that actually changes the commanded value logs a WARNING with
+    both the requested and clamped values."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    with caplog.at_level("WARNING"):
+        await act.engage_and_charge(-6000.0)
+    assert "clamp" in caplog.text.lower()
+    assert "-6000" in caplog.text
+    assert "-5900" in caplog.text
+
+
+async def test_engage_and_charge_in_range_clamp_does_not_log_warning(hass_stub, caplog):
+    """No warning is logged when the value is unchanged by clamping."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    with caplog.at_level("WARNING"):
+        await act.engage_and_charge(-3000.0)
+    assert "clamp" not in caplog.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Sign guard: a pathological live limit must never flip the commanded
+# direction (charge -> discharge or vice-versa). The clamp must collapse to
+# 0.0 (honest idle) instead of writing a sign-flipped setpoint.
+# ---------------------------------------------------------------------------
+
+
+async def test_engage_and_charge_pathological_live_min_clamps_to_zero_not_flipped(hass_stub):
+    """Charge request (-6000) with a wrong-signed live min (+300, >= 0) must
+    NOT flip to a positive (discharge) command -> clamps to 0.0 instead."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": 300.0, "max": 6600.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_and_charge(-6000.0)
+    assert hass_stub.services.calls[1][2]["value"] == 0.0
+    assert act.last_setpoint_w == 0.0
+
+
+async def test_engage_export_pathological_live_max_clamps_to_zero_not_flipped(hass_stub):
+    """Export request (+7000) with a wrong-signed live max (-300, <= 0) must
+    NOT flip to a negative (charge) command -> clamps to 0.0 instead."""
+    hass_stub.set_state(_SETPOINT_ENTITY, "0.0", {"min": -5910.0, "max": -300.0, "step": 100.0})
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.engage_export(7000.0)
+    assert hass_stub.services.calls[1][2]["value"] == 0.0
+    assert act.last_setpoint_w == 0.0
