@@ -61,7 +61,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 55
+    assert len(section_keys) == 59
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1653,3 +1653,90 @@ def test_idle_drain_w_option_rejects_above_range():
     schema_obj = _options_schema({})
     with pytest.raises(vol.Invalid):
         _validate_flat(schema_obj, {const.CONF_IDLE_DRAIN_W: 501.0})
+
+
+# ---------------------------------------------------------------------------
+# Occupancy-wave flags — occ_adapt_fraction, occ_persistence_h,
+# current_hour_blend, load_adapt_partial_hour exposed in the options-UI
+# schema. These existed as models.Config fields only, so HA silently
+# dropped them from the config entry's options on every UI options save
+# (live incident). Purely additive: defaults here MUST equal the current
+# Config dataclass defaults so an untouched options save is a no-op.
+# ---------------------------------------------------------------------------
+
+
+def test_options_schema_includes_occupancy_wave_flags():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    keys = _flat_keys(_options_schema({}))
+    for key in (
+        const.CONF_OCC_ADAPT_FRACTION,
+        const.CONF_OCC_PERSISTENCE_H,
+        const.CONF_CURRENT_HOUR_BLEND,
+        const.CONF_LOAD_ADAPT_PARTIAL_HOUR,
+    ):
+        assert key in keys
+
+
+def test_options_schema_occupancy_wave_flags_default_matches_config():
+    """Schema defaults MUST equal models.Config defaults (parity-safe no-op save)."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+    from custom_components.anker_x1_smartgrid.models import Config
+
+    schema_obj = _options_schema({})
+    schema_keys = _flat_markers(schema_obj)
+    cfg = Config()
+    assert schema_keys[const.CONF_OCC_ADAPT_FRACTION].default() == cfg.occ_adapt_fraction
+    assert schema_keys[const.CONF_OCC_PERSISTENCE_H].default() == cfg.occ_persistence_h
+    assert schema_keys[const.CONF_CURRENT_HOUR_BLEND].default() == cfg.current_hour_blend
+    assert schema_keys[const.CONF_LOAD_ADAPT_PARTIAL_HOUR].default() == cfg.load_adapt_partial_hour
+
+
+def test_options_schema_occupancy_wave_flags_in_load_ml_section():
+    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS, SECTION_LOAD_ML
+
+    for key in (
+        const.CONF_OCC_ADAPT_FRACTION,
+        const.CONF_OCC_PERSISTENCE_H,
+        const.CONF_CURRENT_HOUR_BLEND,
+        const.CONF_LOAD_ADAPT_PARTIAL_HOUR,
+    ):
+        assert key in OPTIONS_SECTIONS[SECTION_LOAD_ML]
+
+
+def test_options_schema_occupancy_wave_flags_roundtrip():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    result = _validate_flat(
+        schema_obj,
+        {
+            const.CONF_OCC_ADAPT_FRACTION: 0.5,
+            const.CONF_OCC_PERSISTENCE_H: 6,
+            const.CONF_CURRENT_HOUR_BLEND: True,
+            const.CONF_LOAD_ADAPT_PARTIAL_HOUR: True,
+        },
+    )
+    assert result[const.CONF_OCC_ADAPT_FRACTION] == 0.5
+    assert result[const.CONF_OCC_PERSISTENCE_H] == 6
+    assert result[const.CONF_CURRENT_HOUR_BLEND] is True
+    assert result[const.CONF_LOAD_ADAPT_PARTIAL_HOUR] is True
+
+
+async def test_options_flow_saves_occupancy_wave_flags(hass):
+    """Regression guard for the live incident: an untouched options save must
+    NOT drop these keys (HA silently deletes schema-absent options on save)."""
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_OCC_ADAPT_FRACTION: 0.3}),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_OCC_ADAPT_FRACTION] == 0.3
+    assert const.CONF_OCC_PERSISTENCE_H in entry.options
+    assert const.CONF_CURRENT_HOUR_BLEND in entry.options
+    assert const.CONF_LOAD_ADAPT_PARTIAL_HOUR in entry.options
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()

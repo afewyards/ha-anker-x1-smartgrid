@@ -201,6 +201,10 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_LOAD_ADAPT_FRACTION,
         const.CONF_LOAD_ADAPT_WINDOW_H,
         const.CONF_LOAD_ADAPT_FADE_H,
+        const.CONF_OCC_ADAPT_FRACTION,
+        const.CONF_OCC_PERSISTENCE_H,
+        const.CONF_CURRENT_HOUR_BLEND,
+        const.CONF_LOAD_ADAPT_PARTIAL_HOUR,
         const.CONF_ADDON_ENABLED,
         const.CONF_ADDON_URL,
         const.CONF_ADDON_TIMEOUT,
@@ -359,6 +363,18 @@ _TUNABLES: list[tuple[str, object, object]] = [
         vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
     ),
     (const.CONF_LOAD_ADAPT_FADE_H, const.DEFAULT_LOAD_ADAPT_FADE_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=24))),
+    (
+        const.CONF_OCC_ADAPT_FRACTION,
+        const.DEFAULT_OCC_ADAPT_FRACTION,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+    ),
+    (
+        const.CONF_OCC_PERSISTENCE_H,
+        const.PERSONS_PERSISTENCE_H,
+        vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
+    ),
+    (const.CONF_CURRENT_HOUR_BLEND, const.DEFAULT_CURRENT_HOUR_BLEND, cv.boolean),
+    (const.CONF_LOAD_ADAPT_PARTIAL_HOUR, const.DEFAULT_LOAD_ADAPT_PARTIAL_HOUR, cv.boolean),
 ]
 
 # Multi-select entity pickers whose suggested_value is simply

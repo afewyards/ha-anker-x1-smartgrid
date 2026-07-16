@@ -157,6 +157,10 @@
               "load_adapt_fraction": "Intraday adaptation strength",
               "load_adapt_window_h": "Adaptation window (hours)",
               "load_adapt_fade_h": "Adaptation fade (hours)",
+              "occ_adapt_fraction": "Occupancy correction fraction (0-1)",
+              "occ_persistence_h": "Occupancy persistence (h)",
+              "current_hour_blend": "Blend current hour with observed load",
+              "load_adapt_partial_hour": "Load-adapt partial-hour ratio",
               "addon_enabled": "Use forecast add-on",
               "addon_url": "Add-on URL",
               "addon_timeout": "Add-on timeout (seconds)"
@@ -167,6 +171,10 @@
               "load_adapt_fraction": "How strongly the intraday corrector shifts the load forecast toward the last hours' residuals (0–1, 0 = off). Default 0.7.",
               "load_adapt_window_h": "Hours of recent residuals the intraday corrector averages. Default 5.",
               "load_adapt_fade_h": "Hours over which the intraday correction fades back to zero. Default 8.",
+              "occ_adapt_fraction": "How strongly the occupancy corrector scales the load forecast by current vs typical presence (0–1, 0 = off). Default 0.",
+              "occ_persistence_h": "Hours the current occupancy count persists into the forecast before reverting to climatology. Default 4.",
+              "current_hour_blend": "Blend the in-progress hour's observed load into the forecast as it accumulates. Default off.",
+              "load_adapt_partial_hour": "Let the intraday corrector use a still-in-progress hour's partial residual. Default off.",
               "addon_enabled": "Offload ML training and forecasting to the Anker X1 Forecast add-on instead of running in-process. Default off.",
               "addon_url": "Base URL of the Anker X1 Forecast add-on. Default http://local-anker_x1_forecast:8099.",
               "addon_timeout": "HTTP timeout for add-on requests, 1–60 seconds. Default 5."
