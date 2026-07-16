@@ -210,12 +210,17 @@ DEFAULT_LOAD_ADAPT_FRACTION = 0.7
 DEFAULT_LOAD_ADAPT_WINDOW_H = 5
 DEFAULT_LOAD_ADAPT_FADE_H = 8
 
-# Occupancy corrector (Layer B): fraction=0.0 disables (byte-identical).
+# Occupancy corrector (Layer B) config keys
+CONF_OCC_ADAPT_FRACTION = "occ_adapt_fraction"
+CONF_OCC_PERSISTENCE_H = "occ_persistence_h"
+# fraction=0.0 disables (byte-identical).
 DEFAULT_OCC_ADAPT_FRACTION = 0.0
 # Shared presence-persistence horizon: local corrector AND the addon payload
 # projection (remote_forecast.project_persons_home) must always agree.
 PERSONS_PERSISTENCE_H = 4
-# Current-hour blend + load-adapt partial-hour (both live-only, default off).
+# Current-hour blend + load-adapt partial-hour config keys (both live-only, default off).
+CONF_CURRENT_HOUR_BLEND = "current_hour_blend"
+CONF_LOAD_ADAPT_PARTIAL_HOUR = "load_adapt_partial_hour"
 DEFAULT_CURRENT_HOUR_BLEND = False
 DEFAULT_LOAD_ADAPT_PARTIAL_HOUR = False
 
