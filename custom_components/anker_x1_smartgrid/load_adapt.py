@@ -52,11 +52,15 @@ def compute_ratio(
     window_h: int,
     *,
     partial: tuple[float, float] | None = None,
-) -> tuple[float | None, int]:
+) -> tuple[float | None, int, float | None]:
     """Bounded actual/predicted energy ratio over the last ``window_h`` hours.
 
-    Only hours present in BOTH the log and past_actuals count; requires
-    ``MIN_MATCHED_HOURS`` matches else ``(None, matched)``.
+    Returns ``(clamped_ratio, matched, raw_ratio)``. ``raw_ratio`` is the
+    pre-clamp ``act_sum / pred_sum`` — diagnostic only, never used to drive
+    the forecast (that stays ``clamped_ratio``, unchanged behavior). Only
+    hours present in BOTH the log and past_actuals count; requires
+    ``MIN_MATCHED_HOURS`` matches else ``(None, matched, None)`` — the bail
+    case has no sum to divide, so raw mirrors the same neutral ``None``.
 
     The actual defaults to the measured hourly energy (``load_kwh`` x 1000,
     a true integral of power over the clock hour — see
@@ -108,8 +112,29 @@ def compute_ratio(
             act_sum += float(actual_rate_w) * frac
             matched += 1
     if matched < MIN_MATCHED_HOURS or pred_sum <= 0.0:
-        return None, matched
-    return min(RATIO_MAX, max(RATIO_MIN, act_sum / pred_sum)), matched
+        return None, matched, None
+    raw = act_sum / pred_sum
+    return min(RATIO_MAX, max(RATIO_MIN, raw)), matched, raw
+
+
+def update_pinned_since(pinned_since: datetime | None, ratio: float | None, now: datetime) -> datetime | None:
+    """RATIO_MAX saturation timer, pure so it is testable without a Controller.
+
+    Starts the clock the first tick the CLAMPED ``ratio`` hits the ceiling,
+    holds ``pinned_since`` while still pinned, clears it the instant ``ratio``
+    drops below ``RATIO_MAX`` or is unavailable (``None``). Diagnostic only —
+    the controller keeps this as in-memory state, not persisted.
+    """
+    if ratio == RATIO_MAX:
+        return pinned_since if pinned_since is not None else now
+    return None
+
+
+def pinned_hours(pinned_since: datetime | None, now: datetime) -> float:
+    """Hours since ``pinned_since``, rounded to 1 decimal; 0.0 when unpinned."""
+    if pinned_since is None:
+        return 0.0
+    return round((now - pinned_since).total_seconds() / 3600.0, 1)
 
 
 class AdaptivePredictor:

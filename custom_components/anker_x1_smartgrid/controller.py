@@ -246,6 +246,10 @@ class Controller:
         self._load_adapt_log = load_adapt.PredictionLog()
         self._load_adapt_ratio: float | None = None
         self._load_adapt_matched: int = 0
+        self._load_adapt_ratio_raw: float | None = None
+        # RATIO_MAX saturation timer (diagnostic only, not persisted); see
+        # load_adapt.update_pinned_since/pinned_hours.
+        self._load_adapt_pinned_since: datetime | None = None
         # ── Layer B occupancy corrector state (occupancy.py) ─────────────────────────
         self._occ_table: occupancy.OccupancyTable | None = None
         self._persons_home_now: int | None = None
@@ -410,7 +414,7 @@ class Controller:
             if self.cfg.load_adapt_partial_hour and self._hour_acc.hour == now_h and self._hour_acc.covered_s > 0.0:
                 _rate_w = self._hour_acc.kwh * 3_600_000.0 / self._hour_acc.covered_s
                 _partial = (_rate_w, self._hour_acc.covered_s / 3600.0)
-            ratio, matched = load_adapt.compute_ratio(
+            ratio, matched, ratio_raw = load_adapt.compute_ratio(
                 self._load_adapt_log,
                 past_actuals or {},
                 now_h,
@@ -418,9 +422,16 @@ class Controller:
                 partial=_partial,
             )
         except Exception:
-            ratio, matched = None, 0
+            ratio, matched, ratio_raw = None, 0, None
         self._load_adapt_ratio = ratio
         self._load_adapt_matched = matched
+        self._load_adapt_ratio_raw = ratio_raw
+        # getattr: bare Controller.__new__ test doubles (test_controller_load_adapt.py
+        # and siblings) never set this field before their first tick — reading it as
+        # None there is identical to a real cold start (never pinned yet).
+        self._load_adapt_pinned_since = load_adapt.update_pinned_since(
+            getattr(self, "_load_adapt_pinned_since", None), ratio, now
+        )
         pred = base
         if self.cfg.load_adapt_fraction > 0.0 and ratio is not None:
             pred = load_adapt.AdaptivePredictor(
@@ -1425,6 +1436,8 @@ class Controller:
             active_model_name=self.active_model_name,
             load_adapt_ratio=self._load_adapt_ratio,
             load_adapt_matched=self._load_adapt_matched,
+            load_adapt_ratio_raw=self._load_adapt_ratio_raw,
+            load_adapt_pinned_h=load_adapt.pinned_hours(self._load_adapt_pinned_since, now),
             occ_table=self._occ_table,
             persons_home_now=self._persons_home_now,
             occ_persistence_h=self.cfg.occ_persistence_h,

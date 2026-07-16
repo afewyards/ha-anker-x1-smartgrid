@@ -93,6 +93,8 @@ def build_status(
     active_model_name: str,
     load_adapt_ratio: float | None,
     load_adapt_matched: int,
+    load_adapt_ratio_raw: float | None,
+    load_adapt_pinned_h: float,
     occ_table,
     persons_home_now: int | None,
     occ_persistence_h: float,
@@ -124,6 +126,8 @@ def build_status(
         "active_model": active_model_name,
         "load_adapt_ratio": (round(load_adapt_ratio, 3) if load_adapt_ratio is not None else None),
         "load_adapt_matched_hours": load_adapt_matched,
+        "load_adapt_ratio_raw": (round(load_adapt_ratio_raw, 3) if load_adapt_ratio_raw is not None else None),
+        "load_adapt_pinned_h": load_adapt_pinned_h,
         **occ_status_attrs(
             occ_table,
             persons_home_now,
