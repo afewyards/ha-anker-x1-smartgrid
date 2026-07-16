@@ -290,6 +290,8 @@ class X1PlanSensor(_Base):
             "slot_minutes": self._controller.last_status.get("slot_minutes"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),
+            "load_adapt_ratio_raw": self._controller.last_status.get("load_adapt_ratio_raw"),
+            "load_adapt_pinned_h": self._controller.last_status.get("load_adapt_pinned_h"),
             # Layer B occupancy corrector observability (controller._occ_status_attrs).
             "occ_state_now": self._controller.last_status.get("occ_state_now"),
             "occ_expected_state": self._controller.last_status.get("occ_expected_state"),
