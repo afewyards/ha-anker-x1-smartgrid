@@ -21,12 +21,20 @@ though the AC side is no longer metrologically independent. Re-derive this
 note if an independent AC house-load sensor becomes available again (it
 would let the curve additionally validate the residual itself, rather than
 only calibrate against it).
+
+    Aggregation post-processing: after per-bin confidence finalization, every
+    non-confident bin's ``eta`` is rewritten by ``_interpolate_gated_bins`` to
+    a value bounded by its confident neighbours (linear interp between the
+    nearest confident-bin midpoints, flat extension outside their range). This
+    keeps a gated bin from being more extreme than measured neighbours, which
+    would otherwise create fictional per-power cliffs the DP optimizes around.
+    A side with zero confident bins is left entirely on the static prior.
 """
 
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from statistics import fmean
 
@@ -93,6 +101,57 @@ def _fallback_bins(direction: str, eta: float, reason: str = "no_data") -> list[
     los = [0.0, *edges]
     his = [*edges, float("inf")]
     return [BinStat(lo, hi, direction, eta, None, 0, 0.0, False, reason) for lo, hi in zip(los, his)]
+
+
+def _bin_midpoint_w(b: BinStat) -> float:
+    """Representative power for anchoring/interpolation: the bin midpoint,
+    except the unbounded top bin, whose midpoint is +inf — it uses its lower
+    edge instead."""
+    if b.hi_w == float("inf"):
+        return b.lo_w
+    return (b.lo_w + b.hi_w) / 2.0
+
+
+def _interp_eta(x: float, anchors: list[tuple[float, float]]) -> float:
+    """Linear interpolation of eta at power ``x`` over ``anchors`` — a
+    non-empty list of ``(power_w, eta)`` sorted ascending by power. Outside the
+    anchor range, flat-extend the nearest anchor."""
+    if x <= anchors[0][0]:
+        return anchors[0][1]
+    if x >= anchors[-1][0]:
+        return anchors[-1][1]
+    for (x0, e0), (x1, e1) in itertools.pairwise(anchors):
+        if x0 <= x <= x1:
+            if x1 == x0:
+                return e0
+            return e0 + (e1 - e0) * (x - x0) / (x1 - x0)
+    return anchors[-1][1]  # unreachable: x is bracketed by the guards above
+
+
+def _interpolate_gated_bins(bins: list[BinStat]) -> list[BinStat]:
+    """Rewrite ``eta`` of every non-confident bin so it can never be more
+    extreme than its confident neighbours (spec: gated-bin neighbor interp).
+
+    Anchors are the confident bins only (each contributes ``(_bin_midpoint_w,
+    eta)``). Each non-confident bin's ``eta`` becomes the linear interpolation
+    at its own midpoint between the nearest anchors, flat-extended beyond the
+    outermost anchors, clamped to <= 1.0. Every other field — ``measured``,
+    ``confident``, ``fallback_reason``, counts — is left untouched, and
+    confident bins pass through by identity.
+
+    If NO bin is confident, ``bins`` is returned unchanged (same object): each
+    non-confident bin keeps its static-prior fallback, byte-identical to the
+    pre-interpolation behaviour a fresh install exercises.
+    """
+    anchors = sorted((_bin_midpoint_w(b), b.eta) for b in bins if b.confident)
+    if not anchors:
+        return bins
+    return [
+        b
+        if b.confident
+        else replace(b, eta=min(_interp_eta(_bin_midpoint_w(b), anchors), 1.0))
+        for b in bins
+    ]
 
 
 class EfficiencyCurve:
@@ -206,7 +265,7 @@ class EfficiencyCurve:
                     "" if confident else "low_confidence",
                 )
             )
-        return out
+        return _interpolate_gated_bins(out)
 
 
 def _parse_ts(ts: str) -> datetime:
