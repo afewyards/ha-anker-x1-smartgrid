@@ -24,6 +24,7 @@ CONF_ROUND_TRIP_EFF = "round_trip_eff"
 
 CONF_CHARGE_MARGIN_EUR_PER_KWH = "charge_margin_eur_per_kwh"
 CONF_IDLE_DRAIN_W = "idle_drain_w"
+CONF_TERMINAL_OVERNIGHT_CREDIT = "terminal_overnight_credit"
 CONF_RESERVE_ANCHOR = "reserve_anchor"
 CONF_RESERVE_CHEAP_BAND = "reserve_cheap_band"
 CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
@@ -105,6 +106,11 @@ DEFAULT_CHARGE_MARGIN_EUR_PER_KWH = 0.0
 # DP/oracle (_apply_solar_load), ride-out reserve, plan display and
 # drift-hedge expectation on their deficit branches.
 DEFAULT_IDLE_DRAIN_W = 0.0
+# Value the first overnight-need kWh at the expected gap price instead of the
+# horizon minimum (two-segment terminal water value). True is the first
+# default-ON flag in this file: it corrects DP behavior, byte-identity is not
+# preserved at default. False reverts to the single-segment terminal.
+DEFAULT_TERMINAL_OVERNIGHT_CREDIT = True
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
