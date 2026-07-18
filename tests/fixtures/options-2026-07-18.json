@@ -1,0 +1,76 @@
+{
+  "addon_enabled": true,
+  "addon_timeout": 5,
+  "addon_url": "http://local-anker_x1_forecast:8099",
+  "anker_device": "ed076aaa3f3ac4e02f8952f991aa6d18",
+  "anticipation_confidence_haircut": 0.15,
+  "anticipation_margin_eur_per_kwh": 0.02,
+  "charge_margin_eur_per_kwh": 0.04,
+  "charge_trough_lookback_h": 8,
+  "current_hour_blend": true,
+  "cycle_cost_eur_per_kwh": 0.09,
+  "enable_export": true,
+  "ent_export_price": "sensor.zonneplan_current_electricity_tariff",
+  "ent_price": "sensor.zonneplan_current_electricity_tariff",
+  "ent_pv_peak_today": [
+    "sensor.ha_solcast_fusion_01kwmz42eg00x4mf88na1evte7_power_highest_peak_time_today"
+  ],
+  "ent_pv_peak_tomorrow": [
+    "sensor.ha_solcast_fusion_01kwmz42eg00x4mf88na1evte7_power_highest_peak_time_tomorrow"
+  ],
+  "ent_pv_power": [
+    "sensor.solar_power"
+  ],
+  "ent_pv_today": [
+    "sensor.ha_solcast_fusion_01kwmz42eg00x4mf88na1evte7_energy_production_today_remaining"
+  ],
+  "ent_pv_tomorrow": [
+    "sensor.ha_solcast_fusion_01kwmz42eg00x4mf88na1evte7_energy_production_tomorrow"
+  ],
+  "ent_weather_forecast": "weather.knmi_home",
+  "eta_charge": 0.92,
+  "export_dwell_min": 15,
+  "export_eps_hi_kwh": 0.4,
+  "export_eps_lo_kwh": 0.2,
+  "export_fee_eur_per_kwh": 0.02,
+  "export_load_comp_factor": 1.0,
+  "export_min_block_kwh": 0.5,
+  "export_peak_band_frac": 0.1,
+  "export_peak_lookback_h": 4,
+  "forecast_service": [
+    "01KWMZ42EG00X4MF88NA1EVTE7"
+  ],
+  "grid_export_limit_w": 6000.0,
+  "idle_drain_w": 100.0,
+  "load_adapt_fade_h": 8,
+  "load_adapt_fraction": 1.0,
+  "load_adapt_partial_hour": true,
+  "load_adapt_window_h": 3,
+  "min_train_samples": 2000,
+  "occ_adapt_fraction": 0.5,
+  "occ_persistence_h": 4,
+  "person_entities": [
+    "person.thierry_kleist",
+    "person.berenice_joye"
+  ],
+  "price_blend_weight_today": 0.5,
+  "price_history_days": 8,
+  "price_mode": "sensor",
+  "reserve_anchor": "trough",
+  "reserve_cheap_band": 0.2,
+  "retention_days": 90,
+  "retention_hourly_days": 730,
+  "round_trip_eff": 0.85,
+  "slot_resolution": "auto",
+  "soc_drift_deadband_kwh": 0.3,
+  "soc_drift_decay_halflife_h": 0.0,
+  "soc_floor": 10.0,
+  "soc_hedge_fraction": 0.5,
+  "soc_target": 100.0,
+  "static_offpeak_hours": "",
+  "static_price_export": 0.0,
+  "static_price_import": 0.25,
+  "static_price_offpeak": 0.0,
+  "use_learned_model": true,
+  "use_measured_eta": true
+}

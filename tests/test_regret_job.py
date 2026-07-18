@@ -45,8 +45,10 @@ def _seed_day(
     export_price=None,
     batt_w=0.0,
     pv_w=0.0,
-    hours=range(24),
+    hours=None,
 ):
+    if hours is None:
+        hours = range(24)
     for h in hours:
         row = {
             "ts": f"{day}T{h:02d}:00:00+00:00",
