@@ -778,7 +778,19 @@ def _oracle_export_revenue(
 # ---------------------------------------------------------------------------
 
 
-def _call_both_export(pv, load, price, export_price, soc_start, cfg, *, terminal_mode="reserve", water_value=None):
+def _call_both_export(
+    pv,
+    load,
+    price,
+    export_price,
+    soc_start,
+    cfg,
+    *,
+    terminal_mode="reserve",
+    water_value=None,
+    water_value_hi=None,
+    overnight_need_kwh=0.0,
+):
     """Invoke both optimizers with export_price and return (opt, hind)."""
     assert len(pv) == len(load) == len(price) == len(export_price) == 24
     day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=soc_start)
@@ -787,6 +799,8 @@ def _call_both_export(pv, load, price, export_price, soc_start, cfg, *, terminal
         cfg,
         terminal_mode=terminal_mode,
         water_value=water_value,
+        water_value_hi=water_value_hi,
+        overnight_need_kwh=overnight_need_kwh,
         export_price=export_price,
         dt_h=HOURLY_DT_H,
     )
@@ -801,6 +815,8 @@ def _call_both_export(pv, load, price, export_price, soc_start, cfg, *, terminal
         export_price=export_price,
         terminal_mode=terminal_mode,
         water_value=water_value,
+        water_value_hi=water_value_hi,
+        overnight_need_kwh=overnight_need_kwh,
         dt_h=HOURLY_DT_H,
     )
     return opt, hind
@@ -852,6 +868,29 @@ class TestExportOnParity:
             water_value=0.10,
         )
         assert_export_parity(opt, hind, label="two_peaks_wv")
+
+    def test_two_segment_terminal_parity(self):
+        """water_value_hi + overnight_need_kwh (two-segment terminal) stays byte-identical."""
+        cfg = _make_export_cfg()
+        pv = [0.0] * 24
+        load = [0.3] * 24
+        price = [0.10] * 6 + [0.20] * 18  # cheap pre-dawn trough
+        export_price = [0.0] * 24
+        export_price[19] = 0.55
+        export_price[20] = 0.45
+        opt, hind = _call_both_export(
+            pv,
+            load,
+            price,
+            export_price,
+            soc_start=70.0,
+            cfg=cfg,
+            terminal_mode="water_value",
+            water_value=0.10,
+            water_value_hi=0.28,
+            overnight_need_kwh=3.0,
+        )
+        assert_export_parity(opt, hind, label="two_segment_terminal")
 
     def test_reserve_floor_export_parity(self):
         """Identical reserve_by_hour to both DPs stays byte-identical (mirror lock)."""

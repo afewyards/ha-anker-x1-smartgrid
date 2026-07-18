@@ -48,6 +48,9 @@ class Config:
     min_horizon_h: int = const.DEFAULT_MIN_HORIZON_H
     water_value_factor: float = const.DEFAULT_WATER_VALUE_FACTOR
     clamp_water_value_nonneg: bool = const.DEFAULT_CLAMP_WATER_VALUE_NONNEG
+    # Two-segment terminal water value: credit the first overnight-need kWh at
+    # the expected gap price instead of the horizon minimum. Default on.
+    terminal_overnight_credit: bool = const.DEFAULT_TERMINAL_OVERNIGHT_CREDIT
     end_soc_deadband: float = const.DEFAULT_END_SOC_DEADBAND
     # Cheapest-hour charge gate: hour must be within this spread (€/kWh) above the
     # window's minimum price.  ANDed with the peak-based ceiling.  0.005 means only

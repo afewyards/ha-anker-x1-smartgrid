@@ -59,8 +59,9 @@ No numpy, no sklearn.  Safe to run on the HAOS box (CPython 3.14 / musl).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from . import const
 from .dp_common import export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 from .regret import (
@@ -84,6 +85,110 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
     if cfg.clamp_water_value_nonneg:
         v = max(0.0, v)
     return v
+
+
+def overnight_terminal_params(
+    gap_start: datetime,
+    pickup: datetime,
+    est_price_by_hour: dict[datetime, float],
+    load_w_by_hod: dict[int, float],
+    v_lo: float,
+    max_export_dc_value: float,
+    cfg: Config,
+    eta_curve=None,
+) -> tuple[float, float]:
+    """Overnight terminal-value params ``(v_hi, need_kwh)`` for the two-segment
+    end-state credit in :func:`dp_common.select_end_state`.
+
+    The **gap** is ``[gap_start, pickup)`` — the post-horizon overnight the DP
+    cannot price directly (the last priced slot ends at ``horizon_edge``; solar
+    only resumes at ``pickup``).  Held energy above the firmware floor genuinely
+    serves this gap's load, so it deserves a richer credit than the horizon-min
+    refill anchor ``v_lo``.
+
+    **need_kwh** — the DC kWh the pack should hold to ride the gap, computed with
+    the *same* semantics as :func:`energy.ride_out_reserve_kwh` so the terminal
+    and the survival reserve share one "overnight need" notion:
+
+    * Debit-only, trough-anchored walk.  Here ``pv_w = 0`` for every gap hour
+      (post-horizon night), so every hour is a deficit hour and the signed
+      trajectory is monotone-decreasing → the trough is the last hour reached and
+      the running ``debit_cum`` *is* the trough-anchored value (no separate
+      signed/trough bookkeeping needed).
+    * Per deficit hour: ``load_w / η_d(load_w) · dt_h / 1000 + idle_drain_w ·
+      dt_h / 1000`` DC kWh, with ``η_d`` from ``eta_curve.eta_discharge(load_w)``
+      when a curve is given, else the static ``cfg.eta_discharge_static()``.
+    * Load per gap hour comes from ``load_w_by_hod[hour]`` (missing hour-of-day →
+      ``const.DEFAULT_FALLBACK_LOAD_W``).
+    * **is_cheap early-break**: built from the priced gap hours via the same
+      ``decision._build_is_cheap_by_hour`` formula (``price ≤ fwd-min ·
+      (1 + reserve_cheap_band)``, 24 h-capped forward min).  The walk STOPS at the
+      first gap hour strictly after ``gap_start`` flagged cheap — the night only
+      needs bridging to the next genuinely-cheap grid hour.  Unpriced gap hours
+      are NOT cheap (walk continues).
+    * Clamped to ``[0, capacity_kwh − firmware_floor_kwh]``.
+
+    **v_hi** — wear-symmetric, clamped valuation of the held DC kWh:
+
+    ``v_hi = clamp(raw · η_d_static − cycle_cost, v_lo, max(v_lo, max_export_dc_value))``
+
+    where ``raw`` is the **load-weighted mean** of the priced gap hours
+    (``Σ price·load / Σ load``).  The ``− cycle_cost`` term restores export-vs-hold
+    symmetry (the export leg pays wear per DC kWh); the upper clamp
+    ``max_export_dc_value`` (caller-supplied ``max_h(effective_export_price[h]·η_d)
+    − cycle_cost`` over in-window hours, or ``v_lo`` when export is off) bounds a
+    glitch/holiday price estimate from driving unbounded hold; the ``v_lo`` floor
+    keeps the refill anchor.
+
+    Returns ``(v_lo, 0.0)`` for an empty gap and ``(v_lo, need)`` when no gap hour
+    carries a price (need still walks — only the is_cheap break needs prices).
+    """
+    if gap_start >= pickup:
+        return (v_lo, 0.0)
+
+    eta_d_static = cfg.eta_discharge_static()
+
+    # is_cheap map over the priced gap hours (mirrors decision._build_is_cheap_by_hour;
+    # hourly gap rows ⇒ a 24-entry forward-min window == RESERVE_WINDOW_MAX_H hours).
+    gap_priced = sorted((h, p) for h, p in est_price_by_hour.items() if gap_start <= h < pickup)
+    is_cheap: dict[datetime, bool] = {}
+    if gap_priced:
+        hours = [h for h, _ in gap_priced]
+        prices = [p for _, p in gap_priced]
+        win = const.RESERVE_WINDOW_MAX_H
+        band = cfg.reserve_cheap_band
+        eps = const.RESERVE_CHEAP_BAND_EPS
+        for k, h in enumerate(hours):
+            tref = min(prices[k : min(k + win, len(prices))])
+            is_cheap[h] = prices[k] <= tref + band * max(tref, eps)
+
+    # need: debit-only trough-anchored walk (pv=0 ⇒ debit_cum is the trough value).
+    debit_cum = 0.0
+    cur = gap_start
+    while cur < pickup:
+        if cur > gap_start and is_cheap.get(cur, False):
+            break
+        dt_h = min(1.0, (pickup - cur).total_seconds() / 3600.0)
+        load_w = load_w_by_hod.get(cur.hour, const.DEFAULT_FALLBACK_LOAD_W)
+        if load_w > 0.0:
+            _eta_d = eta_d_static if eta_curve is None else eta_curve.eta_discharge(load_w)
+            debit_cum += load_w / _eta_d * dt_h / 1000.0 + cfg.idle_drain_w * dt_h / 1000.0
+        cur += timedelta(hours=1)
+    need = min(max(0.0, debit_cum), cfg.capacity_kwh - cfg.firmware_floor_kwh)
+
+    # v_hi: load-weighted mean of priced gap prices, wear-symmetric and clamped.
+    num = 0.0
+    den = 0.0
+    for h, p in gap_priced:
+        w = load_w_by_hod.get(h.hour, const.DEFAULT_FALLBACK_LOAD_W)
+        num += p * w
+        den += w
+    if den <= 0.0:
+        return (v_lo, need)
+    raw = num / den
+    upper = max(v_lo, max_export_dc_value)
+    v_hi = max(v_lo, min(raw * eta_d_static - cfg.cycle_cost_eur_per_kwh, upper))
+    return (v_hi, need)
 
 
 def effective_export_price(raw_export_price: float, cfg: Config) -> float:
@@ -400,6 +505,8 @@ def optimize_grid(
     export_price: list[float] | None = None,
     terminal_mode: str = "reserve",
     water_value: float | None = None,
+    water_value_hi: float | None = None,
+    overnight_need_kwh: float = 0.0,
     reserve_by_hour: list[float] | None = None,
     grid_charge_ceiling: list[float] | None = None,
     hedge_drain_kwh: list[float] | None = None,
@@ -811,6 +918,8 @@ def optimize_grid(
         to_bin=to_bin,
         from_bin=from_bin,
         n_states=n_states,
+        water_value_hi=water_value_hi,
+        overnight_need_kwh=overnight_need_kwh,
     )
 
     if best_end_b == -1:

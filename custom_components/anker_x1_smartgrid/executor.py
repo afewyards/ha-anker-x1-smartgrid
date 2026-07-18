@@ -186,12 +186,29 @@ async def run_forcing_and_export(
             # deeper refill sitting later in the same horizon (that mismatch
             # would price this ledger's opportunity cost differently than the
             # plan it's supposed to be scoring against).
-            _now_h_keep = resolution.hour_floor(now)
-            _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
-            _keep_value = optimize_mod.compute_water_value(
-                min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
-                controller.cfg,
-            )
+            #
+            # Two-segment terminal credit: when the DP stashed the overnight
+            # terminal params (terminal_overnight_credit ON) and the live SoC
+            # sits within the overnight-need band above the firmware floor,
+            # this ledger uses the same richer terminal_v_hi the DP is
+            # crediting that energy at. Above the band, or when the keys are
+            # absent (flag off / stale plan), the legacy horizon-min
+            # expression is unchanged.
+            _terminal_v_hi = _dp_out.get("terminal_v_hi")
+            _terminal_need = _dp_out.get("terminal_need_kwh")
+            if (
+                _terminal_v_hi is not None
+                and _terminal_need is not None
+                and controller.cfg.pct_to_kwh(inputs.soc) <= controller.cfg.firmware_floor_kwh + _terminal_need
+            ):
+                _keep_value = _terminal_v_hi
+            else:
+                _now_h_keep = resolution.hour_floor(now)
+                _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
+                _keep_value = optimize_mod.compute_water_value(
+                    min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
+                    controller.cfg,
+                )
             # Economic decision (which hours, how much) = the DP's committed plan.
             # Read the committed export RATE (W) for the current clock-hour; plan
             # membership is the hurdle gate.  No committed rate ⇒ no export (strictly

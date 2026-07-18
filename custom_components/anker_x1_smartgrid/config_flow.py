@@ -168,6 +168,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
         const.CONF_CHARGE_TROUGH_LOOKBACK_H,
         const.CONF_IDLE_DRAIN_W,
+        const.CONF_TERMINAL_OVERNIGHT_CREDIT,
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
@@ -268,6 +269,7 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (const.CONF_CYCLE_COST_EUR_PER_KWH, const.DEFAULT_CYCLE_COST_EUR_PER_KWH, cv.positive_float),
     (const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH, cv.positive_float),
     (const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0))),
+    (const.CONF_TERMINAL_OVERNIGHT_CREDIT, const.DEFAULT_TERMINAL_OVERNIGHT_CREDIT, cv.boolean),
     (
         const.CONF_RESERVE_CHEAP_BAND,
         const.DEFAULT_RESERVE_CHEAP_BAND,

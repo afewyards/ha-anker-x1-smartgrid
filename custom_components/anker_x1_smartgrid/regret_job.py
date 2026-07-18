@@ -34,6 +34,26 @@ from .dataquality import house_load_w as _house_load_w
 _LOGGER = logging.getLogger(__name__)
 
 
+def _next_synthetic_pickup(after: datetime) -> datetime:
+    """Next occurrence of ``const.FALLBACK_SOLAR_PICKUP_HOUR_UTC`` strictly after ``after``.
+
+    Replicated from :func:`decision._next_synthetic_pickup` (identical logic) to
+    keep ``regret_job`` free of a ``decision`` import.  Zeroes
+    minute/second/microsecond; rolls to the next day when the pickup hour on
+    ``after``'s own day is not strictly later than ``after``.  ``after`` is a
+    LOCAL midnight here, so the result is next-day ``FALLBACK`` hour local.
+    """
+    pickup = after.replace(
+        hour=const.FALLBACK_SOLAR_PICKUP_HOUR_UTC,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if pickup <= after:
+        pickup += timedelta(days=1)
+    return pickup
+
+
 def run_daily_regret(
     recorder,
     cfg,
@@ -143,6 +163,17 @@ def run_daily_regret(
         # BOTH columns are non-NULL on that tick.
         export_kwh_delta_by_hour: dict[int, list[float]] = defaultdict(list)
 
+        # Task 6: collect D+1 (next LOCAL day) realized prices from the SAME
+        # 38 h read window for the overnight terminal credit.  The window already
+        # extends to ref_utc+38h, so the early D+1 hours (through ~14:00 UTC) are
+        # present but were previously discarded by the day-D date filter below.
+        # Keyed by LOCAL hour-of-day so the gap datetimes and load_w_by_hod share
+        # one convention.  ``nextday_local_midnight`` (captured from the first D+1
+        # sample) is the gap start; None ⇒ no D+1 data ⇒ degrade to legacy.
+        _day_plus1 = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        nextday_price_by_hour: dict[int, list[float]] = defaultdict(list)
+        nextday_local_midnight: datetime | None = None
+
         soc_start: float | None = None
         for s in samples:
             ts_str = s.get("ts", "")
@@ -152,9 +183,17 @@ def run_daily_regret(
                 ts_dt = datetime.fromisoformat(ts_str)
             except ValueError:
                 continue
-            # Convert to local time and skip if it doesn't belong to *day*.
+            # Convert to local time; bucket day-D, siphon D+1 gap prices, skip rest.
             local_dt = dt_util.as_local(ts_dt)
-            if local_dt.date().isoformat() != day:
+            _local_date = local_dt.date().isoformat()
+            if _local_date == _day_plus1:
+                # D+1 gap prices for the overnight terminal credit (Task 6).
+                if nextday_local_midnight is None:
+                    nextday_local_midnight = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                if s.get("import_price") is not None:
+                    nextday_price_by_hour[local_dt.hour].append(float(s["import_price"]))
+                continue
+            if _local_date != day:
                 continue
             h = (local_dt.hour * 60 + local_dt.minute) // _slot_minutes
             hours_with_data.add(h)
@@ -320,6 +359,56 @@ def run_daily_regret(
         if _export_price_tuple is not None and cfg.enable_export:
             eff_export = [optimize_mod.effective_export_price(p, cfg) for p in _export_price_tuple]
 
+        # --- Overnight terminal credit (two-segment water value) — Task 6 ------
+        # Value end-of-day energy that will serve the post-horizon overnight gap
+        # [D+1 local midnight → next synthetic solar pickup) at the RICHER
+        # estimated overnight price, from the REALIZED D+1 prices bucketed above
+        # out of this job's own 38 h read window (the live persistence estimator
+        # is NOT reconstructible at job time — no history handle, backfill days
+        # exceed retention).  BOTH internal DP calls (oracle + shadow) MUST get
+        # IDENTICAL (v_hi, need) or dp_regret_eur acquires phantom bias feeding
+        # the 7-day HGBR gate.  D+1 gap prices absent (old backfill) → v_hi=None →
+        # byte-identical legacy single-segment terminal, never guessed.
+        _wv_hi: float | None = None
+        _wv_need: float = 0.0
+        if cfg.terminal_overnight_credit and nextday_local_midnight is not None:
+            _gap_start = nextday_local_midnight
+            _pickup = _next_synthetic_pickup(_gap_start)
+            # Priced gap hours only (mean per LOCAL hour-of-day), keyed by local
+            # datetime so overnight_terminal_params' gap filter + is_cheap walk +
+            # load_w_by_hod lookup all share the hour-of-day convention.
+            _est_price_by_hour: dict[datetime, float] = {}
+            for _hod, _plist in nextday_price_by_hour.items():
+                if not _plist:
+                    continue
+                _h_dt = _gap_start.replace(hour=_hod)
+                if _gap_start <= _h_dt < _pickup:
+                    _est_price_by_hour[_h_dt] = sum(_plist) / len(_plist)
+            if _est_price_by_hour:
+                # Day-D realized per-slot load → W by hour-of-day (avg across a
+                # slot's sub-hour buckets at 15-min; identity at 60-min).
+                _hod_w: dict[int, list[float]] = defaultdict(list)
+                for _h in range(_spd):
+                    _hod_w[(_h * _slot_minutes) // 60].append(load_kwh[_h] / _dt_h * 1000.0)
+                _load_w_by_hod = {_hod: sum(_ws) / len(_ws) for _hod, _ws in _hod_w.items()}
+                # Upper clamp for v_hi = best in-window export DC value (holding
+                # can never beat exporting above this).  Export off → v_lo anchor.
+                if eff_export is None:
+                    _max_export_dc_value = _water_value
+                else:
+                    _eta_d = cfg.eta_discharge_static()
+                    _max_export_dc_value = max(p * _eta_d for p in eff_export) - cfg.cycle_cost_eur_per_kwh
+                _wv_hi, _wv_need = optimize_mod.overnight_terminal_params(
+                    gap_start=_gap_start,
+                    pickup=_pickup,
+                    est_price_by_hour=_est_price_by_hour,
+                    load_w_by_hod=_load_w_by_hod,
+                    v_lo=_water_value,
+                    max_export_dc_value=_max_export_dc_value,
+                    cfg=cfg,
+                    eta_curve=None,
+                )
+
         day_data = regret_mod.DayData(
             pv_kwh=pv_kwh,
             load_kwh=load_kwh,
@@ -331,6 +420,8 @@ def run_daily_regret(
             cfg,
             terminal_mode=_terminal_mode,
             water_value=_water_value,
+            water_value_hi=_wv_hi,
+            overnight_need_kwh=_wv_need,
             export_price=eff_export,
             dt_h=_dt_h,
         )
@@ -355,6 +446,8 @@ def run_daily_regret(
                     slots_per_day=_spd,
                     terminal_mode=_terminal_mode,
                     water_value=_water_value,
+                    water_value_hi=_wv_hi,
+                    overnight_need_kwh=_wv_need,
                     export_price=eff_export,
                     dt_h=_dt_h,
                 )

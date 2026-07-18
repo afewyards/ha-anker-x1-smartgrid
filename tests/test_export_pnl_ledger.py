@@ -20,7 +20,9 @@ from custom_components.anker_x1_smartgrid import scheduler as sch_mod
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
+    ControllerState,
     ExportState,
+    PlanState,
     PriceSlot,
 )
 from custom_components.anker_x1_smartgrid.optimize import compute_water_value, export_pnl_eur
@@ -528,6 +530,59 @@ class TestExportPnlMeasuredNotSetpoint:
 # ---------------------------------------------------------------------------
 
 
+def _patched_compute_decision_with_terminal(
+    export_request: dict,
+    *,
+    terminal_v_hi: float | None = None,
+    terminal_need_kwh: float | None = None,
+):
+    """Factory: like ``_patched_compute_decision`` (test_controller_export_executor.py)
+    but also injects the two-segment terminal keys into ``_out`` when given,
+    so the executor's ``_keep_value`` picks up ``terminal_v_hi`` /
+    ``terminal_need_kwh`` exactly as the live DP stashes them
+    (``decision.compute_decision``). Omitting either leaves the corresponding
+    key absent from ``_out``, matching the flag-off / stale-plan case.
+    """
+
+    def _stub(
+        plan,
+        inputs,
+        slots,
+        pv_remaining,
+        sunset,
+        predictor,
+        cur_temp,
+        cfg,
+        tomorrow_total=None,
+        sun_times=None,
+        today_arrays=None,
+        tomorrow_arrays=None,
+        today_watts=None,
+        tomorrow_watts=None,
+        export_price=None,
+        _out=None,
+        _shadow_dp=False,
+        export_price_matches_import=False,
+        estimated_tomorrow=None,
+        past_actuals_by_hour=None,
+        **kwargs,
+    ):
+        if _out is not None:
+            _out["export_request"] = export_request
+            _out["dp_selected"] = []
+            _out["intervals"] = []
+            _out["grid_request"] = {}
+            if terminal_v_hi is not None:
+                _out["terminal_v_hi"] = terminal_v_hi
+            if terminal_need_kwh is not None:
+                _out["terminal_need_kwh"] = terminal_need_kwh
+        passive = PlanState(ControllerState.PASSIVE, inputs.now, ())
+        deadline = inputs.now + timedelta(hours=8)
+        return passive, 0.0, deadline, [], "water_value", []
+
+    return _stub
+
+
 class TestExportKeepValueHorizonMinAnchor:
     """The live C3 executor's ``_keep_value`` (opportunity-cost term fed into
     the PnL ledger) must use ``compute_water_value(min(remaining_prices), cfg)``
@@ -592,4 +647,158 @@ class TestExportKeepValueHorizonMinAnchor:
         )
         assert ctrl.today_export_pnl_eur != pytest.approx(expected_pnl_old, rel=1e-6), (
             "PnL must not match the stale next-local-trough anchor"
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_value_uses_v_hi_below_threshold(self, monkeypatch):
+        """SoC within the overnight-need band above the firmware floor ->
+        _keep_value must be the DP's terminal_v_hi, not the legacy horizon-min
+        water value."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
+        # capacity_kwh=10.0 -> firmware_floor_kwh=0.5 (5%); need=1.0 -> threshold
+        # is 1.5 kWh (15% SoC). soc=10% (1.0 kWh) sits inside the band.
+        _seed_export_inputs(hass, soc="10.0", export_price="0.30")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision_with_terminal(
+                export_request={cur_h: 3000.0}, terminal_v_hi=0.15, terminal_need_kwh=1.0
+            ),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        cfg = ctrl.cfg
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        # eta_charge=1.0/round_trip_eff=1.0 -> eta_discharge=1.0, so DC==AC kWh.
+        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - 0.15 * ac_kwh
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
+            f"below-threshold SoC must use terminal_v_hi (0.15) as keep_value; "
+            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_value_uses_legacy_above_threshold(self, monkeypatch):
+        """SoC above the overnight-need band -> _keep_value falls back to the
+        legacy compute_water_value(min(remaining_prices), cfg) expression, even
+        though the DP stashed terminal keys."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
+        # threshold is 1.5 kWh (15% SoC); soc=80% (8.0 kWh) is well above it.
+        _seed_export_inputs(hass, soc="80.0", export_price="0.30")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision_with_terminal(
+                export_request={cur_h: 3000.0}, terminal_v_hi=0.15, terminal_need_kwh=1.0
+            ),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        cfg = ctrl.cfg
+        # Same forecast as _seed_export_inputs: current hour 0.30, rest 0.10.
+        keep_legacy = compute_water_value(0.10, cfg)
+        assert keep_legacy != pytest.approx(0.15), "fixture must actually distinguish v_hi from the legacy anchor"
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - keep_legacy * ac_kwh
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
+            f"above-threshold SoC must ignore terminal_v_hi and use the legacy anchor ({keep_legacy}); "
+            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_value_legacy_when_keys_absent(self, monkeypatch):
+        """No terminal keys in _dp_out (flag off / stale plan) -> legacy
+        expression is used unchanged, regardless of how low SoC is."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
+        # Same low SoC as the below-threshold test above -- proves absence of
+        # the keys (not SoC position) drives the legacy branch.
+        _seed_export_inputs(hass, soc="10.0", export_price="0.30")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision_with_terminal(export_request={cur_h: 3000.0}),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        cfg = ctrl.cfg
+        keep_legacy = compute_water_value(0.10, cfg)
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - keep_legacy * ac_kwh
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
+            f"absent terminal keys must fall back to the legacy anchor ({keep_legacy}) even at low SoC; "
+            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dp_scheduled_export_books_nonnegative_pnl(self, monkeypatch):
+        """econ-F5/parity-M4 guard: terminal_v_hi already bakes in ``− cycle_cost``
+        (wear-symmetric with the export leg's own ``− cycle_cost`` term in
+        export_pnl_eur). A DP-committed export priced at exactly the terminal
+        parity point (effective_export_price − cycle_cost) must book PnL == 0,
+        not a spurious loss of ``-cycle_cost * kwh`` from double-subtracting the
+        wear term."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
+        _seed_export_inputs(hass, soc="10.0", export_price="0.30")
+        cfg = ctrl.cfg
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        terminal_v_hi = eff_price - cfg.cycle_cost_eur_per_kwh
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision_with_terminal(
+                export_request={cur_h: 3000.0}, terminal_v_hi=terminal_v_hi, terminal_need_kwh=1.0
+            ),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        assert ctrl.today_export_pnl_eur >= -1e-9, (
+            "DP-committed export at the terminal parity price must not book a spurious "
+            f"loss; got {ctrl.today_export_pnl_eur}"
+        )
+        assert ctrl.today_export_pnl_eur == pytest.approx(0.0, abs=1e-9), (
+            f"expected exactly zero PnL at the parity price (cycle_cost paid once, not "
+            f"double-subtracted between v_hi and export_pnl_eur); got {ctrl.today_export_pnl_eur}"
         )

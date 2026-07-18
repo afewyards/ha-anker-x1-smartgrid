@@ -61,7 +61,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 59
+    assert len(section_keys) == 60
 
 
 def test_options_schema_is_sectioned_devices_expanded():
