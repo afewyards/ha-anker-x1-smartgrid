@@ -22,13 +22,13 @@ note if an independent AC house-load sensor becomes available again (it
 would let the curve additionally validate the residual itself, rather than
 only calibrate against it).
 
-    Aggregation post-processing: after per-bin confidence finalization, every
-    non-confident bin's ``eta`` is rewritten by ``_interpolate_gated_bins`` to
-    a value bounded by its confident neighbours (linear interp between the
-    nearest confident-bin midpoints, flat extension outside their range). This
-    keeps a gated bin from being more extreme than measured neighbours, which
-    would otherwise create fictional per-power cliffs the DP optimizes around.
-    A side with zero confident bins is left entirely on the static prior.
+Aggregation post-processing: after per-bin confidence finalization, every
+non-confident bin's ``eta`` is rewritten by ``_interpolate_gated_bins`` to
+a value bounded by its confident neighbours (linear interp between the
+nearest confident-bin midpoints, flat extension outside their range). This
+keeps a gated bin from being more extreme than measured neighbours, which
+would otherwise create fictional per-power cliffs the DP optimizes around.
+A side with zero confident bins is left entirely on the static prior.
 """
 
 from __future__ import annotations
