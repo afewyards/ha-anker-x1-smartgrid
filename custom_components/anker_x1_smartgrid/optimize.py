@@ -400,6 +400,8 @@ def optimize_grid(
     export_price: list[float] | None = None,
     terminal_mode: str = "reserve",
     water_value: float | None = None,
+    water_value_hi: float | None = None,
+    overnight_need_kwh: float = 0.0,
     reserve_by_hour: list[float] | None = None,
     grid_charge_ceiling: list[float] | None = None,
     hedge_drain_kwh: list[float] | None = None,
@@ -811,6 +813,8 @@ def optimize_grid(
         to_bin=to_bin,
         from_bin=from_bin,
         n_states=n_states,
+        water_value_hi=water_value_hi,
+        overnight_need_kwh=overnight_need_kwh,
     )
 
     if best_end_b == -1:
