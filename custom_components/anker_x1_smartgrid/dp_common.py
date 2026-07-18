@@ -60,6 +60,8 @@ def select_end_state(
     to_bin: Callable[[float], int],
     from_bin: Callable[[int], float],
     n_states: int,
+    water_value_hi: float | None = None,
+    overnight_need_kwh: float = 0.0,
 ) -> tuple[int, float, bool]:
     """Select the DP terminal end state: ``(best_end_b, best_cost, infeasible)``.
 
@@ -78,6 +80,18 @@ def select_end_state(
     case (``best_end_b`` left at -1) signals a problem, and handling that is
     left to the caller.
 
+    When ``water_value_hi`` is set, the credit is two-segment (spec
+    econ-F4): the first ``overnight_need_kwh`` of energy above the HARD
+    ``firmware_floor_kwh`` is credited at the richer ``water_value_hi`` (the
+    "must survive the night" slice); the surplus above that is credited at
+    the original ``water_value`` (``v``). This also shifts the credit anchor
+    itself from the SOFT ``floor_kwh`` down to ``firmware_floor_kwh`` — the
+    (firmware_floor_kwh, floor_kwh] sub-margin band earns credit too, where
+    the legacy single-rate formula gave it none. When ``water_value_hi`` is
+    None (legacy/default), the credit is the original single-rate formula,
+    anchored at ``floor_kwh``, byte-identical to the pre-two-segment
+    behaviour.
+
     ``terminal_mode="reserve"`` (default): select the minimum-cost end state
     with SoC >= soc_target; if unreachable, fall back to the best achievable
     end state and mark ``infeasible``.
@@ -85,11 +99,18 @@ def select_end_state(
     INF = float("inf")
     if terminal_mode == "water_value":
         v = water_value if water_value is not None else 0.0
+
+        def _credit(end_b: int) -> float:
+            if water_value_hi is not None:
+                avail = max(0.0, from_bin(end_b) - firmware_floor_kwh)
+                return water_value_hi * min(avail, overnight_need_kwh) + v * max(0.0, avail - overnight_need_kwh)
+            return max(0.0, from_bin(end_b) - floor_kwh) * v
+
         # Scan from the firmware floor (widened): sub-soft-floor end states
         # are reachable (transition clamp sags to firmware_floor_kwh, not
         # floor_kwh).  The credit anchor stays at floor_kwh (soft margin)
         # below so those sub-margin states simply earn zero credit, not a
-        # penalty.
+        # penalty -- unless water_value_hi shifts the anchor (see _credit).
         floor_b = to_bin(firmware_floor_kwh)
         target_b = to_bin(target_kwh)
         best_score = INF
@@ -97,8 +118,7 @@ def select_end_state(
         for end_b in range(floor_b, target_b + 1):
             if dp[end_b] == INF:
                 continue
-            credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-            score = dp[end_b] - credit
+            score = dp[end_b] - _credit(end_b)
             if score < best_score:
                 best_score = score
                 best_end_b = end_b
@@ -111,8 +131,7 @@ def select_end_state(
             for end_b in range(floor_b, n_states):
                 if dp[end_b] == INF:
                     continue
-                credit = max(0.0, from_bin(end_b) - floor_kwh) * v
-                score = dp[end_b] - credit
+                score = dp[end_b] - _credit(end_b)
                 if score < best_score:
                     best_score = score
                     best_end_b = end_b
