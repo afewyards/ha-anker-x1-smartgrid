@@ -68,3 +68,72 @@ def test_parity_with_hgbr_is_ready():
         rows = _rows(datetime(2026, 6, 1, 0, 0, tzinfo=UTC), n_days * 24)
         counter_ready = ml_status.count_lag_complete_days(rows) >= ml_status.COVERAGE_REQUIRED_DAYS
         assert counter_ready == model.is_ready(rows), f"diverged at {n_days} days"
+
+
+NOW = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+HEALTH_DORMANT = {"ready": False, "promoted": False, "n_rows": 622,
+                  "last_trained": "2026-07-21T01:00:00+00:00"}
+HEALTH_READY = {**HEALTH_DORMANT, "ready": True}
+HEALTH_PROMOTED = {**HEALTH_DORMANT, "ready": True, "promoted": True}
+
+
+def _attrs(**overrides):
+    kw = dict(addon_enabled=True, addon_url="http://x:8099", health=HEALTH_DORMANT,
+              health_ts=NOW, coverage_days=20, active_model="bucketed")
+    kw.update(overrides)
+    return ml_status.build_ml_status_attrs(**kw)
+
+
+def test_status_addon_off():
+    assert _attrs(addon_enabled=False)["ml_status"] == "add-on off"
+    assert _attrs(addon_url="")["ml_status"] == "add-on off"
+    assert _attrs(addon_enabled=False)["addon_configured"] is False
+
+
+def test_status_unreachable():
+    a = _attrs(health=None)
+    assert a["ml_status"] == "⚠ unreachable"
+    assert a["addon_reachable"] is False
+    assert a["addon_n_rows"] is None and a["addon_last_trained"] is None
+
+
+def test_status_eta_countdown():
+    a = _attrs()
+    assert a["ml_status"] == "ML in ~1d"
+    assert a["eta_days"] == 1
+    assert a["coverage_days"] == 20 and a["coverage_required"] == 21
+    assert a["addon_reachable"] is True and a["addon_ready"] is False
+
+
+def test_status_eta_clamps_at_zero():
+    assert _attrs(coverage_days=25)["eta_days"] == 0
+
+
+def test_status_backtest_gate():
+    assert _attrs(health=HEALTH_READY)["ml_status"] == "backtest gate"
+
+
+def test_status_ml_active():
+    a = _attrs(health=HEALTH_PROMOTED, active_model="remote")
+    assert a["ml_status"] == "ML active"
+    assert a["addon_promoted"] is True
+
+
+def test_status_promoted_not_consumed():
+    assert _attrs(health=HEALTH_PROMOTED)["ml_status"] == "⚠ promoted, not consumed"
+
+
+def test_status_no_health_check_yet_falls_back_to_eta():
+    # enabled but first tick hasn't polled yet: NOT flagged unreachable
+    a = _attrs(health=None, health_ts=None)
+    assert a["ml_status"] == "ML in ~1d"
+    assert a["addon_reachable"] is None
+    assert a["last_health_check"] is None
+
+
+def test_status_collecting_data_when_no_coverage():
+    assert _attrs(coverage_days=None)["ml_status"] == "collecting data"
+
+
+def test_last_health_check_iso():
+    assert _attrs()["last_health_check"] == NOW.isoformat()
