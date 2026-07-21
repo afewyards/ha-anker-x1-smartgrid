@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anker_x1_smartgrid"
-version = "0.10.0"
+version = "0.11.0"
 description = "Anker X1 SmartGrid Home Assistant integration"
 requires-python = ">=3.12"
 
