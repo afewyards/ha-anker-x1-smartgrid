@@ -275,9 +275,8 @@ async def fetch_health(session, url: str, timeout: int) -> dict | None:
     during the exact window where a dead ``addon_url`` would otherwise
     hide (observed live 2026-07-21).
     """
-    endpoint = url.rstrip("/") + "/health"
 
-    async def _do_request() -> dict | None:
+    async def _do_request(endpoint: str) -> dict | None:
         async with session.get(endpoint) as resp:
             if resp.status != 200:
                 _LOGGER.debug("remote_forecast: /health returned HTTP %s", resp.status)
@@ -289,7 +288,8 @@ async def fetch_health(session, url: str, timeout: int) -> dict | None:
                 return None
 
     try:
-        data = await asyncio.wait_for(_do_request(), timeout=timeout)
+        endpoint = url.rstrip("/") + "/health"
+        data = await asyncio.wait_for(_do_request(endpoint), timeout=timeout)
     except TimeoutError:
         _LOGGER.debug("remote_forecast: /health timed out after %ss", timeout)
         return None

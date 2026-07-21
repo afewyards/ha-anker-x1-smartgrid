@@ -525,6 +525,60 @@ async def test_health_polled_before_forecast_predict_path():
 
 
 @pytest.mark.asyncio
+async def test_health_poll_failure_reports_unreachable_not_stale():
+    """A health poll that raises AFTER a prior successful poll must report
+    unreachable with a FRESH timestamp — not silently keep the prior
+    successful reading (the stale-health regression).
+    """
+    ctrl = _make_controller(addon_enabled=True)
+    good_health = {"ready": False, "promoted": False, "n_rows": 10, "last_trained": "t0"}
+
+    hour_a = _NOW  # hour 11, poll succeeds
+    hour_b = _NOW.replace(hour=12)  # next clock-hour, poll raises
+
+    call_count = 0
+
+    async def flaky_health(session, url, timeout):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return good_health
+        raise RuntimeError("add-on died mid-session")
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=flaky_health,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        with patch("homeassistant.util.dt.utcnow", return_value=hour_a):
+            await ctrl.tick()
+        assert ctrl.last_status["addon_reachable"] is True  # sanity: first poll succeeded
+
+        with patch("homeassistant.util.dt.utcnow", return_value=hour_b):
+            await ctrl.tick()  # must not raise despite the exploding health poll
+
+    status = ctrl.last_status
+    assert status["addon_reachable"] is False, "must not silently keep the prior successful reading"
+    assert status["ml_status"] == "⚠ unreachable"
+    assert ctrl._addon_health_ts == hour_b, "timestamp must reflect THIS failed attempt, not the stale success"
+
+
+@pytest.mark.asyncio
 async def test_coverage_counted_even_when_remote_tier_active():
     """Coverage keeps counting after Tier-0 activates.
 

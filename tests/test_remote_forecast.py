@@ -627,3 +627,10 @@ async def test_fetch_health_malformed_json():
 async def test_fetch_health_non_dict_payload():
     session = _make_session(_make_response(200, ["not", "a", "dict"]), verb="get")
     assert await fetch_health(session, "http://x:8099", 5) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_none_url_never_raises():
+    """A None/malformed url must not raise before the request is even attempted."""
+    session = _make_session(_make_response(200, {"ready": True}), verb="get")
+    assert await fetch_health(session, None, 5) is None

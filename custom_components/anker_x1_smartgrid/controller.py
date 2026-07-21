@@ -894,24 +894,35 @@ class Controller:
                 "use the learned model."
             )
 
-        # Remote forecast fetch: once per clock-hour when the add-on is enabled.
-        # Uses the weather forecast already fetched above as the feature payload.
-        # A fetch failure (network error, add-on dormant, non-200, bad JSON) silently
-        # returns None — the map is then left unchanged so the next successful fetch
-        # will update it.  This never raises; any exception is swallowed here as a
-        # final backstop even though fetch_forecast already guarantees non-raising.
+        # Health poll + remote forecast fetch: once per clock-hour when the add-on
+        # is enabled. Uses the weather forecast already fetched above as the
+        # feature payload. A fetch failure (network error, add-on dormant,
+        # non-200, bad JSON) silently returns None — the map is then left
+        # unchanged so the next successful fetch will update it.  This never
+        # raises; any exception is swallowed here as a final backstop even
+        # though fetch_forecast and fetch_health already guarantee non-raising.
         if self.cfg.addon_enabled and now.hour != self._last_remote_forecast_hour:
             self._last_remote_forecast_hour = now.hour
             try:
                 # Health FIRST: a failure anywhere in the persons/predict path below
                 # must not blind reachability reporting — that is exactly the window
-                # in which a dead addon_url would otherwise hide.
-                self._addon_health = await fetch_health(
-                    async_get_clientsession(self._hass),
-                    self.cfg.addon_url,
-                    self.cfg.addon_timeout,
-                )
-                self._addon_health_ts = now
+                # in which a dead addon_url would otherwise hide. Timeout is capped
+                # at 5s (independent of the UI-tunable addon_timeout, up to 60s)
+                # since /health is trivial and two sequential full-budget waits
+                # could stall the tick. On any failure both fields below are
+                # written together from THIS attempt so a stale prior-successful
+                # reading is never reported as current.
+                try:
+                    self._addon_health = await fetch_health(
+                        async_get_clientsession(self._hass),
+                        self.cfg.addon_url,
+                        min(self.cfg.addon_timeout, 5),
+                    )
+                except Exception:
+                    _LOGGER.debug("remote_forecast: health poll raised unexpectedly", exc_info=True)
+                    self._addon_health = None
+                finally:
+                    self._addon_health_ts = now
 
                 _persons_by_ts = None
                 if self._recorder is not None:

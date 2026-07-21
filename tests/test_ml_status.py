@@ -64,7 +64,10 @@ def test_parity_with_hgbr_is_ready():
     from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 
     model = HGBRQuantileModel()
-    for n_days in (27, 28, 29, 35):
+    # 26 straddles the boundary from below (20 lag-complete dates, both False);
+    # 27 straddles it from above (21 lag-complete dates, both True) — without a
+    # below-threshold case this test only proves agreement above the boundary.
+    for n_days in (26, 27, 28, 29, 35):
         rows = _rows(datetime(2026, 6, 1, 0, 0, tzinfo=UTC), n_days * 24)
         counter_ready = ml_status.count_lag_complete_days(rows) >= ml_status.COVERAGE_REQUIRED_DAYS
         assert counter_ready == model.is_ready(rows), f"diverged at {n_days} days"
@@ -88,6 +91,19 @@ def test_status_addon_off():
     assert _attrs(addon_enabled=False)["ml_status"] == "add-on off"
     assert _attrs(addon_url="")["ml_status"] == "add-on off"
     assert _attrs(addon_enabled=False)["addon_configured"] is False
+
+
+def test_status_addon_off_clears_stale_health_fields():
+    """Not-configured must not leak a previous (enabled) session's health
+    reading — health-derived fields all report None, not stale values."""
+    a = _attrs(addon_enabled=False, health=HEALTH_PROMOTED, health_ts=NOW)
+    assert a["ml_status"] == "add-on off"
+    assert a["addon_reachable"] is None
+    assert a["addon_ready"] is None
+    assert a["addon_promoted"] is None
+    assert a["addon_n_rows"] is None
+    assert a["addon_last_trained"] is None
+    assert a["last_health_check"] is None
 
 
 def test_status_unreachable():
@@ -137,3 +153,49 @@ def test_status_collecting_data_when_no_coverage():
 
 def test_last_health_check_iso():
     assert _attrs()["last_health_check"] == NOW.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# addon_n_rows / addon_last_trained bounding — defends the recorder's 16 KiB
+# attribute cap against arbitrary add-on JSON passed straight through.
+# ---------------------------------------------------------------------------
+
+
+def test_addon_n_rows_int_passes_through():
+    assert _attrs()["addon_n_rows"] == 622  # HEALTH_DORMANT's n_rows, unchanged
+
+
+def test_addon_n_rows_numeric_string_coerced_to_int():
+    a = _attrs(health={**HEALTH_DORMANT, "n_rows": "622"})
+    assert a["addon_n_rows"] == 622
+
+
+def test_addon_n_rows_non_numeric_becomes_none():
+    a = _attrs(health={**HEALTH_DORMANT, "n_rows": {"garbage": True}})
+    assert a["addon_n_rows"] is None
+
+
+def test_addon_n_rows_bool_is_not_numeric():
+    a = _attrs(health={**HEALTH_DORMANT, "n_rows": True})
+    assert a["addon_n_rows"] is None
+
+
+def test_addon_n_rows_nan_becomes_none():
+    a = _attrs(health={**HEALTH_DORMANT, "n_rows": float("nan")})
+    assert a["addon_n_rows"] is None
+
+
+def test_addon_last_trained_oversized_string_truncated_to_64_chars():
+    huge = "x" * 5000
+    a = _attrs(health={**HEALTH_DORMANT, "last_trained": huge})
+    assert a["addon_last_trained"] == "x" * 64
+
+
+def test_addon_last_trained_non_string_coerced_and_bounded():
+    a = _attrs(health={**HEALTH_DORMANT, "last_trained": 20260721})
+    assert a["addon_last_trained"] == "20260721"
+
+
+def test_addon_last_trained_none_stays_none():
+    a = _attrs(health={**HEALTH_DORMANT, "last_trained": None})
+    assert a["addon_last_trained"] is None

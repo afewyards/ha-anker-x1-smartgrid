@@ -11,12 +11,14 @@ together in the dev venv.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 
 from .featureset import _TZ_AMS
 
 COVERAGE_REQUIRED_DAYS: int = 21
 _LAG_7D = timedelta(hours=168)
+_LAST_TRAINED_MAX_LEN = 64
 
 
 def count_lag_complete_days(hourly_rows: list[dict]) -> int:
@@ -42,6 +44,42 @@ def count_lag_complete_days(hourly_rows: list[dict]) -> int:
     return len(lag_complete_dates)
 
 
+def _coerce_n_rows(value: object) -> int | None:
+    """Coerce a pass-through add-on health value to a bounded int.
+
+    Guards the HA recorder's 16 KiB attribute cap against an oversized or
+    malformed add-on payload. ``None`` when *value* is not numeric-looking
+    (bools are deliberately excluded — they are not "numeric-looking" even
+    though ``bool`` is an ``int`` subclass). Never raises.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _coerce_last_trained(value: object) -> str | None:
+    """Coerce a pass-through add-on health value to a string, truncated to 64 chars.
+
+    Guards the HA recorder's 16 KiB attribute cap against an oversized
+    add-on payload. Never raises.
+    """
+    if value is None:
+        return None
+    try:
+        return str(value)[:_LAST_TRAINED_MAX_LEN]
+    except Exception:
+        return None
+
+
 def build_ml_status_attrs(
     *,
     addon_enabled: bool,
@@ -57,6 +95,13 @@ def build_ml_status_attrs(
     backtest gate → coverage ETA → collecting data.  Never raises.
     """
     configured = bool(addon_enabled) and bool(addon_url)
+    # When the add-on is not configured, health-derived fields must not leak a
+    # stale reading from a previous (enabled) session — force them all to
+    # None rather than trusting whatever the caller happened to pass in.
+    if not configured:
+        health = None
+        health_ts = None
+
     checked = health_ts is not None
     reachable: bool | None = (health is not None) if checked else None
     ready: bool | None = bool(health.get("ready")) if health else None
@@ -88,8 +133,8 @@ def build_ml_status_attrs(
         "addon_reachable": reachable,
         "addon_ready": ready,
         "addon_promoted": promoted,
-        "addon_n_rows": health.get("n_rows") if health else None,
-        "addon_last_trained": health.get("last_trained") if health else None,
+        "addon_n_rows": _coerce_n_rows(health.get("n_rows")) if health else None,
+        "addon_last_trained": _coerce_last_trained(health.get("last_trained")) if health else None,
         "coverage_days": coverage_days,
         "coverage_required": COVERAGE_REQUIRED_DAYS,
         "eta_days": eta_days,
