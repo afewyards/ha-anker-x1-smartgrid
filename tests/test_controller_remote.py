@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta, UTC
 from unittest.mock import AsyncMock, patch
 
@@ -388,3 +389,163 @@ def test_build_hours_payload_passes_weather_fields():
     assert payload[0]["cloud_cover"] == 25.0
     assert payload[0]["humidity"] == 55.0
     assert payload[0]["wind_speed"] == 7.5
+
+
+# ---------------------------------------------------------------------------
+# (f) ML-status visibility: hourly /health poll threaded into last_status
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _tick_env(health_fn, *, now=_NOW):
+    """Patch the network/blocking edges of tick() and install *health_fn*.
+
+    ``fetch_forecast`` is stubbed to return None so the Tier-0 remote predictor
+    never activates — these tests are about the health poll, not model selection.
+    """
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=health_fn,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("homeassistant.util.dt.utcnow", return_value=now),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_health_polled_and_status_attrs_present():
+    """After a tick with addon_enabled, last_status carries ml-status attrs."""
+    ctrl = _make_controller(addon_enabled=True)
+    health = {
+        "ready": False,
+        "promoted": False,
+        "n_rows": 622,
+        "last_trained": "2026-07-21T01:00:00+00:00",
+    }
+
+    async def fake_health(session, url, timeout):
+        return health
+
+    with _tick_env(fake_health):
+        await ctrl.tick()
+
+    status = ctrl.last_status
+    assert status["addon_reachable"] is True
+    assert status["addon_n_rows"] == 622
+    assert status["ml_status"].startswith(("ML in", "collecting"))
+    assert status["coverage_required"] == 21
+
+
+@pytest.mark.asyncio
+async def test_health_unreachable_flagged():
+    """fetch_health returning None (add-on down) surfaces as unreachable."""
+    ctrl = _make_controller(addon_enabled=True)
+
+    async def fake_health(session, url, timeout):
+        return None
+
+    with _tick_env(fake_health):
+        await ctrl.tick()
+
+    status = ctrl.last_status
+    assert status["addon_reachable"] is False
+    assert status["ml_status"] == "⚠ unreachable"
+
+
+@pytest.mark.asyncio
+async def test_health_fetch_failure_never_breaks_tick():
+    """A raising fetch_health must be swallowed; the tick still produces a plan."""
+    ctrl = _make_controller(addon_enabled=True)
+
+    async def exploding_health(session, url, timeout):
+        raise RuntimeError("must be swallowed by the tick backstop")
+
+    with _tick_env(exploding_health):
+        await ctrl.tick()  # must not raise
+
+    assert "setpoint_w" in ctrl.last_status
+
+
+@pytest.mark.asyncio
+async def test_health_polled_before_forecast_predict_path():
+    """A blowing-up forecast path must not skip the health poll.
+
+    Locks ordering requirement (1): the health poll is the FIRST statement in
+    the hourly add-on block's ``try:``, so reachability keeps updating even
+    when the predict path fails.
+    """
+    ctrl = _make_controller(addon_enabled=True)
+    health = {"ready": True, "promoted": False, "n_rows": 900, "last_trained": None}
+
+    async def fake_health(session, url, timeout):
+        return health
+
+    async def exploding_forecast(session, url, timeout, payload):
+        raise RuntimeError("predict path down")
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=fake_health,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            side_effect=exploding_forecast,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("homeassistant.util.dt.utcnow", return_value=_NOW),
+    ):
+        await ctrl.tick()
+
+    assert ctrl.last_status["addon_reachable"] is True
+    assert ctrl.last_status["addon_n_rows"] == 900
+
+
+@pytest.mark.asyncio
+async def test_coverage_counted_even_when_remote_tier_active():
+    """Coverage keeps counting after Tier-0 activates.
+
+    Locks ordering requirement (2): the coverage count sits ABOVE the Tier-0
+    early return in ``_retrain_sync``.  With a cached remote map the method
+    returns immediately, yet coverage_days must still be refreshed.
+    """
+    ctrl = _make_controller(addon_enabled=True)
+    ctrl._remote_forecast_map = _sample_forecast_map(_NOW)
+
+    # Two lag-complete rows 168 h apart on two distinct Amsterdam dates.
+    base = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    rows = [
+        {"hour_ts": base.isoformat()},
+        {"hour_ts": (base + timedelta(hours=168)).isoformat()},
+        {"hour_ts": (base + timedelta(hours=24)).isoformat()},
+        {"hour_ts": (base + timedelta(hours=192)).isoformat()},
+    ]
+    ctrl._recorder.read_hourly_rows = lambda since_iso=None: rows
+
+    ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
+
+    assert ctrl.active_model_name == "remote", "precondition: Tier-0 must have short-circuited"
+    assert ctrl.coverage_lag_complete_days == 2

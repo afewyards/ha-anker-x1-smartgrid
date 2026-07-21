@@ -109,6 +109,7 @@ def build_status(
     slot_minutes: int,
     efficiency_curve_attrs: dict,
     use_measured_eta: bool,
+    ml_status_attrs: dict | None = None,
 ) -> dict:
     _regret = regret or {}
     _bt = backtest_result or {}
@@ -124,6 +125,8 @@ def build_status(
         "pinball_p50": _bt.get("pinball_p50"),
         "pinball_p80": _bt.get("pinball_p80"),
         "active_model": active_model_name,
+        # ML predictor status visibility (observability only).
+        **(ml_status_attrs or {}),
         "load_adapt_ratio": (round(load_adapt_ratio, 3) if load_adapt_ratio is not None else None),
         "load_adapt_matched_hours": load_adapt_matched,
         "load_adapt_ratio_raw": (round(load_adapt_ratio_raw, 3) if load_adapt_ratio_raw is not None else None),

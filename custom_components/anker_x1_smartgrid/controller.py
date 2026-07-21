@@ -25,6 +25,7 @@ from . import (
     guard,
     intra_hour,
     load_adapt,
+    ml_status,
     occupancy,
     optimize as optimize_mod,
     past_actuals as past_actuals_mod,
@@ -37,7 +38,7 @@ from . import (
     snapshot,
     soc_drift,
 )
-from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast
+from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast, fetch_health
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
 from .export_filter import apply_min_export_block
@@ -191,6 +192,10 @@ class Controller:
         self._learned_model_warned = False
         self._last_remote_forecast_hour = -1
         self._remote_forecast_map: dict | None = None
+        # ML-status visibility (observability only — never feeds planning).
+        self._addon_health: dict | None = None
+        self._addon_health_ts: datetime | None = None
+        self.coverage_lag_complete_days: int | None = None
         self._last_profile_refresh: datetime | None = None
         self.predictor = self._profile_predictor
         self.backtest_result: dict | None = None
@@ -505,6 +510,18 @@ class Controller:
            per-tick W samples; gated on ``DEFAULT_MIN_TRAIN_HOURS``.
         3. **Profile** — rolling profile fallback when all else fails.
         """
+        # ------------------------------------------------------------------
+        # Coverage counter (observability only) — MUST stay above the Tier-0
+        # early return, otherwise the ETA freezes the moment remote activates.
+        # ------------------------------------------------------------------
+        if self._recorder is not None:
+            try:
+                self.coverage_lag_complete_days = ml_status.count_lag_complete_days(
+                    self._recorder.read_hourly_rows()
+                )
+            except Exception:
+                self.coverage_lag_complete_days = None
+
         # ------------------------------------------------------------------
         # Tier 0: Remote ML add-on (when add-on is enabled + map available)
         # ------------------------------------------------------------------
@@ -886,6 +903,16 @@ class Controller:
         if self.cfg.addon_enabled and now.hour != self._last_remote_forecast_hour:
             self._last_remote_forecast_hour = now.hour
             try:
+                # Health FIRST: a failure anywhere in the persons/predict path below
+                # must not blind reachability reporting — that is exactly the window
+                # in which a dead addon_url would otherwise hide.
+                self._addon_health = await fetch_health(
+                    async_get_clientsession(self._hass),
+                    self.cfg.addon_url,
+                    self.cfg.addon_timeout,
+                )
+                self._addon_health_ts = now
+
                 _persons_by_ts = None
                 if self._recorder is not None:
                     _ph_since = (now - timedelta(days=remote_forecast.PERSONS_HOW_LOOKBACK_DAYS)).isoformat()
@@ -1434,6 +1461,14 @@ class Controller:
             plan_state=self.plan.state.value,
             backtest_result=self.backtest_result,
             active_model_name=self.active_model_name,
+            ml_status_attrs=ml_status.build_ml_status_attrs(
+                addon_enabled=self.cfg.addon_enabled,
+                addon_url=self.cfg.addon_url,
+                health=self._addon_health,
+                health_ts=self._addon_health_ts,
+                coverage_days=self.coverage_lag_complete_days,
+                active_model=self.active_model_name,
+            ),
             load_adapt_ratio=self._load_adapt_ratio,
             load_adapt_matched=self._load_adapt_matched,
             load_adapt_ratio_raw=self._load_adapt_ratio_raw,
