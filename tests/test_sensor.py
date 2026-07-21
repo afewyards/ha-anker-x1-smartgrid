@@ -349,3 +349,17 @@ async def test_tick_house_load_absent_before_any_successful_compute():
 
     assert result["reason"] == "failsafe"
     assert ctrl.last_status.get("house_load_w") is None
+
+
+def test_active_model_sensor_exposes_ml_status_attrs():
+    from custom_components.anker_x1_smartgrid import sensor
+
+    spec = next(s for s in sensor.SENSOR_SPECS if s.key == "active_model")
+    attr_names = [a for a, _ in spec.attrs_keys]
+    assert attr_names == [
+        "ml_status", "addon_configured", "addon_reachable", "addon_ready",
+        "addon_promoted", "addon_n_rows", "addon_last_trained",
+        "coverage_days", "coverage_required", "eta_days", "last_health_check",
+    ]
+    # every attr maps to the identical last_status key
+    assert all(a == k for a, k in spec.attrs_keys)

@@ -53,7 +53,18 @@ SENSOR_SPECS: list[_SensorSpec] = [
     _SensorSpec("horizon_energy_mae_12h", "SmartGrid 12h horizon energy MAE", "kWh", SensorStateClass.MEASUREMENT),
     _SensorSpec("pinball_p50", "SmartGrid load forecast pinball p50", "W", SensorStateClass.MEASUREMENT),
     _SensorSpec("pinball_p80", "SmartGrid load forecast pinball p80", "W", SensorStateClass.MEASUREMENT),
-    _SensorSpec("active_model", "SmartGrid active load model"),
+    _SensorSpec(
+        "active_model",
+        "SmartGrid active load model",
+        attrs_keys=tuple(
+            (k, k)
+            for k in (
+                "ml_status", "addon_configured", "addon_reachable", "addon_ready",
+                "addon_promoted", "addon_n_rows", "addon_last_trained",
+                "coverage_days", "coverage_required", "eta_days", "last_health_check",
+            )
+        ),
+    ),
     _SensorSpec("regret_eur", "SmartGrid daily regret", "EUR", SensorStateClass.MEASUREMENT),
     # 7-day rolling DP-vs-heuristic regret delta (EUR). Positive = DP was MORE
     # expensive than the heuristic over the past 7 days; negative = DP was
