@@ -15,12 +15,17 @@
 # Entity: confirm the exact id in Developer Tools → States (search "smartgrid plan").
 # Replace `sensor.smartgrid_plan` below if your id differs.
 #
-# NOTE: header/legend value readouts are intentionally OFF. Every series reads
-# the same entity (whose unit is "h" = planned grid hours), and ApexCharts would
-# otherwise print each series' LAST horizon point — deep night, i.e. 0 — with a
-# bogus "h" suffix ("Solar forecast: 0 h"). Horizon values are per-slot kWh
-# energy (not instantaneous power); the custom hover tooltip carries the real
-# values in kWh.
+# NOTE: legend value readouts are intentionally OFF, and header value readouts
+# are OFF for every plan series. Every plan series reads the same entity (whose
+# unit is "h" = planned grid hours), and ApexCharts would otherwise print each
+# series' LAST horizon point — deep night, i.e. 0 — with a bogus "h" suffix
+# ("Solar forecast: 0 h"). Horizon values are per-slot kWh energy (not
+# instantaneous power); the custom hover tooltip carries the real values in
+# kWh. Each plan series' `show` block turns its header readout off to suppress
+# this. The header's show_states is enabled ONLY for the appended Predictor
+# series (attribute: ml_status), whose `show` block sets the header readout to
+# the raw attribute value — "raw" because ml_status is a non-numeric
+# human-readable string, not a value to format.
 type: custom:config-template-card
 # Listed entities trigger a re-render (and thus a graph_span recompute) on update.
 entities:
@@ -39,7 +44,8 @@ card:
   header:
     show: true
     title: "SmartGrid plan · next 24h"
-    show_states: false
+    show_states: true
+    colorize_states: false
   # Dynamic window: span from 2h before the current hour (to show recent history)
   # to one hour past the last horizon slot (so the final hourly column shows in
   # full). The horizon already carries past slots (is_past_horizon), so the extra
@@ -94,6 +100,7 @@ card:
       color: "#8b5cf6"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.price]);
     - entity: sensor.smartgrid_plan
@@ -104,6 +111,7 @@ card:
       color: "#fbbf24"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
     - entity: sensor.smartgrid_plan
@@ -114,6 +122,7 @@ card:
       color: var(--secondary-text-color)
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.load_kwh]);
     - entity: sensor.smartgrid_plan
@@ -124,6 +133,7 @@ card:
       color: "#3b82f6"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.soc]);
     - entity: sensor.smartgrid_plan
@@ -133,6 +143,7 @@ card:
       color: "#ef4444"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
     - entity: sensor.smartgrid_plan
@@ -142,6 +153,7 @@ card:
       color: "#f59e0b"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.solar_charge_kwh > 0 ? Math.log10(Math.max(1, h.solar_charge_kwh * 1000)) : null]);
     # --- Export series (arbitrage leg) ---
@@ -156,8 +168,18 @@ card:
       color: "#10b981"
       show:
         legend_value: false
+        in_header: false
       data_generator: |
         return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
+    # Header-only: surfaces which load-predictor tier is active (Task 5's
+    # ml_status attribute) in the card header. Not charted (in_chart: false),
+    # so it never appears as a line/series in the plot or legend.
+    - entity: sensor.smartgrid_active_load_model
+      attribute: ml_status
+      name: Predictor
+      show:
+        in_chart: false
+        in_header: raw
   apex_config:
     chart:
       height: 380
