@@ -265,6 +265,41 @@ async def fetch_forecast(
     return forecast_map
 
 
+async def fetch_health(session, url: str, timeout: int) -> dict | None:
+    """GET the add-on ``/health`` endpoint and return its payload dict.
+
+    Mirrors :func:`fetch_forecast`'s never-raise contract: unreachable,
+    timeout, non-200, malformed JSON, or a non-dict payload all return
+    ``None`` (⇒ "unreachable" in ml_status).  Unlike ``/predict``, this is
+    polled even while the model is dormant, so reachability is monitored
+    during the exact window where a dead ``addon_url`` would otherwise
+    hide (observed live 2026-07-21).
+    """
+    endpoint = url.rstrip("/") + "/health"
+
+    async def _do_request() -> dict | None:
+        async with session.get(endpoint) as resp:
+            if resp.status != 200:
+                _LOGGER.debug("remote_forecast: /health returned HTTP %s", resp.status)
+                return None
+            try:
+                return await resp.json(content_type=None)
+            except Exception as exc:
+                _LOGGER.debug("remote_forecast: /health JSON parse error: %s", exc)
+                return None
+
+    try:
+        data = await asyncio.wait_for(_do_request(), timeout=timeout)
+    except TimeoutError:
+        _LOGGER.debug("remote_forecast: /health timed out after %ss", timeout)
+        return None
+    except Exception as exc:
+        _LOGGER.debug("remote_forecast: /health connection error: %s", exc)
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
 class RemoteForecastPredictor:
     """Drop-in replacement for ``LoadPredictor`` backed by the ML add-on forecast map.
 

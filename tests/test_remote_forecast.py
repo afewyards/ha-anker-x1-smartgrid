@@ -20,6 +20,7 @@ from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
     build_hours_payload,
     fetch_forecast,
+    fetch_health,
     persons_home_hour_of_week_means,
     project_persons_home,
 )
@@ -64,36 +65,43 @@ _PREDICTIONS = [
 # ---------------------------------------------------------------------------
 
 
-def _make_response(status: int, json_data: dict):
-    """Return a fake aiohttp-style response (async context manager)."""
+def _make_response(status: int, json_data: dict, raise_json: bool = False):
+    """Return a fake aiohttp-style response (async context manager).
+
+    ``raise_json=True`` makes ``resp.json()`` raise (malformed-JSON case);
+    *json_data* is ignored in that case.
+    """
     resp = MagicMock()
     resp.status = status
-    resp.json = AsyncMock(return_value=json_data)
+    if raise_json:
+        resp.json = AsyncMock(side_effect=ValueError("bad json"))
+    else:
+        resp.json = AsyncMock(return_value=json_data)
     return resp
 
 
-def _make_session(resp):
-    """Session whose post() works as ``async with session.post(...) as r:``."""
+def _make_session(resp, verb: str = "post"):
+    """Session whose post()/get() works as ``async with session.<verb>(...) as r:``."""
     session = MagicMock()
 
     @asynccontextmanager
-    async def _post(*args, **kwargs):
+    async def _call(*args, **kwargs):
         yield resp
 
-    session.post = _post
+    setattr(session, verb, _call)
     return session
 
 
-def _make_session_raising(exc_factory):
-    """Session whose post() raises *exc_factory()* when entered."""
+def _make_session_raising(exc_factory, verb: str = "post"):
+    """Session whose post()/get() raises *exc_factory()* when entered."""
     session = MagicMock()
 
     @asynccontextmanager
-    async def _post(*args, **kwargs):
+    async def _call(*args, **kwargs):
         raise exc_factory()
         yield  # pragma: no cover — unreachable, satisfies generator protocol
 
-    session.post = _post
+    setattr(session, verb, _call)
     return session
 
 
@@ -583,3 +591,39 @@ def test_build_hours_payload_persons_home_defaults_none():
     wf = [{"datetime": datetime(2026, 7, 1, 13, 0, tzinfo=UTC)}]
     payload = build_hours_payload(wf)
     assert payload[0]["persons_home"] is None
+
+
+# ---------------------------------------------------------------------------
+# fetch_health — GET /health, polled even while the model is dormant (Task 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_ok():
+    payload = {"ready": True, "promoted": False, "n_rows": 622}
+    session = _make_session(_make_response(200, payload), verb="get")
+    assert await fetch_health(session, "http://x:8099/", 5) == payload
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_non_200():
+    session = _make_session(_make_response(503, {}), verb="get")
+    assert await fetch_health(session, "http://x:8099", 5) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_connect_error():
+    session = _make_session_raising(lambda: OSError("connection refused"), verb="get")
+    assert await fetch_health(session, "http://x:8099", 5) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_malformed_json():
+    session = _make_session(_make_response(200, None, raise_json=True), verb="get")
+    assert await fetch_health(session, "http://x:8099", 5) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_health_non_dict_payload():
+    session = _make_session(_make_response(200, ["not", "a", "dict"]), verb="get")
+    assert await fetch_health(session, "http://x:8099", 5) is None
