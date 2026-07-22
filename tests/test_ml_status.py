@@ -210,25 +210,25 @@ HEALTH_GATE = {**HEALTH_READY, "metrics": {
 
 def test_gate_line_full():
     a = _attrs(health=HEALTH_GATE)
-    assert a["ml_status"] == "backtest gate · 5/8 origins · -24% vs baseline"
+    assert a["ml_status"] == "backtest gate · 5/8 · -24%"
 
 
 def test_gate_line_positive_improvement_signed():
     h = {**HEALTH_READY, "metrics": {**HEALTH_GATE["metrics"], "improvement_pct": 2.0}}
-    assert _attrs(health=h)["ml_status"] == "backtest gate · 5/8 origins · +2% vs baseline"
+    assert _attrs(health=h)["ml_status"] == "backtest gate · 5/8 · +2%"
 
 
 def test_gate_line_missing_improvement_drops_segment():
     m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "improvement_pct"}
     a = _attrs(health={**HEALTH_READY, "metrics": m})
-    assert a["ml_status"] == "backtest gate · 5/8 origins"
+    assert a["ml_status"] == "backtest gate · 5/8"
     assert a["addon_improvement_pct"] is None
 
 
 def test_gate_line_missing_origins_drops_segment():
     m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "n_horizon_origins_24h"}
     a = _attrs(health={**HEALTH_READY, "metrics": m})
-    assert a["ml_status"] == "backtest gate · -24% vs baseline"
+    assert a["ml_status"] == "backtest gate · -24%"
     assert a["addon_origins_24h"] is None
 
 

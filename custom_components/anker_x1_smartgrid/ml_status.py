@@ -153,9 +153,9 @@ def build_ml_status_attrs(
     elif ready:
         parts = ["backtest gate"]
         if origins is not None:
-            parts.append(f"{origins}/{MIN_HORIZON_ORIGINS_24H} origins")
+            parts.append(f"{origins}/{MIN_HORIZON_ORIGINS_24H}")
         if improvement is not None:
-            parts.append(f"{improvement:+.0f}% vs baseline")
+            parts.append(f"{improvement:+.0f}%")
         status = " · ".join(parts)
     elif eta_days is not None:
         status = f"ML in ~{eta_days}d"
