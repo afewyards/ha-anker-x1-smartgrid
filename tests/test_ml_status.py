@@ -199,3 +199,81 @@ def test_addon_last_trained_non_string_coerced_and_bounded():
 def test_addon_last_trained_none_stays_none():
     a = _attrs(health={**HEALTH_DORMANT, "last_trained": None})
     assert a["addon_last_trained"] is None
+
+
+HEALTH_GATE = {**HEALTH_READY, "metrics": {
+    "improvement_pct": -24.298, "n_horizon_origins_24h": 5,
+    "model_mae": 241.62, "baseline_mae": 194.39,
+    "horizon_energy_mae_24h": 3.2959, "baseline_horizon_energy_mae_24h": 3.0975,
+}}
+
+
+def test_gate_line_full():
+    a = _attrs(health=HEALTH_GATE)
+    assert a["ml_status"] == "backtest gate · 5/8 origins · -24% vs baseline"
+
+
+def test_gate_line_positive_improvement_signed():
+    h = {**HEALTH_READY, "metrics": {**HEALTH_GATE["metrics"], "improvement_pct": 2.0}}
+    assert _attrs(health=h)["ml_status"] == "backtest gate · 5/8 origins · +2% vs baseline"
+
+
+def test_gate_line_missing_improvement_drops_segment():
+    m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "improvement_pct"}
+    a = _attrs(health={**HEALTH_READY, "metrics": m})
+    assert a["ml_status"] == "backtest gate · 5/8 origins"
+    assert a["addon_improvement_pct"] is None
+
+
+def test_gate_line_missing_origins_drops_segment():
+    m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "n_horizon_origins_24h"}
+    a = _attrs(health={**HEALTH_READY, "metrics": m})
+    assert a["ml_status"] == "backtest gate · -24% vs baseline"
+    assert a["addon_origins_24h"] is None
+
+
+def test_gate_line_non_dict_metrics_falls_back_bare():
+    a = _attrs(health={**HEALTH_READY, "metrics": "corrupt"})
+    assert a["ml_status"] == "backtest gate"
+    assert a["addon_model_mae"] is None
+
+
+def test_metric_attrs_rounded():
+    a = _attrs(health=HEALTH_GATE)
+    assert a["addon_improvement_pct"] == -24.3
+    assert a["addon_origins_24h"] == 5
+    assert a["addon_origins_required"] == 8
+    assert a["addon_model_mae"] == 241.6
+    assert a["addon_baseline_mae"] == 194.4
+    assert a["addon_h24_mae"] == 3.3
+    assert a["addon_baseline_h24_mae"] == 3.1
+
+
+def test_metric_coercion_rejects_junk():
+    m = {"improvement_pct": float("nan"), "n_horizon_origins_24h": True,
+         "model_mae": "241", "baseline_mae": float("inf"),
+         "horizon_energy_mae_24h": None}
+    a = _attrs(health={**HEALTH_READY, "metrics": m})
+    assert a["ml_status"] == "backtest gate"
+    for key in ("addon_improvement_pct", "addon_origins_24h", "addon_model_mae",
+                "addon_baseline_mae", "addon_h24_mae", "addon_baseline_h24_mae"):
+        assert a[key] is None, key
+
+
+def test_metrics_ignored_when_promoted():
+    a = _attrs(health={**HEALTH_PROMOTED, "metrics": HEALTH_GATE["metrics"]},
+               active_model="remote")
+    assert a["ml_status"] == "ML active"
+    assert a["addon_improvement_pct"] == -24.3  # attrs still exposed
+
+
+def test_metric_attrs_cleared_when_addon_off():
+    a = _attrs(addon_enabled=False, health=HEALTH_GATE)
+    assert a["addon_improvement_pct"] is None
+    assert a["addon_origins_24h"] is None
+    assert a["addon_origins_required"] == 8  # constant, not health-derived
+
+
+def test_origins_required_is_backtest_constant():
+    from custom_components.anker_x1_smartgrid.backtest import MIN_HORIZON_ORIGINS_24H
+    assert _attrs()["addon_origins_required"] == MIN_HORIZON_ORIGINS_24H

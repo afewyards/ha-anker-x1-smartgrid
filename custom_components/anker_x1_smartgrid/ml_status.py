@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 
+from .backtest import MIN_HORIZON_ORIGINS_24H
 from .featureset import _TZ_AMS
 
 COVERAGE_REQUIRED_DAYS: int = 21
@@ -80,6 +81,26 @@ def _coerce_last_trained(value: object) -> str | None:
         return None
 
 
+def _coerce_metric_float(value: object, ndigits: int) -> float | None:
+    """Coerce an add-on backtest metric to a bounded rounded float.
+
+    Stricter than ``_coerce_n_rows``: strings are rejected (metrics are
+    machine-emitted floats; a string means a malformed payload). Never raises.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        return round(f, ndigits) if math.isfinite(f) else None
+    return None
+
+
+def _coerce_metric_int(value: object) -> int | None:
+    """Coerce an add-on backtest count to an int; strings rejected. Never raises."""
+    f = _coerce_metric_float(value, 0)
+    return int(f) if f is not None else None
+
+
 def build_ml_status_attrs(
     *,
     addon_enabled: bool,
@@ -112,6 +133,15 @@ def build_ml_status_attrs(
         else None
     )
 
+    raw_metrics = health.get("metrics") if health else None
+    m = raw_metrics if isinstance(raw_metrics, dict) else {}
+    improvement = _coerce_metric_float(m.get("improvement_pct"), 1)
+    origins = _coerce_metric_int(m.get("n_horizon_origins_24h"))
+    model_mae = _coerce_metric_float(m.get("model_mae"), 1)
+    baseline_mae = _coerce_metric_float(m.get("baseline_mae"), 1)
+    h24_mae = _coerce_metric_float(m.get("horizon_energy_mae_24h"), 2)
+    baseline_h24_mae = _coerce_metric_float(m.get("baseline_horizon_energy_mae_24h"), 2)
+
     if not configured:
         status = "add-on off"
     elif checked and health is None:
@@ -121,7 +151,12 @@ def build_ml_status_attrs(
     elif promoted:
         status = "⚠ promoted, not consumed"
     elif ready:
-        status = "backtest gate"
+        parts = ["backtest gate"]
+        if origins is not None:
+            parts.append(f"{origins}/{MIN_HORIZON_ORIGINS_24H} origins")
+        if improvement is not None:
+            parts.append(f"{improvement:+.0f}% vs baseline")
+        status = " · ".join(parts)
     elif eta_days is not None:
         status = f"ML in ~{eta_days}d"
     else:
@@ -135,6 +170,13 @@ def build_ml_status_attrs(
         "addon_promoted": promoted,
         "addon_n_rows": _coerce_n_rows(health.get("n_rows")) if health else None,
         "addon_last_trained": _coerce_last_trained(health.get("last_trained")) if health else None,
+        "addon_improvement_pct": improvement,
+        "addon_origins_24h": origins,
+        "addon_origins_required": MIN_HORIZON_ORIGINS_24H,
+        "addon_model_mae": model_mae,
+        "addon_baseline_mae": baseline_mae,
+        "addon_h24_mae": h24_mae,
+        "addon_baseline_h24_mae": baseline_h24_mae,
         "coverage_days": coverage_days,
         "coverage_required": COVERAGE_REQUIRED_DAYS,
         "eta_days": eta_days,
