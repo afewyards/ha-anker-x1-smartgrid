@@ -359,6 +359,8 @@ def test_active_model_sensor_exposes_ml_status_attrs():
     assert attr_names == [
         "ml_status", "addon_configured", "addon_reachable", "addon_ready",
         "addon_promoted", "addon_n_rows", "addon_last_trained",
+        "addon_improvement_pct", "addon_origins_24h", "addon_origins_required",
+        "addon_model_mae", "addon_baseline_mae", "addon_h24_mae", "addon_baseline_h24_mae",
         "coverage_days", "coverage_required", "eta_days", "last_health_check",
     ]
     # every attr maps to the identical last_status key
