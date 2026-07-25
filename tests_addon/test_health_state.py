@@ -13,7 +13,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # conftest.py inserts addon/anker_x1_forecast onto sys.path
-from health import build_health_payload, read_options, seconds_until_next_run
+from health import (
+    DEFAULT_PORT,
+    build_health_payload,
+    read_options,
+    seconds_until_next_run,
+    service_port,
+    service_url,
+)
 from trainer import TrainState
 
 _TZ_AMS = ZoneInfo("Europe/Amsterdam")
@@ -252,3 +259,27 @@ def test_read_options_defaults_retrain_hour_on_nonint():
     opts = read_options(path=tmp)
     assert opts["retrain_hour"] == 3  # falls back to default, never raises
     Path(tmp).unlink(missing_ok=True)
+
+
+def test_service_port_default_env_and_garbage(monkeypatch):
+    """service_port honours FORECAST_PORT (run.sh exports it) and never raises:
+    unparseable or out-of-range values fall back to DEFAULT_PORT."""
+    monkeypatch.delenv("FORECAST_PORT", raising=False)
+    assert service_port() == DEFAULT_PORT
+    monkeypatch.setenv("FORECAST_PORT", "9100")
+    assert service_port() == 9100
+    for bad in ["", "eight-thousand", "0", "70000"]:
+        assert service_port(bad) == DEFAULT_PORT
+    monkeypatch.setenv("FORECAST_PORT", "not-a-port")
+    assert service_port() == DEFAULT_PORT
+
+
+def test_service_url_uses_container_hostname(monkeypatch):
+    """The logged URL is built from the container hostname, which Supervisor sets
+    to the add-on DNS name (repo-hash prefixed for store installs)."""
+    monkeypatch.delenv("FORECAST_PORT", raising=False)
+    monkeypatch.setattr("socket.gethostname", lambda: "2b933eb0-anker-x1-forecast")
+    assert service_url() == "http://2b933eb0-anker-x1-forecast:8099"
+    monkeypatch.setenv("FORECAST_PORT", "9100")
+    assert service_url() == "http://2b933eb0-anker-x1-forecast:9100"
+    assert service_url(host="local-anker_x1_forecast", port=8099) == "http://local-anker_x1_forecast:8099"

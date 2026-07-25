@@ -12,6 +12,11 @@ fi
 # Future model artifacts land under /data too.
 chown -R appuser:appuser /data
 
+# One source of truth for the listener port: uvicorn binds it and server.py reads
+# the same env var to log the reachable URL at startup, so the two cannot drift.
+FORECAST_PORT="${FORECAST_PORT:-8099}"
+export FORECAST_PORT
+
 # Drop privileges without relying on external privilege-drop binaries, whose
 # presence in this base image is unverified. This inline python3 helper is
 # exec'd so it replaces PID 1, then execvp replaces itself with uvicorn as
@@ -25,5 +30,6 @@ os.setgroups([])
 os.setgid(pw.pw_gid)
 os.setuid(pw.pw_uid)
 os.environ["HOME"] = pw.pw_dir
-os.execvp("uvicorn", ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8099"])
+port = os.environ.get("FORECAST_PORT", "8099")
+os.execvp("uvicorn", ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", port])
 PYEOF

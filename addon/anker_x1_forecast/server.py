@@ -14,10 +14,15 @@ import sklearn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from health import build_health_payload, read_options, run_retrain_loop
+from health import build_health_payload, read_options, run_retrain_loop, service_port, service_url
 import predictor
 import trainer
 from trainer import TrainState, train_once
+
+# uvicorn configures only its own loggers and leaves the root logger at WARNING,
+# so without this every _log.info in this add-on is dropped before it reaches the
+# add-on log panel.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
 _log = logging.getLogger(__name__)
 
@@ -81,6 +86,12 @@ async def startup_event() -> None:
     db_path: str = opts["db_path"]
     retrain_hour: int = int(opts["retrain_hour"])
     _log.info("startup: db_path=%r retrain_hour=%s", db_path, retrain_hour)
+    url = service_url()
+    _log.info("-" * 64)
+    _log.info("Anker X1 Forecast is listening on 0.0.0.0:%s", service_port())
+    _log.info("Set the integration option 'Add-on URL' to: %s", url)
+    _log.info("Verify from Home Assistant: curl %s/health", url)
+    _log.info("-" * 64)
     global _scheduler_task, _DB_PATH
     _DB_PATH = db_path
     _scheduler_task = asyncio.create_task(_scheduler(db_path, retrain_hour))

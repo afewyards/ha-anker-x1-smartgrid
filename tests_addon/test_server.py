@@ -134,6 +134,33 @@ def test_predict_snapshots_state_and_locks_refresh(monkeypatch):
     assert calls[0][1] is fake_model
 
 
+def test_startup_logs_addon_url(caplog, monkeypatch):
+    """Startup logs the reachable base URL: store installs get a repo-hash
+    hostname users cannot guess, and it is what the integration's 'Add-on URL'
+    option needs."""
+    import asyncio
+    import logging
+    import server
+
+    monkeypatch.setattr(server, "read_options", lambda: {"db_path": "/nonexistent.db", "retrain_hour": 3})
+    monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
+
+    async def _noop_scheduler(db_path, retrain_hour):
+        return None
+
+    monkeypatch.setattr(server, "_scheduler", _noop_scheduler)
+
+    async def _run():
+        with caplog.at_level(logging.INFO):
+            await server.startup_event()
+        if server._scheduler_task is not None:
+            await server._scheduler_task
+
+    asyncio.run(_run())
+    assert "http://2b933eb0-anker-x1-forecast:8099" in caplog.text
+    assert "Add-on URL" in caplog.text
+
+
 def test_health_and_predict_smoke():
     """Exercise the real Pydantic request schema via TestClient (not importorskip'd
     away): /health returns ready flag; /predict validates the hours schema."""

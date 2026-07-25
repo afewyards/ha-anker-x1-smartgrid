@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +24,34 @@ _DEFAULTS: dict = {
     "db_path": "/config/anker_x1_smartgrid.db",
     "retrain_hour": 3,
 }
+
+DEFAULT_PORT = 8099
+"""Listener port. run.sh's uvicorn --port and config.yaml's watchdog use the same value."""
+
+
+def service_port(raw: str | None = None) -> int:
+    """Port this service listens on, from FORECAST_PORT (exported by run.sh).
+
+    Falls back to DEFAULT_PORT for anything unparseable or out of range — a
+    typo'd env var must not crash startup.
+    """
+    value = os.environ.get("FORECAST_PORT") if raw is None else raw
+    try:
+        port = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_PORT
+    return port if 1 <= port <= 65535 else DEFAULT_PORT
+
+
+def service_url(host: str | None = None, port: int | None = None) -> str:
+    """Base URL other containers use to reach this add-on.
+
+    Supervisor names the container after the add-on's DNS name, and store
+    installs get a repository-hash prefix (e.g. ``2b933eb0-anker-x1-forecast``),
+    so the URL the integration's "Add-on URL" option needs cannot be guessed
+    from the docs — hence logging it at startup.
+    """
+    return f"http://{host or socket.gethostname()}:{service_port() if port is None else port}"
 
 
 def read_options(path: str = "/data/options.json") -> dict:

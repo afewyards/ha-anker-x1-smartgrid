@@ -17,7 +17,7 @@ HGBR load-forecast service for Anker X1 SmartGrid — trainer, `/predict` server
 - `requirements.txt` — `scikit-learn==1.5.2` (confirmed cp312/aarch64 manylinux wheel) plus fastapi and uvicorn.
 - `server.py` — HTTP server with `GET /health` and `POST /predict` endpoints.
 - `Dockerfile` — `FROM python:3.12-slim` with requirements install.
-- `run.sh` — Uvicorn launcher on 0.0.0.0:8099.
+- `run.sh` — Uvicorn launcher on 0.0.0.0:`$FORECAST_PORT` (default 8099; `server.py` reads the same env var so the URL it logs matches the real listener).
 
 ## Deploy (Local add-on)
 
@@ -39,6 +39,11 @@ HGBR load-forecast service for Anker X1 SmartGrid — trainer, `/predict` server
 
 - HTTP endpoint: `curl http://172.20.0.47:8099/health` → expect HTTP 200 with real `sklearn_version` (e.g., `1.5.2`) and `python_version` matching `3.12.x`.
 - Logs: `ha addons logs local_anker_x1_forecast` → uvicorn starts cleanly, no import traceback, no meson/source-build error.
+- **Add-on URL**: the startup log block prints the base URL to paste into the integration's
+  "Add-on URL" option, built from the container hostname (which Supervisor sets to the add-on
+  DNS name). Store installs get a repository-hash prefix, so it is *not* the documented
+  `http://local-anker_x1_forecast:8099` default — e.g. `http://2b933eb0-anker-x1-forecast:8099`.
+  Restart the add-on to re-print it; cross-check with `ha addons info <slug> --raw-json | jq .data.hostname`.
 
 ## API Reference
 
