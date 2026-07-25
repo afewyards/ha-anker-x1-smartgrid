@@ -9,6 +9,7 @@ standalone rather than factored into ``hgbr.py`` to avoid add-on vendoring
 lockstep; ``test_parity_with_hgbr_is_ready`` locks the two implementations
 together in the dev venv.
 """
+
 from __future__ import annotations
 
 import math
@@ -127,11 +128,7 @@ def build_ml_status_attrs(
     reachable: bool | None = (health is not None) if checked else None
     ready: bool | None = bool(health.get("ready")) if health else None
     promoted: bool | None = bool(health.get("promoted")) if health else None
-    eta_days = (
-        max(0, COVERAGE_REQUIRED_DAYS - coverage_days)
-        if coverage_days is not None
-        else None
-    )
+    eta_days = max(0, COVERAGE_REQUIRED_DAYS - coverage_days) if coverage_days is not None else None
 
     raw_metrics = health.get("metrics") if health else None
     m = raw_metrics if isinstance(raw_metrics, dict) else {}

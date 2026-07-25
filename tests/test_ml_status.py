@@ -1,4 +1,5 @@
 """Tests for ml_status — coverage counter + (Task 2) status-string builder."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -9,10 +10,7 @@ from custom_components.anker_x1_smartgrid import ml_status
 
 
 def _rows(start: datetime, n_hours: int) -> list[dict]:
-    return [
-        {"hour_ts": (start + timedelta(hours=i)).isoformat()}
-        for i in range(n_hours)
-    ]
+    return [{"hour_ts": (start + timedelta(hours=i)).isoformat()} for i in range(n_hours)]
 
 
 def test_count_empty():
@@ -54,8 +52,7 @@ def test_amsterdam_date_counting():
     # 2026-06-08T22:00Z = 2026-06-09 00:00 Amsterdam (CEST) — the row's date
     # must be counted in LOCAL time, so a UTC-evening row lands on the next day.
     base = datetime(2026, 6, 1, 22, 0, tzinfo=UTC)
-    rows = [{"hour_ts": base.isoformat()},
-            {"hour_ts": (base + timedelta(hours=168)).isoformat()}]
+    rows = [{"hour_ts": base.isoformat()}, {"hour_ts": (base + timedelta(hours=168)).isoformat()}]
     assert ml_status.count_lag_complete_days(rows) == 1  # the +168h row, dated 06-09 local
 
 
@@ -74,15 +71,20 @@ def test_parity_with_hgbr_is_ready():
 
 
 NOW = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
-HEALTH_DORMANT = {"ready": False, "promoted": False, "n_rows": 622,
-                  "last_trained": "2026-07-21T01:00:00+00:00"}
+HEALTH_DORMANT = {"ready": False, "promoted": False, "n_rows": 622, "last_trained": "2026-07-21T01:00:00+00:00"}
 HEALTH_READY = {**HEALTH_DORMANT, "ready": True}
 HEALTH_PROMOTED = {**HEALTH_DORMANT, "ready": True, "promoted": True}
 
 
 def _attrs(**overrides):
-    kw = dict(addon_enabled=True, addon_url="http://x:8099", health=HEALTH_DORMANT,
-              health_ts=NOW, coverage_days=20, active_model="bucketed")
+    kw = dict(
+        addon_enabled=True,
+        addon_url="http://x:8099",
+        health=HEALTH_DORMANT,
+        health_ts=NOW,
+        coverage_days=20,
+        active_model="bucketed",
+    )
     kw.update(overrides)
     return ml_status.build_ml_status_attrs(**kw)
 
@@ -201,11 +203,17 @@ def test_addon_last_trained_none_stays_none():
     assert a["addon_last_trained"] is None
 
 
-HEALTH_GATE = {**HEALTH_READY, "metrics": {
-    "improvement_pct": -24.298, "n_horizon_origins_24h": 5,
-    "model_mae": 241.62, "baseline_mae": 194.39,
-    "horizon_energy_mae_24h": 3.2959, "baseline_horizon_energy_mae_24h": 3.0975,
-}}
+HEALTH_GATE = {
+    **HEALTH_READY,
+    "metrics": {
+        "improvement_pct": -24.298,
+        "n_horizon_origins_24h": 5,
+        "model_mae": 241.62,
+        "baseline_mae": 194.39,
+        "horizon_energy_mae_24h": 3.2959,
+        "baseline_horizon_energy_mae_24h": 3.0975,
+    },
+}
 
 
 def test_gate_line_full():
@@ -250,19 +258,28 @@ def test_metric_attrs_rounded():
 
 
 def test_metric_coercion_rejects_junk():
-    m = {"improvement_pct": float("nan"), "n_horizon_origins_24h": True,
-         "model_mae": "241", "baseline_mae": float("inf"),
-         "horizon_energy_mae_24h": None}
+    m = {
+        "improvement_pct": float("nan"),
+        "n_horizon_origins_24h": True,
+        "model_mae": "241",
+        "baseline_mae": float("inf"),
+        "horizon_energy_mae_24h": None,
+    }
     a = _attrs(health={**HEALTH_READY, "metrics": m})
     assert a["ml_status"] == "backtest gate"
-    for key in ("addon_improvement_pct", "addon_origins_24h", "addon_model_mae",
-                "addon_baseline_mae", "addon_h24_mae", "addon_baseline_h24_mae"):
+    for key in (
+        "addon_improvement_pct",
+        "addon_origins_24h",
+        "addon_model_mae",
+        "addon_baseline_mae",
+        "addon_h24_mae",
+        "addon_baseline_h24_mae",
+    ):
         assert a[key] is None, key
 
 
 def test_metrics_ignored_when_promoted():
-    a = _attrs(health={**HEALTH_PROMOTED, "metrics": HEALTH_GATE["metrics"]},
-               active_model="remote")
+    a = _attrs(health={**HEALTH_PROMOTED, "metrics": HEALTH_GATE["metrics"]}, active_model="remote")
     assert a["ml_status"] == "ML active"
     assert a["addon_improvement_pct"] == -24.3  # attrs still exposed
 
@@ -276,4 +293,5 @@ def test_metric_attrs_cleared_when_addon_off():
 
 def test_origins_required_is_backtest_constant():
     from custom_components.anker_x1_smartgrid.backtest import MIN_HORIZON_ORIGINS_24H
+
     assert _attrs()["addon_origins_required"] == MIN_HORIZON_ORIGINS_24H
