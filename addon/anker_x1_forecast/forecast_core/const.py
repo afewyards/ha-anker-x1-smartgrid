@@ -56,6 +56,9 @@ CONF_PERSON_ENTITIES = "person_entities"  # list of person.* entity ids (options
 
 # Charge trough look-back config key
 CONF_CHARGE_TROUGH_LOOKBACK_H = "charge_trough_lookback_h"
+# Cheap-charge band width (€/kWh above the windowed trough).  Name MUST match
+# the Config field (models.py) — Config.from_dict filters by field name.
+CONF_CHARGE_WINDOW_PRICE_BAND = "charge_window_price_band"
 
 # Price-slot resolution: "auto" (detect from datetime spacing) | "15" | "30" | "60"
 CONF_SLOT_RESOLUTION = "slot_resolution"
@@ -121,13 +124,24 @@ DEFAULT_ADDON_TIMEOUT = 5
 # Water-value planner defaults.  Deliberately const-only tunables: there is no
 # options-schema field for these (Config reads the constant directly, by design —
 # not exposed for end-user tuning via the UI).
+# EXCEPTION: DEFAULT_CHARGE_WINDOW_PRICE_BAND below IS UI-tunable (promoted
+# 2026-07-29) — see CONF_CHARGE_WINDOW_PRICE_BAND.
 DEFAULT_TROUGH_PERCENTILE = 30.0  # percentile of lookahead prices a trough must beat
 DEFAULT_TROUGH_LOOKAHEAD_H = 48  # hours of forward prices scanned for the trough
 DEFAULT_MIN_HORIZON_H = 6  # trough must be at least this many hours out
 DEFAULT_WATER_VALUE_FACTOR = 1.0  # scales the terminal water value v
 DEFAULT_CLAMP_WATER_VALUE_NONNEG = True
 DEFAULT_END_SOC_DEADBAND = 0.25  # kWh deadband on the current-hour committed grid charge
-DEFAULT_CHARGE_WINDOW_PRICE_BAND = 0.005  # €/kWh: max spread above trough price to allow charging
+# €/kWh: max spread above the windowed trough at which an hour is still
+# chargeable (decision.py -> optimize.build_charge_mask).  UI-tunable via
+# CONF_CHARGE_WINDOW_PRICE_BAND: at 0.005 only the single cheapest hour usually
+# qualifies, which on a 12 kW / 20 kWh system can leave a profitable adjacent
+# hour out of the plan by fractions of a cent (2026-07-30 replay: 11:00 at
+# 0.160 vs a 0.1523 trough missed by 0.0077 and cost ~EUR 0.46 of arbitrage).
+# Widening is NOT unbounded risk: charge_margin + cycle_cost + conversion
+# losses reject marginal hours on their own, so the same replay showed no
+# further schedule change from 0.008 all the way to 0.100.
+DEFAULT_CHARGE_WINDOW_PRICE_BAND = 0.005
 # Hours of real-price look-back for the cheap-charge band trough.  trough[h] is the
 # min effective price over [h - lookback, horizon_edge) so an UP-SLOPE hour after the
 # day's trough is judged against that trough and blocked by the band (no expensive
@@ -139,6 +153,7 @@ DEFAULT_CHARGE_TROUGH_LOOKBACK_H = 8
 CONF_ENABLE_EXPORT = "enable_export"
 CONF_MAX_EXPORT_W = "max_export_w"
 CONF_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
+CONF_GRID_IMPORT_LIMIT_W = "grid_import_limit_w"
 CONF_CYCLE_COST_EUR_PER_KWH = "cycle_cost_eur_per_kwh"
 CONF_EXPORT_EPS_LO_KWH = "export_eps_lo_kwh"
 CONF_EXPORT_EPS_HI_KWH = "export_eps_hi_kwh"
@@ -161,6 +176,13 @@ DEFAULT_ENABLE_EXPORT = True
 # net-export setpoint ceiling is ~6000 W — kept at 6000 for parity.
 DEFAULT_MAX_EXPORT_W = 6000.0
 DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0  # configurable grid-connection cap
+# Import-side mirror of DEFAULT_GRID_EXPORT_LIMIT_W: the grid connection's own
+# rating, independent of the (now device-derived, per-install) inverter charge
+# rate.  17250 W = 3-phase 25A x 230V, a generous default connection size so
+# it stays inert (never binds) unless the user narrows it. See
+# regret._max_grid_dc for where this is applied (grid remainder only, not
+# solar-absorbed charge).
+DEFAULT_GRID_IMPORT_LIMIT_W = 17250.0
 DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.10  # battery cycle degradation cost (€/kWh stored)
 # Two-sided surplus hysteresis band (mirrors decide_state's eps_lo/eps_hi)
 DEFAULT_EXPORT_EPS_LO_KWH = 0.2  # disengage below this surplus
@@ -281,8 +303,17 @@ DEFAULT_RESERVE_CHEAP_BAND = 0.20  # a later hour is "relief" within 20% of its 
 RESERVE_CHEAP_BAND_EPS = 0.02  # €/kWh floor on the band denominator (near-zero/neg NL prices)
 SLOT_RESOLUTION_AUTO = "auto"
 DEFAULT_SLOT_RESOLUTION = SLOT_RESOLUTION_AUTO
-SETPOINT_MIN_W = -6000.0
-SETPOINT_MAX_W = 6000.0  # NET-EXPORT ceiling per A1 (full ~6000W, no firmware cap)
+# Absolute setpoint backstops — NOT the operative limit.  The real per-install
+# ceilings are device-derived into cfg.max_charge_w / cfg.max_export_w from the
+# setpoint entity's min/max attributes (anker_resolver._resolve_power_limits),
+# because they scale with the number of battery modules (2 modules: ±6000 W;
+# 4 modules: -12000 / +13200).  These consts only stop a bug from commanding
+# something absurd; Actuator._clamp_to_live_limits has the final word against
+# the BMS's live bounds.  Kept generous so they can never bind BEFORE the
+# derived limits — a value that clamps below the hardware silently halves the
+# planner's charge rate, which is exactly the bug this replaced.
+SETPOINT_MIN_W = -20000.0
+SETPOINT_MAX_W = 20000.0
 WORKMODE_SELF = "Self-consumption"
 PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 

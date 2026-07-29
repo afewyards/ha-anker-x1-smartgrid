@@ -253,6 +253,47 @@ def test_anti_fight_guard_slot_floors_cur_h_mid_hour():
     assert new_plan.committed_charge_kwh == 0.0
 
 
+# ---------------------------------------------------------------------------
+# §4 — decision-layer grid_import_limit_w mirror (regret._max_grid_dc parity)
+# ---------------------------------------------------------------------------
+
+
+def test_forcing_setpoint_bounded_by_grid_import_limit_w():
+    """compute_decision's FORCING setpoint mirrors regret._max_grid_dc's two-cap
+    structure: it must not exceed cfg.grid_import_limit_w even though
+    cfg.max_charge_w (the inverter rate) is wider. PV stays 0 throughout this
+    suite, so the whole FORCING request is grid import -- the exact case
+    grid_import_limit_w exists to bound.
+    """
+    now = datetime(2026, 8, 1, 2, 0, tzinfo=UTC)
+    prices = [0.30] * 8 + [0.08] + [0.30] * 6
+    slots = _slots(now, prices)
+    plan = PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), (), committed_charge_kwh=0.0)
+    cfg = Config(max_charge_w=6000.0, grid_import_limit_w=2000.0, end_soc_deadband=0.25, min_dwell_min=0)
+
+    with patch(
+        "custom_components.anker_x1_smartgrid.optimize.optimize_grid",
+        side_effect=_dp_charge_first_slot(0.5),
+    ):
+        new_plan, setpoint, *_ = ctrl_mod.compute_decision(
+            plan=plan,
+            inputs=PlantInputs(soc=30.0, meter_w=0.0, now=now),
+            slots=slots,
+            pv_remaining=0.0,
+            sunset=now + timedelta(hours=2),
+            predictor=_FlatPredictor(),
+            cur_temp=10.0,
+            cfg=cfg,
+            slot_minutes=15,
+        )
+
+    assert new_plan.state is ControllerState.FORCING, f"expected FORCING; got {new_plan.state}"
+    # Sign convention: negative = charge (see guard.command_setpoint docstring).
+    assert setpoint < 0.0
+    assert abs(setpoint) < cfg.max_charge_w, "grid_import_limit_w must actually bind below the inverter rate"
+    assert abs(setpoint) == pytest.approx(cfg.grid_import_limit_w)
+
+
 def _mock_flat_ceiling(ceiling_kwh_first_slot):
     """Mock optimize.solar_reservation_ceiling: a distinct ceiling in window
     index 0 (the current slot), zero elsewhere -- lets the test pin exactly

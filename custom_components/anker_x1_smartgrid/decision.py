@@ -782,6 +782,7 @@ def compute_decision(
     temp_by_hour: dict[datetime, float | None] | None = None,
     past_actuals_by_hour: dict | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
+    delivered_by_hour: dict | None = None,
     slot_minutes: int | None = None,
     eta_curve: EfficiencyCurve | None = None,
 ) -> tuple[PlanState, float, datetime, list, str, list]:
@@ -1183,7 +1184,10 @@ def compute_decision(
 
     if new_plan.state is ControllerState.FORCING:
         prev = 0.0  # controller tracks prev separately when actuating
-        setpoint = guard.command_setpoint(cfg.max_charge_w, prev, cfg)
+        # Grid charging is grid import: bound the FORCING request by whichever
+        # is tighter, the inverter rate or the grid connection's own rating
+        # (mirrors regret._max_grid_dc's two-cap structure).
+        setpoint = guard.command_setpoint(min(cfg.max_charge_w, cfg.grid_import_limit_w), prev, cfg)
     else:
         setpoint = 0.0
     if sun_times is not None:
@@ -1212,6 +1216,7 @@ def compute_decision(
             past_actuals_by_hour=past_actuals_by_hour,
             hedge_drain_by_hour=hedge_drain_by_hour,
             temp_by_hour=temp_by_hour,
+            delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
         )
     else:
@@ -1228,6 +1233,7 @@ def compute_decision(
             ceiling_by_hour=live_ceiling_by_hour,
             past_actuals_by_hour=past_actuals_by_hour,
             hedge_drain_by_hour=hedge_drain_by_hour,
+            delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve

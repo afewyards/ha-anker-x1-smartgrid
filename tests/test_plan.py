@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot, ForecastInterval
-from custom_components.anker_x1_smartgrid import plan
+from custom_components.anker_x1_smartgrid import const, plan
 
 BASE = datetime(2026, 6, 20, 11, 0, tzinfo=UTC)
 
@@ -28,6 +28,161 @@ def test_modes_grid_solar_idle():
     assert out[0]["pv_w"] == 2000.0
     assert out[0]["start"] == BASE.isoformat()
     assert out[0]["price"] == 0.30
+
+
+def test_grid_import_limit_w_caps_grid_charge_w():
+    """grid_import_limit_w tighter than the inverter rate clips the displayed grid bar.
+
+    No solar: the inverter alone would allow 6000 W of grid charge, but the
+    connection only allows 2000 W. soc starts at 0% (huge ceiling headroom)
+    so the ceiling cap cannot be the one binding here. Mirrors regret._max_grid_dc.
+    """
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, grid_import_limit_w=2000.0)
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+    selected = [BASE]
+    out = plan.build_plan_horizon(slots, intervals, selected, 0.0, BASE + timedelta(hours=1), cfg)
+    assert out[0]["grid_charge_w"] == 2000.0
+
+
+def test_grid_import_limit_w_does_not_bind_solar_charge_w():
+    """Solar charging is not grid import — it is untouched by grid_import_limit_w.
+
+    4000 W solar surplus + a comfortably wider 5000 W import limit: solar
+    still fills to the full inverter rate (4000 W), grid gets only the
+    inverter remainder (2000 W) — the import limit never even has to bind for
+    grid to fall below it, proving solar was never subject to it in the first
+    place. soc starts at 0% so ceiling headroom cannot be the binding term.
+    """
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, grid_import_limit_w=5000.0)
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=4000.0, load_w=0.0, dt_h=1.0)]
+    selected = [BASE]
+    out = plan.build_plan_horizon(slots, intervals, selected, 0.0, BASE + timedelta(hours=1), cfg)
+    assert out[0]["solar_charge_w"] == 4000.0
+    assert out[0]["grid_charge_w"] == 2000.0  # inverter remainder (6000-4000), well under the 5000 import limit
+
+
+def test_grid_import_limit_w_default_is_inert():
+    """Default (17250 W) must not change any existing plan at the stock 6 kW rate."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    assert cfg.grid_import_limit_w == const.DEFAULT_GRID_IMPORT_LIMIT_W
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+    selected = [BASE]
+    out = plan.build_plan_horizon(slots, intervals, selected, 0.0, BASE + timedelta(hours=1), cfg)
+    assert out[0]["grid_charge_w"] == 6000.0
+
+
+def _ceiling_reached_case():
+    """Current slot: selected, but live SoC already at the solar-reservation ceiling.
+
+    Reproduces the live 2026-07-29 shape — the modelled grid bar clamps to 0
+    because forecast solar alone covers the remaining headroom to the ceiling,
+    so an in-progress 6 kW grid charge renders as ``grid_charge_w == 0``.
+    """
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=1261.0, load_w=345.0, dt_h=1.0)]
+    return cfg, slots, intervals, [BASE], {BASE: 49.0}
+
+
+def test_current_slot_grid_charge_clamps_to_zero_without_delivered():
+    """Regression guard: the un-augmented model is what hid the live charge."""
+    cfg, slots, intervals, selected, ceiling = _ceiling_reached_case()
+    out = plan.build_plan_horizon(
+        slots,
+        intervals,
+        selected,
+        49.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        ceiling_by_hour=ceiling,
+    )
+    assert out[0]["grid_charge_w"] == 0.0
+    assert out[0]["grid_charge_kwh"] == 0.0
+
+
+def test_delivered_grid_charge_stays_visible_on_current_slot():
+    cfg, slots, intervals, selected, ceiling = _ceiling_reached_case()
+    out = plan.build_plan_horizon(
+        slots,
+        intervals,
+        selected,
+        49.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        ceiling_by_hour=ceiling,
+        delivered_by_hour={BASE: {"grid_charge_kwh": 2.5}},
+    )
+    assert out[0]["grid_charge_kwh"] == 2.5
+    assert out[0]["grid_charge_w"] == 2500.0
+
+
+def test_delivered_grid_charge_does_not_advance_soc_projection():
+    """Live SoC already contains the delivered energy — adding it would double-count."""
+    cfg, slots, intervals, selected, ceiling = _ceiling_reached_case()
+    common = dict(ceiling_by_hour=ceiling)
+    baseline = plan.build_plan_horizon(slots, intervals, selected, 49.0, BASE + timedelta(hours=1), cfg, **common)
+    augmented = plan.build_plan_horizon(
+        slots,
+        intervals,
+        selected,
+        49.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        delivered_by_hour={BASE: {"grid_charge_kwh": 2.5}},
+        **common,
+    )
+    assert augmented[0]["soc"] == baseline[0]["soc"]
+
+
+def test_delivered_adds_to_a_still_running_modelled_grid_charge():
+    """Mid-charge: delivered-so-far plus the kWh still left to reach the ceiling."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+    out = plan.build_plan_horizon(
+        _slots(1),
+        intervals,
+        [BASE],
+        30.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        ceiling_by_hour={BASE: 49.0},
+        delivered_by_hour={BASE: {"grid_charge_kwh": 0.6}},
+    )
+    # headroom 30% -> 49% of 10 kWh = 1.9 kWh still to go, plus 0.6 already in.
+    assert out[0]["grid_charge_kwh"] == pytest.approx(2.5)
+
+
+def test_delivered_ignored_on_past_slots():
+    """Past slots already carry measured actuals; delivered must not double up."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    act = {
+        "pv_w": 0.0,
+        "load_w": 0.0,
+        "soc": 40.0,
+        "solar_charge_w": 0.0,
+        "grid_charge_w": 4000.0,
+        "grid_export_w": 0.0,
+        "pv_kwh": 0.0,
+        "load_kwh": 0.0,
+        "solar_charge_kwh": 0.0,
+        "grid_charge_kwh": 4.0,
+        "grid_export_kwh": 0.0,
+    }
+    out = plan.build_plan_horizon(
+        _slots(1),
+        [],
+        [BASE],
+        49.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        past_actuals_by_hour={BASE: act},
+        delivered_by_hour={BASE: {"grid_charge_kwh": 2.5}},
+    )
+    assert out[0]["mode"] == "actual"
+    assert out[0]["grid_charge_kwh"] == 4.0
 
 
 def test_soc_projection_rises_and_caps():

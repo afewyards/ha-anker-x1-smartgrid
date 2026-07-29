@@ -415,8 +415,17 @@ class TestExportEngagePositiveSetpoint:
 
     @pytest.mark.asyncio
     async def test_setpoint_saturates_at_real_grid_export_default(self, monkeypatch):
-        """max_export_w raised above the firmware cap so grid_export_limit_w's real
-        6000 W default binds; setpoint saturates at exactly 6000."""
+        """grid_export_limit_w binds the NET export; the gross setpoint adds house load.
+
+        The seeded inputs give a 2300 W house load (pv 2000 + meter 300), and
+        export_load_comp_factor=1.0 adds it back so the NET reaching the grid is
+        the 6000 W limit.  The gross therefore saturates at 8300, not 6000 —
+        SETPOINT_MAX_W used to clamp it back to 6000, which silently delivered
+        only 6000-2300=3700 W net and defeated the house-load compensation.
+        The rail is now a backstop well above any real hardware, so the
+        compensation survives; Actuator._clamp_to_live_limits holds the gross to
+        what the BMS actually accepts.
+        """
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
         ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 9000.0, "grid_export_limit_w": 6000.0})
@@ -426,7 +435,7 @@ class TestExportEngagePositiveSetpoint:
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
-        assert sp == pytest.approx(6000.0)  # exact, not just <=
+        assert sp == pytest.approx(6000.0 + 2300.0)  # net saturates at the grid limit
 
     @pytest.mark.asyncio
     async def test_executor_reserve_value_bounds_setpoint(self, monkeypatch):
@@ -450,7 +459,14 @@ class TestExportEngagePositiveSetpoint:
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
         await ctrl.tick()
         sp = [c for c in act.calls if c[0] == "engage_export"][-1][1]
-        assert sp == pytest.approx(6000.0)
+        # NOTE: the reserve does NOT bind here — the 3 kWh reserve leaves 5 kWh of
+        # surplus ENERGY, which does not cap instantaneous POWER.  The old 6000.0
+        # expectation came from SETPOINT_MAX_W, so this assertion was satisfied by
+        # the rail rather than by the reserve, despite the test's name.  With the
+        # rail moved to a backstop, the binding term is the 9000 W net cap plus the
+        # 2300 W house-load compensation.  A test that genuinely exercises the
+        # reserve bound is still missing.
+        assert sp == pytest.approx(9000.0 + 2300.0)
 
 
 # ---------------------------------------------------------------------------

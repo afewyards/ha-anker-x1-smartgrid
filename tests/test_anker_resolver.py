@@ -22,8 +22,13 @@ _ROLES = {
 }
 
 
-def _register_anker_device(hass, *, drop=(), capacity_state="10.0"):
-    """Register a mock anker_x1 device + entities. Returns (device_id, src_entry)."""
+def _register_anker_device(hass, *, drop=(), capacity_state="10.0", setpoint_state=None, setpoint_attrs=None):
+    """Register a mock anker_x1 device + entities. Returns (device_id, src_entry).
+
+    ``setpoint_state`` defaults to None (no state written) so the power-limit
+    resolution path stays dormant unless a test opts in — mirroring an
+    anker_x1 integration that has not populated the number entity yet.
+    """
     src = MockConfigEntry(domain=const.ANKER_X1_DOMAIN, title="Anker X1")
     src.add_to_hass(hass)
     device = dr.async_get(hass).async_get_or_create(
@@ -34,7 +39,7 @@ def _register_anker_device(hass, *, drop=(), capacity_state="10.0"):
     for suffix, (platform, oid) in _ROLES.items():
         if suffix in drop:
             continue
-        reg.async_get_or_create(
+        ent = reg.async_get_or_create(
             platform,
             const.ANKER_X1_DOMAIN,
             f"{src.entry_id}_{suffix}",
@@ -42,6 +47,8 @@ def _register_anker_device(hass, *, drop=(), capacity_state="10.0"):
             device_id=device.id,
             suggested_object_id=oid,
         )
+        if suffix == "battery_setpoint" and setpoint_state is not None:
+            hass.states.async_set(ent.entity_id, setpoint_state, setpoint_attrs or {})
     if capacity_state is not None:
         cap = reg.async_get_or_create(
             "sensor",
@@ -141,6 +148,100 @@ async def test_resolve_capacity_sensor_absent_omitted(hass):
     resolved, missing = resolve_anker_config(hass, device_id)
     assert const.CONF_CAPACITY_KWH not in resolved
     assert missing == []
+
+
+# ---------------------------------------------------------------------------
+# Device-derived power limits (setpoint number entity min/max attributes)
+# ---------------------------------------------------------------------------
+
+
+def _with_limits(hass, **kw):
+    return _register_anker_device(
+        hass,
+        setpoint_state="0",
+        setpoint_attrs=kw.pop("attrs", {"min": -12000.0, "max": 13200.0}),
+        **kw,
+    )
+
+
+async def test_resolve_power_limits_from_setpoint_entity(hass):
+    """min/max on the setpoint number ARE the hardware charge/export ceilings."""
+    device_id, _ = _with_limits(hass)
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert resolved[const.CONF_MAX_CHARGE_W] == 12000.0  # abs(min), negative = charge
+    assert resolved[const.CONF_MAX_EXPORT_W] == 13200.0
+
+
+async def test_resolve_power_limits_no_state_omitted(hass):
+    """Number entity present but stateless (anker_x1 not populated yet) -> const default."""
+    device_id, _ = _register_anker_device(hass)
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+    assert const.CONF_MAX_EXPORT_W not in resolved
+    assert missing == []  # limits are soft, like capacity
+
+
+async def test_resolve_power_limits_unavailable_omitted(hass):
+    device_id, _ = _with_limits(hass)
+    hass.states.async_set(
+        "number.anker_x1_battery_setpoint_charge_discharge",
+        "unavailable",
+        {"min": -12000.0, "max": 13200.0},
+    )
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+
+
+async def test_resolve_power_limits_attrs_absent_omitted(hass):
+    device_id, _ = _with_limits(hass, attrs={})
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+    assert const.CONF_MAX_EXPORT_W not in resolved
+
+
+async def test_resolve_power_limits_non_numeric_omitted(hass):
+    device_id, _ = _with_limits(hass, attrs={"min": "lots", "max": None})
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+    assert const.CONF_MAX_EXPORT_W not in resolved
+
+
+async def test_resolve_power_limits_bool_rejected(hass):
+    """bool is an int subclass — must not be read as a limit."""
+    device_id, _ = _with_limits(hass, attrs={"min": True, "max": False})
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+    assert const.CONF_MAX_EXPORT_W not in resolved
+
+
+async def test_resolve_power_limits_wrong_sign_omitted(hass):
+    """min >= 0 / max <= 0 is pathological — keep the const rather than invert."""
+    device_id, _ = _with_limits(hass, attrs={"min": 500.0, "max": -500.0})
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert const.CONF_MAX_CHARGE_W not in resolved
+    assert const.CONF_MAX_EXPORT_W not in resolved
+
+
+async def test_resolve_power_limits_independent(hass):
+    """A usable min with a broken max still yields the charge limit (and vice versa)."""
+    device_id, _ = _with_limits(hass, attrs={"min": -12000.0, "max": "nope"})
+    resolved, _ = resolve_anker_config(hass, device_id)
+    assert resolved[const.CONF_MAX_CHARGE_W] == 12000.0
+    assert const.CONF_MAX_EXPORT_W not in resolved
+
+
+async def test_apply_resolution_refreshes_power_limits(hass):
+    """Added modules raise the limits on reload without touching stored options."""
+    device_id, _ = _with_limits(hass)
+    data = {
+        const.CONF_ANKER_DEVICE: device_id,
+        const.CONF_MAX_CHARGE_W: 6000.0,  # the stale 2-module const
+        const.CONF_MAX_EXPORT_W: 6000.0,
+    }
+    apply_anker_resolution(hass, data)
+    assert data[const.CONF_MAX_CHARGE_W] == 12000.0
+    assert data[const.CONF_MAX_EXPORT_W] == 13200.0
 
 
 async def test_resolve_unknown_device_all_missing(hass):

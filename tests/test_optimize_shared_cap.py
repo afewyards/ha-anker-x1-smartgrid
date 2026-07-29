@@ -33,6 +33,65 @@ def test_helper_solar_saturates_rate():
     assert _max_grid_dc(0.0, 6.0, cfg) == 0.0
 
 
+# ---------------------------------------------------------------------------
+# grid_import_limit_w — the import-side mirror of grid_export_limit_w
+# ---------------------------------------------------------------------------
+
+
+def test_grid_import_limit_binds_below_inverter_rate():
+    """The grid connection can be tighter than the inverter's charge rating."""
+    cfg = _cfg(grid_import_limit_w=4000.0)
+    # No solar: inverter allows 6 kWh, the connection only 4.
+    assert _max_grid_dc(0.0, 0.0, cfg) == 4.0
+
+
+def test_grid_import_limit_does_not_bind_solar():
+    """Solar charging is not grid import — it keeps the full inverter rate.
+
+    With a 4 kW import limit and 5 kWh of solar absorbed, the inverter is
+    already past the import limit on solar alone; grid gets the inverter
+    remainder (1 kWh), NOT 4 kWh.
+    """
+    cfg = _cfg(grid_import_limit_w=4000.0)
+    assert _max_grid_dc(0.0, 5.0, cfg) == 1.0
+
+
+def test_grid_import_limit_above_rate_is_inert():
+    """A connection wider than the inverter leaves the inverter rate binding."""
+    cfg = _cfg(grid_import_limit_w=17250.0)
+    assert _max_grid_dc(0.0, 0.0, cfg) == 6.0
+    assert _max_grid_dc(0.0, 2.0, cfg) == 4.0
+
+
+def test_grid_import_limit_default_is_inert_at_stock_charge_rate():
+    """Default must not change any existing plan (parity with the pre-option path)."""
+    assert _cfg().grid_import_limit_w > 6000.0
+    assert _max_grid_dc(0.0, 0.0, _cfg()) == 6.0
+
+
+def test_grid_import_limit_scales_with_dt():
+    """The cap is a power; per-slot energy scales with the slot width."""
+    cfg = _cfg(grid_import_limit_w=4000.0)
+    assert _max_grid_dc(0.0, 0.0, cfg, dt_h=0.25) == 1.0
+
+
+def test_grid_import_limit_still_bounded_by_headroom():
+    """Headroom to soc_target wins when it is tighter than either rate cap."""
+    cfg = _cfg(grid_import_limit_w=4000.0)
+    # soc_after 9.5 of a 10 kWh pack at 100% target -> 0.5 kWh headroom.
+    assert _max_grid_dc(9.5, 9.5, cfg) == 0.5
+
+
+def test_optimize_grid_respects_grid_import_limit():
+    """The DP schedules no more grid AC per hour than the connection allows."""
+    cfg = _cfg(soc_target=100.0, grid_import_limit_w=2000.0)
+    pv = [0.0, 0.0]
+    load = [0.0, 0.0]
+    price = [0.10, 0.50]
+    out = opt.optimize_grid(pv, load, price, soc_start=0.0, cfg=cfg, window_start_h=0, window_len=2)
+    assert out["schedule"][0] <= 2.0 + 1e-6
+
+
 def test_optimize_grid_caps_solar_plus_grid_at_rate():
     # One hour, strong solar surplus + cheapest price: total charge must not
     # exceed max_charge_w AC. With eta=1, solar surplus 4 kWh and a 6 kWh rate,

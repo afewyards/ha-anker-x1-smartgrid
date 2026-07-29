@@ -75,6 +75,7 @@ def build_plan_horizon(
     past_actuals_by_hour: dict[datetime, dict] | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     slot_minutes: int = 60,
+    delivered_by_hour: dict[datetime, dict] | None = None,
     *,
     eta_curve=None,
 ) -> list[dict]:
@@ -82,10 +83,14 @@ def build_plan_horizon(
 
     Read-only and derived: never affects control.  Each hour splits battery
     charging into two coexisting AC components under the SHARED inverter rate
-    cap (solar first, grid fills the remainder):
+    cap (solar first, grid fills the remainder), with the GRID component
+    additionally bounded by the grid connection's own rating
+    (``grid_import_limit_w`` — mirrors ``regret._max_grid_dc``; solar is not
+    grid import and keeps the full inverter rate):
 
         solar_charge_w = min(solar_surplus, max_charge_w, headroom_w)
         grid_charge_w  = max(0, min(grid_request, max_charge_w - solar_charge_w,
+                                    grid_import_limit_w,
                                     headroom_w - solar_charge_w))   # grid hours only
 
     ``grid_request_by_hour`` maps an hour-start datetime to the requested grid
@@ -99,6 +104,19 @@ def build_plan_horizon(
     export-to-grid watts (NET-EXPORT semantics: serves house first, exports
     remainder).  Export DRAINS the SoC simulation so the projected-SoC line
     reflects export hours correctly.
+
+    ``delivered_by_hour`` maps an hour-start datetime to a partial-actuals record
+    (``{"grid_charge_kwh": ...}``, same shape as ``past_actuals_by_hour``) for grid
+    energy ALREADY DELIVERED in a slot that is still in progress.  In practice only
+    the current slot ever has an entry.  Without it, an in-progress grid charge
+    disappears from the card as it is delivered: ``grid_charge_w`` below is the
+    energy still needed to reach ``ceiling_by_hour``, computed from the LIVE SoC, so
+    it decays to 0 exactly as the charge completes (live 2026-07-29: a 2.5 kWh
+    grid charge rendered as ``mode="grid", grid_charge_w=0``).  The delivered kWh is
+    ADDED to the modelled remainder for display only — the two are disjoint (the
+    modelled part is headroom-limited to what is left), so this reconstructs the
+    slot total without double counting.  It deliberately does NOT feed ``soc_sim``:
+    the live ``soc`` this simulation starts from already contains it.
 
     ``reserve_by_hour`` maps an hour-start datetime to the ride-out reserve in
     DC kWh (from ``energy.ride_out_reserve_kwh``).  Converted to a ``reserve_soc`` %
@@ -138,6 +156,7 @@ def build_plan_horizon(
     rsv_by_hour = {hour_floor(k): v for k, v in (reserve_by_hour or {}).items()}
     ceil_by_hour = {hour_floor(k): v for k, v in (ceiling_by_hour or {}).items()}
     hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
+    deliv_by_hour = {hour_floor(k): v for k, v in (delivered_by_hour or {}).items()}
     cap_wh = cfg.capacity_kwh * 1000.0
     eta = cfg.eta_charge_safe()
     # NOTE: guard applied to the whole expression (not just eta_charge in the
@@ -207,9 +226,17 @@ def build_plan_horizon(
                 ceil_headroom_w = max(0.0, (ceil_soc - soc_sim) / 100.0 * cap_wh / (eta * dt_h))
             else:
                 ceil_headroom_w = 0.0
+            # Grid connection cap (grid_import_limit_w) bounds only the GRID portion —
+            # solar_charge_w above already got the full inverter rate and is untouched.
+            # Mirrors regret._max_grid_dc so the displayed plan matches the DP decision.
             grid_charge_w = max(
                 0.0,
-                min(grid_request_w, cfg.max_charge_w - solar_charge_w, ceil_headroom_w - solar_charge_w),
+                min(
+                    grid_request_w,
+                    cfg.max_charge_w - solar_charge_w,
+                    cfg.grid_import_limit_w,
+                    ceil_headroom_w - solar_charge_w,
+                ),
             )
         elif iv is not None and iv.load_w > iv.pv_w:
             self_discharge_w = min(iv.load_w - iv.pv_w, cfg.max_charge_w)
@@ -250,6 +277,16 @@ def build_plan_horizon(
             mode = "solar"
         else:
             mode = "idle"
+        # Display-only: fold energy already delivered in this (in-progress) slot
+        # back in, so an active grid charge stays on the card instead of decaying
+        # to 0 as the live SoC eats the modelled headroom. Applied AFTER soc_sim
+        # (which must keep advancing on the modelled remainder alone — the live
+        # SoC it started from already contains the delivered energy).
+        grid_charge_w_disp = grid_charge_w
+        if deliv_by_hour and dt_h > 0:
+            _deliv_kwh = (deliv_by_hour.get(hour) or {}).get("grid_charge_kwh")
+            if _deliv_kwh:
+                grid_charge_w_disp += float(_deliv_kwh) * 1000.0 / dt_h
         out.append(
             {
                 "start": slot.start.isoformat(),
@@ -257,7 +294,7 @@ def build_plan_horizon(
                 "pv_w": pv_w,
                 "load_w": load_w,
                 "solar_charge_w": round(solar_charge_w, 1),
-                "grid_charge_w": round(grid_charge_w, 1),
+                "grid_charge_w": round(grid_charge_w_disp, 1),
                 "mode": mode,
                 "soc": round(soc_sim, 1),
                 "charge_w": round(total_w, 1),
@@ -268,7 +305,7 @@ def build_plan_horizon(
                 "pv_kwh": round(pv_w * dt_h / 1000.0, 3) if pv_w is not None else None,
                 "load_kwh": round(load_w * dt_h / 1000.0, 3) if load_w is not None else None,
                 "solar_charge_kwh": round(solar_charge_w * dt_h / 1000.0, 3),
-                "grid_charge_kwh": round(grid_charge_w * dt_h / 1000.0, 3),
+                "grid_charge_kwh": round(grid_charge_w_disp * dt_h / 1000.0, 3),
                 "grid_export_kwh": round(grid_export_w * dt_h / 1000.0, 3),
             }
         )
@@ -297,6 +334,7 @@ def build_display_horizon(
     past_actuals_by_hour: dict[datetime, dict] | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     temp_by_hour: dict[datetime, float | None] | None = None,
+    delivered_by_hour: dict[datetime, dict] | None = None,
     *,
     eta_curve=None,
 ) -> list[dict]:
@@ -329,6 +367,9 @@ def build_display_horizon(
             °C), passed straight through to ``build_display_intervals``.  Hours
             absent from the map (or when the map itself is ``None``) fall back
             to ``cur_temp`` — same semantics as ``build_display_intervals``.
+        delivered_by_hour: Grid energy already delivered in an in-progress slot
+            (in practice only the current one), passed straight through to
+            ``build_plan_horizon`` — see its docstring for the contract.
     """
     if sun_times is None:
         return []
@@ -369,5 +410,6 @@ def build_display_horizon(
         ceiling_by_hour=ceiling_by_hour,
         past_actuals_by_hour=past_actuals_by_hour,
         hedge_drain_by_hour=hedge_drain_by_hour,
+        delivered_by_hour=delivered_by_hour,
         eta_curve=eta_curve,
     )

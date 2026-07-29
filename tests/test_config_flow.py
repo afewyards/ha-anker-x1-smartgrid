@@ -61,7 +61,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 60
+    assert len(section_keys) == 62  # +1 grid_import_limit_w, +1 charge_window_price_band
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -595,6 +595,87 @@ def test_options_schema_grid_export_limit_w_rejects_negative():
         _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: -100.0})
 
 
+def test_options_schema_includes_grid_import_limit_w():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    keys = _flat_keys(schema_obj)
+    assert const.CONF_GRID_IMPORT_LIMIT_W in keys
+
+
+def test_options_schema_grid_import_limit_w_default():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    schema_keys = _flat_markers(schema_obj)
+    assert schema_keys[const.CONF_GRID_IMPORT_LIMIT_W].default() == const.DEFAULT_GRID_IMPORT_LIMIT_W
+
+
+def test_options_schema_grid_import_limit_w_roundtrip():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    result = _validate_flat(schema_obj, {const.CONF_GRID_IMPORT_LIMIT_W: 4000.0})
+    assert result[const.CONF_GRID_IMPORT_LIMIT_W] == 4000.0
+
+
+def test_options_schema_grid_import_limit_w_rejects_negative():
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_GRID_IMPORT_LIMIT_W: -100.0})
+
+
+def test_options_schema_includes_charge_window_price_band():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    keys = _flat_keys(schema_obj)
+    assert const.CONF_CHARGE_WINDOW_PRICE_BAND in keys
+
+
+def test_options_schema_charge_window_price_band_default():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    schema_keys = _flat_markers(schema_obj)
+    assert schema_keys[const.CONF_CHARGE_WINDOW_PRICE_BAND].default() == const.DEFAULT_CHARGE_WINDOW_PRICE_BAND
+
+
+def test_options_schema_charge_window_price_band_roundtrip():
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    result = _validate_flat(schema_obj, {const.CONF_CHARGE_WINDOW_PRICE_BAND: 0.010})
+    assert result[const.CONF_CHARGE_WINDOW_PRICE_BAND] == 0.010
+
+
+def test_options_schema_charge_window_price_band_rejects_negative():
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_CHARGE_WINDOW_PRICE_BAND: -0.01})
+
+
+def test_charge_window_price_band_reaches_config_from_options():
+    """The option must actually drive cfg.charge_window_price_band.
+
+    Config.from_dict filters by dataclass field name, so the CONF_ key and the
+    Config field share a name by design — this test locks that coupling: a UI
+    value that never reaches the DP's charge mask would be a silent no-op knob.
+    """
+    from custom_components.anker_x1_smartgrid.models import Config
+
+    cfg = Config.from_dict({const.CONF_CHARGE_WINDOW_PRICE_BAND: 0.010})
+    assert cfg.charge_window_price_band == 0.010
+
+
 def test_options_schema_includes_cycle_cost_eur_per_kwh():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
@@ -747,6 +828,21 @@ def test_config_reflects_submitted_export_values():
     assert cfg.export_dwell_min == 10
     assert cfg.export_eps_lo_kwh == 0.3
     assert cfg.export_eps_hi_kwh == 0.6
+
+
+def test_config_reflects_grid_import_limit_w_default():
+    """Config model exposes the import-side mirror's default correctly."""
+    cfg = Config()
+    assert cfg.grid_import_limit_w == const.DEFAULT_GRID_IMPORT_LIMIT_W
+    # Default must stay comfortably above the stock inverter rate so it is
+    # inert for existing installs (no plan change) — see const.py comment.
+    assert cfg.grid_import_limit_w > const.DEFAULT_MAX_CHARGE_W
+
+
+def test_config_reflects_submitted_grid_import_limit_w():
+    """Config.from_dict correctly applies a submitted grid_import_limit_w."""
+    cfg = Config.from_dict({"grid_import_limit_w": 4000.0})
+    assert cfg.grid_import_limit_w == 4000.0
 
 
 # ---------------------------------------------------------------------------

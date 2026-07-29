@@ -63,6 +63,11 @@ class Config:
     enable_export: bool = const.DEFAULT_ENABLE_EXPORT
     max_export_w: float = const.DEFAULT_MAX_EXPORT_W
     grid_export_limit_w: float = const.DEFAULT_GRID_EXPORT_LIMIT_W
+    # Import-side mirror of grid_export_limit_w: the grid connection's own
+    # rating, distinct from the device-derived inverter charge rate
+    # (max_charge_w). See regret._max_grid_dc — this bounds the GRID portion
+    # of a charging hour only; solar-absorbed charge is unaffected.
+    grid_import_limit_w: float = const.DEFAULT_GRID_IMPORT_LIMIT_W
     cycle_cost_eur_per_kwh: float = const.DEFAULT_CYCLE_COST_EUR_PER_KWH
     export_eps_lo_kwh: float = const.DEFAULT_EXPORT_EPS_LO_KWH
     export_eps_hi_kwh: float = const.DEFAULT_EXPORT_EPS_HI_KWH

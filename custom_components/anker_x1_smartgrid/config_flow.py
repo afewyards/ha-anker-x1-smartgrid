@@ -169,6 +169,8 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_CHARGE_TROUGH_LOOKBACK_H,
         const.CONF_IDLE_DRAIN_W,
         const.CONF_TERMINAL_OVERNIGHT_CREDIT,
+        const.CONF_GRID_IMPORT_LIMIT_W,
+        const.CONF_CHARGE_WINDOW_PRICE_BAND,
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
@@ -257,9 +259,26 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.CONF_GRID_EXPORT_LIMIT_W,
         const.DEFAULT_GRID_EXPORT_LIMIT_W,
         # Sane ceiling added here (review LOW, deliberate): previously
-        # min-only. 20000W comfortably covers a 3-phase 32A grid connection,
-        # well above the X1's own 6000W device ceiling (SETPOINT_MAX_W).
+        # min-only. 20000W comfortably covers a 3-phase 32A grid connection.
+        # SETPOINT_MAX_W (20000.0) is a generous absolute backstop, not a
+        # device ceiling — real per-install limits are device-derived into
+        # cfg.max_charge_w/max_export_w (see const.py's SETPOINT_MIN_W/MAX_W
+        # comment).
         vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
+    ),
+    (
+        const.CONF_GRID_IMPORT_LIMIT_W,
+        const.DEFAULT_GRID_IMPORT_LIMIT_W,
+        # Import-side mirror of the export limit above; same sane ceiling.
+        vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
+    ),
+    (
+        const.CONF_CHARGE_WINDOW_PRICE_BAND,
+        const.DEFAULT_CHARGE_WINDOW_PRICE_BAND,
+        # 0.05 €/kWh ceiling: an order of magnitude above the default and far
+        # past the point where charge_margin + cycle_cost stop admitting new
+        # hours anyway, so it bounds typos without constraining real tuning.
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.05)),
     ),
     (
         const.CONF_EXPORT_FEE_EUR_PER_KWH,

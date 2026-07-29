@@ -72,7 +72,47 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
                 val = None
             if val is not None and val > 0:
                 resolved[const.CONF_CAPACITY_KWH] = val
+
+    _resolve_power_limits(hass, resolved)
     return resolved, missing
+
+
+def _numeric(value: Any) -> float | None:
+    """Return *value* as a float, rejecting bool (an int subclass) and non-numerics."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _resolve_power_limits(hass: HomeAssistant, resolved: dict[str, Any]) -> None:
+    """Derive the charge/export ceilings from the setpoint entity's live bounds.
+
+    The X1's nominal charge/discharge capability is hardware, not user
+    preference — and it CHANGES when battery modules are added (2 modules:
+    ±6000 W; 4 modules: min -12000 / max 13200).  The number entity publishes
+    the true bounds as its ``min``/``max`` attributes, which
+    ``Actuator._clamp_to_live_limits`` already reads; deriving the planner's
+    ceilings from the same source keeps them in step with the hardware instead
+    of frozen at DEFAULT_MAX_CHARGE_W / DEFAULT_MAX_EXPORT_W.
+
+    Sign convention (per the entity's own help text): negative = charge,
+    positive = discharge/export.  Soft like capacity — anything missing,
+    non-numeric or wrong-signed is omitted so the const default stands, and
+    each limit resolves independently of the other.  Mutates *resolved*.
+    """
+    ent_id = resolved.get(const.CONF_ENT_SETPOINT)
+    if not ent_id:
+        return
+    st = hass.states.get(ent_id)
+    if st is None or st.state in ("unknown", "unavailable"):
+        return
+
+    live_min = _numeric(st.attributes.get("min"))
+    if live_min is not None and live_min < 0:
+        resolved[const.CONF_MAX_CHARGE_W] = abs(live_min)
+    live_max = _numeric(st.attributes.get("max"))
+    if live_max is not None and live_max > 0:
+        resolved[const.CONF_MAX_EXPORT_W] = live_max
 
 
 def apply_anker_resolution(hass: HomeAssistant, data: dict[str, Any]) -> None:

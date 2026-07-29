@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from custom_components.anker_x1_smartgrid import const
+from custom_components.anker_x1_smartgrid import controller as controller_mod
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
@@ -603,3 +604,184 @@ async def test_coverage_counted_even_when_remote_tier_active():
 
     assert ctrl.active_model_name == "remote", "precondition: Tier-0 must have short-circuited"
     assert ctrl.coverage_lag_complete_days == 2
+
+
+# ---------------------------------------------------------------------------
+# (g) RACE 2 (2026-07-29): bounded same-hour health-poll retry
+#
+# Supervisor started the forecast add-on container 17s AFTER this
+# integration's hourly health poll already ran and failed, latching
+# "unreachable" on the card for up to an hour even though the add-on was
+# healthy the entire time it was up (see controller._MAX_ADDON_HEALTH_RETRIES
+# / Controller._poll_addon_health). These tests lock the bounded-retry
+# behaviour: retry the cheap /health call on later same-hour ticks while it
+# keeps failing, stop once it succeeds, and give up after the retry cap so a
+# genuinely-dead add-on is not hammered every ~60s tick for the full hour.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_retried_on_later_tick_same_hour_after_failure():
+    """First tick's health poll fails; a second tick in the SAME clock-hour
+    must retry /health (not wait for the next hour) -- and must NOT re-run
+    the expensive remote-forecast fetch."""
+    ctrl = _make_controller(addon_enabled=True)
+
+    call_count = 0
+
+    async def flaky_then_ok(session, url, timeout):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None  # add-on not up yet
+        return {"ready": True, "promoted": False, "n_rows": 5, "last_trained": None}
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=flaky_then_ok,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_fetch_forecast,
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("homeassistant.util.dt.utcnow", return_value=_NOW),
+    ):
+        await ctrl.tick()
+        assert ctrl.last_status["addon_reachable"] is False  # first attempt failed
+
+        await ctrl.tick()  # same clock-hour retry
+        assert ctrl.last_status["addon_reachable"] is True
+
+    assert call_count == 2, "the retry must call fetch_health again"
+    assert mock_fetch_forecast.call_count == 1, "the expensive forecast fetch must not be retried"
+
+
+@pytest.mark.asyncio
+async def test_health_no_retry_once_already_reachable_same_hour():
+    """A successful health poll must not be retried on later same-hour
+    ticks -- only a FAILURE re-arms the retry."""
+    ctrl = _make_controller(addon_enabled=True)
+    call_count = 0
+
+    async def always_ok(session, url, timeout):
+        nonlocal call_count
+        call_count += 1
+        return {"ready": True, "promoted": False, "n_rows": 5, "last_trained": None}
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=always_ok,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("homeassistant.util.dt.utcnow", return_value=_NOW),
+    ):
+        await ctrl.tick()
+        await ctrl.tick()
+
+    assert call_count == 1, "a healthy poll must not be retried within the same hour"
+
+
+@pytest.mark.asyncio
+async def test_health_retry_capped_within_hour():
+    """A genuinely-dead add-on must not be hammered every tick for the whole
+    hour -- retries stop at controller._MAX_ADDON_HEALTH_RETRIES."""
+    ctrl = _make_controller(addon_enabled=True)
+
+    async def always_down(session, url, timeout):
+        return None
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=always_down,
+        ) as mock_health,
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("homeassistant.util.dt.utcnow", return_value=_NOW),
+    ):
+        # 1 initial (hourly-gate) attempt + enough same-hour ticks to blow
+        # past the retry cap several times over.
+        for _ in range(controller_mod._MAX_ADDON_HEALTH_RETRIES + 5):
+            await ctrl.tick()
+
+    assert mock_health.call_count == 1 + controller_mod._MAX_ADDON_HEALTH_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_health_retry_writes_fresh_timestamp_each_attempt():
+    """Every retry attempt (success or failure) must stamp _addon_health_ts
+    from THAT tick -- never carry forward a stale timestamp (mirrors
+    test_health_poll_failure_reports_unreachable_not_stale, but within the
+    same hour via the retry path instead of the next-hour path)."""
+    ctrl = _make_controller(addon_enabled=True)
+
+    async def always_down(session, url, timeout):
+        return None
+
+    tick_1 = _NOW
+    tick_2 = _NOW + timedelta(minutes=1)  # still hour 11
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=always_down,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        with patch("homeassistant.util.dt.utcnow", return_value=tick_1):
+            await ctrl.tick()
+        assert ctrl._addon_health_ts == tick_1
+
+        with patch("homeassistant.util.dt.utcnow", return_value=tick_2):
+            await ctrl.tick()
+        assert ctrl._addon_health_ts == tick_2, "retry must stamp its OWN attempt's timestamp"

@@ -146,12 +146,22 @@ def _max_grid_dc(
     *,
     eta_curve=None,
 ) -> float:
-    """Max DC grid charge for one hour under the SHARED inverter rate cap.
+    """Max DC grid charge for one hour under the two-cap structure (inverter + grid).
 
     The inverter setpoint is a single TOTAL battery-charge target: solar is
-    consumed first, grid imports only the remainder.  So the grid ceiling is
-    the AC charge rate left after this hour's solar charging, converted to DC,
-    and further bounded by headroom to soc_target.
+    consumed first, grid imports only the remainder.  So the grid ceiling
+    starts as the AC charge rate left after this hour's solar charging.
+
+    Two independent caps then apply to that remainder, in this order:
+      1. The INVERTER rate (cfg.max_charge_w) governs the TOTAL (solar + grid)
+         and therefore the solar_ac_used accounting below — solar is not grid
+         import, so it always gets the full inverter rate.
+      2. The GRID connection's own rating (cfg.grid_import_limit_w) additionally
+         bounds only the remainder actually pulled from the grid. A connection
+         wider than the inverter (the default) never binds here; a connection
+         narrower than the inverter clips the grid portion but never touches
+         solar_ac_used.
+    Finally, headroom to soc_target bounds whichever of the two is tighter.
 
     soc_kwh / soc_after_kwh are DC kWh before / after the solar-load step
     (i.e. soc_after_kwh = _apply_solar_load(soc_kwh, net, cfg)).
@@ -163,7 +173,11 @@ def _max_grid_dc(
     target_kwh = cfg.target_kwh
     solar_ac_used = max(0.0, soc_after_kwh - soc_kwh) / eta  # AC absorbed by solar
     remaining_ac = max(0.0, rate_kwh_slot - solar_ac_used)
-    return max(0.0, min(remaining_ac * eta, target_kwh - soc_after_kwh))
+    # Grid-connection cap applies ONLY to this remaining (grid) AC — solar_ac_used
+    # above already carries the full inverter rate and is untouched by it.
+    grid_import_cap_kwh_slot = cfg.grid_import_limit_w / 1000.0 * dt_h
+    grid_ac = min(remaining_ac, grid_import_cap_kwh_slot)
+    return max(0.0, min(grid_ac * eta, target_kwh - soc_after_kwh))
 
 
 # ---------------------------------------------------------------------------

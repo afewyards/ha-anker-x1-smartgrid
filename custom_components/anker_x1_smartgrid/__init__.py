@@ -46,6 +46,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Nominal X1 charge/discharge capability is hardware, not user preference.
     # Both keys used to be form fields, so older entries carry stale stored
     # values — force the consts unconditionally so they can never win.
+    # These are only the FALLBACK: apply_anker_resolution below overwrites them
+    # with the setpoint entity's live min/max when the device publishes them,
+    # so adding battery modules raises the ceilings on the next reload instead
+    # of leaving the planner rate-limited at the const.
     data[CONF_MAX_CHARGE_W] = DEFAULT_MAX_CHARGE_W
     data[CONF_MAX_EXPORT_W] = DEFAULT_MAX_EXPORT_W
 

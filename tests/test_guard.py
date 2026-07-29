@@ -16,7 +16,7 @@ def test_quantize_rounds_and_signs():
 
 def test_quantize_clamps_to_min():
     cfg = Config()
-    assert guard.quantize_setpoint(99999.0, cfg) == -6000.0
+    assert guard.quantize_setpoint(99999.0, cfg) == const.SETPOINT_MIN_W
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ def test_quantize_positive_small_rounds_to_zero():
 def test_quantize_positive_clamps_to_max():
     """Desired discharge > SETPOINT_MAX_W is clamped to SETPOINT_MAX_W."""
     cfg = Config()
-    assert guard.quantize_setpoint(-99999.0, cfg) == 6000.0
+    assert guard.quantize_setpoint(-99999.0, cfg) == const.SETPOINT_MAX_W
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +106,14 @@ def test_command_discharge_capped_by_max_export_w():
 
 
 def test_command_discharge_capped_by_setpoint_max_w():
-    """Discharge is capped at SETPOINT_MAX_W even when max_export_w is higher."""
-    cfg = Config(max_export_w=9000.0, deadband_w=300.0)
-    out = guard.command_setpoint(-9999.0, prev_setpoint_w=0.0, cfg=cfg)
-    assert out == 6000.0
+    """Discharge is capped at SETPOINT_MAX_W even when max_export_w is higher.
+
+    max_export_w is device-derived and can exceed the static rail on no real
+    hardware, so drive it past the rail explicitly to exercise the backstop.
+    """
+    cfg = Config(max_export_w=const.SETPOINT_MAX_W + 3000.0, deadband_w=300.0)
+    out = guard.command_setpoint(-(const.SETPOINT_MAX_W + 9999.0), prev_setpoint_w=0.0, cfg=cfg)
+    assert out == const.SETPOINT_MAX_W
 
 
 def test_command_discharge_deadband_holds_prev():
@@ -157,8 +161,13 @@ def test_command_discharge_cap_override_allows_above_max_export_w():
 
 def test_command_discharge_cap_override_still_clamps_setpoint_max():
     cfg = Config(max_export_w=3000.0, deadband_w=300.0)
-    out = guard.command_setpoint(-9999.0, prev_setpoint_w=0.0, cfg=cfg, discharge_cap_w=const.SETPOINT_MAX_W)
-    assert out == 6000.0  # SETPOINT_MAX_W ceiling
+    out = guard.command_setpoint(
+        -(const.SETPOINT_MAX_W + 9999.0),
+        prev_setpoint_w=0.0,
+        cfg=cfg,
+        discharge_cap_w=const.SETPOINT_MAX_W,
+    )
+    assert out == const.SETPOINT_MAX_W  # SETPOINT_MAX_W ceiling
 
 
 def test_command_discharge_cap_default_uses_max_export_w():

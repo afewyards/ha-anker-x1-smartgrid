@@ -101,8 +101,11 @@ async def run_forcing_and_export(
 
     _engage_failed = False
     if new_plan.state is ControllerState.FORCING:
+        # Grid charging is grid import: bound the FORCING request by whichever
+        # is tighter, the inverter rate or the grid connection's own rating
+        # (mirrors regret._max_grid_dc's two-cap structure).
         setpoint = guard.command_setpoint(
-            controller.cfg.max_charge_w,
+            min(controller.cfg.max_charge_w, controller.cfg.grid_import_limit_w),
             controller._actuator.last_setpoint_w,
             controller.cfg,
         )

@@ -69,9 +69,17 @@ def test_default_soc_floor_is_firmware_floor():
 # ── A2: export hardware constants & config keys ──────────────────────────────
 
 
-def test_setpoint_max_w():
-    """SETPOINT_MAX_W mirrors SETPOINT_MIN_W (full ~6000W ceiling per A1)."""
-    assert const.SETPOINT_MAX_W == 6000.0
+def test_setpoint_rails_clear_the_hardware_ceiling():
+    """The rails are backstops — they must never bind BEFORE the derived limits.
+
+    cfg.max_charge_w / cfg.max_export_w are device-derived from the setpoint
+    entity's min/max (anker_resolver._resolve_power_limits) and grow with the
+    module count.  A rail at or below a real hardware limit silently halves the
+    planner's rate: a 4-module X1 reports -12000/13200, which the old ±6000
+    rails clamped back to 6000.
+    """
+    assert const.SETPOINT_MAX_W > 13200.0
+    assert abs(const.SETPOINT_MIN_W) > 12000.0
 
 
 def test_setpoint_max_is_mirror_of_min():

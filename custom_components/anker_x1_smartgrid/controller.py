@@ -15,6 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
+from .anker_resolver import apply_anker_resolution, resolve_anker_config
 from . import (
     const,
     coordinator,
@@ -75,6 +76,31 @@ _UNSET = object()
 # Bounded wait for the tick lock during unload/reload so release()/recorder.close
 # never interleave with an in-flight tick's engage_*; unblocks if a tick wedges.
 _SHUTDOWN_LOCK_TIMEOUT_S = 15.0
+
+# ── RACE 1 (2026-07-29 add-battery-module restart) ──────────────────────────
+# Device-derived hardware scalars: these three CONF_* keys double as the
+# matching Config field names (see const.py / models.Config), so
+# getattr(self.cfg, key) reads "what the planner is currently using" without
+# a separate name-mapping table. See Controller._maybe_reresolve_anker.
+_DEVICE_DERIVED_LIMIT_KEYS = (
+    const.CONF_CAPACITY_KWH,
+    const.CONF_MAX_CHARGE_W,
+    const.CONF_MAX_EXPORT_W,
+)
+# Human label + unit for the late-resolution INFO log, keyed by the same CONF_*.
+_LIMIT_LOG_META = {
+    const.CONF_CAPACITY_KWH: ("battery capacity", "kWh"),
+    const.CONF_MAX_CHARGE_W: ("max charge power", "W"),
+    const.CONF_MAX_EXPORT_W: ("max export power", "W"),
+}
+
+# ── RACE 2 (2026-07-29 add-battery-module restart) ──────────────────────────
+# Bounded same-hour retry count for the cheap add-on /health poll (see the
+# elif branch in _tick_impl and Controller._poll_addon_health). Ticks are
+# ~60s apart, so this buys ~_MAX_ADDON_HEALTH_RETRIES extra minutes of
+# catch-up after a failed hourly poll without hammering a genuinely-dead
+# add-on every tick for the rest of the clock-hour.
+_MAX_ADDON_HEALTH_RETRIES = 5
 
 
 def _persist_iso_or_none(value: datetime | None) -> str | None:
@@ -195,6 +221,21 @@ class Controller:
         # ML-status visibility (observability only — never feeds planning).
         self._addon_health: dict | None = None
         self._addon_health_ts: datetime | None = None
+        # RACE 2: bounded same-hour retry budget for a failed health poll;
+        # reset to 0 each time the normal once-per-hour block runs. See
+        # _MAX_ADDON_HEALTH_RETRIES / _poll_addon_health / _tick_impl.
+        self._addon_health_retry_count: int = 0
+        # RACE 1: True while an Anker device is configured but at least one
+        # of capacity_kwh/max_charge_w/max_export_w has never yet been read
+        # from live entity state (see _maybe_reresolve_anker). False (never
+        # retry) when no Anker device is configured at all.
+        self._anker_resolution_pending: bool = bool(self._data.get(const.CONF_ANKER_DEVICE))
+        # Which of _DEVICE_DERIVED_LIMIT_KEYS has EVER been read from live
+        # entity state. Tracked per-key (not one all-or-nothing flag)
+        # because the capacity sensor and the setpoint number are separate
+        # anker_x1 entities that can populate at different times — a key
+        # applies the moment IT lands rather than waiting on the others.
+        self._anker_resolved_keys: set[str] = set()
         self.coverage_lag_complete_days: int | None = None
         self._last_profile_refresh: datetime | None = None
         self.predictor = self._profile_predictor
@@ -383,6 +424,34 @@ class Controller:
             _LOGGER.warning("past-actuals build failed; horizon past slots stay empty", exc_info=True)
             return {}
 
+    async def _get_current_delivered(self, now) -> dict:
+        """Grid energy already delivered in the CURRENT, still-running clock-hour.
+
+        Display-only. ``_get_past_actuals`` stops strictly before ``now_h``, so the
+        current slot is modelled from scratch off the live SoC every tick — and its
+        grid bar is headroom-limited to what is still needed to reach the hour's
+        solar-reservation ceiling. That decays to 0 as the charge lands, so an
+        active grid charge vanishes from the card mid-burst (live 2026-07-29: a
+        2.5 kWh charge showed as ``mode="grid", grid_charge_w=0``). Feeding the
+        delivered kWh back into the horizon reconstructs the slot total.
+
+        Deliberately NOT cached like the past actuals: completed hours never
+        change, the in-progress one does. Reads only this hour's rows (<= 1 per
+        tick), never the 48 h window. Returns {} on error — the card degrades to
+        the old under-report rather than the tick failing.
+        """
+        now_h = resolution.hour_floor(now)
+        try:
+            rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, now_h.isoformat())
+            actuals = past_actuals_mod.aggregate_past_actuals(rows)
+            return {h: v for h, v in actuals.items() if h == now_h}
+        except Exception:
+            _LOGGER.warning(
+                "current-hour delivered build failed; an active grid charge may not show on the card",
+                exc_info=True,
+            )
+            return {}
+
     def _update_load_adapt(self, now, cur_temp, past_actuals):
         """Update the base-prediction log + residual ratio; return the predictor
         for the LIVE plan (base tier unless a correction applies).
@@ -516,9 +585,7 @@ class Controller:
         # ------------------------------------------------------------------
         if self._recorder is not None:
             try:
-                self.coverage_lag_complete_days = ml_status.count_lag_complete_days(
-                    self._recorder.read_hourly_rows()
-                )
+                self.coverage_lag_complete_days = ml_status.count_lag_complete_days(self._recorder.read_hourly_rows())
             except Exception:
                 self.coverage_lag_complete_days = None
 
@@ -600,6 +667,89 @@ class Controller:
                 self._retrain_sync(since_iso)
         except Exception:
             pass
+
+    def _maybe_reresolve_anker(self) -> None:
+        """RACE 1 retry: re-resolve device-derived limits until they land.
+
+        apply_anker_resolution (anker_resolver.py) runs exactly ONCE, at
+        config-entry setup (__init__.py) — it re-derives capacity_kwh and
+        the charge/export ceilings from the anker_x1 device's own entities,
+        but only in memory (must never persist; see apply_anker_resolution's
+        docstring). If the anker_x1 integration has not yet published live
+        state for the capacity sensor or the setpoint number's min/max
+        attributes at that exact moment — observed 2026-07-29: Home
+        Assistant Core reached RUNNING ~90s after those entities got their
+        first state, following a battery-module upgrade restart — the
+        values are silently omitted (they are "soft" roles) and the stale/
+        default scalars stick FOREVER, with no log line, until a manual
+        integration reload.
+
+        Called on every tick (regardless of self.enabled) while genuinely
+        unresolved. Cheap (entity-registry + a couple of hass.states.get()
+        lookups, no I/O) but pointless to repeat once resolved, so each key
+        stops being retried for good the first time IT has been read from
+        live state — this does not keep watching for further hardware
+        changes; that is still `apply_anker_resolution`'s job on the next
+        reload. The capacity sensor and the setpoint number are separate
+        anker_x1 entities and may populate at different times, so a key
+        applies as soon as it lands rather than waiting on the others.
+        """
+        if not self._anker_resolution_pending:
+            return
+        device_id = self._data.get(const.CONF_ANKER_DEVICE)
+        if not device_id:
+            # No Anker device configured at all — nothing to ever resolve.
+            self._anker_resolution_pending = False
+            return
+        # resolve_anker_config only puts a key in `resolved` when it just
+        # read a genuine, valid live state — an unresolved role is simply
+        # absent, never a guessed/stale value — so "key present" is the
+        # real "this landed" signal, independent of whether the
+        # freshly-resolved value happens to differ from what was stored.
+        resolved, _missing = resolve_anker_config(self._hass, device_id)
+        landed_now = [key for key in _DEVICE_DERIVED_LIMIT_KEYS if key in resolved]
+        if not landed_now:
+            return  # nothing new this attempt; retry next tick
+        _before = {key: getattr(self.cfg, key) for key in _DEVICE_DERIVED_LIMIT_KEYS}
+        # Merge through apply_anker_resolution (not resolved's raw dict) so
+        # its ent_pv_power guard (never clobber a user-configured PV list
+        # with the device's own PV sensor) still applies. Re-applying an
+        # already-landed key alongside a newly-landed one is harmless —
+        # it's the same live value being written again.
+        apply_anker_resolution(self._hass, self._data)
+        self.cfg = Config.from_dict(self._data)
+        self._anker_resolved_keys.update(landed_now)
+        if len(self._anker_resolved_keys) >= len(_DEVICE_DERIVED_LIMIT_KEYS):
+            self._anker_resolution_pending = False
+        for key in _DEVICE_DERIVED_LIMIT_KEYS:
+            old, new = _before[key], getattr(self.cfg, key)
+            if abs(old - new) > 1e-9:
+                label, unit = _LIMIT_LOG_META[key]
+                _LOGGER.info("%s resolved late: %.1f -> %.1f %s", label, old, new, unit)
+
+    async def _poll_addon_health(self, now: datetime) -> None:
+        """Poll the add-on's cheap ``/health`` endpoint and store the result.
+
+        Always writes ``_addon_health_ts`` from THIS attempt, even on
+        failure, so a stale prior-successful reading is never reported as
+        current — see
+        tests/test_controller_remote.py::test_health_poll_failure_reports_unreachable_not_stale.
+        Timeout is capped at 5s (independent of the UI-tunable
+        ``addon_timeout``, up to 60s) since ``/health`` is trivial and this
+        must stay cheap enough to retry (RACE 2 — see the ``elif`` branch in
+        ``_tick_impl``).
+        """
+        try:
+            self._addon_health = await fetch_health(
+                async_get_clientsession(self._hass),
+                self.cfg.addon_url,
+                min(self.cfg.addon_timeout, 5),
+            )
+        except Exception:
+            _LOGGER.debug("remote_forecast: health poll raised unexpectedly", exc_info=True)
+            self._addon_health = None
+        finally:
+            self._addon_health_ts = now
 
     async def tick(self) -> dict:
         # Re-entrancy guard (review 1.2): the 60s timer fires regardless of the
@@ -752,13 +902,15 @@ class Controller:
         estimated_tomorrow=None,
         past_actuals_by_hour: dict | None = None,
         hedge_drain_by_hour: dict | None = None,
+        delivered_by_hour: dict | None = None,
     ):
         """Shared executor-job invocation of ``compute_decision`` (Task C5).
 
         ``shadow=True`` mirrors the disabled-path call site exactly: sets
         ``_shadow_dp=True`` and omits the live-only kwargs (estimated_tomorrow /
-        past_actuals_by_hour / hedge_drain_by_hour — these already default to
-        None in ``compute_decision``, so omitting == passing None). The guard
+        past_actuals_by_hour / hedge_drain_by_hour / delivered_by_hour — these
+        already default to None in ``compute_decision``, so omitting == passing
+        None). The guard
         (whether to call at all) and the try/except around the shadow call
         stay at that call site, not here — they differ from the live path and
         are not safe to fold in without changing failure behaviour.
@@ -779,6 +931,7 @@ class Controller:
             kwargs["estimated_tomorrow"] = estimated_tomorrow
             kwargs["past_actuals_by_hour"] = past_actuals_by_hour
             kwargs["hedge_drain_by_hour"] = hedge_drain_by_hour
+            kwargs["delivered_by_hour"] = delivered_by_hour
         return await self._hass.async_add_executor_job(
             functools.partial(
                 compute_decision,
@@ -832,6 +985,11 @@ class Controller:
         now = dt_util.utcnow()
         _first_tick = self._first_tick_after_start
         self._first_tick_after_start = False
+        # RACE 1: retry device-derived capacity/limit resolution while it
+        # hasn't genuinely landed yet (self-heals a HA-restart race where the
+        # anker_x1 entities weren't populated at config-entry setup). Runs
+        # regardless of self.enabled so a re-enable always sees correct cfg.
+        self._maybe_reresolve_anker()
         # Refresh the measured efficiency curve off-loop (cached; cheap no-op most
         # ticks). Skipped entirely when use_measured_eta is off (default) — the
         # planner uses the static scalar; the curve rebuilds on the first tick after
@@ -903,26 +1061,14 @@ class Controller:
         # though fetch_forecast and fetch_health already guarantee non-raising.
         if self.cfg.addon_enabled and now.hour != self._last_remote_forecast_hour:
             self._last_remote_forecast_hour = now.hour
+            # RACE 2 bookkeeping: a fresh hour resets the bounded same-hour
+            # health-retry budget (see the elif branch below).
+            self._addon_health_retry_count = 0
             try:
                 # Health FIRST: a failure anywhere in the persons/predict path below
                 # must not blind reachability reporting — that is exactly the window
-                # in which a dead addon_url would otherwise hide. Timeout is capped
-                # at 5s (independent of the UI-tunable addon_timeout, up to 60s)
-                # since /health is trivial and two sequential full-budget waits
-                # could stall the tick. On any failure both fields below are
-                # written together from THIS attempt so a stale prior-successful
-                # reading is never reported as current.
-                try:
-                    self._addon_health = await fetch_health(
-                        async_get_clientsession(self._hass),
-                        self.cfg.addon_url,
-                        min(self.cfg.addon_timeout, 5),
-                    )
-                except Exception:
-                    _LOGGER.debug("remote_forecast: health poll raised unexpectedly", exc_info=True)
-                    self._addon_health = None
-                finally:
-                    self._addon_health_ts = now
+                # in which a dead addon_url would otherwise hide.
+                await self._poll_addon_health(now)
 
                 _persons_by_ts = None
                 if self._recorder is not None:
@@ -950,6 +1096,33 @@ class Controller:
                     self._remote_forecast_map = _fetched_map
             except Exception:
                 _LOGGER.debug("remote_forecast fetch raised unexpectedly", exc_info=True)
+        elif (
+            self.cfg.addon_enabled
+            and self._addon_health is None
+            and self._addon_health_retry_count < _MAX_ADDON_HEALTH_RETRIES
+        ):
+            # RACE 2 catch-up (2026-07-29 add-battery-module restart): Supervisor
+            # started the add-on container 17s AFTER this integration's hourly
+            # health poll already ran and failed, latching "unreachable" on the
+            # ml-status card for up to an hour even though the add-on was healthy
+            # for almost all of that time. Gating the CHEAP /health call (5s
+            # timeout cap) to strictly once-per-clock-hour hides a real recovery
+            # that happens moments later.
+            #
+            # Retry ONLY the health call on later ticks within the same hour,
+            # capped at _MAX_ADDON_HEALTH_RETRIES attempts — ticks are ~60s
+            # apart, so this buys a few extra minutes of catch-up without
+            # hammering a genuinely-dead add-on every tick for the rest of the
+            # hour. This branch is skipped once the poll succeeds (self._addon_health
+            # is no longer None) or the cap is hit; either way it reverts to the
+            # normal once-per-hour cadence. The expensive remote-forecast fetch
+            # (persons/weather payload + POST) is deliberately NOT retried here —
+            # only the trivial /health call.
+            self._addon_health_retry_count += 1
+            try:
+                await self._poll_addon_health(now)
+            except Exception:
+                _LOGGER.debug("remote_forecast: health retry raised unexpectedly", exc_info=True)
 
         if not self.enabled:
             # Hand control back to the X1 ONCE if we were actively engaged, then stay
@@ -1185,6 +1358,9 @@ class Controller:
                 weight_today=self.cfg.price_blend_weight_today,
             )
         past_actuals = await self._get_past_actuals(now)
+        # Current, still-running hour — rebuilt every tick so an in-progress grid
+        # charge stays on the card (display-only; see _get_current_delivered).
+        delivered_now = await self._get_current_delivered(now)
 
         # Layer A: residual-corrected predictor for the LIVE plan only (shadow,
         # fictive and disabled paths keep the base tier — parity preserved).
@@ -1216,6 +1392,7 @@ class Controller:
             estimated_tomorrow=_estimated_tomorrow,
             past_actuals_by_hour=past_actuals,
             hedge_drain_by_hour=hedge_drain_by_hour,
+            delivered_by_hour=delivered_now,
         )
         # Cache P50 intervals for next tick's drift accumulator step (only when hedging
         # is enabled; off→on toggle leaves it None so the H1 gate fires on the first

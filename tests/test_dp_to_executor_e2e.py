@@ -187,6 +187,38 @@ class TestCheapHourGridCharge:
         )
         assert not any(c[0] == "engage_export" for c in act.calls), "FORCING must not also call engage_export"
 
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_respects_grid_import_limit_w(self, monkeypatch):
+        """Executor-layer mirror of regret._max_grid_dc: the live FORCING setpoint
+        must not exceed cfg.grid_import_limit_w even when it is narrower than
+        cfg.max_charge_w (the inverter rate). PV=0 throughout this scenario
+        (see _seed_common), so the whole FORCING request is grid import.
+        """
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: self.BASE)
+
+        hass = StubHass()
+        ctrl, act = _make_controller(hass, cfg_overrides={"grid_import_limit_w": 2000.0})
+        _seed_common(hass, self.BASE, soc="15.0", export_price="0.30")
+        _seed_price_forecast(hass, self.BASE, [0.05] + [0.35] * 11)
+        ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        assert ctrl.plan.state is ControllerState.FORCING, (
+            f"real DP must select the current cheap hour for charging; got plan.state={ctrl.plan.state}"
+        )
+        charge_calls = [c for c in act.calls if c[0] == "engage_and_charge"]
+        assert len(charge_calls) == 1, f"expected exactly one engage_and_charge call; calls={act.calls}"
+        setpoint = charge_calls[0][1]
+        assert setpoint < 0.0, f"FORCING setpoint must be negative (charge direction); got {setpoint}"
+        assert ctrl.cfg.grid_import_limit_w < ctrl.cfg.max_charge_w, (
+            "test setup must actually put the import limit below the inverter rate"
+        )
+        assert abs(setpoint) <= ctrl.cfg.grid_import_limit_w + 1e-6, (
+            f"setpoint magnitude {abs(setpoint)} exceeds grid_import_limit_w={ctrl.cfg.grid_import_limit_w}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Case 2 — export hour (real DP → committed export NOW → engage_export)
@@ -213,7 +245,18 @@ class TestExportHour:
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: self.BASE)
 
         hass = StubHass()
-        ctrl, act = _make_controller(hass)
+        # cfg limits are pushed ABOVE the rail so the hardware clamp is the
+        # binding term.  They used to both sit at 6000 and coincide with
+        # SETPOINT_MAX_W; now that the rail is a backstop above any real
+        # hardware (limits are device-derived per install), a cfg at the old
+        # default would bind first and the clamp would go unexercised.
+        ctrl, act = _make_controller(
+            hass,
+            cfg_overrides={
+                "max_export_w": const.SETPOINT_MAX_W + 5000.0,
+                "grid_export_limit_w": const.SETPOINT_MAX_W + 5000.0,
+            },
+        )
         _seed_common(hass, self.BASE, soc="85.0", export_price="0.55", sunset_h=6.0)
         # Peak now (0.60), mid-range, a cheap trough at +8h (0.07), mid-range tail.
         prices = [0.60] + [0.25] * 7 + [0.07] + [0.25] * 8
