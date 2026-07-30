@@ -315,6 +315,23 @@ DEFAULT_SLOT_RESOLUTION = SLOT_RESOLUTION_AUTO
 SETPOINT_MIN_W = -20000.0
 SETPOINT_MAX_W = 20000.0
 WORKMODE_SELF = "Self-consumption"
+# Workmode the actuator restores when it releases VPP control.  This is the
+# mode the battery sits in whenever the planner is NOT commanding, so it must
+# be a mode that cannot grid-charge on its own.  "App-managed" hands the pack
+# to the Anker cloud schedule — on 2026-07-30 that schedule grid-charged at
+# 12 kW inside every window the export executor had released, so it is offered
+# only as an explicit opt-out, never as the default.
+CONF_RESTORE_WORKMODE = "restore_workmode"
+DEFAULT_RESTORE_WORKMODE = WORKMODE_SELF
+# VPP/3rd-party is deliberately absent: it is the ENGAGED mode, so restoring
+# into it would never release control.
+RESTORE_WORKMODE_OPTIONS = (
+    WORKMODE_SELF,
+    "Time-of-Use",
+    "Backup-only",
+    "User-defined",
+    "App-managed",
+)
 PRICE_SCALE = 1e7  # Zonneplan forecast electricity_price integer scaling
 
 # The 5 hard Anker-role entities (SOC, battery power, setpoint, workmode,

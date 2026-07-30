@@ -70,6 +70,8 @@ async def test_engage_rejects_positive_setpoint(hass_stub):
 
 
 async def test_release_orders_calls(hass_stub):
+    """Fallback ordering (engage switch unreadable in this stub — see the
+    release-workmode block below for the auto-clear path)."""
     act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     await act.release_to_self()
     seq = [(c[0], c[1]) for c in hass_stub.services.calls]
@@ -122,7 +124,10 @@ async def test_engage_export_rejects_nonpositive_setpoint(hass_stub):
 
 
 async def test_release_from_export_restores_self_consumption(hass_stub):
-    """release_to_self after export: setpoint→0, workmode→Self-consumption, switch off."""
+    """release_to_self after export: setpoint→0, workmode→Self-consumption.
+
+    Switch state is unreadable in this stub, so the turn_off fallback also fires.
+    """
     act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
     await act.engage_export(3000.0)
     hass_stub.services.calls.clear()
@@ -132,6 +137,79 @@ async def test_release_from_export_restores_self_consumption(hass_stub):
     assert hass_stub.services.calls[0][2]["value"] == 0.0
     assert act.last_setpoint_w == 0.0
     assert act.engaged is False
+
+
+# ---------------------------------------------------------------------------
+# Release must land in a PASSIVE workmode, not App-managed (live 2026-07-30)
+#
+# Selecting any non-VPP workmode clears the modbus/engage switch device-side.
+# The old release issued an explicit `switch.turn_off` AFTER selecting
+# Self-consumption, and that turn_off is what flipped the inverter to
+# App-managed — handing the battery to the Anker app's own schedule.  On the
+# night of 2026-07-30 the app then grid-charged at 12 kW in every window our
+# export executor had released, costing EUR 5.58.  Over the preceding three
+# days `Self-consumption` never once appeared in the workmode history.
+# ---------------------------------------------------------------------------
+
+
+async def test_release_leaves_workmode_passive_without_touching_switch(hass_stub):
+    """Auto-clear path: select restores the passive workmode, no switch.turn_off.
+
+    The engage switch reads `off` after the select (firmware auto-clear), so
+    issuing turn_off would be the very call that reverts to App-managed.
+    """
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    hass_stub.set_state(ANKER_TEST_ENTITIES[const.CONF_ENT_ENGAGE], "off")
+    await act.release_to_self()
+    seq = [(c[0], c[1]) for c in hass_stub.services.calls]
+    assert seq == [("number", "set_value"), ("select", "select_option")]
+    assert hass_stub.services.calls[1][2]["option"] == const.WORKMODE_SELF
+    assert act.engaged is False
+    assert act.last_setpoint_w == 0.0
+
+
+async def test_release_falls_back_to_switch_off_when_still_engaged(hass_stub):
+    """Fallback path: firmware did NOT auto-clear, so we must still release.
+
+    Leaving the inverter in VPP would freeze the battery at setpoint 0 and put
+    the whole house on the grid, so a stuck `on` switch is worse than landing
+    in App-managed.
+    """
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    hass_stub.set_state(ANKER_TEST_ENTITIES[const.CONF_ENT_ENGAGE], "on")
+    await act.release_to_self()
+    seq = [(c[0], c[1]) for c in hass_stub.services.calls]
+    assert seq == [("number", "set_value"), ("select", "select_option"), ("switch", "turn_off")]
+    assert act.engaged is False
+
+
+async def test_release_falls_back_to_switch_off_when_switch_unreadable():
+    """Unknown switch state is treated as still-engaged (safe direction)."""
+    calls = []
+
+    class _Svc:
+        async def async_call(self, domain, service, data, blocking=True):
+            calls.append((domain, service))
+
+    class _H:
+        def __init__(self):
+            self.services = _Svc()
+            self.states = _NoStates()
+
+    act = Actuator(_H(), {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    await act.release_to_self()
+    assert calls == [("number", "set_value"), ("select", "select_option"), ("switch", "turn_off")]
+
+
+async def test_release_honours_configured_restore_workmode(hass_stub):
+    """The restore workmode is operator-selectable, not hardcoded."""
+    act = Actuator(
+        hass_stub,
+        {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES, const.CONF_RESTORE_WORKMODE: "Backup-only"},
+    )
+    hass_stub.set_state(ANKER_TEST_ENTITIES[const.CONF_ENT_ENGAGE], "off")
+    await act.release_to_self()
+    assert hass_stub.services.calls[1][2]["option"] == "Backup-only"
 
 
 async def test_engage_and_charge_still_works_unchanged(hass_stub):

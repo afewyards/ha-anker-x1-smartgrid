@@ -171,6 +171,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_TERMINAL_OVERNIGHT_CREDIT,
         const.CONF_GRID_IMPORT_LIMIT_W,
         const.CONF_CHARGE_WINDOW_PRICE_BAND,
+        const.CONF_RESTORE_WORKMODE,
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
@@ -441,6 +442,17 @@ _SELECT_GROUPS: dict[str, tuple[str, object, list[SelectOptionDict]]] = {
         [
             SelectOptionDict(value=const.RESERVE_ANCHOR_TROUGH, label="ride-to-trough (self-scaling)"),
             SelectOptionDict(value=const.RESERVE_ANCHOR_LEGACY, label="legacy (debit-to-trough + price-prior)"),
+        ],
+    ),
+    "restore_workmode": (
+        const.CONF_RESTORE_WORKMODE,
+        const.DEFAULT_RESTORE_WORKMODE,
+        [
+            SelectOptionDict(value=const.WORKMODE_SELF, label="Self-consumption (passive, recommended)"),
+            SelectOptionDict(value="Time-of-Use", label="Time-of-Use"),
+            SelectOptionDict(value="Backup-only", label="Backup-only"),
+            SelectOptionDict(value="User-defined", label="User-defined"),
+            SelectOptionDict(value="App-managed", label="App-managed (Anker app may grid-charge)"),
         ],
     ),
     "price_mode": (

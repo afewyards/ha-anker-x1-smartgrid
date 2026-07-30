@@ -78,7 +78,8 @@
               "idle_drain_w": "Idle DC drain (W)",
               "terminal_overnight_credit": "Credit overnight need at terminal",
               "grid_import_limit_w": "Grid import limit (W)",
-              "charge_window_price_band": "Cheap-charge band (€/kWh)"
+              "charge_window_price_band": "Cheap-charge band (€/kWh)",
+              "restore_workmode": "Restore work mode on release"
             },
             "data_description": {
               "soc_floor": "Soft minimum state of charge the planner protects. The firmware enforces a hard 5% floor below this. Default 5.",
@@ -91,7 +92,8 @@
               "idle_drain_w": "Constant inverter/BMS standby drain taken from the battery while it discharges (W). 0 disables.",
               "terminal_overnight_credit": "Value the first overnight-need kWh at the expected gap price instead of the horizon minimum. Disable to revert to single-segment terminal. Default on.",
               "grid_import_limit_w": "Maximum grid charge power your grid connection allows (fuse/contract limit — not a device property). Solar charging is unaffected. Default 17250.",
-              "charge_window_price_band": "How far above the cheapest hour a price may sit and still be used for grid charging. Larger admits more charge hours; the charge margin and cycle cost still reject unprofitable ones. Default 0.005."
+              "charge_window_price_band": "How far above the cheapest hour a price may sit and still be used for grid charging. Larger admits more charge hours; the charge margin and cycle cost still reject unprofitable ones. Default 0.005.",
+              "restore_workmode": "Work mode the battery falls back to whenever the planner is not commanding. Self-consumption (default) cannot grid-charge on its own; App-managed hands the pack to the Anker app, whose own schedule can buy from the grid behind the planner’s back."
             }
           },
           "export": {

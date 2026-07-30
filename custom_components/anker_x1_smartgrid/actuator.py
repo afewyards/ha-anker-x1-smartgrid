@@ -134,10 +134,19 @@ class Actuator:
         await self._engage(setpoint_w)
 
     async def release_to_self(self) -> None:
-        """Release VPP control and restore passive Self-consumption workmode.
+        """Release VPP control and restore a passive workmode.
 
         Safe to call from either a charge (negative setpoint) or export
         (positive setpoint) engaged state.
+
+        Selecting any non-VPP workmode clears the modbus/engage switch
+        device-side, so the select IS the release.  The explicit
+        ``switch.turn_off`` this used to issue unconditionally is what flipped
+        the inverter to App-managed — i.e. straight into the Anker cloud
+        schedule — and is now only a fallback for firmware that did not
+        auto-clear.  An unreadable switch counts as still-engaged: being stuck
+        in VPP at setpoint 0 freezes the battery and puts the whole house on
+        the grid, which is worse than landing in App-managed.
         """
         await self._hass.services.async_call(
             "number",
@@ -148,14 +157,23 @@ class Actuator:
         await self._hass.services.async_call(
             "select",
             "select_option",
-            {"entity_id": self._data[const.CONF_ENT_WORKMODE], "option": const.WORKMODE_SELF},
+            {
+                "entity_id": self._data[const.CONF_ENT_WORKMODE],
+                "option": self._data.get(const.CONF_RESTORE_WORKMODE, const.DEFAULT_RESTORE_WORKMODE),
+            },
             blocking=True,
         )
-        await self._hass.services.async_call(
-            "switch",
-            "turn_off",
-            {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
-            blocking=True,
-        )
+        engage_state = self._hass.states.get(self._data[const.CONF_ENT_ENGAGE])
+        if engage_state is None or engage_state.state != "off":
+            _LOGGER.debug(
+                "Engage switch still %s after workmode restore; issuing explicit turn_off",
+                "unreadable" if engage_state is None else engage_state.state,
+            )
+            await self._hass.services.async_call(
+                "switch",
+                "turn_off",
+                {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+                blocking=True,
+            )
         self.last_setpoint_w = 0.0
         self.engaged = False

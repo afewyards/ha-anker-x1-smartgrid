@@ -61,7 +61,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 62  # +1 grid_import_limit_w, +1 charge_window_price_band
+    assert len(section_keys) == 63  # +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -77,6 +77,31 @@ def test_options_schema_is_sectioned_devices_expanded():
     for name, sec in top.items():
         assert isinstance(sec, _section)
         assert sec.options["collapsed"] is (name != SECTION_DEVICES)
+
+
+def test_options_schema_offers_restore_workmode_defaulting_to_self_consumption():
+    """The mode the battery falls back to when the planner releases is operator-set.
+
+    Defaulting to anything that can grid-charge on its own (App-managed) is
+    what produced the 2026-07-30 charge/export pump.
+    """
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    assert const.CONF_RESTORE_WORKMODE in _flat_keys(schema_obj)
+    out = _validate_flat(schema_obj, {})
+    assert out[const.CONF_RESTORE_WORKMODE] == const.WORKMODE_SELF
+
+
+def test_restore_workmode_rejects_the_engaged_vpp_mode():
+    """Restoring into VPP/3rd-party would never release control."""
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_RESTORE_WORKMODE: "VPP/3rd-party"})
 
 
 def test_options_schema_excludes_device_derived_limits():
