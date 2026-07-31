@@ -895,6 +895,7 @@ class Controller:
         *,
         export_price: float | None,
         export_price_matches_import: bool,
+        export_slots: list[PriceSlot] | None = None,
         temp_by_hour: dict,
         slot_minutes: int | None,
         dp_out: dict,
@@ -921,6 +922,7 @@ class Controller:
             export_price=export_price,
             _out=dp_out,
             export_price_matches_import=export_price_matches_import,
+            export_slots=export_slots,
             temp_by_hour=temp_by_hour,
             slot_minutes=slot_minutes,
             eta_curve=self._planner_curve(),
@@ -1172,6 +1174,7 @@ class Controller:
 
             # Read live feed-in tariff (same logic as the enabled path below).
             _shadow_export_price, _shadow_export_matches_import = self._resolve_export_price()
+            _shadow_export_slots = self._resolve_export_slots()
 
             # Shadow compute: run the real decision logic but NEVER actuate.
             # Use _prev_plan so the dwell / state-machine history is preserved.
@@ -1199,6 +1202,7 @@ class Controller:
                         tomorrow_watts,
                         export_price=_shadow_export_price,
                         export_price_matches_import=_shadow_export_matches_import,
+                        export_slots=_shadow_export_slots,
                         temp_by_hour=_temp_by_hour,
                         slot_minutes=_slot_minutes,
                         dp_out=_shadow_dp_out,
@@ -1341,6 +1345,7 @@ class Controller:
         # Read live feed-in tariff for the export-credit term in the DP optimizer.
         # Empty ent_export_price → None → export credit disabled (default behaviour).
         _export_price, _export_matches_import = self._resolve_export_price()
+        _export_slots = self._resolve_export_slots()
 
         # _dp_out receives DP artefacts when the DP succeeds:
         # {"dp_selected": [...], "intervals": [...]}.  Left empty on DP failure
@@ -1386,6 +1391,7 @@ class Controller:
             tomorrow_watts,
             export_price=_export_price,
             export_price_matches_import=_export_matches_import,
+            export_slots=_export_slots,
             temp_by_hour=_temp_by_hour,
             slot_minutes=_slot_minutes,
             dp_out=_dp_out,
@@ -1949,6 +1955,15 @@ class Controller:
         price = coordinator.read_float(self._hass, export_ent) if export_ent else None
         matches = bool(export_ent and export_ent == import_ent)
         return price, matches
+
+    def _resolve_export_slots(self) -> list[PriceSlot]:
+        """Per-slot export (feed-in) curve for the DP, or [] when there is none.
+
+        Static mode, an unset export entity, an export entity equal to the import
+        entity, or an entity with no recognised price attribute all yield [] —
+        the DP then keeps its legacy scalar export-price paths untouched.
+        """
+        return coordinator.read_export_price_slots(self._hass, self._data)
 
     def _resolve_slot_minutes(self, slots) -> int:
         """Per-refresh detected slot length, latched to the finest seen this UTC day.
