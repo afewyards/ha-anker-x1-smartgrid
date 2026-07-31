@@ -114,6 +114,36 @@ def _dp_window(
     return now_h, deadline_ceil, window_len
 
 
+def _export_window_curve(
+    export_slots: list[PriceSlot] | None,
+    starts: list[datetime],
+    required: list[bool],
+    slot_minutes: int,
+) -> list[float] | None:
+    """Raw per-slot export prices aligned to ``starts``, or None.
+
+    All-or-nothing coverage: every position flagged ``required`` (i.e. the window
+    slot carries a real import price) must be covered by the export curve;
+    otherwise None is returned and the caller keeps the legacy scalar paths.
+    Uncovered non-required positions are padded with 0.0, mirroring how
+    ``window_price`` pads phantom slots.  The curve is resampled onto the window's
+    own grid, so an export sensor at a different resolution than the import
+    sensor still lines up (coarse entries forward-fill their declared width).
+    """
+    if not export_slots:
+        return None
+    by_start = resolution.resample_price_map(export_slots, slot_minutes)
+    out: list[float] = []
+    for start, need in zip(starts, required, strict=True):
+        price = by_start.get(start)
+        if price is None:
+            if need:
+                return None
+            price = 0.0
+        out.append(price)
+    return out
+
+
 def _dp_select_slots(
     inputs: PlantInputs,
     slots: list[PriceSlot],
@@ -134,6 +164,7 @@ def _dp_select_slots(
     eta_curve: EfficiencyCurve | None = None,
     water_value_hi: float | None = None,
     overnight_need_kwh: float = 0.0,
+    export_slots: list[PriceSlot] | None = None,
 ) -> tuple[
     list[datetime],
     dict[datetime, float],
@@ -177,6 +208,11 @@ def _dp_select_slots(
     against divide-by-zero (falls back to flat broadcast when current import ≈ 0).
     ``None`` → ``feed_in=None`` → credit term is a strict no-op (T0.1b
     parity invariant preserved).
+
+    When ``export_slots`` supplies a curve covering every priced window slot,
+    those per-slot prices are used verbatim (fee-adjusted) — this outranks both
+    the same-entity reuse and the ratio-scale fallback.  Coverage is
+    all-or-nothing; a partial curve is discarded, never mixed per slot.
 
     Co-optimized export (D2)
     ------------------------
@@ -284,6 +320,15 @@ def _dp_select_slots(
     #
     # When export_price is None (no export entity configured), both arrays
     # are None/zero — export credit is a strict no-op (T0.1b parity).
+    #
+    # Case 1a — the export entity publishes its OWN per-slot curve (e.g. the
+    #   Frank Energie market-price sensor).  Use it verbatim (fee-adjusted):
+    #   an all-in import tariff is market + flat surcharges, so ratio-scaling
+    #   MULTIPLIES where it should subtract and mis-prices the peaks.
+    #   Coverage is all-or-nothing (see _export_window_curve) — a partial curve
+    #   is ignored rather than mixed per slot.
+    _export_starts = [now_h + h * stride for h in range(window_len)]
+    _export_curve = _export_window_curve(export_slots, _export_starts, _price_valid, slot_minutes)
     if export_price is None:
         window_export_price: list[float] = [0.0] * window_len
         feed_in: list[float] | None = None
@@ -298,6 +343,9 @@ def _dp_select_slots(
         eff = optimize_mod.effective_export_price(export_price, cfg)
         window_export_price = [eff] * window_len
         feed_in = [eff] * window_len
+    elif _export_curve is not None:
+        window_export_price = [optimize_mod.effective_export_price(p, cfg) for p in _export_curve]
+        feed_in = list(window_export_price)
     elif export_price_matches_import:
         # Same entity → per-hour export prices == per-hour import prices, less the fee.
         window_export_price = [optimize_mod.effective_export_price(p, cfg) for p in window_price]
