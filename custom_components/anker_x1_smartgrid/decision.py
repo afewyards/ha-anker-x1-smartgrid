@@ -1013,15 +1013,17 @@ def compute_decision(
     # water_value_hi=None → select_end_state takes the byte-identical legacy branch.
     water_value_hi: float | None = None
     overnight_need_kwh: float = 0.0
+    _est_slot_list: list[PriceSlot] = []
     if cfg.terminal_overnight_credit:
         _pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or _next_synthetic_pickup(
             horizon_edge
         )
-        _est_price_by_hour = (
-            {s.start: s.price for s in pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)}
+        _est_slot_list = (
+            pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)
             if estimated_tomorrow is not None
-            else {}
+            else []
         )
+        _est_price_by_hour = {s.start: s.price for s in _est_slot_list}
         # Predicted hour-of-day load (W), same source the reserve walk uses.
         _load_by_hod: dict[int, float] = {}
         for _iv in intervals_reserve:
@@ -1218,6 +1220,8 @@ def compute_decision(
             temp_by_hour=temp_by_hour,
             delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
+            est_slots=_est_slot_list,
+            terminal_need_kwh=overnight_need_kwh,
         )
     else:
         horizon = plan_mod.build_plan_horizon(

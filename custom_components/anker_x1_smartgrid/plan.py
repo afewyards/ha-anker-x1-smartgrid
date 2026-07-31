@@ -365,6 +365,8 @@ def build_display_horizon(
     delivered_by_hour: dict[datetime, dict] | None = None,
     *,
     eta_curve=None,
+    est_slots: list[PriceSlot] | None = None,
+    terminal_need_kwh: float = 0.0,
 ) -> list[dict]:
     """Two-day self-consumption display horizon (PV + load + discharge-aware SoC).
 
@@ -398,6 +400,14 @@ def build_display_horizon(
         delivered_by_hour: Grid energy already delivered in an in-progress slot
             (in practice only the current one), passed straight through to
             ``build_plan_horizon`` — see its docstring for the contract.
+        est_slots: Optional estimated-tomorrow tail ``PriceSlot`` list (e.g. from
+            ``pricing_store.build_estimated_slots``), appended to ``slots`` BEFORE
+            building intervals — so pv/load for the tail hours come from this same
+            two-day PV curve + predictor. Their hour-floored starts become
+            ``est_starts`` for ``build_plan_horizon`` (flags those rows
+            ``estimated``). ``None``/empty (default) is a no-op — byte-identical.
+        terminal_need_kwh: Forwarded straight through to ``build_plan_horizon``'s
+            ``terminal_need_kwh`` (only meaningful together with ``est_slots``).
     """
     if sun_times is None:
         return []
@@ -416,8 +426,14 @@ def build_display_horizon(
             tomorrow_sunset,
             step_h=1.0,
         )
+    # Estimated tomorrow tail: appended to the price-slot list BEFORE building
+    # intervals, so pv/load for those hours are derived from this same two-day
+    # PV curve + predictor (not left None/0). `est_slots=None`/`[]` is a no-op —
+    # `all_slots is slots` and `est_starts` stays `None`, byte-identical.
+    all_slots = slots + est_slots if est_slots else slots
+    est_starts = frozenset(hour_floor(s.start) for s in est_slots) if est_slots else None
     ivals = build_display_intervals(
-        slots,
+        all_slots,
         now,
         curve,
         predictor,
@@ -426,7 +442,7 @@ def build_display_horizon(
         temp_by_hour=temp_by_hour,
     )
     return build_plan_horizon(
-        slots,
+        all_slots,
         ivals,
         selected,
         soc,
@@ -440,4 +456,6 @@ def build_display_horizon(
         hedge_drain_by_hour=hedge_drain_by_hour,
         delivered_by_hour=delivered_by_hour,
         eta_curve=eta_curve,
+        est_starts=est_starts,
+        terminal_need_kwh=terminal_need_kwh,
     )

@@ -106,7 +106,16 @@ def _plan() -> PlanState:
     return PlanState(ControllerState.PASSIVE, BASE - timedelta(hours=2), ())
 
 
-def _call(cfg: Config, *, soc: float, prices: list[float], estimated_tomorrow=None, out=None, export_price=0.30):
+def _call(
+    cfg: Config,
+    *,
+    soc: float,
+    prices: list[float],
+    estimated_tomorrow=None,
+    out=None,
+    export_price=0.30,
+    sun_times=None,
+):
     inputs = PlantInputs(soc=soc, meter_w=0.0, now=BASE)
     sunset = BASE + timedelta(hours=len(prices))
     return compute_decision(
@@ -122,6 +131,7 @@ def _call(cfg: Config, *, soc: float, prices: list[float], estimated_tomorrow=No
         export_price_matches_import=True,
         estimated_tomorrow=estimated_tomorrow,
         _out=out,
+        sun_times=sun_times,
     )
 
 
@@ -354,3 +364,87 @@ def test_flag_off_byte_identical(monkeypatch):
     assert out_est["export_request"] == out_none["export_request"]
     assert out_est["grid_request"] == out_none["grid_request"]
     assert out_est["dp_selected"] == out_none["dp_selected"]
+
+
+# ---------------------------------------------------------------------------
+# 6. Task 3 — the estimated tomorrow tail reaches the live DISPLAY horizon
+#
+# ``compute_decision`` only threads the tail through ``build_display_horizon``
+# (the ``sun_times is not None`` branch); the degraded ``sun_times=None``
+# fallback (``build_plan_horizon`` called directly) is untouched. ``sun_times``
+# below is a bare non-None tuple with no today/tomorrow PV arrays, so the
+# two-day curve is empty and the gap/pickup math is identical to the other
+# tests in this file (still the [03:00, 08:00) UTC synthetic gap) — only the
+# horizon-assembly branch taken inside ``compute_decision`` changes.
+# ---------------------------------------------------------------------------
+
+_SUN_TIMES = (
+    BASE + timedelta(hours=9),  # today_sunset (23:00) — unused: no PV arrays
+    BASE + timedelta(hours=18),  # tomorrow_sunrise (08:00 next day)
+    BASE + timedelta(hours=30),  # tomorrow_sunset (20:00 next day)
+)
+
+
+def _row_start(row: dict):
+    return datetime.fromisoformat(row["start"])
+
+
+def test_live_horizon_grows_est_tail():
+    """sun_times present + estimate + credit ON → horizon rows extend past
+    horizon_edge, every tail row is ``estimated=True``, and tail prices equal
+    the estimated-slot prices built for the gap (no display munging)."""
+    cfg = _cfg()  # terminal_overnight_credit defaults ON
+    est = _expensive_estimate()
+    _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
+
+    assert horizon, "expected a non-empty horizon"
+    assert max(_row_start(r) for r in horizon) > _HORIZON_EDGE
+
+    real_rows = [r for r in horizon if _row_start(r) < _HORIZON_EDGE]
+    tail_rows = [r for r in horizon if _row_start(r) >= _HORIZON_EDGE]
+    assert tail_rows, "expected estimated tail rows appended past horizon_edge"
+    assert all(r["estimated"] is True for r in tail_rows)
+    assert all(r["estimated"] is False for r in real_rows)
+
+    pickup = _next_synthetic_pickup(_HORIZON_EDGE)
+    expected_prices = {s.start: s.price for s in pricing_store.build_estimated_slots(est, _HORIZON_EDGE, pickup)}
+    assert {_row_start(r) for r in tail_rows} == set(expected_prices)
+    for row in tail_rows:
+        assert row["price"] == pytest.approx(expected_prices[_row_start(row)])
+
+
+def test_no_estimate_no_tail():
+    """estimated_tomorrow=None → no est slots are built → last row unchanged."""
+    cfg = _cfg()
+    _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=None, sun_times=_SUN_TIMES)
+
+    assert horizon
+    assert max(_row_start(r) for r in horizon) == BASE + timedelta(hours=len(_PRICES) - 1)
+    assert all(r["estimated"] is False for r in horizon)
+
+
+def test_flag_off_no_tail():
+    """terminal_overnight_credit=False → _est_slot_list never built → no tail
+    even though an estimate is supplied."""
+    cfg = _cfg(terminal_overnight_credit=False)
+    est = _expensive_estimate()
+    _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
+
+    assert horizon
+    assert max(_row_start(r) for r in horizon) == BASE + timedelta(hours=len(_PRICES) - 1)
+    assert all(r["estimated"] is False for r in horizon)
+
+
+def test_tail_soc_continues_from_last_real_row():
+    """The SoC walk is continuous across the real→tail boundary: the first
+    estimated row's soc picks up from (does not reset above) the last real
+    row's soc — no charge/export is planned in the tail, so it can only hold
+    or drain."""
+    cfg = _cfg()
+    est = _expensive_estimate()
+    _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
+
+    real_rows = sorted((r for r in horizon if not r["estimated"]), key=_row_start)
+    tail_rows = sorted((r for r in horizon if r["estimated"]), key=_row_start)
+    assert real_rows and tail_rows
+    assert tail_rows[0]["soc"] <= real_rows[-1]["soc"]
