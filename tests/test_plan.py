@@ -300,7 +300,7 @@ def test_idle_drain_sags_projected_soc():
         cfg_idle,
         export_request_by_hour={BASE: 1000.0},
     )
-    assert out0_e[0]["mode"] == "idle"
+    assert out0_e[0]["mode"] == "export"
     assert out0_e[0]["soc"] == out_idle_e[0]["soc"]
 
 
@@ -731,6 +731,32 @@ def test_export_drains_soc_sim_no_solar():
     assert out[0]["grid_export_w"] == 3000.0
     # SoC: 70 - 30 = 40, capped to [5, 100] -> 40
     assert out[0]["soc"] == 40.0
+
+
+def test_export_row_mode_is_export():
+    """Export hour not selected for grid charge gets mode == 'export' (not 'idle')."""
+    cfg = Config(
+        capacity_kwh=10.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        max_charge_w=5000.0,
+        eta_charge=1.0,
+        round_trip_eff=1.0,
+    )
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+    export_req = {BASE: 3000.0}  # export hour, not selected for grid charge
+    out = plan.build_plan_horizon(
+        slots,
+        intervals,
+        [],
+        70.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        export_request_by_hour=export_req,
+    )
+    assert out[0]["grid_export_w"] == 3000.0
+    assert out[0]["mode"] == "export"
 
 
 def test_non_export_hour_grid_export_w_is_zero():

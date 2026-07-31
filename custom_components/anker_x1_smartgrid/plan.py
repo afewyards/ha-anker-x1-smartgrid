@@ -298,6 +298,8 @@ def build_plan_horizon(
             mode = "estimated"
         elif is_grid:
             mode = "grid"
+        elif grid_export_w > 0:
+            mode = "export"
         elif iv is not None and iv.pv_w > iv.load_w:
             mode = "solar"
         else:
