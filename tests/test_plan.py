@@ -238,6 +238,58 @@ def test_display_intervals_empty_slots():
     assert plan.build_display_intervals([], now, [], _StubPredictor(), None, 400.0) == []
 
 
+def test_display_intervals_fan_hourly_pv_across_15min_quarters():
+    """Live France defect (slot_minutes=15): the PV curve is intrinsically HOURLY
+    (one point/hour from every parsers.py builder), but the old PV bucketing keyed
+    pv_by_slot on floor_to_slot(start, slot_minutes) — so only the :00 quarter
+    matched a curve point and :15/:30/:45 fell back to 0.0. Live evidence: pv_w =
+    2391.6 at 15:00 then 0.0/0.0/0.0, 1397.9 at 16:00 then 0.0/0.0/0.0. Fixed: PV
+    is hour-bucketed/looked-up (mirrors the D1 temp_by_hour pattern) so every
+    quarter of an hour inherits that hour's watts."""
+    now = datetime(2026, 7, 31, 15, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(minutes=15 * i), 0.20) for i in range(8)]
+    pv_curve = [(now, 2391.6), (now + timedelta(hours=1), 1397.9)]
+    ivs = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=15)
+    assert len(ivs) == 8
+    pv_ws = [iv.pv_w for iv in ivs]
+    # NOT the pre-fix [2391.6, 0.0, 0.0, 0.0, 1397.9, 0.0, 0.0, 0.0] shape.
+    assert pv_ws == [2391.6, 2391.6, 2391.6, 2391.6, 1397.9, 1397.9, 1397.9, 1397.9]
+
+
+def test_display_intervals_pv_slot_minutes_60_byte_identical():
+    """floor_to_slot(x, 60) == hour_floor(x), so an explicit slot_minutes=60 (and
+    the implicit 60-min default) must be byte-identical to the pre-fix PV
+    bucketing — zero behavior change at the legacy hourly resolution."""
+    now = datetime(2026, 7, 31, 15, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(hours=i), 0.20) for i in range(3)]
+    pv_curve = [(now, 2391.6), (now + timedelta(hours=1), 1397.9)]
+    implicit = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0)
+    explicit = plan.build_display_intervals(
+        slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=60
+    )
+    assert implicit == explicit
+    assert [iv.pv_w for iv in implicit] == [2391.6, 1397.9, 0.0]
+
+
+def test_display_intervals_pv_energy_conserved_at_15min():
+    """Window-energy sanity: sum(pv_w * dt_h) over a day must be equal whether the
+    slot grid is hourly or 15-min — the hourly PV curve's energy must be fanned
+    across quarters, not quartered (pre-fix: ~1/4 of solar energy reached the
+    DP/reserve integration at decision.py:288)."""
+    now = datetime(2026, 7, 31, 0, 0, tzinfo=UTC)
+    hours = 4
+    pv_curve = [(now + timedelta(hours=i), 1000.0 * (i + 1)) for i in range(hours)]
+    slots_hourly = [PriceSlot(now + timedelta(hours=i), 0.20) for i in range(hours)]
+    slots_15 = [PriceSlot(now + timedelta(minutes=15 * i), 0.20) for i in range(hours * 4)]
+    ivs_hourly = plan.build_display_intervals(
+        slots_hourly, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=60
+    )
+    ivs_15 = plan.build_display_intervals(slots_15, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=15)
+    energy_hourly = sum(iv.pv_w * iv.dt_h for iv in ivs_hourly)
+    energy_15 = sum(iv.pv_w * iv.dt_h for iv in ivs_15)
+    assert energy_15 == pytest.approx(energy_hourly)
+
+
 def test_soc_discharges_on_deficit():
     # idle hour with load > pv must LOWER soc by discharge energy / eta_discharge
     cfg = Config(
