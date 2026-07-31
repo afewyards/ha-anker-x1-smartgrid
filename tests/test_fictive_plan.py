@@ -167,6 +167,7 @@ _LIVE_PLAN_KEYS = {
     "solar_charge_kwh",
     "grid_charge_kwh",
     "grid_export_kwh",
+    "estimated",
 }
 
 

@@ -78,6 +78,8 @@ def build_plan_horizon(
     delivered_by_hour: dict[datetime, dict] | None = None,
     *,
     eta_curve=None,
+    est_starts: frozenset | None = None,
+    terminal_need_kwh: float = 0.0,
 ) -> list[dict]:
     """Join price/PV/load/charge-plan into an hourly horizon for visualization.
 
@@ -138,6 +140,18 @@ def build_plan_horizon(
     When supplied, charge/self-discharge/export each look up a power-dependent
     eta from the curve instead.
 
+    ``est_starts`` marks hour-floored slot starts as "estimated" rows (e.g. a
+    tomorrow price tail appended beyond the forecast horizon by a later stage):
+    those rows get ``"estimated": True``, ``mode="estimated"`` (takes precedence
+    over grid/solar/idle), and a ``reserve_soc`` line showing the firmware floor
+    plus ``terminal_need_kwh`` converted to SoC (clamped to ``cfg.soc_target``)
+    instead of the usual ``reserve_by_hour`` / ``cfg.soc_floor`` value. All other
+    rows get ``"estimated": False``. This flags rows only — appending the tail
+    slots themselves is a separate change; est hours are absent from
+    ``selected_set``/``exp_by_hour``/``delivered_by_hour``/``ceil_by_hour`` by
+    construction, so charge/export stay 0 and the SoC walk + firmware-floor
+    clamp run unmodified.
+
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
     DP's native unit, for planning/charting (e.g. the Lovelace energy card).
@@ -157,7 +171,9 @@ def build_plan_horizon(
     ceil_by_hour = {hour_floor(k): v for k, v in (ceiling_by_hour or {}).items()}
     hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
     deliv_by_hour = {hour_floor(k): v for k, v in (delivered_by_hour or {}).items()}
+    est_set = {hour_floor(s) for s in (est_starts or ())}
     cap_wh = cfg.capacity_kwh * 1000.0
+    cap_kwh = cap_wh / 1000.0
     eta = cfg.eta_charge_safe()
     # NOTE: guard applied to the whole expression (not just eta_charge in the
     # divisor) — diverges from Config.eta_discharge_static() in the
@@ -188,6 +204,7 @@ def build_plan_horizon(
                     "solar_charge_w": solar_charge_w,
                     "grid_charge_w": grid_charge_w,
                     "mode": "actual",
+                    "estimated": False,  # est_starts hours are future-only by construction
                     "soc": act["soc"],
                     "charge_w": round(solar_charge_w + grid_charge_w, 1),
                     "is_past_horizon": slot.start >= horizon_edge,
@@ -207,6 +224,7 @@ def build_plan_horizon(
         load_w = iv.load_w if iv is not None else None
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
         is_grid = hour in selected_set
+        is_est = hour in est_set
         solar_surplus = max(0.0, iv.pv_w - iv.load_w) if iv is not None else 0.0
         if cap_wh > 0:
             headroom_w = max(0.0, (cfg.soc_target - soc_sim) / 100.0 * cap_wh / (eta * dt_h))
@@ -271,7 +289,14 @@ def build_plan_horizon(
             reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else cfg.soc_floor
         else:
             reserve_soc = cfg.soc_floor
-        if is_grid:
+        if is_est:
+            # Estimated tail rows show the firmware floor plus the still-needed
+            # terminal energy converted to SoC, instead of the usual reserve line.
+            need_pct = terminal_need_kwh / cap_kwh * 100.0 if cap_kwh > 0 else 0.0
+            reserve_soc = min(const.FIRMWARE_SOC_FLOOR + need_pct, cfg.soc_target)
+        if is_est:
+            mode = "estimated"
+        elif is_grid:
             mode = "grid"
         elif iv is not None and iv.pv_w > iv.load_w:
             mode = "solar"
@@ -296,6 +321,7 @@ def build_plan_horizon(
                 "solar_charge_w": round(solar_charge_w, 1),
                 "grid_charge_w": round(grid_charge_w_disp, 1),
                 "mode": mode,
+                "estimated": is_est,
                 "soc": round(soc_sim, 1),
                 "charge_w": round(total_w, 1),
                 "is_past_horizon": slot.start >= horizon_edge,

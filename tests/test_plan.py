@@ -1239,3 +1239,99 @@ def test_build_display_horizon_omitting_temp_by_hour_uses_cur_temp():
     )
     assert out, "expected a non-empty horizon"
     assert all(e["load_w"] == 200.0 for e in out)  # 20.0 * 10 everywhere
+
+
+class TestEstimatedTail:
+    """`estimated` row flagging (est_starts / terminal_need_kwh) — flag plumbing only,
+    no tail slots appended yet (that's a later task)."""
+
+    def test_all_rows_carry_estimated_false_by_default(self):
+        """No est_starts passed → every row still carries the estimated key, all False."""
+        cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+        slots = _slots(3)
+        intervals = [
+            ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),
+            ForecastInterval(BASE + timedelta(hours=1), pv_w=0.0, load_w=400.0, dt_h=1.0),
+            ForecastInterval(BASE + timedelta(hours=2), pv_w=0.0, load_w=400.0, dt_h=1.0),
+        ]
+        selected = [BASE + timedelta(hours=1)]
+        out = plan.build_plan_horizon(slots, intervals, selected, 50.0, BASE + timedelta(hours=3), cfg)
+        assert [e["estimated"] for e in out] == [False, False, False]
+
+    def test_est_rows_flagged_and_mode_estimated(self):
+        """Last 2 of 6 hours in est_starts → flagged + mode="estimated", overriding solar."""
+        cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+        slots = _slots(6)
+        intervals = [
+            ForecastInterval(BASE + timedelta(hours=i), pv_w=1000.0, load_w=200.0, dt_h=1.0) for i in range(6)
+        ]
+        est_starts = frozenset({BASE + timedelta(hours=4), BASE + timedelta(hours=5)})
+        out = plan.build_plan_horizon(
+            slots, intervals, [], 50.0, BASE + timedelta(hours=6), cfg, est_starts=est_starts
+        )
+        assert [e["estimated"] for e in out] == [False, False, False, False, True, True]
+        assert [e["mode"] for e in out[4:]] == ["estimated", "estimated"]
+        assert "solar" not in [e["mode"] for e in out[4:]]
+
+    def test_est_rows_zero_charge_export(self):
+        """Est rows have no interval (beyond the forecast horizon) -> charge/export stay 0."""
+        cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+        slots = _slots(2)
+        intervals = [ForecastInterval(BASE, pv_w=1000.0, load_w=200.0, dt_h=1.0)]
+        est_starts = frozenset({BASE + timedelta(hours=1)})
+        out = plan.build_plan_horizon(
+            slots, intervals, [], 50.0, BASE + timedelta(hours=2), cfg, est_starts=est_starts
+        )
+        est_row = out[1]
+        assert est_row["estimated"] is True
+        assert est_row["grid_charge_kwh"] == 0.0
+        assert est_row["grid_export_kwh"] == 0.0
+
+    def test_est_soc_walk_clamps_at_firmware_floor(self):
+        """Low start SoC + heavy est load -> est-row soc clamps at the firmware floor,
+        never below it, and the walk stays monotone non-increasing."""
+        cfg = Config(
+            capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0,
+            round_trip_eff=1.0,
+        )
+        slots = _slots(3)
+        intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0) for i in range(3)]
+        est_starts = frozenset({BASE + timedelta(hours=1), BASE + timedelta(hours=2)})
+        out = plan.build_plan_horizon(
+            slots, intervals, [], 6.0, BASE + timedelta(hours=3), cfg, est_starts=est_starts
+        )
+        socs = [e["soc"] for e in out]
+        assert socs[1] >= const.FIRMWARE_SOC_FLOOR
+        assert socs[2] >= const.FIRMWARE_SOC_FLOOR
+        assert all(a >= b for a, b in zip(socs, socs[1:]))  # monotone non-increasing
+
+    def test_est_reserve_soc_shows_need_line(self):
+        """terminal_need_kwh=2.0 at 20 kWh capacity -> est reserve_soc == firmware floor (5) + 10 = 15.0."""
+        cfg = Config(capacity_kwh=20.0, soc_target=100.0)
+        slots = _slots(2)
+        intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+        est_starts = frozenset({BASE + timedelta(hours=1)})
+        out = plan.build_plan_horizon(
+            slots,
+            intervals,
+            [],
+            50.0,
+            BASE + timedelta(hours=2),
+            cfg,
+            est_starts=est_starts,
+            terminal_need_kwh=2.0,
+        )
+        assert out[1]["reserve_soc"] == 15.0
+
+    def test_est_rows_marked_past_horizon(self):
+        """Est slot start >= horizon_edge -> is_past_horizon True (unmodified existing logic)."""
+        cfg = Config(capacity_kwh=10.0, soc_target=100.0)
+        slots = _slots(2)
+        intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
+        est_starts = frozenset({BASE + timedelta(hours=1)})
+        # horizon_edge before the est slot's start -> it must read as past-horizon.
+        out = plan.build_plan_horizon(
+            slots, intervals, [], 50.0, BASE, cfg, est_starts=est_starts
+        )
+        assert out[1]["estimated"] is True
+        assert out[1]["is_past_horizon"] is True
