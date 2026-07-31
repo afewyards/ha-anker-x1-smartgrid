@@ -313,6 +313,10 @@ class X1PlanSensor(_Base):
             "horizon": plan.get("horizon", []),
             "deadline": plan.get("deadline"),
             "arbitrage_pnl": self._controller.last_status.get("planned_export_revenue_eur"),
+            # Terminal water-value artefacts from the DP optimizer's final slot,
+            # for observability only. None on DP failure or when the flag is off.
+            "terminal_v_hi": self._controller.last_status.get("terminal_v_hi"),
+            "terminal_need_kwh": self._controller.last_status.get("terminal_need_kwh"),
             "slot_minutes": self._controller.last_status.get("slot_minutes"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),

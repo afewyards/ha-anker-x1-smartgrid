@@ -1548,6 +1548,11 @@ class Controller:
         # key — it simply leaves whatever value the last enabled tick wrote.
         # A dedicated sensor reads the key.
         self.last_status["house_load_w"] = _house_load_now_w
+        # Task 4: surface the DP optimizer's terminal water-value artefacts for
+        # dashboard/diagnostic observability only. Absent from _dp_out on DP
+        # failure (dict left empty at declaration) → last_status carries None.
+        self.last_status["terminal_v_hi"] = _dp_out.get("terminal_v_hi")
+        self.last_status["terminal_need_kwh"] = _dp_out.get("terminal_need_kwh")
         self.last_status["plan"] = {
             "horizon": horizon,
             "deadline": deadline.isoformat() if deadline else None,

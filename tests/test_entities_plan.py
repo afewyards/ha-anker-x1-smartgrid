@@ -68,3 +68,29 @@ def test_plan_sensor_arbitrage_pnl_missing_is_none():
     }
     s = X1PlanSensor(_Ctl(status), "e1")
     assert s.extra_state_attributes["arbitrage_pnl"] is None
+
+
+def test_plan_sensor_terminal_attrs_present():
+    """terminal_v_hi/terminal_need_kwh echo the DP's terminal water-value artefacts from last_status."""
+    horizon = [{"start": "2026-06-25T10:00:00+00:00", "price": 0.28, "mode": "grid", "soc": 60.0}]
+    status = {
+        "plan": {"horizon": horizon, "deadline": "2026-06-25T18:00:00+00:00", "planned_grid_hours": 1},
+        "terminal_v_hi": 0.24,
+        "terminal_need_kwh": 3.1,
+    }
+    s = X1PlanSensor(_Ctl(status), "e1")
+    attrs = s.extra_state_attributes
+    assert attrs["terminal_v_hi"] == 0.24
+    assert attrs["terminal_need_kwh"] == 3.1
+
+
+def test_plan_sensor_terminal_attrs_missing_is_none():
+    """terminal_v_hi/terminal_need_kwh are None when absent from last_status (DP failure / flag off)."""
+    horizon = [{"start": "2026-06-25T10:00:00+00:00", "price": 0.28, "mode": "grid", "soc": 60.0}]
+    status = {
+        "plan": {"horizon": horizon, "deadline": "2026-06-25T18:00:00+00:00", "planned_grid_hours": 1},
+    }
+    s = X1PlanSensor(_Ctl(status), "e1")
+    attrs = s.extra_state_attributes
+    assert attrs["terminal_v_hi"] is None
+    assert attrs["terminal_need_kwh"] is None
