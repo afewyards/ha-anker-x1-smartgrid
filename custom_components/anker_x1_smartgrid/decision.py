@@ -1338,6 +1338,7 @@ def compute_decision(
             hedge_drain_by_hour=hedge_drain_by_hour,
             temp_by_hour=temp_by_hour,
             delivered_by_hour=delivered_by_hour,
+            slot_minutes=slot_minutes,
             eta_curve=eta_curve,
             est_slots=_est_slot_list,
             terminal_need_kwh=overnight_need_kwh,

@@ -439,6 +439,18 @@ class Controller:
         change, the in-progress one does. Reads only this hour's rows (<= 1 per
         tick), never the 48 h window. Returns {} on error — the card degrades to
         the old under-report rather than the tick failing.
+
+        DEFERRED (finding A4): at 15-min slot resolution, up to 3 completed
+        sibling quarters fold into "current" here (``now_h`` is a clock-hour
+        floor, not a slot floor).  NOT switched to ``floor_to_slot(now,
+        slot_minutes)`` — ``aggregate_past_actuals`` buckets recorder samples
+        by ``hour_floor`` internally (past_actuals.py), regardless of what key
+        we filter on here, so a slot-floored ``now_h`` would simply never
+        match any key in ``actuals`` and this would start returning {} on
+        every 15-min tick (losing the delivered-energy add-back entirely,
+        worse than the current over-report). Fixing it for real needs
+        ``aggregate_past_actuals`` itself to bucket on the slot grid, which is
+        out of this fix's file scope (past_actuals.py).
         """
         now_h = resolution.hour_floor(now)
         try:
@@ -953,7 +965,9 @@ class Controller:
             )
         )
 
-    def _publish_fictive_plan(self, slots, dp_out: dict, soc: float, deadline: datetime | None) -> None:
+    def _publish_fictive_plan(
+        self, slots, dp_out: dict, soc: float, deadline: datetime | None, slot_minutes: int = 60
+    ) -> None:
         """Build + publish the DP's proposed horizon as ``last_status["fictive_plan"]``,
         or clear the key when the DP produced nothing (Task C5).
 
@@ -977,10 +991,15 @@ class Controller:
             grid_request_by_hour=dp_out.get("grid_request"),
             eta_curve=self._planner_curve(),
         )
+        # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
+        # over-report under the "planned_grid_hours" name. Scale by the slot
+        # width so the value stays true hours; a no-op at the legacy 60-min
+        # default (slot_minutes/60.0 == 1.0).
+        _grid_slots = sum(1 for e in _fictive_h if e["mode"] == "grid")
         self.last_status["fictive_plan"] = {
             "horizon": _fictive_h,
             "deadline": deadline.isoformat() if deadline else None,
-            "planned_grid_hours": sum(1 for e in _fictive_h if e["mode"] == "grid"),
+            "planned_grid_hours": _grid_slots * (slot_minutes / 60.0),
         }
 
     async def _tick_impl(self) -> dict:
@@ -1278,6 +1297,7 @@ class Controller:
                     today_watts=today_watts,
                     tomorrow_watts=tomorrow_watts,
                     temp_by_hour=_temp_by_hour,
+                    slot_minutes=_slot_minutes,
                     eta_curve=self._planner_curve(),
                 )
                 if horizon:
@@ -1292,7 +1312,7 @@ class Controller:
             # The DP ran purely for observation — no setpoint was ever issued.
             # Mirrors the enabled-path publication (T0.6a) with identical schema.
             if _shadow_dp_out.get("dp_selected") is not None and shadow_deadline is not None and inputs is not None:
-                self._publish_fictive_plan(slots, _shadow_dp_out, inputs.soc, shadow_deadline)
+                self._publish_fictive_plan(slots, _shadow_dp_out, inputs.soc, shadow_deadline, _slot_minutes)
             else:
                 # DP did not run or failed — remove any stale fictive_plan key.
                 self.last_status.pop("fictive_plan", None)
@@ -1559,15 +1579,20 @@ class Controller:
         # failure (dict left empty at declaration) → last_status carries None.
         self.last_status["terminal_v_hi"] = _dp_out.get("terminal_v_hi")
         self.last_status["terminal_need_kwh"] = _dp_out.get("terminal_need_kwh")
+        # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
+        # over-report under the "planned_grid_hours" name. Scale by the slot
+        # width so the value stays true hours; a no-op at the legacy 60-min
+        # default (_slot_minutes/60.0 == 1.0).
+        _grid_slots = sum(1 for e in horizon if e["mode"] == "grid")
         self.last_status["plan"] = {
             "horizon": horizon,
             "deadline": deadline.isoformat() if deadline else None,
-            "planned_grid_hours": sum(1 for e in horizon if e["mode"] == "grid"),
+            "planned_grid_hours": _grid_slots * (_slot_minutes / 60.0),
         }
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
-        self._publish_fictive_plan(slots, _dp_out, inputs.soc, deadline)
+        self._publish_fictive_plan(slots, _dp_out, inputs.soc, deadline, _slot_minutes)
         return result
 
     def _write_decision_sync(self, snapshot: dict) -> None:

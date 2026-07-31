@@ -163,17 +163,34 @@ def build_plan_horizon(
     """
     if not slots:
         return []
-    iv_by_hour = {hour_floor(iv.start): iv for iv in intervals}
-    selected_set = {hour_floor(s) for s in selected}
-    req_by_hour = {hour_floor(k): v for k, v in (grid_request_by_hour or {}).items()}
-    exp_by_hour = {hour_floor(k): v for k, v in (export_request_by_hour or {}).items()}
+    # iv_by_hour/selected_set/req/exp/ceil are keyed on the SLOT grid, not the
+    # hour: they come from the DP schedule (_dp_select_slots's own slot-floored
+    # keys, see decision.py T9 notes) or from build_display_intervals (also
+    # slot-floored — see D1 there).  Flooring their keys with hour_floor
+    # collapsed 4 distinct 15-min entries onto one hour key (last-write-wins),
+    # so a committed 4000 W quarter got silently overwritten by a later, unset
+    # sibling quarter and mode="grid" painted onto all 4 (finding A2).
+    # floor_to_slot(..., 60) == hour_floor, so this is byte-identical at the
+    # legacy 60-min resolution.
+    iv_by_hour = {floor_to_slot(iv.start, slot_minutes): iv for iv in intervals}
+    selected_set = {floor_to_slot(s, slot_minutes) for s in selected}
+    req_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (grid_request_by_hour or {}).items()}
+    exp_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (export_request_by_hour or {}).items()}
+    ceil_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (ceiling_by_hour or {}).items()}
+    # rsv_by_hour/hedge_by_hour/deliv_by_hour stay HOUR-keyed on purpose: their
+    # producers (decision._build_reserve_by_hour, controller._apply_drift_hedge,
+    # controller._get_current_delivered) hand back ONE value per clock-hour by
+    # design (out of this fix's scope to make slot-granular) — floor_to_slot on
+    # the lookup key would miss the dict for 3-of-4 quarters and silently fall
+    # back to the default instead of the real value. hour_floor at
+    # slot_minutes=60 IS floor_to_slot, so this is still byte-identical there.
     rsv_by_hour = {hour_floor(k): v for k, v in (reserve_by_hour or {}).items()}
-    ceil_by_hour = {hour_floor(k): v for k, v in (ceiling_by_hour or {}).items()}
     hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
     deliv_by_hour = {hour_floor(k): v for k, v in (delivered_by_hour or {}).items()}
     est_set = {hour_floor(s) for s in (est_starts or ())}
     cap_wh = cfg.capacity_kwh * 1000.0
     cap_kwh = cap_wh / 1000.0
+    _slot_frac = slot_minutes / 60.0
     eta = cfg.eta_charge_safe()
     # NOTE: guard applied to the whole expression (not just eta_charge in the
     # divisor) — diverges from Config.eta_discharge_static() in the
@@ -184,6 +201,11 @@ def build_plan_horizon(
     out: list[dict] = []
     for slot in sorted(slots, key=lambda s: s.start):
         hour = hour_floor(slot.start)
+        # Slot-grid key for the 5 genuinely slot-keyed lookups above (iv/selected/
+        # req/exp/ceil); `hour` (above) stays the lookup key for past_actuals/
+        # est_set/rsv/hedge/deliv, which are genuinely per-clock-hour. Equal to
+        # `hour` at slot_minutes=60.
+        slot_key = floor_to_slot(slot.start, slot_minutes)
         act = past_actuals_by_hour.get(hour) if past_actuals_by_hour else None
         if act is not None:
             # Past slot: emit recorded actuals verbatim and DO NOT advance soc_sim,
@@ -195,6 +217,18 @@ def build_plan_horizon(
                 reserve_soc = cfg.soc_floor
             solar_charge_w = act["solar_charge_w"]
             grid_charge_w = act["grid_charge_w"]
+            # A3: aggregate_past_actuals bucketing is genuinely per-clock-hour (the
+            # recorder samples are hour-keyed), so every slot row sharing this hour
+            # looks up the SAME hour-total actual. At 15-min that stamped the FULL
+            # hour's energy onto each of the 4 quarter rows (4x inflated column
+            # totals when summed). Split it evenly across the hour's slot rows
+            # instead — _slot_frac = slot_minutes/60 is 1.0 (no-op) at the legacy
+            # 60-min resolution.
+            _pv_kwh = act.get("pv_kwh")
+            _load_kwh = act.get("load_kwh")
+            _solar_charge_kwh = act.get("solar_charge_kwh")
+            _grid_charge_kwh = act.get("grid_charge_kwh")
+            _grid_export_kwh = act.get("grid_export_kwh")
             out.append(
                 {
                     "start": slot.start.isoformat(),
@@ -211,19 +245,19 @@ def build_plan_horizon(
                     "grid_export_w": act["grid_export_w"],
                     "self_discharge_w": 0.0,
                     "reserve_soc": round(reserve_soc, 1),
-                    "pv_kwh": act.get("pv_kwh"),
-                    "load_kwh": act.get("load_kwh"),
-                    "solar_charge_kwh": act.get("solar_charge_kwh"),
-                    "grid_charge_kwh": act.get("grid_charge_kwh"),
-                    "grid_export_kwh": act.get("grid_export_kwh"),
+                    "pv_kwh": _pv_kwh * _slot_frac if _pv_kwh is not None else None,
+                    "load_kwh": _load_kwh * _slot_frac if _load_kwh is not None else None,
+                    "solar_charge_kwh": _solar_charge_kwh * _slot_frac if _solar_charge_kwh is not None else None,
+                    "grid_charge_kwh": _grid_charge_kwh * _slot_frac if _grid_charge_kwh is not None else None,
+                    "grid_export_kwh": _grid_export_kwh * _slot_frac if _grid_export_kwh is not None else None,
                 }
             )
             continue
-        iv = iv_by_hour.get(hour)
+        iv = iv_by_hour.get(slot_key)
         pv_w = iv.pv_w if iv is not None else None
         load_w = iv.load_w if iv is not None else None
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
-        is_grid = hour in selected_set
+        is_grid = slot_key in selected_set
         is_est = hour in est_set
         solar_surplus = max(0.0, iv.pv_w - iv.load_w) if iv is not None else 0.0
         if cap_wh > 0:
@@ -235,11 +269,11 @@ def build_plan_horizon(
         grid_charge_w = 0.0
         self_discharge_w = 0.0
         if is_grid:
-            grid_request_w = req_by_hour.get(hour, cfg.max_charge_w)
+            grid_request_w = req_by_hour.get(slot_key, cfg.max_charge_w)
             # GRID stops at the solar-reservation ceiling for this hour (leave room
             # for forecast solar); SOLAR may still fill to soc_target above it.
             # When no ceiling is supplied, fall back to soc_target (prior behaviour).
-            ceil_soc = ceil_by_hour.get(hour, cfg.soc_target)
+            ceil_soc = ceil_by_hour.get(slot_key, cfg.soc_target)
             if cap_wh > 0:
                 ceil_headroom_w = max(0.0, (ceil_soc - soc_sim) / 100.0 * cap_wh / (eta * dt_h))
             else:
@@ -259,7 +293,7 @@ def build_plan_horizon(
         elif iv is not None and iv.load_w > iv.pv_w:
             self_discharge_w = min(iv.load_w - iv.pv_w, cfg.max_charge_w)
         # Export to grid (NET-EXPORT: positive setpoint = export after serving house).
-        grid_export_w = exp_by_hour.get(hour, 0.0)
+        grid_export_w = exp_by_hour.get(slot_key, 0.0)
         total_w = solar_charge_w + grid_charge_w
         if cap_wh > 0:
             # eta_curve (measured, power-dependent) overrides the static scalars
@@ -363,6 +397,7 @@ def build_display_horizon(
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     temp_by_hour: dict[datetime, float | None] | None = None,
     delivered_by_hour: dict[datetime, dict] | None = None,
+    slot_minutes: int = 60,
     *,
     eta_curve=None,
     est_slots: list[PriceSlot] | None = None,
@@ -408,6 +443,13 @@ def build_display_horizon(
             ``estimated``). ``None``/empty (default) is a no-op — byte-identical.
         terminal_need_kwh: Forwarded straight through to ``build_plan_horizon``'s
             ``terminal_need_kwh`` (only meaningful together with ``est_slots``).
+        slot_minutes: The live/resolved slot width in minutes (15/30/60), passed
+            straight through to ``build_display_intervals`` and
+            ``build_plan_horizon``.  Without this, both callees fell back to
+            their own 60-min default regardless of the caller's actual
+            resolution, so every row got ``dt_h=1.0`` at 15-min — a 4x energy-
+            integration inflation (finding A1).  Default 60 is byte-identical
+            to the pre-fix behaviour.
     """
     if sun_times is None:
         return []
@@ -440,6 +482,7 @@ def build_display_horizon(
         cur_temp,
         fallback_w,
         temp_by_hour=temp_by_hour,
+        slot_minutes=slot_minutes,
     )
     return build_plan_horizon(
         all_slots,
@@ -455,6 +498,7 @@ def build_display_horizon(
         past_actuals_by_hour=past_actuals_by_hour,
         hedge_drain_by_hour=hedge_drain_by_hour,
         delivered_by_hour=delivered_by_hour,
+        slot_minutes=slot_minutes,
         eta_curve=eta_curve,
         est_starts=est_starts,
         terminal_need_kwh=terminal_need_kwh,

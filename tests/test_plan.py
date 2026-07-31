@@ -1363,3 +1363,189 @@ class TestEstimatedTail:
         )
         assert out[1]["estimated"] is True
         assert out[1]["is_past_horizon"] is True
+
+
+# ---------------------------------------------------------------------------
+# 15-min display-path fixes (A1/A2/A3, code review 2026-07-31)
+# ---------------------------------------------------------------------------
+
+
+def test_build_plan_horizon_quarter_grid_fidelity_at_15min():
+    """A2 regression: iv_by_hour/selected_set/req_by_hour/exp_by_hour/ceil_by_hour
+    must be keyed on the SLOT grid at slot_minutes=15, not collapsed onto the
+    shared clock-hour (which let a later unselected quarter silently overwrite
+    an earlier committed one, and painted mode="grid" onto all 4 quarters)."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    q0 = BASE
+    q1 = BASE + timedelta(minutes=15)
+    q2 = BASE + timedelta(minutes=30)
+    q3 = BASE + timedelta(minutes=45)
+    quarters = [q0, q1, q2, q3]
+    slots = [PriceSlot(q, 0.30) for q in quarters]
+    intervals = [ForecastInterval(q, pv_w=0.0, load_w=0.0, dt_h=0.25) for q in quarters]
+    # Only q1 is committed: a 4000 W grid charge. q0/q2/q3 are NOT selected.
+    selected = [q1]
+    grid_request = {q1: 4000.0}
+    out = plan.build_plan_horizon(
+        slots,
+        intervals,
+        selected,
+        0.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        grid_request_by_hour=grid_request,
+        slot_minutes=15,
+    )
+    by_start = {e["start"]: e for e in out}
+    assert by_start[q0.isoformat()]["mode"] == "idle"
+    assert by_start[q1.isoformat()]["mode"] == "grid"
+    assert by_start[q2.isoformat()]["mode"] == "idle"
+    assert by_start[q3.isoformat()]["mode"] == "idle"
+    # The committed 4000 W quarter survives...
+    assert by_start[q1.isoformat()]["grid_charge_w"] == 4000.0
+    # ...and does NOT bleed onto its unselected siblings.
+    assert by_start[q0.isoformat()]["grid_charge_w"] == 0.0
+    assert by_start[q2.isoformat()]["grid_charge_w"] == 0.0
+    assert by_start[q3.isoformat()]["grid_charge_w"] == 0.0
+
+
+def test_build_plan_horizon_slot_minutes_60_byte_identical():
+    """A2 invariant: floor_to_slot(x, 60) == hour_floor(x), so an explicit
+    slot_minutes=60 must be byte-identical to the (pre-fix) implicit default."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+    slots = _slots(3)
+    intervals = [
+        ForecastInterval(BASE, pv_w=2000.0, load_w=300.0, dt_h=1.0),
+        ForecastInterval(BASE + timedelta(hours=1), pv_w=0.0, load_w=400.0, dt_h=1.0),
+        ForecastInterval(BASE + timedelta(hours=2), pv_w=0.0, load_w=400.0, dt_h=1.0),
+    ]
+    selected = [BASE + timedelta(hours=1)]
+    horizon_edge = BASE + timedelta(hours=3)
+    implicit = plan.build_plan_horizon(slots, intervals, selected, 50.0, horizon_edge, cfg)
+    explicit = plan.build_plan_horizon(slots, intervals, selected, 50.0, horizon_edge, cfg, slot_minutes=60)
+    assert implicit == explicit
+    assert [e["mode"] for e in implicit] == ["solar", "grid", "idle"]
+
+
+def test_build_display_horizon_threads_slot_minutes_to_dt_h():
+    """A1 regression: build_display_horizon must forward slot_minutes to
+    build_display_intervals/build_plan_horizon so 15-min rows integrate energy
+    at dt_h=0.25, not the hour-locked default of dt_h=1.0 (4x inflation)."""
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(minutes=15 * i), 0.30) for i in range(8)]
+    sun_times = _sun_times_for(now)
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=4000.0, eta_charge=1.0)
+    out = plan.build_display_horizon(
+        slots,
+        now,
+        today_arrays=None,
+        tomorrow_arrays=None,
+        sun_times=sun_times,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[],
+        horizon_edge=now + timedelta(hours=1),
+        cfg=cfg,
+        slot_minutes=15,
+    )
+    assert out, "expected non-empty horizon"
+    # _StubPredictor returns a constant 500 W load regardless of dt/temp;
+    # load_kwh = load_w * dt_h / 1000 must reflect the true 15-min slot width
+    # (0.125 kWh), not the hour-locked default (0.5 kWh).
+    assert out[0]["load_kwh"] == pytest.approx(0.125)
+
+
+def test_build_display_horizon_slot_minutes_60_is_byte_identical_to_implicit():
+    """A1 invariant: explicit slot_minutes=60 must match the implicit default —
+    zero behavior change at the legacy hourly resolution."""
+    now = datetime(2026, 6, 20, 17, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(hours=i), 0.30) for i in range(6)]
+    sun_times = _sun_times_for(now)
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=4000.0, eta_charge=1.0)
+    kwargs = dict(
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
+        sun_times=sun_times,
+        predictor=_StubPredictor(),
+        cur_temp=None,
+        fallback_w=400.0,
+        soc=50.0,
+        selected=[now.replace(minute=0, second=0, microsecond=0)],
+        horizon_edge=now + timedelta(hours=2),
+        cfg=cfg,
+    )
+    implicit = plan.build_display_horizon(slots, now, **kwargs)
+    explicit = plan.build_display_horizon(slots, now, slot_minutes=60, **kwargs)
+    assert implicit == explicit
+    assert implicit, "expected non-empty horizon"
+
+
+def test_past_slot_kwh_divided_across_quarters_at_15min():
+    """A3 regression: at slot_minutes=15, each of the hour's 4 quarter rows must
+    carry an EVEN SHARE of the hour's measured actual, not the full hour total
+    stamped onto every quarter (4x inflated column totals when summed)."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    hour_start = BASE
+    act = {
+        "pv_w": 800.0,
+        "load_w": 400.0,
+        "soc": 50.0,
+        "solar_charge_w": 400.0,
+        "grid_charge_w": 0.0,
+        "grid_export_w": 0.0,
+        "pv_kwh": 0.8,
+        "load_kwh": 0.4,
+        "solar_charge_kwh": 0.4,
+        "grid_charge_kwh": 0.0,
+        "grid_export_kwh": 0.0,
+    }
+    quarters = [hour_start + timedelta(minutes=15 * i) for i in range(4)]
+    slots = [PriceSlot(q, 0.30) for q in quarters]
+    out = plan.build_plan_horizon(
+        slots,
+        [],
+        [],
+        49.0,
+        hour_start + timedelta(hours=1),
+        cfg,
+        past_actuals_by_hour={hour_start: act},
+        slot_minutes=15,
+    )
+    assert len(out) == 4
+    assert all(e["mode"] == "actual" for e in out)
+    assert out[0]["pv_kwh"] == pytest.approx(0.2)  # 0.8 / 4
+    assert out[0]["load_kwh"] == pytest.approx(0.1)  # 0.4 / 4
+    assert sum(e["pv_kwh"] for e in out) == pytest.approx(0.8)
+    assert sum(e["load_kwh"] for e in out) == pytest.approx(0.4)
+
+
+def test_past_slot_kwh_unscaled_at_default_slot_minutes():
+    """A3 invariant: slot_minutes=60 (default) leaves past-actual kwh columns
+    byte-identical to the raw recorded values (the A3 fraction is 1.0)."""
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
+    act = {
+        "pv_w": 800.0,
+        "load_w": 400.0,
+        "soc": 50.0,
+        "solar_charge_w": 400.0,
+        "grid_charge_w": 0.0,
+        "grid_export_w": 0.0,
+        "pv_kwh": 0.837,
+        "load_kwh": 0.412,
+        "solar_charge_kwh": 0.4,
+        "grid_charge_kwh": 0.0,
+        "grid_export_kwh": 0.0,
+    }
+    out = plan.build_plan_horizon(
+        _slots(1),
+        [],
+        [],
+        49.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        past_actuals_by_hour={BASE: act},
+    )
+    assert out[0]["pv_kwh"] == 0.837
+    assert out[0]["load_kwh"] == 0.412
