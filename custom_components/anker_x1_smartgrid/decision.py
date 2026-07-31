@@ -165,6 +165,7 @@ def _dp_select_slots(
     water_value_hi: float | None = None,
     overnight_need_kwh: float = 0.0,
     export_slots: list[PriceSlot] | None = None,
+    _out: dict | None = None,
 ) -> tuple[
     list[datetime],
     dict[datetime, float],
@@ -177,6 +178,21 @@ def _dp_select_slots(
 
     May raise on any error; the caller (``compute_decision``) wraps in
     try/except and falls back to PASSIVE (``selected=[]``).
+
+    ``_out`` is an optional side-channel dict (same convention as
+    ``compute_decision``'s own ``_out`` — indeed ``compute_decision`` passes
+    its own ``_out`` straight through here).  When provided, on a normal
+    (non-raising) return this function writes:
+        _out["export_curve_covered"] — bool, True iff a non-empty
+            ``export_slots`` curve was supplied AND passed the all-or-nothing
+            coverage check (i.e. the DP actually used it, not the ratio-scale/
+            same-entity/static fallback).
+        _out["export_curve_slots"]   — int, ``len(export_slots)`` as supplied
+            (0 when ``export_slots`` is falsy) — independent of whether
+            coverage passed, so a partial curve still reports its true size.
+    Written only at the very end of a successful run, alongside the return —
+    an exception raised anywhere above leaves ``_out`` untouched, matching
+    ``compute_decision``'s own ``_out`` atomicity contract.
 
     Window construction
     -------------------
@@ -329,6 +345,25 @@ def _dp_select_slots(
     #   is ignored rather than mixed per slot.
     _export_starts = [now_h + h * stride for h in range(window_len)]
     _export_curve = _export_window_curve(export_slots, _export_starts, _price_valid, slot_minutes)
+    if export_slots and _export_curve is None:
+        # Finding 2c: the all-or-nothing coverage check silently discarded a
+        # non-empty curve — surface it at INFO (tick-level INFO is the norm
+        # for this module's DP diagnostics, e.g. the PASSIVE-fallback log
+        # below) instead of leaving the fallback to ratio-scale/legacy
+        # pricing invisible.
+        _covered_by_start = resolution.resample_price_map(export_slots, slot_minutes)
+        _required_n = sum(1 for need in _price_valid if need)
+        _covered_n = sum(
+            1 for start, need in zip(_export_starts, _price_valid, strict=True) if need and start in _covered_by_start
+        )
+        _LOGGER.info(
+            "Export price curve supplied (%d slots) failed all-or-nothing coverage "
+            "of the DP window: %d/%d required slots covered; falling back to "
+            "ratio-scale/legacy export pricing for this tick",
+            len(export_slots),
+            _covered_n,
+            _required_n,
+        )
     if export_price is None:
         window_export_price: list[float] = [0.0] * window_len
         feed_in: list[float] | None = None
@@ -525,6 +560,9 @@ def _dp_select_slots(
     ceiling_by_hour: dict[datetime, float] = {
         now_h + h * stride: grid_charge_ceiling[h] / cap * 100.0 for h in range(window_len)
     }
+    if _out is not None:
+        _out["export_curve_covered"] = _export_curve is not None
+        _out["export_curve_slots"] = len(export_slots) if export_slots else 0
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour
 
 
@@ -847,6 +885,13 @@ def compute_decision(
     populates it with DP-run artefacts needed for fictive-plan publication:
         _out["dp_selected"]  — list[datetime] of DP-chosen charge hours (may be []).
         _out["intervals"]    — P50 ForecastInterval list used for horizon building.
+        _out["export_curve_covered"] — bool, True iff a non-empty ``export_slots``
+            curve was supplied AND passed the DP's all-or-nothing coverage check
+            (i.e. the DP actually used it this tick, not a ratio-scale/same-entity/
+            static fallback).  Written by ``_dp_select_slots`` (see its own
+            docstring); surfaced on the plan sensor for rollout observability.
+        _out["export_curve_slots"]   — int, count of ``export_slots`` supplied as
+            parsed (0 when none), independent of whether coverage passed.
     Keys are written only when the DP actually runs and succeeds; the dict is
     left untouched when the DP raises.
 
@@ -1085,11 +1130,22 @@ def compute_decision(
             _max_export_dc_value = water_value
         else:
             _eta_d = cfg.eta_discharge_static()
-            _win_slots = [s for s in slots if now_h <= s.start < horizon_edge]
+            # Anchor on `_slot_now_h` (this function's own `_dp_window(...,
+            # slot_minutes)` result, computed above) — NOT the hour-floored
+            # `now_h` local. At slot_minutes=60 the two are identical
+            # (parity); at 15-min they diverge by up to 3 slots whenever
+            # `inputs.now` sits outside the hour's first slot, so the old
+            # hour-floor anchor demanded coverage of already-elapsed
+            # quarter-slots the DP window never even spans. A curve
+            # correctly scoped to the DP's own window then failed this
+            # stricter check and silently fell back to ratio-scale while
+            # the DP itself used the curve (window-anchor mismatch).
+            _win_slots = [s for s in slots if _slot_now_h <= s.start < horizon_edge]
             _win_prices = [s.price for s in _win_slots]
-            # Same span as the DP window ([now, horizon_edge)); every import slot in
-            # it is "required", so coverage here matches the DP's own all-or-nothing
-            # test.  Partial coverage → None → the legacy branches below.
+            # Same span as the DP window ([_slot_now_h, horizon_edge)); every
+            # import slot in it is "required", so coverage here matches the
+            # DP's own all-or-nothing test.  Partial coverage → None → the
+            # legacy branches below.
             _win_export = _export_window_curve(
                 export_slots,
                 [s.start for s in _win_slots],
@@ -1145,6 +1201,7 @@ def compute_decision(
             eta_curve=eta_curve,
             water_value_hi=water_value_hi,
             overnight_need_kwh=overnight_need_kwh,
+            _out=_out,
         )
         # Live path: DP replaces heuristic selected slots.
         selected = _dp_selected

@@ -320,6 +320,14 @@ class X1PlanSensor(_Base):
             "terminal_v_hi": self._controller.last_status.get("terminal_v_hi"),
             "terminal_need_kwh": self._controller.last_status.get("terminal_need_kwh"),
             "slot_minutes": self._controller.last_status.get("slot_minutes"),
+            # Export-curve engagement diagnostics (decision._dp_select_slots'
+            # _out side-channel) — makes the "per-slot export curve visible in
+            # plan" rollout step actually observable: None until the DP has run
+            # with an export curve at least once; False means a curve was
+            # supplied but failed all-or-nothing coverage this tick (see the
+            # matching INFO log in decision.py).
+            "export_curve_covered": self._controller.last_status.get("export_curve_covered"),
+            "export_curve_slots": self._controller.last_status.get("export_curve_slots"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),
             "load_adapt_ratio_raw": self._controller.last_status.get("load_adapt_ratio_raw"),

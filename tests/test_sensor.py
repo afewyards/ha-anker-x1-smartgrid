@@ -28,6 +28,43 @@ def test_export_setpoint_sensor_reads_key():
 
 
 # ---------------------------------------------------------------------------
+# Finding 2: export-curve engagement diagnostics must be visible on the plan
+# sensor next to the existing DP diagnostics (terminal_v_hi, slot_minutes).
+# ---------------------------------------------------------------------------
+
+
+def test_plan_sensor_surfaces_export_curve_diagnostics():
+    from custom_components.anker_x1_smartgrid.sensor import X1PlanSensor
+
+    class _C:
+        last_status = {
+            "plan": {"horizon": [], "deadline": None, "planned_grid_hours": 0},
+            "export_curve_covered": True,
+            "export_curve_slots": 38,
+        }
+
+    s = X1PlanSensor(_C(), "e")
+    attrs = s.extra_state_attributes
+    assert attrs["export_curve_covered"] is True
+    assert attrs["export_curve_slots"] == 38
+
+
+def test_plan_sensor_export_curve_diagnostics_default_none():
+    """Absent from last_status (DP didn't run / no curve wired) -> None,
+    matching the sibling terminal_v_hi/terminal_need_kwh default-None
+    convention (both keys always present on the sensor, value None until set)."""
+    from custom_components.anker_x1_smartgrid.sensor import X1PlanSensor
+
+    class _C:
+        last_status = {"plan": {"horizon": [], "deadline": None, "planned_grid_hours": 0}}
+
+    s = X1PlanSensor(_C(), "e")
+    attrs = s.extra_state_attributes
+    assert attrs["export_curve_covered"] is None
+    assert attrs["export_curve_slots"] is None
+
+
+# ---------------------------------------------------------------------------
 # T16/T22: house load sensor — event-driven, reads live HA state directly
 # (not last_status / the 60s controller tick).
 # ---------------------------------------------------------------------------
