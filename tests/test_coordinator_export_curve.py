@@ -112,6 +112,42 @@ async def test_read_export_price_slots_no_slot_covers_now_keeps_curve(hass, monk
     assert [s.price for s in slots] == pytest.approx([0.10, 0.12])
 
 
+_SINGLE_SLOT_ATTR = {
+    "prices": [
+        {"from": "2026-07-31T10:00:00+02:00", "till": "2026-07-31T10:15:00+02:00", "price": 0.10},
+    ]
+}
+
+
+async def test_read_export_price_slots_single_slot_matching_state_kept(hass, monkeypatch):
+    """A single-entry curve (duration_min unknowable) whose lone price agrees
+    with the scalar state is kept — same as any other unverifiable curve."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    hass.states.async_set(FRANK_MARKET, "0.10", _SINGLE_SLOT_ATTR)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_IN_FIRST_SLOT)
+    slots = coordinator.read_export_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.10])
+    assert slots[0].duration_min is None
+
+
+async def test_read_export_price_slots_single_slot_mismatch_kept_and_logged(hass, monkeypatch, caplog):
+    """R2: a single-entry curve has no derivable duration (parse_price_curve
+    leaves duration_min=None), so _slot_covering_now can never find a window
+    containing 'now' — the cross-check can't evaluate it. Route chosen:
+    unverifiable-but-kept (matches the existing "nothing covers now" philosophy
+    — the guard never blocks what it can't evaluate) WITH a debug log so the
+    skip is traceable instead of silently indistinguishable from a genuine
+    no-coverage result. Even a wildly-mismatched scalar state does not
+    discard the curve."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    hass.states.async_set(FRANK_MARKET, "999.0", _SINGLE_SLOT_ATTR)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_IN_FIRST_SLOT)
+    with caplog.at_level("DEBUG"):
+        slots = coordinator.read_export_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.10])
+    assert any(FRANK_MARKET in rec.getMessage() for rec in caplog.records)
+
+
 async def test_read_export_price_slots_reads_zonneplan_forecast_shape(hass):
     """Shape-agnostic: a `forecast`-shaped export entity works too."""
     d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: "sensor.other_export"})

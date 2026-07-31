@@ -147,10 +147,20 @@ def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
 
 
 def _slot_covering_now(slots: list[PriceSlot], now: datetime) -> PriceSlot | None:
-    """Return the slot whose [start, start+duration) window contains ``now``, or None."""
+    """Return the slot whose [start, start+duration) window contains ``now``, or None.
+
+    A slot with ``duration_min is None`` (parse_price_curve leaves this unset for
+    a single-entry curve — duration is normally derived from the gap to the next
+    entry, and there isn't one) has no known window width and is skipped rather
+    than treated as zero-width. R2: previously ``duration_min or 0.0`` produced
+    the same "never matches" outcome by coincidence, silently indistinguishable
+    from a genuine "nothing covers now" result — see the caller's log for the
+    unverifiable case this now makes visible.
+    """
     for slot in slots:
-        duration = slot.duration_min or 0.0
-        if slot.start <= now < slot.start + timedelta(minutes=duration):
+        if slot.duration_min is None:
+            continue
+        if slot.start <= now < slot.start + timedelta(minutes=slot.duration_min):
             return slot
     return None
 
@@ -191,6 +201,18 @@ def read_export_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
         return slots
     slot_now = _slot_covering_now(slots, dt_util.utcnow())
     if slot_now is None:
+        # R2: distinct from "no slot's window overlaps now" — a curve with an
+        # unknown slot duration (single-entry curve; parse_price_curve leaves
+        # duration_min=None with no next-entry gap to derive it from) can never
+        # be evaluated by the cross-check above. Logged so this is traceable
+        # instead of being silently indistinguishable from the ordinary case.
+        if any(s.duration_min is None for s in slots):
+            _LOGGER.debug(
+                "Export price curve for %s has no known slot duration (single-entry "
+                "curve) — cross-check against the scalar state skipped, keeping the "
+                "curve unverified",
+                export_ent,
+            )
         return slots
     tolerance = max(_EXPORT_CURVE_ABS_TOL, _EXPORT_CURVE_REL_TOL * abs(state_val))
     if abs(slot_now.price - state_val) > tolerance:

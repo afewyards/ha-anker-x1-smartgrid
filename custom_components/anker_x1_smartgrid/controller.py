@@ -1277,6 +1277,13 @@ class Controller:
             # but live sensors stay 0 while disabled.
             # Build status AFTER the daily regret job so regret keys are fresh.
             status = self._status(now, 0.0, None, "disabled")
+            # R1: mirror the enabled path below — surface the DP's export-curve
+            # engagement for observability even while shadow/disabled. _status()
+            # rebuilds self.last_status wholesale every tick, so these keys must
+            # be re-added after every such rebuild or sensor.py reads stale/None
+            # values forever (they are never otherwise copied across).
+            self.last_status["export_curve_covered"] = _shadow_dp_out.get("export_curve_covered")
+            self.last_status["export_curve_slots"] = _shadow_dp_out.get("export_curve_slots")
 
             # Publish a self-consumption display horizon (no grid charging) so the
             # card still renders PV + load + projected SoC while disabled.
@@ -1579,6 +1586,12 @@ class Controller:
         # failure (dict left empty at declaration) → last_status carries None.
         self.last_status["terminal_v_hi"] = _dp_out.get("terminal_v_hi")
         self.last_status["terminal_need_kwh"] = _dp_out.get("terminal_need_kwh")
+        # R1: surface the DP's export-curve engagement (decision.py writes these
+        # into _dp_out) for the dashboard/diagnostic sensor. _status() above just
+        # rebuilt self.last_status wholesale, so — like terminal_v_hi/need_kwh —
+        # this must be re-added every tick or sensor.py reads permanent None.
+        self.last_status["export_curve_covered"] = _dp_out.get("export_curve_covered")
+        self.last_status["export_curve_slots"] = _dp_out.get("export_curve_slots")
         # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
         # over-report under the "planned_grid_hours" name. Scale by the slot
         # width so the value stays true hours; a no-op at the legacy 60-min
