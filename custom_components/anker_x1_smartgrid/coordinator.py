@@ -136,6 +136,27 @@ def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     return _parse_price_attrs(hass.states.get(ent))
 
 
+def read_export_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
+    """Per-slot export (feed-in) price curve, or ``[]`` when there is none.
+
+    ``[]`` means "no curve — keep the legacy scalar export paths", and is
+    returned when:
+      * static tariff mode (the configured constant governs the export credit),
+      * ``ent_export_price`` is unset,
+      * the export entity IS the import entity (the DP already reuses the import
+        curve for that case; returning [] keeps Zonneplan byte-identical),
+      * the entity is missing or exposes no recognised price attribute.
+    """
+    if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:
+        return []
+    export_ent = data.get(const.CONF_ENT_EXPORT_PRICE, "")
+    if not export_ent:
+        return []
+    if export_ent == data.get(const.CONF_ENT_PRICE, ""):
+        return []
+    return _parse_price_attrs(hass.states.get(export_ent))
+
+
 def count_persons_home(hass: HomeAssistant, data: dict) -> int | None:
     """Count configured person.* entities currently in state 'home'.
 
