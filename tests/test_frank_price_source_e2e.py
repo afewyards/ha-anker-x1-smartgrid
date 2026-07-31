@@ -55,10 +55,14 @@ async def test_doubled_15min_attribute_yields_96_slots_at_15_minutes(hass):
     assert resolution.resolve_slot_minutes(slots, const.SLOT_RESOLUTION_AUTO) == 15
 
 
-async def test_export_market_curve_parses_at_same_resolution(hass):
+async def test_export_market_curve_parses_at_same_resolution(hass, monkeypatch):
     d = _data()
     hass.states.async_set(FRANK_ALL_IN, "0.20", {"prices": _frank_prices(0.20)})
     hass.states.async_set(FRANK_MARKET, "0.08", {"prices": _frank_prices(0.08)})
+    # Pin "now" into the i=0 slot, where the fixture's scalar state (0.08) agrees
+    # with the curve — the cross-check in read_export_price_slots compares the
+    # slot covering "now" against the entity's own scalar state.
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _DAY_START)
 
     export_slots = coordinator.read_export_price_slots(hass, d)
     assert len(export_slots) == 96

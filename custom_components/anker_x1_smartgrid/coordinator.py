@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone, UTC
 
 from homeassistant.core import HomeAssistant
@@ -12,7 +13,16 @@ from .models import Config, PlantInputs, PriceSlot
 from .parsers import parse_price_curve, _parse_dt
 from .tariff import synth_static_price_slots
 
+_LOGGER = logging.getLogger(__name__)
+
 _BAD = {"unknown", "unavailable", "none", ""}
+
+# Export-curve cross-check tolerance: the curve slot covering "now" must agree
+# with the export entity's own scalar state within max(absolute, relative).
+# A wrong-unit curve (e.g. ct/kWh) or the wrong series (all-in vs market) will
+# blow through both floors; a normal quote-to-quote wobble will not.
+_EXPORT_CURVE_ABS_TOL = 0.02
+_EXPORT_CURVE_REL_TOL = 0.25
 
 
 def read_float(hass: HomeAssistant, entity_id: str) -> float | None:
@@ -136,6 +146,15 @@ def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     return _parse_price_attrs(hass.states.get(ent))
 
 
+def _slot_covering_now(slots: list[PriceSlot], now: datetime) -> PriceSlot | None:
+    """Return the slot whose [start, start+duration) window contains ``now``, or None."""
+    for slot in slots:
+        duration = slot.duration_min or 0.0
+        if slot.start <= now < slot.start + timedelta(minutes=duration):
+            return slot
+    return None
+
+
 def read_export_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     """Per-slot export (feed-in) price curve, or ``[]`` when there is none.
 
@@ -145,7 +164,17 @@ def read_export_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
       * ``ent_export_price`` is unset,
       * the export entity IS the import entity (the DP already reuses the import
         curve for that case; returning [] keeps Zonneplan byte-identical),
-      * the entity is missing or exposes no recognised price attribute.
+      * the entity is missing or exposes no recognised price attribute,
+      * the entity's own scalar state disagrees with the curve slot covering
+        "now" by more than a unit/series-mismatch tolerance (see below).
+
+    The curve is otherwise trusted verbatim by the DP with no independent
+    check against the entity's units or series. As a cross-check (not a
+    gate — it never blocks a curve it can't evaluate), whenever the entity's
+    scalar state is numeric AND a slot covers "now": a curve in the wrong
+    unit (e.g. ct/kWh) or carrying the wrong series (all-in instead of
+    market) will disagree with the scalar state by far more than normal
+    quote-to-quote noise, and the whole curve is discarded.
     """
     if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:
         return []
@@ -154,7 +183,26 @@ def read_export_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
         return []
     if export_ent == data.get(const.CONF_ENT_PRICE, ""):
         return []
-    return _parse_price_attrs(hass.states.get(export_ent))
+    slots = _parse_price_attrs(hass.states.get(export_ent))
+    if not slots:
+        return slots
+    state_val = read_float(hass, export_ent)
+    if state_val is None:
+        return slots
+    slot_now = _slot_covering_now(slots, dt_util.utcnow())
+    if slot_now is None:
+        return slots
+    tolerance = max(_EXPORT_CURVE_ABS_TOL, _EXPORT_CURVE_REL_TOL * abs(state_val))
+    if abs(slot_now.price - state_val) > tolerance:
+        _LOGGER.warning(
+            "Export price curve for %s disagrees with its own scalar state "
+            "(curve=%.4f state=%.4f) — discarding curve, falling back to legacy scalar export",
+            export_ent,
+            slot_now.price,
+            state_val,
+        )
+        return []
+    return slots
 
 
 def count_persons_home(hass: HomeAssistant, data: dict) -> int | None:

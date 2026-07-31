@@ -68,7 +68,7 @@ def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
     ``resolution.detect_slot_minutes`` mis-reads the resolution.  The sort is
     stable, so "first" means first in the source list among equal starts.
     """
-    if not forecast_attr:
+    if not isinstance(forecast_attr, list):
         return []
     slots: list[PriceSlot] = []
     for entry in forecast_attr:

@@ -33,6 +33,13 @@ def test_parse_price_curve_empty():
     assert parsers.parse_price_curve(None) == []
 
 
+def test_parse_price_curve_non_list_attribute_returns_empty():
+    """A truthy non-list attribute (e.g. `prices: 5`) must not raise — it's not a curve."""
+    assert parsers.parse_price_curve(5) == []
+    assert parsers.parse_price_curve("prices") == []
+    assert parsers.parse_price_curve({"from": "x", "price": 0.1}) == []
+
+
 def test_parse_price_curve_drops_non_finite_prices():
     attr = [
         {"datetime": "2026-07-02T10:00:00Z", "electricity_price": "NaN"},

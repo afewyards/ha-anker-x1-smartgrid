@@ -1,5 +1,7 @@
 """coordinator.read_export_price_slots — per-slot export (feed-in) curve reader."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import const, coordinator
@@ -14,6 +16,11 @@ _MARKET_ATTR = {
         {"from": "2026-07-31T10:15:00+02:00", "till": "2026-07-31T10:30:00+02:00", "price": 0.12},
     ]
 }
+
+# 2026-07-31T10:05:00+02:00 == 08:05 UTC — inside the first _MARKET_ATTR slot.
+_NOW_IN_FIRST_SLOT = datetime(2026, 7, 31, 8, 5, tzinfo=UTC)
+# Outside both _MARKET_ATTR slots (they cover 08:00-08:30 UTC).
+_NOW_OUTSIDE_SLOTS = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
 
 
 def _data(**overrides):
@@ -59,6 +66,50 @@ async def test_read_export_price_slots_empty_when_no_curve_attribute(hass):
     d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
     hass.states.async_set(FRANK_MARKET, "0.10", {"unit_of_measurement": "EUR/kWh"})
     assert coordinator.read_export_price_slots(hass, d) == []
+
+
+async def test_read_export_price_slots_matching_state_keeps_curve(hass, monkeypatch):
+    """Curve slot covering 'now' agrees with the entity's scalar state — curve kept."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    hass.states.async_set(FRANK_MARKET, "0.10", _MARKET_ATTR)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_IN_FIRST_SLOT)
+    slots = coordinator.read_export_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.10, 0.12])
+
+
+async def test_read_export_price_slots_unit_mismatch_discards_curve(hass, monkeypatch, caplog):
+    """Curve carrying the wrong series/units (e.g. values ~100x the scalar state) is untrustworthy."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    mismatched_attr = {
+        "prices": [
+            {"from": "2026-07-31T10:00:00+02:00", "till": "2026-07-31T10:15:00+02:00", "price": 10.0},
+            {"from": "2026-07-31T10:15:00+02:00", "till": "2026-07-31T10:30:00+02:00", "price": 12.0},
+        ]
+    }
+    hass.states.async_set(FRANK_MARKET, "0.05", mismatched_attr)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_IN_FIRST_SLOT)
+    with caplog.at_level("WARNING"):
+        slots = coordinator.read_export_price_slots(hass, d)
+    assert slots == []
+    assert any(FRANK_MARKET in rec.getMessage() for rec in caplog.records)
+
+
+async def test_read_export_price_slots_unavailable_state_keeps_curve(hass, monkeypatch):
+    """No scalar state to cross-check against — the guard is a cross-check, not a gate."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    hass.states.async_set(FRANK_MARKET, "unavailable", _MARKET_ATTR)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_IN_FIRST_SLOT)
+    slots = coordinator.read_export_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.10, 0.12])
+
+
+async def test_read_export_price_slots_no_slot_covers_now_keeps_curve(hass, monkeypatch):
+    """'now' falls outside every slot — nothing to compare against, curve kept."""
+    d = _data(**{const.CONF_ENT_PRICE: FRANK_ALL_IN, const.CONF_ENT_EXPORT_PRICE: FRANK_MARKET})
+    hass.states.async_set(FRANK_MARKET, "999.0", _MARKET_ATTR)
+    monkeypatch.setattr(coordinator.dt_util, "utcnow", lambda: _NOW_OUTSIDE_SLOTS)
+    slots = coordinator.read_export_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.10, 0.12])
 
 
 async def test_read_export_price_slots_reads_zonneplan_forecast_shape(hass):
