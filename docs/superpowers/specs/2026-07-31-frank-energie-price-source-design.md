@@ -54,6 +54,6 @@ No code change. Deduped 15-min slots → `detect_slot_minutes` returns 15 → na
 ## Open questions
 
 1. Do tomorrow's prices appear in the `prices` attribute after ~13:00 CEST publication? DP overnight value depends on it — verify live before trusting overnight plans.
-2. Confirm Frank France injection credit really is spot market price (check contract/app).
+2. ~~Confirm Frank France injection credit really is spot market price (check contract/app).~~ **ANSWERED 2026-07-31 (see memory `frank-energie-fr-export-pricing`): NO — "Option Injection" pays a flat monthly solar-profile-weighted EPEX average −0.5 c€ (~0.09 €/kWh), timing-independent; battery-origin export contractually grey. France therefore deploys with `ent_export_price` UNSET (export = €0 no-op, pure self-consumption arbitrage). The export-curve machinery ships dormant for genuinely spot-indexed markets.**
 3. Doubled-array quirk: file upstream issue on HiDiHo01/home-assistant-frank_energie?
 4. France box DP runtime at 15-min resolution — measure, no prior baseline on that hardware.
