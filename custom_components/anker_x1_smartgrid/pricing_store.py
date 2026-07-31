@@ -128,8 +128,10 @@ def build_estimated_slots(
     """Estimated PriceSlots covering ONLY [real_horizon_end, tomorrow_solar_pickup).
 
     Empty (the deferral case) when there is no estimate, no pickup, or real prices
-    already extend past tonight (real_horizon_end >= pickup).  These slots are passed
-    ONLY to compute_anticipation_held_extra — NEVER merged into `slots`.
+    already extend past tonight (real_horizon_end >= pickup).  These slots are NEVER
+    merged into the DP's `slots` and never reach `_dp_select_slots`; the display
+    layer appends them to its own copy of the slot list via
+    `build_display_horizon(est_slots=...)` to render the estimated tail.
     """
     if estimated_tomorrow is None or tomorrow_solar_pickup is None or real_horizon_end >= tomorrow_solar_pickup:
         return []

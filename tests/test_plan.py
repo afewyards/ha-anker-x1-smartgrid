@@ -1,3 +1,5 @@
+import itertools
+
 import pytest
 from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot, ForecastInterval
@@ -1329,7 +1331,7 @@ class TestEstimatedTail:
         socs = [e["soc"] for e in out]
         assert socs[1] >= const.FIRMWARE_SOC_FLOOR
         assert socs[2] >= const.FIRMWARE_SOC_FLOOR
-        assert all(a >= b for a, b in zip(socs, socs[1:]))  # monotone non-increasing
+        assert all(a >= b for a, b in itertools.pairwise(socs))  # monotone non-increasing
 
     def test_est_reserve_soc_shows_need_line(self):
         """terminal_need_kwh=2.0 at 20 kWh capacity -> est reserve_soc == firmware floor (5) + 10 = 15.0."""

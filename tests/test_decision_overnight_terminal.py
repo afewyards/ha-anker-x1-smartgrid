@@ -33,6 +33,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from homeassistant.util import dt as dt_util
 
+from custom_components.anker_x1_smartgrid import decision
 from custom_components.anker_x1_smartgrid import optimize as optimize_mod
 from custom_components.anker_x1_smartgrid import pricing_store
 from custom_components.anker_x1_smartgrid.decision import _next_synthetic_pickup, compute_decision
@@ -411,6 +412,45 @@ def test_live_horizon_grows_est_tail():
     assert {_row_start(r) for r in tail_rows} == set(expected_prices)
     for row in tail_rows:
         assert row["price"] == pytest.approx(expected_prices[_row_start(row)])
+    # Deferred minor: the DP never plans charge/export against estimated rows —
+    # they only ever hold or drain (see test_tail_soc_continues_from_last_real_row).
+    for row in tail_rows:
+        assert row["grid_charge_kwh"] == 0.0
+        assert row["grid_export_kwh"] == 0.0
+
+
+def test_dp_never_sees_estimated_slots(monkeypatch):
+    """Core wave invariant: with the estimated tail ACTIVE (flag on + estimate +
+    sun_times set, the same scenario as ``test_live_horizon_grows_est_tail``),
+    ``decision._dp_select_slots`` must be invoked with ONLY the real price
+    slots — the estimated tail must never reach the DP, no matter that the
+    display horizon appends it afterwards."""
+    cfg = _cfg()  # terminal_overnight_credit defaults ON
+    est = _expensive_estimate()
+
+    real_dp_select_slots = decision._dp_select_slots
+    captured: list[list[PriceSlot]] = []
+
+    def _spy(*args, **kwargs):
+        captured.append(kwargs["slots"])
+        return real_dp_select_slots(*args, **kwargs)
+
+    monkeypatch.setattr(decision, "_dp_select_slots", _spy)
+    _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
+
+    assert captured, "the live DP path must call _dp_select_slots exactly once"
+    dp_slots = captured[-1]
+
+    pickup = _next_synthetic_pickup(_HORIZON_EDGE)
+    est_starts = {s.start for s in pricing_store.build_estimated_slots(est, _HORIZON_EDGE, pickup)}
+    assert est_starts, "the gap must be estimate-priced (non-empty) for this to be a real check"
+
+    real_starts = {s.start for s in _slots(_PRICES)}
+    dp_starts = {s.start for s in dp_slots}
+    assert dp_starts == real_starts
+    assert len(dp_slots) == len(_PRICES)
+    assert not (dp_starts & est_starts), "no estimated slot start may reach the DP"
+    assert max(dp_starts) < min(est_starts)
 
 
 def test_no_estimate_no_tail():
