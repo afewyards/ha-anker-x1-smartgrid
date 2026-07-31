@@ -230,6 +230,7 @@ async def run_forcing_and_export(
                 hurdle_clears=_hurdle,
                 now=now,
                 cfg=controller.cfg,
+                slot_minutes=_slot_minutes,
             )
 
             if _new_export_state.engaged:

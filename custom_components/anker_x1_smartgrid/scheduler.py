@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import statistics
 from datetime import datetime, timedelta
@@ -9,6 +10,8 @@ from datetime import datetime, timedelta
 from . import const
 from .models import Config, ControllerState, ExportState, ForecastInterval, PlanState, PriceSlot
 from .regret import _eta_charge_at, _eta_discharge_at
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def detect_evening_peak(now: datetime, slots: list[PriceSlot], cfg: Config) -> datetime | None:
@@ -153,6 +156,42 @@ def find_next_solar_pickup(
     return None
 
 
+_DWELL_CLAMP_LOGGED: set[tuple[str, int, int]] = set()
+"""(label, configured_min, slot_minutes) combos already warned about, so a
+stable misconfiguration logs once instead of every tick."""
+
+
+def _effective_dwell_min(configured_min: int, slot_minutes: int, *, label: str) -> int:
+    """Clamp ``configured_min`` strictly below ``slot_minutes`` (N1 fix).
+
+    The dwell short-circuit in ``decide_state``/``decide_export_state``
+    ("within dwell -> stay") skips the per-slot price/hurdle re-check entirely
+    while dwell hasn't elapsed. If the configured dwell is >= the slot length,
+    that short-circuit can span an entire unselected slot without the gate
+    ever firing. Clamping the EFFECTIVE dwell to ``slot_minutes - 1`` (floor 1
+    minute) guarantees at least one re-check per slot boundary crossed.
+
+    At ``slot_minutes=60`` with the 15-min default this never binds (15 <
+    59) -- byte-identical to the pre-fix behaviour. Logs once per distinct
+    (label, configured_min, slot_minutes) combo when it does bind.
+    """
+    ceiling = max(1, slot_minutes - 1)
+    effective = min(configured_min, ceiling)
+    if effective != configured_min:
+        key = (label, configured_min, slot_minutes)
+        if key not in _DWELL_CLAMP_LOGGED:
+            _DWELL_CLAMP_LOGGED.add(key)
+            _LOGGER.warning(
+                "%s=%d min >= the %d-min slot length; clamping the effective dwell to "
+                "%d min so the per-slot price gate cannot be bypassed",
+                label,
+                configured_min,
+                slot_minutes,
+                effective,
+            )
+    return effective
+
+
 def decide_state(
     plan: PlanState,
     *,
@@ -185,7 +224,8 @@ def decide_state(
             return plan
         return PlanState(ControllerState.PASSIVE, now, ())
 
-    dwell_elapsed = (now - plan.state_since) >= timedelta(minutes=cfg.min_dwell_min)
+    _effective_min_dwell = _effective_dwell_min(cfg.min_dwell_min, slot_minutes, label="min_dwell_min")
+    dwell_elapsed = (now - plan.state_since) >= timedelta(minutes=_effective_min_dwell)
     now_selected = _slot_start(now, slot_minutes) in {_slot_start(s, slot_minutes) for s in selected_slots}
 
     if plan.state is ControllerState.FORCING:
@@ -217,14 +257,19 @@ def decide_export_state(
     hurdle_clears: bool,
     now: datetime,
     cfg: Config,
+    slot_minutes: int = 60,
 ) -> ExportState:
     """Next ExportState applying two-sided eps band, dwell, and hurdle gate.
 
     Engage when: surplus_kwh > cfg.export_eps_hi_kwh AND hurdle_clears AND dwell elapsed.
     Disengage when: surplus_kwh < cfg.export_eps_lo_kwh OR NOT hurdle_clears (dwell-gated).
     Within [eps_lo, eps_hi]: hysteresis dead zone — no state change.
+
+    ``slot_minutes`` (default 60, legacy-identical) clamps the effective dwell
+    strictly below the slot length -- see :func:`_effective_dwell_min` (N1).
     """
-    dwell_elapsed = (now - prev.state_since) >= timedelta(minutes=cfg.export_dwell_min)
+    _effective_export_dwell = _effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min")
+    dwell_elapsed = (now - prev.state_since) >= timedelta(minutes=_effective_export_dwell)
 
     if prev.engaged:
         # Within dwell -> stay.
