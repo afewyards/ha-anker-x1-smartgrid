@@ -833,6 +833,7 @@ def compute_decision(
     delivered_by_hour: dict | None = None,
     slot_minutes: int | None = None,
     eta_curve: EfficiencyCurve | None = None,
+    export_slots: list[PriceSlot] | None = None,
 ) -> tuple[PlanState, float, datetime, list, str, list]:
     """Pure wiring of energy + scheduler + guard.
 
@@ -1084,9 +1085,21 @@ def compute_decision(
             _max_export_dc_value = water_value
         else:
             _eta_d = cfg.eta_discharge_static()
-            _win_prices = [s.price for s in slots if now_h <= s.start < horizon_edge]
+            _win_slots = [s for s in slots if now_h <= s.start < horizon_edge]
+            _win_prices = [s.price for s in _win_slots]
+            # Same span as the DP window ([now, horizon_edge)); every import slot in
+            # it is "required", so coverage here matches the DP's own all-or-nothing
+            # test.  Partial coverage → None → the legacy branches below.
+            _win_export = _export_window_curve(
+                export_slots,
+                [s.start for s in _win_slots],
+                [True] * len(_win_slots),
+                slot_minutes,
+            )
             if cfg.price_mode == const.PRICE_MODE_STATIC:
                 _eff = [optimize_mod.effective_export_price(export_price, cfg)]
+            elif _win_export is not None:
+                _eff = [optimize_mod.effective_export_price(p, cfg) for p in _win_export]
             elif export_price_matches_import:
                 _eff = [optimize_mod.effective_export_price(p, cfg) for p in _win_prices]
             else:
@@ -1122,6 +1135,7 @@ def compute_decision(
             terminal_mode=terminal_mode,
             water_value=water_value,
             export_price_matches_import=export_price_matches_import,
+            export_slots=export_slots,
             reserve_by_hour=_reserve_list,
             sun_times=sun_times,
             intervals=intervals,
