@@ -864,3 +864,55 @@ async def test_read_pv_power_w_mixed_w_and_kw_entities_sum_correctly(hass):
     hass.states.async_set("sensor.pv_w", "300", {"unit_of_measurement": "W"})
     hass.states.async_set("sensor.pv_kw", "1.5", {"unit_of_measurement": "kW"})
     assert coordinator.read_pv_power_w(hass, d) == 300.0 + 1500.0
+
+
+async def test_read_price_slots_reads_frank_prices_attribute(hass):
+    """Frank Energie exposes `prices`, not `forecast`."""
+    d = _data()
+    hass.states.async_set(
+        d[const.CONF_ENT_PRICE],
+        "0.2461",
+        {
+            "prices": [
+                {"from": "2026-07-31T10:00:00+02:00", "till": "2026-07-31T10:15:00+02:00", "price": 0.2461},
+                {"from": "2026-07-31T10:15:00+02:00", "till": "2026-07-31T10:30:00+02:00", "price": 0.2312},
+            ]
+        },
+    )
+    slots = coordinator.read_price_slots(hass, d)
+    assert [s.price for s in slots] == pytest.approx([0.2461, 0.2312])
+    assert slots[0].duration_min == 15.0
+
+
+async def test_read_price_slots_prefers_forecast_over_prices(hass):
+    """Candidate order is fixed: `forecast` wins when both attributes exist."""
+    d = _data()
+    hass.states.async_set(
+        d[const.CONF_ENT_PRICE],
+        "0.13",
+        {
+            "forecast": [{"datetime": "2026-06-20T12:00:00Z", "electricity_price": 1300000}],
+            "prices": [{"from": "2026-06-20T12:00:00Z", "price": 0.99}],
+        },
+    )
+    slots = coordinator.read_price_slots(hass, d)
+    assert len(slots) == 1
+    assert slots[0].price == pytest.approx(0.13)
+
+
+async def test_read_price_slots_empty_forecast_falls_through_to_prices(hass):
+    """First NON-EMPTY parse wins — an empty `forecast` must not shadow `prices`."""
+    d = _data()
+    hass.states.async_set(
+        d[const.CONF_ENT_PRICE],
+        "0.30",
+        {"forecast": [], "prices": [{"from": "2026-06-20T12:00:00Z", "price": 0.30}]},
+    )
+    slots = coordinator.read_price_slots(hass, d)
+    assert len(slots) == 1 and slots[0].price == pytest.approx(0.30)
+
+
+async def test_read_price_slots_no_recognised_attribute_returns_empty(hass):
+    d = _data()
+    hass.states.async_set(d[const.CONF_ENT_PRICE], "0.30", {"unit_of_measurement": "EUR/kWh"})
+    assert coordinator.read_price_slots(hass, d) == []

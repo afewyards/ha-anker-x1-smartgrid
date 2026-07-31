@@ -104,18 +104,36 @@ def read_pv_power_w(hass: HomeAssistant, data: dict) -> float | None:
     return total
 
 
+# Ordered price-curve attribute candidates.  "forecast" (Zonneplan) is tried
+# before "prices" (Frank Energie) so an entity exposing both keeps its
+# historical meaning.  First candidate yielding a NON-EMPTY parse wins.
+_PRICE_ATTR_CANDIDATES = ("forecast", "prices")
+
+
+def _parse_price_attrs(state) -> list[PriceSlot]:
+    """Parse the first recognised, non-empty price-curve attribute of `state`."""
+    if state is None:
+        return []
+    try:
+        attrs = state.attributes
+    except AttributeError:
+        return []
+    for key in _PRICE_ATTR_CANDIDATES:
+        slots = parse_price_curve(attrs.get(key))
+        if slots:
+            return slots
+    return []
+
+
 def read_price_slots(hass: HomeAssistant, data: dict) -> list[PriceSlot]:
     # Static tariff mode: synthesize slots from config, ignore any price sensor.
     if data.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE) == const.PRICE_MODE_STATIC:
         return synth_static_price_slots(dt_util.utcnow(), Config.from_dict(data), dt_util.DEFAULT_TIME_ZONE)
-    # Sensor mode (default): read the dynamic price sensor's forecast attribute.
+    # Sensor mode (default): read the dynamic price sensor's curve attribute.
     ent = data.get(const.CONF_ENT_PRICE)
     if not ent:
         return []
-    state = hass.states.get(ent)
-    if state is None:
-        return []
-    return parse_price_curve(state.attributes.get("forecast"))
+    return _parse_price_attrs(hass.states.get(ent))
 
 
 def count_persons_home(hass: HomeAssistant, data: dict) -> int | None:
