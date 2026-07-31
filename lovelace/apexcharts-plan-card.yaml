@@ -112,7 +112,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.price]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.price]);
     - entity: sensor.smartgrid_plan
       name: Solar forecast
       type: area
@@ -122,7 +122,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
     - entity: sensor.smartgrid_plan
       name: Predicted load
       type: line
@@ -132,7 +132,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.load_kwh]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.load_kwh]);
     - entity: sensor.smartgrid_plan
       name: Projected SoC
       type: line
@@ -142,7 +142,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.soc]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.soc]);
     - entity: sensor.smartgrid_plan
       name: Grid charge
       type: column
@@ -151,7 +151,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
     - entity: sensor.smartgrid_plan
       name: Solar charge
       type: column
@@ -174,7 +174,58 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
+        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
+    # --- Estimated-tail series (dimmed) ---
+    # As of Task 3, horizon rows past the price edge carry estimated: true
+    # (price from a persistence prior, pv/load from forecast, soc ride-down).
+    # The real series above now filter those out (!h.estimated); these 3
+    # replay the tail dashed/translucent instead, each prepending the last
+    # real row so the line stays continuous across the boundary. No load
+    # counterpart — load has no separate estimated model to distinguish.
+    - entity: sensor.smartgrid_plan
+      name: Price (est)
+      type: line
+      yaxis_id: price
+      stroke_width: 2
+      color: "#8b5cf6"
+      opacity: 0.35
+      stroke_dash: 4
+      show:
+        in_legend: false
+        legend_value: false
+      data_generator: |
+        const H = entity.attributes.horizon || [];
+        const i = H.findIndex(h => h.estimated);
+        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.price]);
+    - entity: sensor.smartgrid_plan
+      name: SoC (est)
+      type: line
+      yaxis_id: soc
+      stroke_width: 2
+      color: "#3b82f6"
+      opacity: 0.35
+      stroke_dash: 4
+      show:
+        in_legend: false
+        legend_value: false
+      data_generator: |
+        const H = entity.attributes.horizon || [];
+        const i = H.findIndex(h => h.estimated);
+        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.soc]);
+    - entity: sensor.smartgrid_plan
+      name: Solar (est)
+      type: area
+      yaxis_id: power
+      color: "#fbbf24"
+      opacity: 0.35
+      stroke_dash: 4
+      show:
+        in_legend: false
+        legend_value: false
+      data_generator: |
+        const H = entity.attributes.horizon || [];
+        const i = H.findIndex(h => h.estimated);
+        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
   apex_config:
     chart:
       height: 380
@@ -183,14 +234,14 @@ card:
         columnWidth: "55%"
         borderRadius: 3
     fill:
-      type: [solid, gradient, solid, solid, solid, solid, solid]
+      type: [solid, gradient, solid, solid, solid, solid, solid, solid, solid, solid]
       gradient:
         shadeIntensity: 0.3
         opacityFrom: 0.5
         opacityTo: 0.05
         stops: [0, 100]
     stroke:
-      dashArray: [0, 0, 0, 0, 0, 0, 0]
+      dashArray: [0, 0, 0, 0, 0, 0, 0, 4, 4, 4]
     subtitle:
       # Realized cash net today (green/red by sign) + the plan's still-
       # expected export revenue. Either half drops out when its source is
@@ -247,8 +298,8 @@ card:
           var x = g.seriesX[seriesIndex][dataPointIndex];
           var barSeries = { 'Grid charge': 1, 'Solar charge': 1, 'Grid export': 1 };
           var unit = function (name) {
-            return name === 'Price' ? '€/kWh'
-              : name === 'Projected SoC' ? '%'
+            return name === 'Price' || name === 'Price (est)' ? '€/kWh'
+              : name === 'Projected SoC' || name === 'SoC (est)' ? '%'
               : 'kWh';
           };
           var fmt = function (name, v) {
