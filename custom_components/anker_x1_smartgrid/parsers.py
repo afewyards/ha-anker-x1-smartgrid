@@ -20,26 +20,71 @@ def _parse_dt(value: str) -> datetime | None:
     return dt.astimezone(UTC)
 
 
+# Disjoint per-entry key sets — sniffing is unambiguous.
+_ZONNEPLAN_START = "datetime"
+_ZONNEPLAN_PRICE = "electricity_price"
+_FRANK_START = "from"
+_FRANK_PRICE = "price"
+
+
+def _decode_price_entry(entry: dict) -> tuple[datetime, float] | None:
+    """Decode one forecast entry to (start_utc, price €/kWh), or None.
+
+    Zonneplan — ``{"datetime": ISO, "electricity_price": int}``, price ÷ PRICE_SCALE.
+    Frank Energie — ``{"from": ISO, "price": float}``, price already €/kWh.
+    Unrecognised / malformed / non-finite entries return None so the caller skips them.
+    """
+    if _ZONNEPLAN_START in entry and _ZONNEPLAN_PRICE in entry:
+        start = _parse_dt(entry.get(_ZONNEPLAN_START))
+        raw = entry.get(_ZONNEPLAN_PRICE)
+        scale = const.PRICE_SCALE
+    elif _FRANK_START in entry and _FRANK_PRICE in entry:
+        start = _parse_dt(entry.get(_FRANK_START))
+        raw = entry.get(_FRANK_PRICE)
+        scale = 1.0
+    else:
+        return None
+    if start is None or raw is None:
+        return None
+    try:
+        price = float(raw) / scale
+    except (ValueError, TypeError):
+        return None
+    if not math.isfinite(price):
+        return None  # "NaN"/"Infinity" parse as float; never let them reach the DP
+    return start, price
+
+
 def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
-    """Map Zonneplan forecast entries to sorted PriceSlots (price in €/kWh)."""
+    """Map a price-sensor forecast attribute to sorted PriceSlots (price in €/kWh).
+
+    Accepts both the Zonneplan (``datetime``/``electricity_price``, integer-scaled)
+    and Frank Energie (``from``/``price``, plain €/kWh) entry shapes; the key sets
+    are disjoint so per-entry sniffing is unambiguous.
+
+    Duplicate starts are collapsed **keep-first** — the HiDiHo01 ``frank_energie``
+    integration publishes every slot exactly twice.  Without the collapse the
+    consecutive-gap duration derivation below yields 0-minute slots and
+    ``resolution.detect_slot_minutes`` mis-reads the resolution.  The sort is
+    stable, so "first" means first in the source list among equal starts.
+    """
     if not forecast_attr:
         return []
     slots: list[PriceSlot] = []
     for entry in forecast_attr:
         if not isinstance(entry, dict):
             continue
-        start = _parse_dt(entry.get("datetime"))
-        raw = entry.get("electricity_price")
-        if start is None or raw is None:
+        decoded = _decode_price_entry(entry)
+        if decoded is None:
             continue
-        try:
-            price = float(raw) / const.PRICE_SCALE
-        except (ValueError, TypeError):
-            continue
-        if not math.isfinite(price):
-            continue  # "NaN"/"Infinity" parse as float; never let them reach the DP
-        slots.append(PriceSlot(start, price))
+        slots.append(PriceSlot(decoded[0], decoded[1]))
     slots.sort(key=lambda s: s.start)
+    deduped: list[PriceSlot] = []
+    for s in slots:
+        if deduped and s.start == deduped[-1].start:
+            continue
+        deduped.append(s)
+    slots = deduped
     if len(slots) < 2:
         return slots
     durations = [(slots[i + 1].start - slots[i].start).total_seconds() / 60.0 for i in range(len(slots) - 1)]
