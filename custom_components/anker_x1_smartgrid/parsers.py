@@ -206,9 +206,12 @@ def build_pv_curve_from_watts(
     THEN are the per-bucket means SUMMED across sources (H2). This avoids diluting
     a coarse-cadence (e.g. hourly) source when it is pooled with a finer-cadence
     (e.g. 30-min) source before averaging. Drops buckets strictly before ``now``'s
-    bucket floor. Returns a sorted list of (datetime_utc, watts_summed) with one
-    entry per bucket between the first and last kept bucket (gaps filled with 0.0
-    so the timeline stays contiguous). Returns [] when all inputs are None/empty.
+    bucket floor from the EMITTED curve (see the sample-and-hold paragraph below
+    for why a dropped bucket can still count towards gap math). Returns a sorted
+    list of (datetime_utc, watts_summed) with one entry per bucket between the
+    first and last kept bucket (any bucket still empty after the per-source hold
+    below is filled with 0.0, so the timeline stays contiguous). Returns [] when
+    all inputs are None/empty.
 
     ``step_h`` drives bucket width (1.0h default; 0.25h for 15-min).  At
     ``step_h=1.0`` this reduces byte-identically to the legacy hourly bucketing
@@ -225,8 +228,13 @@ def build_pv_curve_from_watts(
     mirrored forward for the same duration as the final inter-sample gap (capped
     at < 1h; a source with only one real bucket, having no gap to mirror, falls
     back to the flat < 1h cap) — this avoids downstream code doubling/halving
-    energy when it iterates bucket-by-bucket. Leading buckets before a source's
-    first sample stay 0.0 (no look-back).
+    energy when it iterates bucket-by-bucket. That final-gap lookup uses the
+    source's FULL (unfiltered) raw-sample history, not just the emitted (>= now_h)
+    buckets: otherwise a genuinely multi-sample source whose second-to-last
+    sample rolled before ``now`` would look like a lone sample and wrongly take
+    the flat-1h fallback instead of correctly seeing its real (possibly >= 1h,
+    tail-suppressing) gap. Leading buckets before a source's first sample stay
+    0.0 (no look-back).
     """
     sources: list[list[tuple[datetime, float]]] = []
     for group in (today_sources, tomorrow_sources):
@@ -257,17 +265,29 @@ def build_pv_curve_from_watts(
     # diluting the coarse source.
     summed: dict[datetime, float] = {}
     for src in sources:
-        buckets: dict[datetime, list[float]] = {}
+        # Bucket ALL raw samples first (no now_h filtering yet) so a real bucket
+        # that ends up dropped from the EMITTED curve can still serve as the
+        # true "previous real bucket" for the tail's gap math below — otherwise
+        # a multi-sample source whose second-to-last sample rolled before `now`
+        # would look like a lone sample (see docstring / task-1 review finding).
+        all_buckets: dict[datetime, list[float]] = {}
         for dt, w in src:
             dt_utc = dt.astimezone(UTC).replace(tzinfo=UTC) if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
             bucket = _floor(dt_utc)
-            if bucket < now_h:
-                continue
-            buckets.setdefault(bucket, []).append(w)
-        if not buckets:
+            all_buckets.setdefault(bucket, []).append(w)
+        if not all_buckets:
             continue
-        real = {bucket: sum(ws) / len(ws) for bucket, ws in buckets.items()}
-        keys = sorted(real)
+        all_real = {bucket: sum(ws) / len(ws) for bucket, ws in all_buckets.items()}
+        all_keys = sorted(all_real)
+        all_index = {k: i for i, k in enumerate(all_keys)}
+
+        # EMITTED buckets — same now_h drop as before, applied at the bucket
+        # (not per-sample) level; identical result, since a sample's own bucket
+        # is what the old per-sample check compared against `now_h` too.
+        keys = [k for k in all_keys if k >= now_h]
+        if not keys:
+            continue
+        real = {k: all_real[k] for k in keys}
         held: dict[datetime, float] = dict(real)
         n = len(keys)
         for i, t in enumerate(keys):
@@ -285,7 +305,11 @@ def build_pv_curve_from_watts(
                 # Tail after the source's LAST real bucket: mirror the final
                 # observed inter-sample gap (only if it was < 1h); a lone sample
                 # (no previous gap to mirror) falls back to the flat 1h cap.
-                gap = t - keys[i - 1] if i > 0 else None
+                # The "previous" bucket is looked up in the FULL (unfiltered)
+                # sequence so a true predecessor that rolled before now_h still
+                # counts — it's just never itself emitted.
+                ai = all_index[t]
+                gap = t - all_keys[ai - 1] if ai > 0 else None
                 if gap is not None and gap >= hour_cap:
                     continue
                 limit = t + (gap if gap is not None else hour_cap)

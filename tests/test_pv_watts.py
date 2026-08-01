@@ -528,6 +528,23 @@ def test_cross_source_sum_after_hold():
     assert [w for _, w in curve] == [486.0, 486.0, 2245.0, 2245.0]
 
 
+def test_tail_gap_uses_unfiltered_predecessor_not_false_lone_sample():
+    """Fix-round-1 regression (task-1 review, Important finding).
+
+    The `now_h` drop filter must not blind the tail rule's gap computation:
+    a genuinely multi-sample source whose second-to-last sample rolled before
+    `now` must NOT look like a lone sample (which would wrongly take the flat
+    1h fallback and fabricate held energy). The tail's "previous real bucket"
+    must be found in the source's FULL unfiltered sample history — here that
+    is 10:00, one hour before the emitted 11:00 sample, so the >= 1h rule
+    correctly suppresses ANY tail extension, matching a plain two-hourly-
+    sample source with no hold at all.
+    """
+    src = [(_sh(10, 0), 1200.0), (_sh(11, 0), 800.0)]
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
+    assert curve == [(_sh(11, 0), 800.0)]
+
+
 async def test_read_pv_today_watts_naive_key_treated_as_utc(hass):
     """A watts dict key with NO timezone suffix must be interpreted as UTC 11:00Z.
 
