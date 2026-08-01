@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -216,7 +216,7 @@ class TestExportPnlAccumulator:
     async def test_pnl_accumulates_on_export_tick(self):
         """After an engaged export tick, today_export_pnl_eur > 0."""
         hass = _StubHass()
-        ctrl, act, _, rec = _make_controller(hass)
+        ctrl, act, _, _rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         # Force already-engaged so dwell is satisfied
@@ -235,7 +235,7 @@ class TestExportPnlAccumulator:
     async def test_pnl_accumulates_across_multiple_ticks(self):
         """Multiple export ticks accumulate monotonically."""
         hass = _StubHass()
-        ctrl, act, _, rec = _make_controller(hass)
+        ctrl, _act, _, _rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -253,7 +253,7 @@ class TestExportPnlAccumulator:
     async def test_pnl_resets_on_day_rollover(self, monkeypatch):
         """Accumulator resets to 0 when local day changes."""
         hass = _StubHass()
-        ctrl, act, _, rec = _make_controller(hass)
+        ctrl, _act, _, _rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -325,7 +325,7 @@ class TestExportPnlTagging:
     async def test_today_export_pnl_present_in_last_status(self):
         """last_status must contain 'today_export_pnl_eur' key after any tick."""
         hass = _StubHass()
-        ctrl, act, _, rec = _make_controller(hass)
+        ctrl, _act, _, _rec = _make_controller(hass)
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -341,7 +341,7 @@ class TestExportPnlTagging:
         """No export → today_export_pnl_eur is 0.0 in last_status (not None)."""
         hass = _StubHass()
         # Disable export
-        ctrl, act, _, rec = _make_controller(hass, cfg_overrides={"enable_export": False})
+        ctrl, _act, _, _rec = _make_controller(hass, cfg_overrides={"enable_export": False})
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
 
         await ctrl.tick()

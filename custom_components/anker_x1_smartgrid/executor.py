@@ -198,22 +198,15 @@ async def run_forcing_and_export(
             # when the key is absent/falsy (flag off / stale plan), the
             # legacy horizon-min expression is unchanged.
             _segs = _dp_out.get("terminal_segments")
+            _keep_value = None
             if _segs:
                 _above_fw = max(0.0, controller.cfg.pct_to_kwh(inputs.soc) - controller.cfg.firmware_floor_kwh)
-                _keep_value = None
                 for _kwh, _v in sorted(_segs, key=lambda s: -s[1]):
                     if _above_fw <= _kwh:
                         _keep_value = _v
                         break
                     _above_fw -= _kwh
-                if _keep_value is None:  # beyond all segments → legacy
-                    _now_h_keep = resolution.hour_floor(now)
-                    _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
-                    _keep_value = optimize_mod.compute_water_value(
-                        min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
-                        controller.cfg,
-                    )
-            else:  # keys absent / flag off → legacy, unchanged
+            if _keep_value is None:  # beyond all segments, or keys absent/flag off → legacy, unchanged
                 _now_h_keep = resolution.hour_floor(now)
                 _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
                 _keep_value = optimize_mod.compute_water_value(
