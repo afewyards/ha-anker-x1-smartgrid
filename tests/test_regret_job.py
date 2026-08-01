@@ -3,14 +3,14 @@
 The nightly regret job runs the DP core **twice** — the perfect-foresight oracle
 (``regret.hindsight_optimal_grid``) and a shadow ``optimize.optimize_grid`` whose
 schedule is scored into ``dp_regret_eur`` (fed to the 7-day HGBR gate).  With the
-overnight-terminal flag ON, BOTH calls MUST receive **identical**
-``(water_value_hi, overnight_need_kwh)`` or the shadow schedule diverges from the
-oracle and ``dp_regret_eur`` acquires phantom bias.
+overnight-terminal flag ON, BOTH calls MUST receive the **identical**
+``terminal_segments`` list or the shadow schedule diverges from the oracle and
+``dp_regret_eur`` acquires phantom bias.
 
 Gap prices are the **realized D+1 prices** bucketed from the job's own 38 h read
 window (the persistence estimator is not reconstructible at job time).  When D+1
 gap prices are absent (old backfill data) the day degrades to the byte-identical
-legacy single-segment terminal (``water_value_hi=None``) — never guessed.
+legacy single-segment terminal (``terminal_segments=None``) — never guessed.
 """
 
 from custom_components.anker_x1_smartgrid import regret_job
@@ -69,11 +69,11 @@ def _spy_terminal_params(monkeypatch):
     """Wrap both internal DP calls; return a dict capturing the raw kwargs
     each received.
 
-    Task 4 removed both cores' water_value_hi/overnight_need_kwh params in
-    favor of terminal_segments; regret_job.py's own forwarding into both
-    calls was silenced (not yet re-wired to terminal_segments — that lands
-    in Task 6), so callers here now assert those old names are ABSENT from
-    the captured kwargs rather than asserting their forwarded values.
+    Task 6 rebuilds ``terminal_segments`` from the realized D+1 gap prices
+    (``optimize.overnight_terminal_segments``) and threads the IDENTICAL list
+    into BOTH the oracle (``hindsight_optimal_grid``) and shadow
+    (``optimize_grid``) DP cores -- asymmetry here biases ``dp_regret_eur``/the
+    7-day HGBR gate.
     """
     captured: dict[str, dict] = {}
     _orig_hog = regret_job.regret_mod.hindsight_optimal_grid
@@ -92,8 +92,7 @@ def _spy_terminal_params(monkeypatch):
     return captured
 
 
-def _assert_no_legacy_terminal_kwargs(captured: dict, leg: str) -> None:
-    """Task 6 re-adapts these assertions to check identical real segments lists."""
+def _assert_none_terminal_segments(captured: dict, leg: str) -> None:
     kw = captured[leg]
     assert "water_value_hi" not in kw
     assert "overnight_need_kwh" not in kw
@@ -101,46 +100,49 @@ def _assert_no_legacy_terminal_kwargs(captured: dict, leg: str) -> None:
 
 
 def test_internal_dp_symmetry(monkeypatch):
-    """Flag ON + D+1 prices present → both internal DP calls stay symmetric:
-    neither receives the removed water_value_hi/overnight_need_kwh kwargs, and
-    ``dp_regret_eur ≈ 0`` on a synthetic hold night."""
+    """Flag ON + D+1 prices present -> both internal DP calls receive the
+    IDENTICAL, non-None ``terminal_segments`` list, and ``dp_regret_eur`` is
+    approximately 0 on a synthetic hold night (symmetric params means the
+    shadow schedule mirrors the oracle)."""
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
     rec = StubRecorder()
     cfg = _cfg()
-    # Day-D: uniform-price hold night, modest load, no charging → both DP cores agree.
+    # Day-D: uniform-price hold night, modest load, no charging -> both DP cores agree.
     _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
-    # D+1 overnight prices present in the 38 h window (local hours 0-13) → the
-    # flag path builds real params rather than degrading to legacy.
+    # D+1 overnight prices present in the 38 h window (local hours 0-13) -> the
+    # flag path builds real segments rather than degrading to legacy.
     _seed_day(rec, NEXT, soc_start=60.0, load_w=500.0, import_price=0.30, hours=range(14))
 
     regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    # PRIMARY invariant: both internal DP calls agree in lacking the removed kwargs.
+    # PRIMARY invariant: both internal DP calls receive the identical, real segments list.
     assert "oracle" in captured and "shadow" in captured
-    _assert_no_legacy_terminal_kwargs(captured, "oracle")
-    _assert_no_legacy_terminal_kwargs(captured, "shadow")
-    # No phantom bias: identical (absent) params → shadow schedule mirrors oracle → dp_regret ≈ 0.
+    oracle_segs = captured["oracle"].get("terminal_segments")
+    shadow_segs = captured["shadow"].get("terminal_segments")
+    assert oracle_segs is not None
+    assert oracle_segs == shadow_segs
+    # No phantom bias: identical params -> shadow schedule mirrors oracle -> dp_regret ~= 0.
     row = rec.daily_regret_rows[DAY]
     assert row["dp_regret_eur"] is not None
     assert abs(row["dp_regret_eur"]) < 1e-6
 
 
 def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
-    """Old backfill day with no D+1 rows in the window → both DP calls still
-    lack the removed water_value_hi/overnight_need_kwh kwargs, no raise, no
+    """Old backfill day with no D+1 rows in the window -> both DP calls get
+    ``terminal_segments=None`` (legacy single-segment credit), no raise, no
     biased regret."""
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
     rec = StubRecorder()
     cfg = _cfg()  # flag ON
-    # Only day-D samples — no D+1 rows at all (backfill exceeded retention).
+    # Only day-D samples -- no D+1 rows at all (backfill exceeded retention).
     _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
 
     updates = regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    _assert_no_legacy_terminal_kwargs(captured, "oracle")
-    _assert_no_legacy_terminal_kwargs(captured, "shadow")
+    _assert_none_terminal_segments(captured, "oracle")
+    _assert_none_terminal_segments(captured, "shadow")
     # Still fully scored, no raise, no biased regret.
     row = rec.daily_regret_rows[DAY]
     assert row["regret_eur"] is not None
@@ -150,7 +152,7 @@ def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
 
 
 def test_flag_off_passes_none_to_both_cores(monkeypatch):
-    """Flag OFF → legacy single-segment terminal for BOTH cores even when D+1
+    """Flag OFF -> ``terminal_segments=None`` for BOTH cores even when D+1
     prices are present in the window."""
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
@@ -161,5 +163,5 @@ def test_flag_off_passes_none_to_both_cores(monkeypatch):
 
     regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    _assert_no_legacy_terminal_kwargs(captured, "oracle")
-    _assert_no_legacy_terminal_kwargs(captured, "shadow")
+    _assert_none_terminal_segments(captured, "oracle")
+    _assert_none_terminal_segments(captured, "shadow")

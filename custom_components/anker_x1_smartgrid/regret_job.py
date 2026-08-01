@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone, UTC
+from datetime import date, datetime, timedelta, UTC
 
 from homeassistant.util import dt as dt_util
 
@@ -359,24 +359,25 @@ def run_daily_regret(
         if _export_price_tuple is not None and cfg.enable_export:
             eff_export = [optimize_mod.effective_export_price(p, cfg) for p in _export_price_tuple]
 
-        # --- Overnight terminal credit (two-segment water value) — Task 6 ------
+        # --- Overnight terminal credit (piecewise per-hour segments) — Task 6 ---
         # Value end-of-day energy that will serve the post-horizon overnight gap
-        # [D+1 local midnight → next synthetic solar pickup) at the RICHER
-        # estimated overnight price, from the REALIZED D+1 prices bucketed above
-        # out of this job's own 38 h read window (the live persistence estimator
-        # is NOT reconstructible at job time — no history handle, backfill days
-        # exceed retention).  BOTH internal DP calls (oracle + shadow) MUST get
-        # IDENTICAL (v_hi, need) or dp_regret_eur acquires phantom bias feeding
-        # the 7-day HGBR gate.  D+1 gap prices absent (old backfill) → v_hi=None →
-        # byte-identical legacy single-segment terminal, never guessed.
-        _wv_hi: float | None = None
-        _wv_need: float = 0.0
+        # [D+1 local midnight, next synthetic solar pickup) via the piecewise
+        # per-hour credit (spec rev-3, dp_common.select_end_state), built from the
+        # REALIZED D+1 prices bucketed above out of this job's own 38 h read
+        # window (the live persistence estimator is NOT reconstructible at job
+        # time — no history handle, backfill days exceed retention).  BOTH
+        # internal DP calls (oracle + shadow) MUST get the IDENTICAL
+        # terminal_segments list or dp_regret_eur acquires phantom bias feeding
+        # the 7-day HGBR gate.  D+1 gap prices absent (old backfill) or flag OFF
+        # → terminal_segments=None → byte-identical legacy single-segment
+        # terminal, never guessed.
+        _terminal_segments: list[tuple[float, float]] | None = None
         if cfg.terminal_overnight_credit and nextday_local_midnight is not None:
             _gap_start = nextday_local_midnight
             _pickup = _next_synthetic_pickup(_gap_start)
             # Priced gap hours only (mean per LOCAL hour-of-day), keyed by local
-            # datetime so overnight_terminal_params' gap filter + is_cheap walk +
-            # load_w_by_hod lookup all share the hour-of-day convention.
+            # datetime so overnight_terminal_segments' gap filter +
+            # load_w_by_hod lookup share the hour-of-day convention.
             _est_price_by_hour: dict[datetime, float] = {}
             for _hod, _plist in nextday_price_by_hour.items():
                 if not _plist:
@@ -391,23 +392,26 @@ def run_daily_regret(
                 for _h in range(_spd):
                     _hod_w[(_h * _slot_minutes) // 60].append(load_kwh[_h] / _dt_h * 1000.0)
                 _load_w_by_hod = {_hod: sum(_ws) / len(_ws) for _hod, _ws in _hod_w.items()}
-                # Upper clamp for v_hi = best in-window export DC value (holding
-                # can never beat exporting above this).  Export off → v_lo anchor.
-                if eff_export is None:
-                    _max_export_dc_value = _water_value
-                else:
-                    _eta_d = cfg.eta_discharge_static()
-                    _max_export_dc_value = max(p * _eta_d for p in eff_export) - cfg.cycle_cost_eur_per_kwh
-                _wv_hi, _wv_need = optimize_mod.overnight_terminal_params(
+                # need_kwh/v_hi_mean (display/debug-only scalars) have no
+                # consumer in this job -- only the segments list feeds the
+                # DP cores below.
+                _terminal_segments, _, _ = optimize_mod.overnight_terminal_segments(
                     gap_start=_gap_start,
                     pickup=_pickup,
                     est_price_by_hour=_est_price_by_hour,
                     load_w_by_hod=_load_w_by_hod,
                     v_lo=_water_value,
-                    max_export_dc_value=_max_export_dc_value,
                     cfg=cfg,
                     eta_curve=None,
                 )
+                # An empty segments list (e.g. every priced gap hour resolves to
+                # zero DC draw) carries a different credit anchor than None in
+                # dp_common.select_end_state (firmware_floor_kwh vs floor_kwh) —
+                # collapse it back to None so a degenerate builder result still
+                # reads as "no real segments" rather than a silently-different
+                # anchor.
+                if not _terminal_segments:
+                    _terminal_segments = None
 
         day_data = regret_mod.DayData(
             pv_kwh=pv_kwh,
@@ -420,11 +424,9 @@ def run_daily_regret(
             cfg,
             terminal_mode=_terminal_mode,
             water_value=_water_value,
-            # terminal_segments intentionally NOT threaded here (default None,
-            # transitionally inert) -- hindsight_optimal_grid's water_value_hi/
-            # overnight_need_kwh params were removed in favor of
-            # terminal_segments; wiring real segments through this call site
-            # is Task 6.
+            # Same _terminal_segments list as the shadow DP call below
+            # (PARITY-CRITICAL: asymmetry biases dp_regret_eur).
+            terminal_segments=_terminal_segments,
             export_price=eff_export,
             dt_h=_dt_h,
         )
@@ -449,11 +451,9 @@ def run_daily_regret(
                     slots_per_day=_spd,
                     terminal_mode=_terminal_mode,
                     water_value=_water_value,
-                    # terminal_segments intentionally NOT threaded here (default
-                    # None, transitionally inert) -- optimize_grid's
-                    # water_value_hi/overnight_need_kwh params were removed in
-                    # favor of terminal_segments; wiring real segments through
-                    # this call site is Task 6.
+                    # Same _terminal_segments list as the oracle call above
+                    # (PARITY-CRITICAL: asymmetry biases dp_regret_eur).
+                    terminal_segments=_terminal_segments,
                     export_price=eff_export,
                     dt_h=_dt_h,
                 )
