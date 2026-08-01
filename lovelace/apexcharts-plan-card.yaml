@@ -39,6 +39,12 @@ entities:
   - sensor.smartgrid_active_load_model
 variables:
   H: states['sensor.smartgrid_plan'].attributes.horizon || []
+  # Real-tariff horizon only. The estimated-tomorrow tail (spec
+  # 2026-07-31-plan-estimated-tail) is display-suppressed as of
+  # spec 2026-08-01-card-crop-daily-stats: the chart ends where real
+  # Zonneplan/Frank tariff ends. The plan sensor still EMITS the tail —
+  # the DP needs it for terminal value — this only stops drawing it.
+  HR: (states['sensor.smartgrid_plan'].attributes.horizon || []).filter(function (h) { return !h.estimated; })
   PNL: states['sensor.smartgrid_plan'].attributes.arbitrage_pnl
   # Realized battery cash net for today (spec 2026-07-10). Guarded: missing
   # entity or unknown/unavailable state renders as null, not NaN.
@@ -68,7 +74,7 @@ card:
   # with value.substring(2, len-1) (drops "${" and the LAST char, expecting "}").
   # A YAML ">" folded scalar would append a trailing "\n", so it would strip the
   # newline and leave a dangling "}" → "Unexpected token '}'". Keep it one line.
-  graph_span: "${ H.length ? Math.max(1, Math.ceil((new Date(H[H.length - 1].start).getTime() - new Date().setMinutes(0, 0, 0)) / 3600000) + 3) + 'h' : '38h' }"
+  graph_span: "${ HR.length ? Math.max(1, Math.ceil((new Date(HR[HR.length - 1].start).getTime() - new Date().setMinutes(0, 0, 0)) / 3600000) + 3) + 'h' : '38h' }"
   span:
     start: hour
     # Begin the window 2h before the current hour to surface recent history.
@@ -151,7 +157,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.grid_charge_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_charge_kwh * 1000)) : null]);
     - entity: sensor.smartgrid_plan
       name: Solar charge
       type: column
@@ -160,7 +166,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.solar_charge_kwh > 0 ? Math.log10(Math.max(1, h.solar_charge_kwh * 1000)) : null]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.solar_charge_kwh > 0 ? Math.log10(Math.max(1, h.solar_charge_kwh * 1000)) : null]);
     # --- Export series (arbitrage leg) ---
     # Grid export bars plot POSITIVE per-slot kWh on the same energy axis as the
     # charge bars (charge and export never occur in the same hour, so they never
@@ -174,58 +180,7 @@ card:
       show:
         legend_value: false
       data_generator: |
-        return (entity.attributes.horizon || []).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
-    # --- Estimated-tail series (dimmed) ---
-    # As of Task 3, horizon rows past the price edge carry estimated: true
-    # (price from a persistence prior, pv/load from forecast, soc ride-down).
-    # The real series above now filter those out (!h.estimated); these 3
-    # replay the tail dashed/translucent instead, each prepending the last
-    # real row so the line stays continuous across the boundary. No load
-    # counterpart — load has no separate estimated model to distinguish.
-    - entity: sensor.smartgrid_plan
-      name: Price (est)
-      type: line
-      yaxis_id: price
-      stroke_width: 2
-      color: "#8b5cf6"
-      opacity: 0.35
-      stroke_dash: 4
-      show:
-        in_legend: false
-        legend_value: false
-      data_generator: |
-        const H = entity.attributes.horizon || [];
-        const i = H.findIndex(h => h.estimated);
-        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.price]);
-    - entity: sensor.smartgrid_plan
-      name: SoC (est)
-      type: line
-      yaxis_id: soc
-      stroke_width: 2
-      color: "#3b82f6"
-      opacity: 0.35
-      stroke_dash: 4
-      show:
-        in_legend: false
-        legend_value: false
-      data_generator: |
-        const H = entity.attributes.horizon || [];
-        const i = H.findIndex(h => h.estimated);
-        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.soc]);
-    - entity: sensor.smartgrid_plan
-      name: Solar (est)
-      type: area
-      yaxis_id: power
-      color: "#fbbf24"
-      opacity: 0.35
-      stroke_dash: 4
-      show:
-        in_legend: false
-        legend_value: false
-      data_generator: |
-        const H = entity.attributes.horizon || [];
-        const i = H.findIndex(h => h.estimated);
-        return (i < 0 ? [] : H.slice(Math.max(0, i - 1))).map(h => [new Date(h.start).getTime(), h.pv_kwh]);
+        return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
   apex_config:
     chart:
       height: 380
@@ -234,14 +189,14 @@ card:
         columnWidth: "55%"
         borderRadius: 3
     fill:
-      type: [solid, gradient, solid, solid, solid, solid, solid, solid, solid, solid]
+      type: [solid, gradient, solid, solid, solid, solid, solid]
       gradient:
         shadeIntensity: 0.3
         opacityFrom: 0.5
         opacityTo: 0.05
         stops: [0, 100]
     stroke:
-      dashArray: [0, 0, 0, 0, 0, 0, 0, 4, 4, 4]
+      dashArray: [0, 0, 0, 0, 0, 0, 0]
     subtitle:
       # Realized cash net today (green/red by sign) + the plan's still-
       # expected export revenue. Either half drops out when its source is
@@ -298,8 +253,8 @@ card:
           var x = g.seriesX[seriesIndex][dataPointIndex];
           var barSeries = { 'Grid charge': 1, 'Solar charge': 1, 'Grid export': 1 };
           var unit = function (name) {
-            return name === 'Price' || name === 'Price (est)' ? '€/kWh'
-              : name === 'Projected SoC' || name === 'SoC (est)' ? '%'
+            return name === 'Price' ? '€/kWh'
+              : name === 'Projected SoC' ? '%'
               : 'kWh';
           };
           var fmt = function (name, v) {
