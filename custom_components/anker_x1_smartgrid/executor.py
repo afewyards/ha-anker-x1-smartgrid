@@ -190,22 +190,30 @@ async def run_forcing_and_export(
             # would price this ledger's opportunity cost differently than the
             # plan it's supposed to be scoring against).
             #
-            # Two-segment terminal credit: when the DP stashed the overnight
-            # terminal params (terminal_overnight_credit ON) and the live SoC
-            # sits within the overnight-need band above the firmware floor,
-            # this ledger uses the same richer terminal_v_hi the DP is
-            # crediting that energy at. Above the band, or when the keys are
-            # absent (flag off / stale plan), the legacy horizon-min
-            # expression is unchanged.
-            _terminal_v_hi = _dp_out.get("terminal_v_hi")
-            _terminal_need = _dp_out.get("terminal_need_kwh")
-            if (
-                _terminal_v_hi is not None
-                and _terminal_need is not None
-                and controller.cfg.pct_to_kwh(inputs.soc) <= controller.cfg.firmware_floor_kwh + _terminal_need
-            ):
-                _keep_value = _terminal_v_hi
-            else:
+            # Piecewise terminal credit: when the DP stashed terminal_segments
+            # (chronological (dc_kwh, value_eur_per_dc_kwh) pairs) this ledger
+            # walks them sorted by value descending, cumulating from the
+            # firmware floor — the marginal kWh above the floor is priced at
+            # whichever segment it falls into. Beyond the last segment, or
+            # when the key is absent/falsy (flag off / stale plan), the
+            # legacy horizon-min expression is unchanged.
+            _segs = _dp_out.get("terminal_segments")
+            if _segs:
+                _above_fw = max(0.0, controller.cfg.pct_to_kwh(inputs.soc) - controller.cfg.firmware_floor_kwh)
+                _keep_value = None
+                for _kwh, _v in sorted(_segs, key=lambda s: -s[1]):
+                    if _above_fw <= _kwh:
+                        _keep_value = _v
+                        break
+                    _above_fw -= _kwh
+                if _keep_value is None:  # beyond all segments → legacy
+                    _now_h_keep = resolution.hour_floor(now)
+                    _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
+                    _keep_value = optimize_mod.compute_water_value(
+                        min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
+                        controller.cfg,
+                    )
+            else:  # keys absent / flag off → legacy, unchanged
                 _now_h_keep = resolution.hour_floor(now)
                 _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
                 _keep_value = optimize_mod.compute_water_value(

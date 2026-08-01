@@ -533,15 +533,14 @@ class TestExportPnlMeasuredNotSetpoint:
 def _patched_compute_decision_with_terminal(
     export_request: dict,
     *,
-    terminal_v_hi: float | None = None,
-    terminal_need_kwh: float | None = None,
+    terminal_segments: list[tuple[float, float]] | None = None,
 ):
     """Factory: like ``_patched_compute_decision`` (test_controller_export_executor.py)
-    but also injects the two-segment terminal keys into ``_out`` when given,
-    so the executor's ``_keep_value`` picks up ``terminal_v_hi`` /
-    ``terminal_need_kwh`` exactly as the live DP stashes them
-    (``decision.compute_decision``). Omitting either leaves the corresponding
-    key absent from ``_out``, matching the flag-off / stale-plan case.
+    but also injects the piecewise ``terminal_segments`` key into ``_out``
+    when given, so the executor's ``_keep_value`` picks up the same
+    ``(dc_kwh, value_eur_per_dc_kwh)`` pairs the live DP stashes there
+    (``decision.compute_decision``). Omitting it leaves the key absent from
+    ``_out``, matching the flag-off / stale-plan case.
     """
 
     def _stub(
@@ -572,10 +571,8 @@ def _patched_compute_decision_with_terminal(
             _out["dp_selected"] = []
             _out["intervals"] = []
             _out["grid_request"] = {}
-            if terminal_v_hi is not None:
-                _out["terminal_v_hi"] = terminal_v_hi
-            if terminal_need_kwh is not None:
-                _out["terminal_need_kwh"] = terminal_need_kwh
+            if terminal_segments is not None:
+                _out["terminal_segments"] = terminal_segments
         passive = PlanState(ControllerState.PASSIVE, inputs.now, ())
         deadline = inputs.now + timedelta(hours=8)
         return passive, 0.0, deadline, [], "water_value", []
@@ -587,7 +584,14 @@ class TestExportKeepValueHorizonMinAnchor:
     """The live C3 executor's ``_keep_value`` (opportunity-cost term fed into
     the PnL ledger) must use ``compute_water_value(min(remaining_prices), cfg)``
     — the same anchor as the DP's terminal water value — not
-    ``find_next_trough``'s earliest-qualifying local minimum."""
+    ``find_next_trough``'s earliest-qualifying local minimum.
+
+    When the DP stashes ``terminal_segments`` (piecewise ``(dc_kwh,
+    value_eur_per_dc_kwh)`` pairs, chronological order), the executor walks
+    them sorted by value descending, cumulating from ``firmware_floor_kwh``:
+    the marginal kWh above the floor is priced at whichever segment it falls
+    into. Beyond the last segment, or when the key is absent/falsy, it falls
+    back to the horizon-min legacy expression above."""
 
     @pytest.mark.asyncio
     async def test_keep_value_uses_horizon_min_not_local_trough(self, monkeypatch):
@@ -649,24 +653,34 @@ class TestExportKeepValueHorizonMinAnchor:
             "PnL must not match the stale next-local-trough anchor"
         )
 
+    # Shared 2-segment fixture for the walk tests below (chronological order,
+    # as decision.py stashes it; the executor sorts by value desc itself).
+    # capacity_kwh=10.0 -> firmware_floor_kwh=0.5 kWh (5%). Segment 1 spans
+    # the first 1.0 kWh above the floor at 0.20 €/kWh; segment 2 the next
+    # 2.0 kWh at 0.05 €/kWh; total band = 3.0 kWh above the floor. Neither
+    # value equals the legacy compute_water_value(0.10, cfg) anchor (which
+    # is exactly 0.10 given this file's water_value_factor=1.0/eta=1.0
+    # defaults), so the fixture actually distinguishes all three branches.
+    _WALK_SEGMENTS = [(1.0, 0.20), (2.0, 0.05)]
+
     @pytest.mark.asyncio
-    async def test_keep_value_uses_v_hi_below_threshold(self, monkeypatch):
-        """SoC within the overnight-need band above the firmware floor ->
-        _keep_value must be the DP's terminal_v_hi, not the legacy horizon-min
-        water value."""
+    async def test_keep_value_walks_into_first_segment(self, monkeypatch):
+        """Marginal DC kWh above the firmware floor sits inside the first
+        (highest-value) segment -> _keep_value must be that segment's value,
+        not the legacy horizon-min water value."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
-        # capacity_kwh=10.0 -> firmware_floor_kwh=0.5 (5%); need=1.0 -> threshold
-        # is 1.5 kWh (15% SoC). soc=10% (1.0 kWh) sits inside the band.
+        # soc=10% -> 1.0 kWh; above_fw = 1.0 - 0.5 = 0.5 kWh, inside segment 1
+        # (0-1.0 kWh band).
         _seed_export_inputs(hass, soc="10.0", export_price="0.30")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod,
             "compute_decision",
             _patched_compute_decision_with_terminal(
-                export_request={cur_h: 3000.0}, terminal_v_hi=0.15, terminal_need_kwh=1.0
+                export_request={cur_h: 3000.0}, terminal_segments=self._WALK_SEGMENTS
             ),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -681,29 +695,67 @@ class TestExportKeepValueHorizonMinAnchor:
         cfg = ctrl.cfg
         eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
         # eta_charge=1.0/round_trip_eff=1.0 -> eta_discharge=1.0, so DC==AC kWh.
-        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - 0.15 * ac_kwh
+        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - 0.20 * ac_kwh
         assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
-            f"below-threshold SoC must use terminal_v_hi (0.15) as keep_value; "
+            f"marginal kWh inside segment 1 must use its value (0.20) as keep_value; "
             f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
         )
 
     @pytest.mark.asyncio
-    async def test_keep_value_uses_legacy_above_threshold(self, monkeypatch):
-        """SoC above the overnight-need band -> _keep_value falls back to the
-        legacy compute_water_value(min(remaining_prices), cfg) expression, even
-        though the DP stashed terminal keys."""
+    async def test_keep_value_walks_into_second_segment(self, monkeypatch):
+        """Marginal DC kWh above the firmware floor exhausts the first
+        segment and lands inside the second -> _keep_value must be the
+        second segment's value."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
         hass = _StubHass()
         ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
-        # threshold is 1.5 kWh (15% SoC); soc=80% (8.0 kWh) is well above it.
+        # soc=25% -> 2.5 kWh; above_fw = 2.5 - 0.5 = 2.0 kWh. Segment 1 (1.0
+        # kWh) is exhausted, leaving 1.0 kWh inside segment 2's 2.0 kWh band.
+        _seed_export_inputs(hass, soc="25.0", export_price="0.30")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision_with_terminal(
+                export_request={cur_h: 3000.0}, terminal_segments=self._WALK_SEGMENTS
+            ),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected an export tick, calls={act.calls}"
+        ac_kwh = rec.rows[-1]["export_kwh"]
+        assert ac_kwh and ac_kwh > 0
+
+        cfg = ctrl.cfg
+        eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
+        expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - 0.05 * ac_kwh
+        assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
+            f"marginal kWh inside segment 2 must use its value (0.05) as keep_value; "
+            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_value_beyond_all_segments_falls_back_to_legacy(self, monkeypatch):
+        """SoC sits above the DP's entire segmented band -> _keep_value falls
+        back to the legacy compute_water_value(min(remaining_prices), cfg)
+        expression, even though the DP stashed terminal_segments."""
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
+        hass = _StubHass()
+        ctrl, act, _, rec = _make_controller(hass, cfg_overrides=dict(soc_floor=0.0))
+        # above_fw at soc=80% (8.0 kWh) is 7.5 kWh, well beyond the 3.0 kWh
+        # total segment band (1.0 + 2.0).
         _seed_export_inputs(hass, soc="80.0", export_price="0.30")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod,
             "compute_decision",
             _patched_compute_decision_with_terminal(
-                export_request={cur_h: 3000.0}, terminal_v_hi=0.15, terminal_need_kwh=1.0
+                export_request={cur_h: 3000.0}, terminal_segments=self._WALK_SEGMENTS
             ),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
@@ -718,12 +770,14 @@ class TestExportKeepValueHorizonMinAnchor:
         cfg = ctrl.cfg
         # Same forecast as _seed_export_inputs: current hour 0.30, rest 0.10.
         keep_legacy = compute_water_value(0.10, cfg)
-        assert keep_legacy != pytest.approx(0.15), "fixture must actually distinguish v_hi from the legacy anchor"
+        assert keep_legacy != pytest.approx(0.20) and keep_legacy != pytest.approx(0.05), (
+            "fixture must actually distinguish segment values from legacy"
+        )
         eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
         expected_pnl = ac_kwh * eff_price - cfg.cycle_cost_eur_per_kwh * ac_kwh - keep_legacy * ac_kwh
         assert ctrl.today_export_pnl_eur == pytest.approx(expected_pnl, rel=1e-6), (
-            f"above-threshold SoC must ignore terminal_v_hi and use the legacy anchor ({keep_legacy}); "
-            f"got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
+            f"beyond-all-segments SoC must ignore terminal_segments and use the legacy "
+            f"anchor ({keep_legacy}); got {ctrl.today_export_pnl_eur} (expected {expected_pnl})"
         )
 
     @pytest.mark.asyncio
@@ -763,11 +817,12 @@ class TestExportKeepValueHorizonMinAnchor:
 
     @pytest.mark.asyncio
     async def test_dp_scheduled_export_books_nonnegative_pnl(self, monkeypatch):
-        """econ-F5/parity-M4 guard: terminal_v_hi already bakes in ``− cycle_cost``
-        (wear-symmetric with the export leg's own ``− cycle_cost`` term in
-        export_pnl_eur). A DP-committed export priced at exactly the terminal
-        parity point (effective_export_price − cycle_cost) must book PnL == 0,
-        not a spurious loss of ``-cycle_cost * kwh`` from double-subtracting the
+        """econ-F5/parity-M4 guard: the terminal segment value already bakes
+        in ``− cycle_cost`` (wear-symmetric with the export leg's own
+        ``− cycle_cost`` term in export_pnl_eur). A DP-committed export
+        priced at exactly the terminal parity point
+        (effective_export_price − cycle_cost) must book PnL == 0, not a
+        spurious loss of ``-cycle_cost * kwh`` from double-subtracting the
         wear term."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)
@@ -776,13 +831,15 @@ class TestExportKeepValueHorizonMinAnchor:
         _seed_export_inputs(hass, soc="10.0", export_price="0.30")
         cfg = ctrl.cfg
         eff_price = ctrl_mod.optimize_mod.effective_export_price(0.30, cfg)
-        terminal_v_hi = eff_price - cfg.cycle_cost_eur_per_kwh
+        parity_value = eff_price - cfg.cycle_cost_eur_per_kwh
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod,
             "compute_decision",
             _patched_compute_decision_with_terminal(
-                export_request={cur_h: 3000.0}, terminal_v_hi=terminal_v_hi, terminal_need_kwh=1.0
+                # soc=10% -> above_fw = 0.5 kWh; a 1.0 kWh segment covers it.
+                export_request={cur_h: 3000.0},
+                terminal_segments=[(1.0, parity_value)],
             ),
         )
         ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
