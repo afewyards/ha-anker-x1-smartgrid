@@ -1,7 +1,7 @@
 """Unit tests for optimize.overnight_terminal_segments (per-hour piecewise
 overnight terminal-credit builder; spec rev-3).
 
-Replaces the two-segment ``overnight_terminal_params`` valuation with a
+Replaces the retired scalar two-segment terminal-credit builder with a
 chronological per-hour walk over the post-horizon gap: every *priced* gap
 hour becomes its own ``(dc_kwh, value_eur_per_dc_kwh)`` segment, valued
 independently — no cross-hour averaging, no ``-cycle_cost`` term, no

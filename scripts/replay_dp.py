@@ -2,11 +2,12 @@
 """Offline DP replay harness — Task 1 of the 2026-08-01 terminal-piecewise-credit wave.
 
 Rebuilds ``decision.compute_decision``'s pre-DP wiring (per-hour ride-out
-``reserve_by_hour``, the trough ``is_cheap`` map, ``water_value`` /
-``water_value_hi`` / ``overnight_need_kwh``) directly from a plan-sensor fixture
-+ an options fixture, then calls ``decision._dp_select_slots`` — monkeypatching
-``optimize.optimize_grid`` and ``optimize.select_end_state`` to capture exactly
-what reaches the DP core — to answer the open verification question in
+``reserve_by_hour``, the est-widened trough ``is_cheap`` map, ``water_value`` /
+the piecewise ``terminal_segments`` list from ``optimize.overnight_terminal_segments``)
+directly from a plan-sensor fixture + an options fixture, then calls
+``decision._dp_select_slots`` — monkeypatching ``optimize.optimize_grid`` and
+``optimize.select_end_state`` to capture exactly what reaches the DP core — to
+answer the open verification question in
 ``docs/superpowers/specs/2026-08-01-terminal-piecewise-credit-design.md``:
 
     The fixture's export ends at 5.0 % SoC, below the displayed reserve line
@@ -118,9 +119,11 @@ def _split_horizon(horizon: list[dict]) -> tuple[list[PriceSlot], dict, dict]:
     ``pricing_store.build_estimated_slots`` docstring + the DP-isolation pin
     ``tests/test_decision_overnight_terminal.py::test_dp_never_sees_estimated_slots``).
     Their ``price`` values are, however, exactly the ``est_price_by_hour`` the
-    live tick fed to ``overnight_terminal_params`` — reused here instead of
+    live tick feeds to ``overnight_terminal_segments`` — reused here instead of
     requiring a raw ``estimated_tomorrow`` 24-entry array (not present in either
-    fixture).
+    fixture). They also stand in for ``decision.py``'s ``_est_slot_list`` (built
+    live via ``pricing_store.build_estimated_slots``) when widening the
+    ``is_cheap`` map: both are just ``(start, price)`` pairs over the gap.
     """
     real_slots: list[PriceSlot] = []
     est_price_by_hour: dict[datetime, float] = {}
@@ -259,8 +262,25 @@ def replay(
     remaining_prices = [s.price for s in real_slots if s.start >= now_h]
     water_value = optimize_mod.compute_water_value(min(remaining_prices), cfg)
 
+    # Est-widened is_cheap map + terminal pickup (decision.py:1047-1068): pickup
+    # and the estimated-tail slot list are built BEFORE is_cheap so the reserve
+    # walk's forward-min window can see past the real-price truncation edge into
+    # the genuine overnight estimate (mirrors decision.py's ordering exactly).
+    # est_price_by_hour (already parsed by _split_horizon) stands in for
+    # decision.py's `_est_slot_list` here — see _split_horizon's docstring. The
+    # estimated slot OBJECTS feed only this is_cheap map, never the DP itself.
+    pickup: datetime | None = None
+    est_slot_list: list[PriceSlot] = []
+    if cfg.terminal_overnight_credit:
+        pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or decision._next_synthetic_pickup(
+            horizon_edge
+        )
+        est_slot_list = [
+            PriceSlot(start=h, price=p) for h, p in est_price_by_hour.items() if horizon_edge <= h < pickup
+        ]
+
     is_cheap = (
-        decision._build_is_cheap_by_hour(real_slots, cfg, slot_minutes)
+        decision._build_is_cheap_by_hour(real_slots + est_slot_list, cfg, slot_minutes)
         if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH
         else None
     )
@@ -287,39 +307,24 @@ def replay(
     export_price_matches_import = options_raw.get("ent_export_price") == options_raw.get("ent_price")
     export_price = next((s.price for s in real_slots if s.start == now_h), remaining_prices[0])
 
-    water_value_hi: float | None = None
-    overnight_need_kwh = 0.0
+    # Piecewise per-hour terminal segments (spec rev-3, decision.py:1125-1158) —
+    # replaces the retired scalar (water_value_hi, overnight_need_kwh) two-segment
+    # credit. No max_export_dc_value clamp derivation: the new builder has no
+    # upper clamp to feed.
+    terminal_segments: list[tuple[float, float]] | None = None
+    need_kwh = 0.0
+    v_hi_mean: float | None = None
     if cfg.terminal_overnight_credit:
-        pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or decision._next_synthetic_pickup(
-            horizon_edge
-        )
         load_by_hod: dict[int, float] = {}
         for iv in intervals_reserve:
             load_by_hod[iv.start.hour] = iv.load_w
 
-        eta_d_static = cfg.eta_discharge_static()
-        win_slots = [s for s in real_slots if slot_now_h <= s.start < horizon_edge]
-        win_prices = [s.price for s in win_slots]
-        if cfg.price_mode == const.PRICE_MODE_STATIC:
-            eff = [optimize_mod.effective_export_price(export_price, cfg)]
-        elif export_price_matches_import:
-            eff = [optimize_mod.effective_export_price(p, cfg) for p in win_prices]
-        else:
-            cur_import = win_prices[0] if win_prices else 0.0
-            if cur_import > 1e-9:
-                ratio = export_price / cur_import
-                eff = [optimize_mod.effective_export_price(p * ratio, cfg) for p in win_prices]
-            else:
-                eff = [optimize_mod.effective_export_price(export_price, cfg)]
-        max_export_dc_value = (max(eff) * eta_d_static - cfg.cycle_cost_eur_per_kwh) if eff else water_value
-
-        water_value_hi, overnight_need_kwh = optimize_mod.overnight_terminal_params(
+        terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
             gap_start=horizon_edge,
             pickup=pickup,
             est_price_by_hour=est_price_by_hour,
             load_w_by_hod=load_by_hod,
             v_lo=water_value,
-            max_export_dc_value=max_export_dc_value,
             cfg=cfg,
             eta_curve=eta_curve,
         )
@@ -380,8 +385,7 @@ def replay(
             slot_minutes=slot_minutes,
             dt_h=dt_h,
             eta_curve=eta_curve,
-            water_value_hi=water_value_hi,
-            overnight_need_kwh=overnight_need_kwh,
+            terminal_segments=terminal_segments,
             export_slots=None,
         )
     finally:
@@ -403,8 +407,9 @@ def replay(
         "hedge_drain_kwh": hedge_drain_kwh,
         "hedge_drain_by_hour": hedge_drain_by_hour,
         "water_value": water_value,
-        "water_value_hi": water_value_hi,
-        "overnight_need_kwh": overnight_need_kwh,
+        "terminal_segments": terminal_segments,
+        "need_kwh": need_kwh,
+        "v_hi_mean": v_hi_mean,
         "reserve_by_hour": reserve_by_hour,
         "reserve_list": reserve_list,
         "slot_now_h": slot_now_h,
@@ -471,8 +476,14 @@ def main() -> None:
         f"firmware_floor_kwh={cfg.firmware_floor_kwh:.3f} (FIRMWARE_SOC_FLOOR={const.FIRMWARE_SOC_FLOOR}%) "
         f"soc_target={cfg.soc_target}% cycle_cost={cfg.cycle_cost_eur_per_kwh} reserve_anchor={cfg.reserve_anchor}"
     )
-    print(f"water_value(v_lo)={_fmt(r['water_value'])}  water_value_hi={_fmt(r['water_value_hi'])}  "
-          f"overnight_need_kwh={_fmt(r['overnight_need_kwh'])}")
+    _segs = r["terminal_segments"] or []
+    _segs_total_dc = sum(s[0] for s in _segs)
+    _segs_top_v = max((s[1] for s in _segs), default=None)
+    print(
+        f"water_value(v_lo)={_fmt(r['water_value'])}  terminal_segments: count={len(_segs)}  "
+        f"total_dc_kwh={_fmt(_segs_total_dc, 3)}  top_value={_fmt(_segs_top_v)}  "
+        f"need_kwh={_fmt(r['need_kwh'])}  v_hi_mean={_fmt(r['v_hi_mean'])}"
+    )
     if r["hedge_drain_by_hour"]:
         hh, hkwh = next(iter(r["hedge_drain_by_hour"].items()))
         print(f"hedge_drain_by_hour={{{hh.isoformat()}: {hkwh:.3f} kWh}}  (sensitivity knob — see docstring)")
@@ -505,9 +516,11 @@ def main() -> None:
         f"  cfg.firmware_floor_kwh (const.FIRMWARE_SOC_FLOOR={const.FIRMWARE_SOC_FLOOR}%) = "
         f"{cfg.firmware_floor_kwh:.3f} kWh"
     )
+    _kw_segs = kwargs.get("terminal_segments") or []
     print(
-        f"  terminal_mode={kwargs.get('terminal_mode')!r}  water_value_hi passed={_fmt(kwargs.get('water_value_hi'))}  "
-        f"overnight_need_kwh passed={_fmt(kwargs.get('overnight_need_kwh'))}"
+        f"  terminal_mode={kwargs.get('terminal_mode')!r}  terminal_segments passed: count={len(_kw_segs)}  "
+        f"total_dc_kwh={_fmt(sum(s[0] for s in _kw_segs), 3)}  "
+        f"top_value={_fmt(max((s[1] for s in _kw_segs), default=None))}"
     )
     print(f"  reserve_by_hour passed: len={len(dp_reserve_list) if dp_reserve_list is not None else 0}  "
           f"min={_fmt(min(dp_reserve_list), 3) if dp_reserve_list else 'None'}  "

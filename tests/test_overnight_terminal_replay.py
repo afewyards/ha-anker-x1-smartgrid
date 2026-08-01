@@ -110,14 +110,6 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
         for iv in intervals:
             load_by_hod[iv.start.hour] = iv.load_w
 
-        max_export_dc_value = water_value
-        if eff_export:
-            eta_d_static = cfg.eta_discharge_static()
-            max_export_dc_value = max(
-                max(ep * eta_d_static for ep in eff_export) - cfg.cycle_cost_eur_per_kwh,
-                water_value,
-            )
-
         # Descending gap prices with a single cheap tail hour. The is_cheap
         # formula uses fwd_min * (1+band): early hours at 0.45+ are >20% above
         # the tail (0.10), so the walk accumulates ~4h of need before breaking.
@@ -131,22 +123,19 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
             gap_h += timedelta(hours=1)
             idx += 1
 
-        water_value_hi, overnight_need_kwh = optimize.overnight_terminal_params(
+        terminal_segments, overnight_need_kwh, water_value_hi = optimize.overnight_terminal_segments(
             gap_start=horizon_edge,
             pickup=pickup,
             est_price_by_hour=est_price_by_hour,
             load_w_by_hod=load_by_hod,
             v_lo=water_value,
-            max_export_dc_value=max_export_dc_value,
             cfg=cfg,
             eta_curve=eta_curve,
         )
-
-    # Task 4: optimize_grid no longer takes water_value_hi/overnight_need_kwh --
-    # translate to the equivalent single-entry terminal_segments (byte-identical
-    # by construction: dp_common's single-segment case reproduces the legacy
-    # two-segment formula; None stays None, preserving the legacy-anchor branch).
-    terminal_segments = [(overnight_need_kwh, water_value_hi)] if water_value_hi is not None else None
+        if not terminal_segments:
+            terminal_segments = None
+    else:
+        terminal_segments = None
 
     result = optimize.optimize_grid(
         window_pv,
@@ -238,26 +227,17 @@ class TestReplayEvidence:
         pickup = horizon_edge + timedelta(hours=11)
         load_by_hod = {iv.start.hour: iv.load_w for iv in intervals}
 
-        eta_d_static = cfg.eta_discharge_static()
-        max_export_dc_value = max(
-            max(ep * eta_d_static for ep in eff_export) - cfg.cycle_cost_eur_per_kwh,
-            water_value,
-        )
-
-        water_value_hi, overnight_need_kwh = optimize.overnight_terminal_params(
+        terminal_segments, _overnight_need_kwh, _water_value_hi = optimize.overnight_terminal_segments(
             gap_start=horizon_edge,
             pickup=pickup,
             est_price_by_hour={},
             load_w_by_hod=load_by_hod,
             v_lo=water_value,
-            max_export_dc_value=max_export_dc_value,
             cfg=cfg,
             eta_curve=eta_curve,
         )
-
-        # Task 4: optimize_grid no longer takes water_value_hi/overnight_need_kwh --
-        # translate to the equivalent single-entry terminal_segments (see _run_dp).
-        terminal_segments = [(overnight_need_kwh, water_value_hi)] if water_value_hi is not None else None
+        if not terminal_segments:
+            terminal_segments = None
 
         result = optimize.optimize_grid(
             window_pv,
