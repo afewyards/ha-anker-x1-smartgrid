@@ -65,6 +65,30 @@ class TestActualsCache:
         assert set(ctrl._daily_actuals) == {date(2026, 7, 31)}
         assert ctrl._daily_actuals_day == "2026-07-31", "a failed refresh must not advance the key"
 
+    async def test_aggregation_failure_leaves_the_cache_intact(self, monkeypatch):
+        """A raise from aggregate_actual_days itself (not just the recorder read)
+
+        must not propagate out of _tick_impl and must not advance the day key —
+        else the display-only stats table can pin the control loop in failsafe
+        for the whole read window (review finding, Task 8 round 1).
+        """
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {date(2026, 7, 31): daily_stats.new_day_totals()}
+        ctrl._daily_actuals_day = "2026-07-31"
+        ctrl._recorder.read_feature_rows = lambda since_iso: []
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("aggregation is unhappy")
+
+        monkeypatch.setattr(daily_stats, "aggregate_actual_days", _boom)
+
+        await ctrl._refresh_daily_actuals(datetime(2026, 8, 1, 10, 0, tzinfo=UTC))
+
+        assert set(ctrl._daily_actuals) == {date(2026, 7, 31)}
+        assert ctrl._daily_actuals_day == "2026-07-31", "a failed aggregation must not advance the key"
+
 
 class TestPublishDailyStats:
     async def test_publishes_a_merged_table_with_today_from_the_ledger(self):

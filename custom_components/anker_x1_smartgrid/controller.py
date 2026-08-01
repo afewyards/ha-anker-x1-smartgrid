@@ -1796,13 +1796,13 @@ class Controller:
         _since = (now - timedelta(days=daily_stats.WINDOW_DAYS + 1)).isoformat()
         try:
             rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, _since)
+            self._daily_actuals = daily_stats.aggregate_actual_days(
+                rows, self.cfg.export_fee_eur_per_kwh, dt_util.DEFAULT_TIME_ZONE
+            )
+            self._daily_actuals_day = _today
         except Exception:
             _LOGGER.warning("daily stats: actuals backfill failed; keeping previous cache", exc_info=True)
             return
-        self._daily_actuals = daily_stats.aggregate_actual_days(
-            rows, self.cfg.export_fee_eur_per_kwh, dt_util.DEFAULT_TIME_ZONE
-        )
-        self._daily_actuals_day = _today
 
     def _publish_daily_stats(
         self,
