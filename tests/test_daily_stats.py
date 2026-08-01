@@ -107,3 +107,57 @@ class TestAggregateActualDays:
 
     def test_empty_input(self):
         assert daily_stats.aggregate_actual_days([], 0.0, CEST) == {}
+
+
+class TestLedgerParity:
+    def test_recorded_replay_equals_live_ledger_euros(self):
+        """A synthetic tick stream priced both ways must agree to 1e-9.
+
+        Live path:     optimize.cash_flows_eur(meter_w, batt_w, ...) per tick.
+        Recorded path: daily_stats.aggregate_actual_days over the SAME ticks
+                       expressed as v9 kWh deltas.
+
+        If these ever diverge, one of the two attribution sites has grown its
+        own copy of the min() rule.
+        """
+        from custom_components.anker_x1_smartgrid.optimize import cash_flows_eur
+
+        tick_h = 60.0 / 3600.0
+        fee = 0.015
+        # (meter_w, batt_w) pairs: grid charge, PV-covered charge, battery
+        # export, PV-spill export, mixed idle, and a negative-price hour.
+        ticks = [
+            (1500.0, -2000.0),
+            (200.0, -2000.0),
+            (-2500.0, 2500.0),
+            (-3000.0, 1000.0),
+            (0.0, 0.0),
+            (900.0, -400.0),
+        ]
+        import_price, raw_export_price = 0.31, 0.24
+
+        live_cost = live_credit = 0.0
+        rows = []
+        base = datetime(2026, 7, 20, 6, 0, tzinfo=UTC)
+        for i, (meter_w, batt_w) in enumerate(ticks):
+            cost, credit = cash_flows_eur(meter_w, batt_w, import_price, raw_export_price - fee, tick_h)
+            live_cost += cost
+            live_credit += credit
+            rows.append(
+                {
+                    "ts": (base + timedelta(minutes=i)).isoformat(),
+                    # Recorder columns are the UNattributed per-leg deltas;
+                    # the min() happens inside aggregate_actual_days.
+                    "grid_import_kwh": max(0.0, meter_w) / 1000.0 * tick_h,
+                    "grid_export_kwh": max(0.0, -meter_w) / 1000.0 * tick_h,
+                    "batt_charge_kwh": max(0.0, -batt_w) / 1000.0 * tick_h,
+                    "batt_discharge_kwh": max(0.0, batt_w) / 1000.0 * tick_h,
+                    "import_price": import_price,
+                    "export_price": raw_export_price,
+                }
+            )
+
+        out = daily_stats.aggregate_actual_days(rows, fee, CEST)
+        day = out[date(2026, 7, 20)]
+        assert day["cost_eur"] == pytest.approx(live_cost, abs=1e-9)
+        assert day["revenue_eur"] == pytest.approx(live_credit, abs=1e-9)
