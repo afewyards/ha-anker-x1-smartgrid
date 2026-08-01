@@ -191,6 +191,118 @@ def overnight_terminal_params(
     return (v_hi, need)
 
 
+def overnight_terminal_segments(
+    gap_start: datetime,
+    pickup: datetime,
+    est_price_by_hour: dict[datetime, float],
+    load_w_by_hod: dict[int, float],
+    v_lo: float,
+    cfg: Config,
+    eta_curve=None,
+) -> tuple[list[tuple[float, float]], float, float]:
+    """Per-hour piecewise overnight terminal-credit segments (spec rev-3).
+
+    Replaces the scalar two-segment credit (:func:`overnight_terminal_params`)
+    with one ``(dc_kwh, value_eur_per_dc_kwh)`` segment per **priced** gap
+    hour, consumed by :func:`dp_common.select_end_state` richest-first. This
+    fixes the pre-publication dump-to-5% failure mode: a scalar mean blended
+    a glitch/estimate hour into every kWh's valuation and a hard
+    ``-cycle_cost`` term could push the whole credit to zero; per-hour
+    segments bound a bad hour's damage to its own slice and let genuinely
+    cheap hours self-select out via a low segment value instead of an
+    is_cheap early break.
+
+    The **gap** is ``[gap_start, pickup)`` — the post-horizon overnight the DP
+    cannot price directly. The walk is chronological, one step per hour
+    (partial final hour handled via ``dt_h``):
+
+    * Unpriced gap hours contribute **no segment** — their energy simply
+      falls back to the DP's plain ``water_value`` surplus rate.
+    * Priced gap hour ``h`` (price ``p_h``): DC energy drawn from the pack
+      is ``dc_h = load_w/η_d(load_w)·dt_h/1000 + idle_drain_w·dt_h/1000``
+      (``η_d`` from ``eta_curve.eta_discharge(load_w)`` when a curve is
+      given, else the static ``cfg.eta_discharge_static()``; missing
+      hour-of-day load falls back to ``const.DEFAULT_FALLBACK_LOAD_W``).
+      The segment's raw value is the avoided-import value per DC kWh,
+      ``raw_v_h = (load_w·dt_h/1000 · p_h) / dc_h`` — idle drain dilutes
+      this naturally (it draws DC energy but serves no load). There is
+      **no** ``-cycle_cost`` term here (unlike the legacy scalar v_hi): the
+      export leg already pays wear in the DP transition, so subtracting it
+      again here would double-count it against the hold side.
+    * ``seg_v = max(v_lo, raw_v_h)`` — a per-segment floor at the horizon-min
+      refill anchor, never a global clamp.
+
+    Total ``Σ dc_h`` is capped at ``capacity_kwh - firmware_floor_kwh``
+    (mirrors the hard energy ceiling ``select_end_state`` can ever credit),
+    trimming the **lowest-value** segments first — partial trim of the
+    boundary segment is allowed so the cap is hit exactly rather than
+    overshot.
+
+    ``need_kwh`` — the overnight-need display/reserve figure — is the sum of
+    (post-trim) segment ``dc_h`` for segments whose **raw** value (not the
+    floored ``seg_v``) is strictly greater than ``v_lo``; this reproduces
+    "bridge to the next genuinely-cheap hour" without an explicit is_cheap
+    break.
+
+    ``v_hi_mean`` is the dc-weighted mean of the kept segments' ``seg_v``
+    (display/attr continuity only — the DP itself consumes the segment list,
+    not this scalar).
+
+    Returns ``([], 0.0, v_lo)`` for an empty/inverted gap and for a gap with
+    no priced hours at all (no segment can be built without a price).
+    """
+    if gap_start >= pickup:
+        return ([], 0.0, v_lo)
+
+    eta_d_static = cfg.eta_discharge_static()
+
+    # Chronological walk: one candidate segment per priced hour, as
+    # [dc_h, seg_v, raw_v_h] so the cap-trim step below can mutate dc_h
+    # in place while segments stay chronologically ordered.
+    raw_segments: list[list[float]] = []
+    cur = gap_start
+    while cur < pickup:
+        dt_h = min(1.0, (pickup - cur).total_seconds() / 3600.0)
+        p_h = est_price_by_hour.get(cur)
+        if p_h is not None:
+            load_w = load_w_by_hod.get(cur.hour, const.DEFAULT_FALLBACK_LOAD_W)
+            eta_d = eta_d_static if eta_curve is None else eta_curve.eta_discharge(load_w)
+            dc_h = load_w / eta_d * dt_h / 1000.0 + cfg.idle_drain_w * dt_h / 1000.0
+            if dc_h > 0.0:
+                raw_v_h = (load_w * dt_h / 1000.0 * p_h) / dc_h
+                seg_v = max(v_lo, raw_v_h)
+                raw_segments.append([dc_h, seg_v, raw_v_h])
+        cur += timedelta(hours=1)
+
+    if not raw_segments:
+        return ([], 0.0, v_lo)
+
+    # Cap Σ dc_h at the hard energy ceiling, trimming lowest-value segments
+    # first (partial trim of the boundary segment allowed).
+    cap = max(0.0, cfg.capacity_kwh - cfg.firmware_floor_kwh)
+    total_dc = sum(seg[0] for seg in raw_segments)
+    if total_dc > cap:
+        excess = total_dc - cap
+        for seg in sorted(raw_segments, key=lambda s: s[1]):
+            if excess <= 0.0:
+                break
+            trim = min(seg[0], excess)
+            seg[0] -= trim
+            excess -= trim
+
+    kept = [(dc_h, seg_v, raw_v_h) for dc_h, seg_v, raw_v_h in raw_segments if dc_h > 0.0]
+    if not kept:
+        return ([], 0.0, v_lo)
+
+    need_kwh = sum(dc_h for dc_h, _, raw_v_h in kept if raw_v_h > v_lo)
+
+    total_kept_dc = sum(dc_h for dc_h, _, _ in kept)
+    v_hi_mean = sum(dc_h * seg_v for dc_h, seg_v, _ in kept) / total_kept_dc
+
+    segments = [(dc_h, seg_v) for dc_h, seg_v, _ in kept]
+    return (segments, need_kwh, v_hi_mean)
+
+
 def effective_export_price(raw_export_price: float, cfg: Config) -> float:
     """Net export price after the flat feed-in fee.
 
