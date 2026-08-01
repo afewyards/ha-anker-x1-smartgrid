@@ -272,6 +272,13 @@ def test_export_off_clamps_max_export_at_v_lo(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    reason=(
+        "transitional: two-segment terminal credit inert until terminal_segments is "
+        "threaded (Task 4) and decision wiring lands (Task 5)"
+    ),
+    strict=True,
+)
 def test_truncated_morning_holds_overnight_need():
     """An expensive overnight estimate makes the DP hold energy it would else burst.
 
