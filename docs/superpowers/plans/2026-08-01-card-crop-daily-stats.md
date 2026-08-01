@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Baseline: main `77ed780`. Repo root `/Users/kleist/Sites/x1-smartcharge`.
-- Run tests with `python3 -m pytest` from the repo root. `asyncio_mode = "auto"` — async tests need no decorator.
+- **Tests MUST run inside the project venv:** `source .venv/bin/activate && python3 -m pytest` from the repo root. Bare `python3` on this machine is 3.9 and has no `homeassistant` package — `tests/conftest.py` fails to import and pytest never collects. If pytest will not run, STOP and escalate; never substitute hand-rolled verification for a real pytest run. `asyncio_mode = "auto"` — async tests need no decorator.
 - Lint: `ruff check custom_components tests` must pass. `line-length = 120`, `target-version = "py312"`.
 - `daily_stats.py` MUST NOT import Home Assistant. Timezone arrives as an explicit `tzinfo` parameter.
 - Attribution is defined once, in `optimize.py`. No second copy of the `min()` rule anywhere.
@@ -117,7 +117,7 @@ def test_fixture_filter_predicate_crops_thirteen_hours():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_lovelace_plan_card.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_lovelace_plan_card.py -v`
 Expected: FAIL — `test_no_estimated_tail_series_remain` (3 `(est)` names present), `test_every_series_filters_estimated_rows` (bar series lack the filter), `test_graph_span_reads_the_filtered_horizon` (no `HR` variable). `test_apex_fill_and_stroke_arrays_match_series_count` and `test_fixture_filter_predicate_crops_thirteen_hours` PASS already (10 series, 10-entry arrays).
 
 - [ ] **Step 3: Add the `HR` variable and repoint `graph_span`**
@@ -187,7 +187,7 @@ In the tooltip `unit()` function, drop the two `(est)` branches so it reads:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_lovelace_plan_card.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_lovelace_plan_card.py -v`
 Expected: 5 passed.
 
 - [ ] **Step 7: Commit**
@@ -246,7 +246,7 @@ class TestCashEnergyKwh:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_cash_ledger.py::TestCashEnergyKwh -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_cash_ledger.py::TestCashEnergyKwh -v`
 Expected: FAIL with `ImportError: cannot import name 'cash_energy_kwh'`.
 
 - [ ] **Step 3: Extract the helper**
@@ -284,7 +284,7 @@ This is arithmetically byte-identical: the original `grid_charge_w / 1000.0 * ti
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_cash_ledger.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_cash_ledger.py -v`
 Expected: all pass — the new class plus every pre-existing `cash_flows_eur` test (which pin the byte-identical claim).
 
 - [ ] **Step 5: Commit**
@@ -429,7 +429,7 @@ class TestAggregateActualDays:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_daily_stats.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'custom_components.anker_x1_smartgrid.daily_stats'`.
 
 - [ ] **Step 3: Create the module with `aggregate_actual_days`**
@@ -533,7 +533,7 @@ def aggregate_actual_days(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_daily_stats.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py -v`
 Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
@@ -617,7 +617,7 @@ class TestLedgerParity:
 
 - [ ] **Step 2: Run the test**
 
-Run: `python3 -m pytest tests/test_daily_stats.py::TestLedgerParity -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py::TestLedgerParity -v`
 Expected: PASS (Tasks 2 and 3 already provide both sides).
 
 - [ ] **Step 3: Commit**
@@ -726,7 +726,7 @@ class TestAggregatePlannedDays:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_daily_stats.py::TestAggregatePlannedDays -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py::TestAggregatePlannedDays -v`
 Expected: FAIL with `AttributeError: module ... has no attribute 'aggregate_planned_days'`.
 
 - [ ] **Step 3: Implement**
@@ -777,7 +777,7 @@ def aggregate_planned_days(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_daily_stats.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py -v`
 Expected: all pass (Task 3's 8 + Task 4's 1 + 7 new).
 
 - [ ] **Step 5: Commit**
@@ -891,7 +891,7 @@ class TestMergeDays:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_daily_stats.py::TestMergeDays -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py::TestMergeDays -v`
 Expected: FAIL with `AttributeError: module ... has no attribute 'merge_days'`.
 
 - [ ] **Step 3: Implement**
@@ -956,7 +956,7 @@ def merge_days(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_daily_stats.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats.py -v`
 Expected: all pass (24 total).
 
 - [ ] **Step 5: Lint**
@@ -1025,7 +1025,7 @@ class TestLedgerEnergyAccumulators:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_cash_ledger.py::TestLedgerEnergyAccumulators -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_cash_ledger.py::TestLedgerEnergyAccumulators -v`
 Expected: FAIL with `AttributeError: 'CashLedger' object has no attribute 'today_grid_charge_kwh'`.
 
 - [ ] **Step 3: Add the fields, reset, and accumulation**
@@ -1144,7 +1144,7 @@ class TestLedgerEnergyPersistence:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_cash_ledger.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_cash_ledger.py -v`
 Expected: all pass, including the pre-existing ledger tests.
 
 - [ ] **Step 7: Commit**
@@ -1296,7 +1296,7 @@ Note: `tests.helpers.StubRecorder` already implements `read_feature_rows(since_i
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_daily_stats_controller.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats_controller.py -v`
 Expected: FAIL with `AttributeError: 'Controller' object has no attribute '_refresh_daily_actuals'`.
 
 - [ ] **Step 3: Import the module and initialise the cache**
@@ -1402,12 +1402,12 @@ Immediately after the `self.last_status["plan"] = {...}` assignment (ends `:1604
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_daily_stats_controller.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats_controller.py -v`
 Expected: 5 passed.
 
 - [ ] **Step 7: Run the controller regression suite**
 
-Run: `python3 -m pytest tests/ -q -k "controller or ledger or daily_stats"`
+Run: `source .venv/bin/activate && python3 -m pytest tests/ -q -k "controller or ledger or daily_stats"`
 Expected: all pass. `_tick_impl` gained two calls; any stub recorder lacking `read_feature_rows` will surface here.
 
 - [ ] **Step 8: Commit**
@@ -1488,7 +1488,7 @@ def test_days_blob_is_not_recorded():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest tests/test_daily_stats_sensor.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats_sensor.py -v`
 Expected: FAIL with `ImportError: cannot import name 'X1DailyStatsSensor'`.
 
 - [ ] **Step 3: Add the sensor class**
@@ -1536,12 +1536,12 @@ In `async_setup_entry`, add it to the `async_add_entities([...])` list immediate
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `python3 -m pytest tests/test_daily_stats_sensor.py -v`
+Run: `source .venv/bin/activate && python3 -m pytest tests/test_daily_stats_sensor.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 6: Run the sensor regression suite**
 
-Run: `python3 -m pytest tests/ -q -k "sensor"`
+Run: `source .venv/bin/activate && python3 -m pytest tests/ -q -k "sensor"`
 Expected: all pass. Any test asserting an exact entity count will fail here and must be updated to include the new entity.
 
 - [ ] **Step 7: Commit**
@@ -1616,8 +1616,8 @@ In `README.md`, find the section that tells the user to paste `lovelace/apexchar
 
 - [ ] **Step 4: Run the full suite**
 
-Run: `python3 -m pytest tests/ -q`
-Expected: all pass. Compare the count against the pre-change baseline (`git stash && python3 -m pytest tests/ -q` if unsure) — the delta must be exactly the tests added by this plan.
+Run: `source .venv/bin/activate && python3 -m pytest tests/ -q`
+Expected: all pass. Compare the count against the pre-change baseline (`git stash && source .venv/bin/activate && python3 -m pytest tests/ -q` if unsure) — the delta must be exactly the tests added by this plan.
 
 - [ ] **Step 5: Lint**
 
