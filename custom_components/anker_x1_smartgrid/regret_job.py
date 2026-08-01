@@ -420,8 +420,11 @@ def run_daily_regret(
             cfg,
             terminal_mode=_terminal_mode,
             water_value=_water_value,
-            water_value_hi=_wv_hi,
-            overnight_need_kwh=_wv_need,
+            # terminal_segments intentionally NOT threaded here (default None,
+            # transitionally inert) -- hindsight_optimal_grid's water_value_hi/
+            # overnight_need_kwh params were removed in favor of
+            # terminal_segments; wiring real segments through this call site
+            # is Task 6.
             export_price=eff_export,
             dt_h=_dt_h,
         )
@@ -446,8 +449,11 @@ def run_daily_regret(
                     slots_per_day=_spd,
                     terminal_mode=_terminal_mode,
                     water_value=_water_value,
-                    water_value_hi=_wv_hi,
-                    overnight_need_kwh=_wv_need,
+                    # terminal_segments intentionally NOT threaded here (default
+                    # None, transitionally inert) -- optimize_grid's
+                    # water_value_hi/overnight_need_kwh params were removed in
+                    # favor of terminal_segments; wiring real segments through
+                    # this call site is Task 6.
                     export_price=eff_export,
                     dt_h=_dt_h,
                 )

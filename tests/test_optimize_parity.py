@@ -788,8 +788,7 @@ def _call_both_export(
     *,
     terminal_mode="reserve",
     water_value=None,
-    water_value_hi=None,
-    overnight_need_kwh=0.0,
+    terminal_segments=None,
 ):
     """Invoke both optimizers with export_price and return (opt, hind)."""
     assert len(pv) == len(load) == len(price) == len(export_price) == 24
@@ -799,8 +798,7 @@ def _call_both_export(
         cfg,
         terminal_mode=terminal_mode,
         water_value=water_value,
-        water_value_hi=water_value_hi,
-        overnight_need_kwh=overnight_need_kwh,
+        terminal_segments=terminal_segments,
         export_price=export_price,
         dt_h=HOURLY_DT_H,
     )
@@ -815,8 +813,7 @@ def _call_both_export(
         export_price=export_price,
         terminal_mode=terminal_mode,
         water_value=water_value,
-        water_value_hi=water_value_hi,
-        overnight_need_kwh=overnight_need_kwh,
+        terminal_segments=terminal_segments,
         dt_h=HOURLY_DT_H,
     )
     return opt, hind
@@ -870,7 +867,7 @@ class TestExportOnParity:
         assert_export_parity(opt, hind, label="two_peaks_wv")
 
     def test_two_segment_terminal_parity(self):
-        """water_value_hi + overnight_need_kwh (two-segment terminal) stays byte-identical."""
+        """Single-entry terminal_segments (legacy two-segment equivalent) stays byte-identical."""
         cfg = _make_export_cfg()
         pv = [0.0] * 24
         load = [0.3] * 24
@@ -887,10 +884,32 @@ class TestExportOnParity:
             cfg=cfg,
             terminal_mode="water_value",
             water_value=0.10,
-            water_value_hi=0.28,
-            overnight_need_kwh=3.0,
+            terminal_segments=[(3.0, 0.28)],
         )
         assert_export_parity(opt, hind, label="two_segment_terminal")
+
+    def test_piecewise_terminal_parity(self):
+        """Multi-segment terminal_segments (rev-3 piecewise terminal credit) stays
+        byte-identical between optimize_grid and hindsight_optimal_grid."""
+        cfg = _make_export_cfg()
+        pv = [0.0] * 24
+        load = [0.3] * 24
+        price = [0.10] * 6 + [0.20] * 18  # cheap pre-dawn trough
+        export_price = [0.0] * 24
+        export_price[19] = 0.55
+        export_price[20] = 0.45
+        opt, hind = _call_both_export(
+            pv,
+            load,
+            price,
+            export_price,
+            soc_start=70.0,
+            cfg=cfg,
+            terminal_mode="water_value",
+            water_value=0.10,
+            terminal_segments=[(2.0, 0.30), (1.5, 0.22)],
+        )
+        assert_export_parity(opt, hind, label="piecewise_terminal")
 
     def test_reserve_floor_export_parity(self):
         """Identical reserve_by_hour to both DPs stays byte-identical (mirror lock)."""

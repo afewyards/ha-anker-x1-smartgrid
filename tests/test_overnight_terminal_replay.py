@@ -142,6 +142,12 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
             eta_curve=eta_curve,
         )
 
+    # Task 4: optimize_grid no longer takes water_value_hi/overnight_need_kwh --
+    # translate to the equivalent single-entry terminal_segments (byte-identical
+    # by construction: dp_common's single-segment case reproduces the legacy
+    # two-segment formula; None stays None, preserving the legacy-anchor branch).
+    terminal_segments = [(overnight_need_kwh, water_value_hi)] if water_value_hi is not None else None
+
     result = optimize.optimize_grid(
         window_pv,
         window_load,
@@ -154,8 +160,7 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
         export_price=eff_export,
         terminal_mode="water_value",
         water_value=water_value,
-        water_value_hi=water_value_hi,
-        overnight_need_kwh=overnight_need_kwh,
+        terminal_segments=terminal_segments,
         dt_h=1.0,
         eta_curve=eta_curve,
     )
@@ -250,6 +255,10 @@ class TestReplayEvidence:
             eta_curve=eta_curve,
         )
 
+        # Task 4: optimize_grid no longer takes water_value_hi/overnight_need_kwh --
+        # translate to the equivalent single-entry terminal_segments (see _run_dp).
+        terminal_segments = [(overnight_need_kwh, water_value_hi)] if water_value_hi is not None else None
+
         result = optimize.optimize_grid(
             window_pv,
             window_load,
@@ -262,8 +271,7 @@ class TestReplayEvidence:
             export_price=eff_export,
             terminal_mode="water_value",
             water_value=water_value,
-            water_value_hi=water_value_hi,
-            overnight_need_kwh=overnight_need_kwh,
+            terminal_segments=terminal_segments,
             dt_h=1.0,
             eta_curve=eta_curve,
         )

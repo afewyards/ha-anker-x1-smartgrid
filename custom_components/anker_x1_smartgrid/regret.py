@@ -266,8 +266,7 @@ def hindsight_optimal_grid(
     *,
     terminal_mode: str = "reserve",
     water_value: float | None = None,
-    water_value_hi: float | None = None,
-    overnight_need_kwh: float = 0.0,
+    terminal_segments: list[tuple[float, float]] | None = None,
     export_price: tuple[float, ...] | list[float] | None = None,
     reserve_by_hour: list[float] | tuple[float, ...] | None = None,
     grid_charge_ceiling: list[float] | None = None,
@@ -577,7 +576,7 @@ def hindsight_optimal_grid(
         to_bin=to_bin,
         from_bin=from_bin,
         n_states=n_states,
-        terminal_segments=None,
+        terminal_segments=terminal_segments,
     )
 
     if best_end_b == -1:

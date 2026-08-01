@@ -173,6 +173,12 @@ def test_wiring_threads_params_to_optimize_grid_and_out(monkeypatch):
     the pass-through kwargs), so the test pins the wiring — arguments handed to the
     builder, and the sentinel forwarded downstream — without depending on the DP's
     internal end-state arithmetic (covered by the Task 3 helper tests).
+
+    Task 4 removed optimize_grid's water_value_hi/overnight_need_kwh params in
+    favor of terminal_segments; decision.py's own forwarding into optimize_grid
+    was silenced (not yet re-wired to terminal_segments — that lands in Task 5),
+    so the sentinel now stops at ``_out`` and never reaches optimize_grid's
+    kwargs. Task 5 re-adapts this test to assert real segments threading.
     """
     captured_builder: dict = {}
     captured_dp: dict = {}
@@ -190,10 +196,8 @@ def test_wiring_threads_params_to_optimize_grid_and_out(monkeypatch):
         return (0.99, 3.33)
 
     def _spy_dp(*args, **kwargs):
-        captured_dp.update(
-            water_value_hi=kwargs.get("water_value_hi"),
-            overnight_need_kwh=kwargs.get("overnight_need_kwh"),
-        )
+        captured_dp.clear()
+        captured_dp.update(kwargs)
         wl = kwargs["window_len"]
         return {
             "schedule": [0.0] * wl,
@@ -227,11 +231,14 @@ def test_wiring_threads_params_to_optimize_grid_and_out(monkeypatch):
     assert expected_est, "gap must be priced by the estimate (non-empty)"
     assert captured_builder["eta_curve"] is None
 
-    # sentinel forwarded downstream + stashed.
-    assert captured_dp["water_value_hi"] == 0.99
-    assert captured_dp["overnight_need_kwh"] == 3.33
+    # sentinel stashed on _out regardless (builder computation is untouched)...
     assert out["terminal_v_hi"] == 0.99
     assert out["terminal_need_kwh"] == 3.33
+    # ...but Task 4 silenced decision.py's forwarding into optimize_grid, so the
+    # old kwarg names never reach it (transitionally inert until Task 5).
+    assert "water_value_hi" not in captured_dp
+    assert "overnight_need_kwh" not in captured_dp
+    assert captured_dp.get("terminal_segments") is None
 
 
 def test_max_export_dc_value_is_best_in_window_export(monkeypatch):

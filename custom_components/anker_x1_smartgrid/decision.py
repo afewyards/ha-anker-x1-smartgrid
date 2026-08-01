@@ -449,8 +449,10 @@ def _dp_select_slots(
         hedge_drain_kwh=hedge_drain_kwh,
         dt_h=dt_h,
         eta_curve=eta_curve,
-        water_value_hi=water_value_hi,  # two-segment overnight terminal (None → legacy)
-        overnight_need_kwh=overnight_need_kwh,
+        # terminal_segments intentionally NOT threaded here (default None,
+        # transitionally inert) -- optimize_grid's water_value_hi/
+        # overnight_need_kwh params were removed in favor of terminal_segments;
+        # wiring real segments through this call site is Task 5.
     )
     schedule: list[float] = result["schedule"]
     export_kwh_by_hour: list[float] = result.get("export_schedule", [0.0] * window_len)

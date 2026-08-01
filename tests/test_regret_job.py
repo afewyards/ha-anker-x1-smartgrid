@@ -66,18 +66,25 @@ def _seed_day(
 
 
 def _spy_terminal_params(monkeypatch):
-    """Wrap both internal DP calls; return a dict capturing the
-    ``(water_value_hi, overnight_need_kwh)`` each received."""
-    captured: dict[str, tuple] = {}
+    """Wrap both internal DP calls; return a dict capturing the raw kwargs
+    each received.
+
+    Task 4 removed both cores' water_value_hi/overnight_need_kwh params in
+    favor of terminal_segments; regret_job.py's own forwarding into both
+    calls was silenced (not yet re-wired to terminal_segments — that lands
+    in Task 6), so callers here now assert those old names are ABSENT from
+    the captured kwargs rather than asserting their forwarded values.
+    """
+    captured: dict[str, dict] = {}
     _orig_hog = regret_job.regret_mod.hindsight_optimal_grid
     _orig_og = regret_job.optimize_mod.optimize_grid
 
     def _hog(*a, **kw):
-        captured["oracle"] = (kw.get("water_value_hi"), kw.get("overnight_need_kwh"))
+        captured["oracle"] = kw
         return _orig_hog(*a, **kw)
 
     def _og(*a, **kw):
-        captured["shadow"] = (kw.get("water_value_hi"), kw.get("overnight_need_kwh"))
+        captured["shadow"] = kw
         return _orig_og(*a, **kw)
 
     monkeypatch.setattr(regret_job.regret_mod, "hindsight_optimal_grid", _hog)
@@ -85,9 +92,18 @@ def _spy_terminal_params(monkeypatch):
     return captured
 
 
+def _assert_no_legacy_terminal_kwargs(captured: dict, leg: str) -> None:
+    """Task 6 re-adapts these assertions to check identical real segments lists."""
+    kw = captured[leg]
+    assert "water_value_hi" not in kw
+    assert "overnight_need_kwh" not in kw
+    assert kw.get("terminal_segments") is None
+
+
 def test_internal_dp_symmetry(monkeypatch):
-    """Flag ON + D+1 prices present → both internal DP calls get IDENTICAL
-    ``(v_hi, need)`` and ``dp_regret_eur ≈ 0`` on a synthetic hold night."""
+    """Flag ON + D+1 prices present → both internal DP calls stay symmetric:
+    neither receives the removed water_value_hi/overnight_need_kwh kwargs, and
+    ``dp_regret_eur ≈ 0`` on a synthetic hold night."""
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
     rec = StubRecorder()
@@ -100,20 +116,20 @@ def test_internal_dp_symmetry(monkeypatch):
 
     regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    # PRIMARY invariant: both internal DP calls received IDENTICAL overnight params.
+    # PRIMARY invariant: both internal DP calls agree in lacking the removed kwargs.
     assert "oracle" in captured and "shadow" in captured
-    assert captured["oracle"] == captured["shadow"]
-    # Flag ON + D+1 prices present → non-None v_hi (legacy branch NOT taken).
-    assert captured["oracle"][0] is not None
-    # No phantom bias: identical params → shadow schedule mirrors oracle → dp_regret ≈ 0.
+    _assert_no_legacy_terminal_kwargs(captured, "oracle")
+    _assert_no_legacy_terminal_kwargs(captured, "shadow")
+    # No phantom bias: identical (absent) params → shadow schedule mirrors oracle → dp_regret ≈ 0.
     row = rec.daily_regret_rows[DAY]
     assert row["dp_regret_eur"] is not None
     assert abs(row["dp_regret_eur"]) < 1e-6
 
 
 def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
-    """Old backfill day with no D+1 rows in the window → both DP calls get
-    ``water_value_hi=None`` (legacy), no raise, no biased regret."""
+    """Old backfill day with no D+1 rows in the window → both DP calls still
+    lack the removed water_value_hi/overnight_need_kwh kwargs, no raise, no
+    biased regret."""
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
     rec = StubRecorder()
@@ -123,9 +139,8 @@ def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
 
     updates = regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    # Degrades to legacy: both DP calls get water_value_hi=None (never guessed).
-    assert captured["oracle"] == (None, 0.0)
-    assert captured["shadow"] == (None, 0.0)
+    _assert_no_legacy_terminal_kwargs(captured, "oracle")
+    _assert_no_legacy_terminal_kwargs(captured, "shadow")
     # Still fully scored, no raise, no biased regret.
     row = rec.daily_regret_rows[DAY]
     assert row["regret_eur"] is not None
@@ -146,5 +161,5 @@ def test_flag_off_passes_none_to_both_cores(monkeypatch):
 
     regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
 
-    assert captured["oracle"] == (None, 0.0)
-    assert captured["shadow"] == (None, 0.0)
+    _assert_no_legacy_terminal_kwargs(captured, "oracle")
+    _assert_no_legacy_terminal_kwargs(captured, "shadow")
