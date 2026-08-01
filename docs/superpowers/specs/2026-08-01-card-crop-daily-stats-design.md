@@ -233,9 +233,14 @@ paste-able alongside the existing plan card.
    `aggregate_actual_days` (replaying samples) and the live `CashLedger` (which skips
    those ticks entirely) are not two prices for the same energy — they cover genuinely
    different sets of ticks. A day can therefore shift by **euros, not cents**, when it
-   rolls from `mixed` to `actual`: this system has already seen a single night swing about
-   €5.58 (memory: release-workmode-app-managed-pump, 2026-07-30 — an App-managed release
-   grid-charged 12 kW in every released window, energy the ledger path never saw). Today's
+   rolls from `mixed` to `actual` — the divergence is bounded by however much real battery
+   activity falls inside disabled/failsafe stretches, which can run for hours, not by any
+   per-tick rounding. No measured instance has yet been attributed to this seam; the
+   magnitude claim is derived from the mechanism, not from an observed day. (An earlier
+   draft cited the −€5.58 night of 2026-07-30 here. That was withdrawn: it was a
+   release-workmode loss — an App-managed release grid-charging 12 kW in released
+   windows — and a release is not the same controller path as disabled or failsafe, so it
+   is not established to be an instance of this seam.) Today's
    row is still ledger-sourced (`merge_days`' precedence rule) and still matches the card
    subtitle's headline number exactly — that part is unchanged and remains the reason the
    precedence rule exists.
