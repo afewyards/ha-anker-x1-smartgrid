@@ -19,6 +19,7 @@ from .anker_resolver import apply_anker_resolution, resolve_anker_config
 from . import (
     const,
     coordinator,
+    daily_stats,
     energy,
     executor,
     featureset,
@@ -274,6 +275,11 @@ class Controller:
         # Refreshed at most once per clock-hour (past hours never change).
         self._past_actuals_cache: dict | None = None
         self._past_actuals_hour: datetime | None = None
+        # Per-day statistics: closed days never change, so the measured half
+        # is aggregated once per local day (see _refresh_daily_actuals) rather
+        # than re-querying ~20k sample rows every 60s tick.
+        self._daily_actuals: dict[date, dict] = {}
+        self._daily_actuals_day: str | None = None
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
         # NOT persisted.  Recorder load_w / metered-net PnL / last_status all use
@@ -1495,6 +1501,11 @@ class Controller:
         # rollover, BEFORE accumulating this tick.
         self._rollover_daily_ledgers(now)
 
+        # Per-day statistics: refresh the closed-day cache when the local day
+        # key moves. Placed right after the ledger rollover so the cache and
+        # the ledger agree on which day "today" is.
+        await self._refresh_daily_actuals(now)
+
         # Cash ledger: realized battery €-flows, accumulated on every enabled
         # tick past the failsafe guard — independent of the executor branches
         # below, so it also catches exports the executor never commanded
@@ -1620,6 +1631,7 @@ class Controller:
             "deadline": deadline.isoformat() if deadline else None,
             "planned_grid_hours": _grid_slots * (_slot_minutes / 60.0),
         }
+        self._publish_daily_stats(now, horizon, _export_price, _export_slots, _slot_minutes)
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
@@ -1767,6 +1779,68 @@ class Controller:
             slots,
             slot_minutes,
             raw_export_price,
+        )
+
+    async def _refresh_daily_actuals(self, now: datetime) -> None:
+        """Re-aggregate the closed-day actuals cache (startup + once per local day).
+
+        WINDOW_DAYS+1 days of samples is ~20k rows — far too heavy for a 60s
+        tick — but closed days never change, so this only runs when the local
+        day key moves (``None`` on the first tick after a restart).  A failed
+        read leaves both the cache AND the key untouched so the next tick
+        retries rather than pinning an empty table for the rest of the day.
+        """
+        _today = dt_util.as_local(now).date().isoformat()
+        if self._daily_actuals_day == _today:
+            return
+        _since = (now - timedelta(days=daily_stats.WINDOW_DAYS + 1)).isoformat()
+        try:
+            rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, _since)
+        except Exception:
+            _LOGGER.warning("daily stats: actuals backfill failed; keeping previous cache", exc_info=True)
+            return
+        self._daily_actuals = daily_stats.aggregate_actual_days(
+            rows, self.cfg.export_fee_eur_per_kwh, dt_util.DEFAULT_TIME_ZONE
+        )
+        self._daily_actuals_day = _today
+
+    def _publish_daily_stats(
+        self,
+        now: datetime,
+        horizon: list[dict],
+        export_price: float | None,
+        export_slots: list[PriceSlot] | None,
+        slot_minutes: int,
+    ) -> None:
+        """Merge cached actuals + live ledger + plan horizon into last_status.
+
+        Cheap: the measured half is already cached and the horizon is in
+        memory, so this runs every tick.  Export is valued at the per-slot
+        curve where one is supplied, else the flat entity price; both are put
+        through effective_export_price so the fee is applied exactly once.
+        """
+        _curve = resolution.resample_price_map(export_slots, slot_minutes) if export_slots else {}
+        _flat = optimize_mod.effective_export_price(export_price, self.cfg) if export_price is not None else None
+
+        def _export_price_at(start: datetime) -> float | None:
+            _raw = _curve.get(start)
+            return _flat if _raw is None else optimize_mod.effective_export_price(_raw, self.cfg)
+
+        _tz = dt_util.DEFAULT_TIME_ZONE
+        _today_totals = daily_stats.new_day_totals()
+        _today_totals.update(
+            {
+                "grid_charge_kwh": self._ledger.today_grid_charge_kwh,
+                "grid_export_kwh": self._ledger.today_export_kwh,
+                "cost_eur": self._ledger.today_charge_cost_eur,
+                "revenue_eur": self._ledger.today_export_revenue_eur,
+            }
+        )
+        self.last_status["daily_stats"] = daily_stats.merge_days(
+            self._daily_actuals,
+            daily_stats.aggregate_planned_days(horizon, _export_price_at, _tz),
+            _today_totals,
+            dt_util.as_local(now).date(),
         )
 
     async def release(self) -> None:
