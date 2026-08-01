@@ -332,6 +332,13 @@ class TestLedgerEnergyPersistence:
         ctrl._store = CapturingStore()
         ctrl.today_grid_charge_kwh = 3.5
         ctrl.today_export_kwh = 1.25
+
+        # Teeth: Controller has no __slots__, so a missing property/setter pair
+        # would silently create shadow instance attributes that still round-trip
+        # through _persist/restore. Assert the ledger itself was reached.
+        assert ctrl._ledger.today_grid_charge_kwh == pytest.approx(3.5)
+        assert ctrl._ledger.today_export_kwh == pytest.approx(1.25)
+
         await ctrl._persist()
 
         # CapturingStore.saved holds the LAST payload (a dict, not a list).
@@ -343,3 +350,5 @@ class TestLedgerEnergyPersistence:
         fresh.restore(payload)
         assert fresh.today_grid_charge_kwh == pytest.approx(3.5)
         assert fresh.today_export_kwh == pytest.approx(1.25)
+        assert fresh._ledger.today_grid_charge_kwh == pytest.approx(3.5)
+        assert fresh._ledger.today_export_kwh == pytest.approx(1.25)
