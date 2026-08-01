@@ -1,14 +1,17 @@
-"""Two-segment overnight terminal-value credit in ``dp_common.select_end_state``.
+"""Piecewise per-hour terminal-value credit in ``dp_common.select_end_state``.
 
-See docs/superpowers/specs/2026-07-18-overnight-terminal-value-design.md
-(spec econ-F4). ``select_end_state``'s ``water_value`` terminal mode credits
-end-of-horizon SoC above the firmware floor at a single rate ``v``. This adds
-a second, richer rate ``water_value_hi`` for the first ``overnight_need_kwh``
-of that energy (the "must survive the night" slice); the surplus above that
-stays priced at the original ``v``. The legacy single-rate behaviour (credit
-anchored at the SOFT ``floor_kwh``) must stay byte-identical when
-``water_value_hi`` is omitted/None -- this is a parity gate shared with
-``optimize.optimize_grid`` / ``regret.hindsight_optimal_grid``.
+See docs/superpowers/specs/2026-08-01-terminal-piecewise-credit-design.md
+(supersedes the two-segment credit of
+docs/superpowers/specs/2026-07-18-overnight-terminal-value-design.md).
+``select_end_state``'s ``water_value`` terminal mode credits end-of-horizon
+SoC above the firmware floor at a single rate ``v``. This replaces the old
+``water_value_hi``/``overnight_need_kwh`` two-segment params with
+``terminal_segments``: a list of ``(dc_kwh, value_eur_per_dc_kwh)`` pairs,
+walked richest-first, with any surplus beyond all segments credited at the
+original ``v``. The legacy single-rate behaviour (credit anchored at the SOFT
+``floor_kwh``) must stay byte-identical when ``terminal_segments`` is
+omitted/None -- this is a parity gate shared with ``optimize.optimize_grid``
+/ ``regret.hindsight_optimal_grid``.
 """
 
 from __future__ import annotations
@@ -38,10 +41,10 @@ def _bins(bin_kwh: float, n_states: int):
     return to_bin, from_bin
 
 
-class TestNoneVhiByteParity:
-    """Legacy branch (water_value_hi is None) must stay byte-identical."""
+class TestNoneSegmentsByteParity:
+    """Legacy branch (terminal_segments is None) must stay byte-identical."""
 
-    def test_direct_call_identical_with_and_without_new_kwargs(self):
+    def test_none_segments_byte_parity(self):
         to_bin, from_bin = _bins(1.0, 11)
         dp = [0.1 * b for b in range(11)]
         dp[3] = INF  # a hole in the reachable set exercises the `continue`
@@ -57,14 +60,14 @@ class TestNoneVhiByteParity:
             n_states=11,
         )
         omitted = select_end_state(dp, **kwargs)
-        explicit_none = select_end_state(dp, water_value_hi=None, overnight_need_kwh=0.0, **kwargs)
+        explicit_none = select_end_state(dp, terminal_segments=None, **kwargs)
         assert omitted == explicit_none
 
     def test_optimize_oracle_parity_unaffected_by_new_signature(self):
         """Full-stack regression: optimize_grid <-> hindsight_optimal_grid
         parity (kwh/eur/schedule) for a live water_value scenario -- neither
-        caller passes the two new params, so this pins that the added
-        (unused) kwargs don't perturb the existing call path at all."""
+        caller passes terminal_segments, so this pins that the new param
+        doesn't perturb the existing call path at all."""
         cfg = make_config(eta_charge=0.92)
         pv = [0.0] * 24
         load = [1.0] * 24
@@ -92,15 +95,16 @@ class TestNoneVhiByteParity:
             assert opt["schedule"][h] == pytest.approx(hind["schedule"][h], abs=1e-6)
 
 
-class TestTwoSegmentCredit:
-    """Direct unit tests over a hand-built linear-cost dp array so the
-    trade-off between charging cost and the two-segment credit can be
-    verified by hand.
+class TestPiecewiseTwoSegmentsPlusSurplus:
+    """Two segments (sorted desc by value) plus the water_value surplus tail
+    -- hand-computed credit at three end bins spanning seg1-only,
+    seg1+seg2-exactly, and into the surplus band beyond both segments.
 
     dp[b] = COST_PER_BIN * b models a per-kWh charging cost to reach end
-    state b. COST_PER_BIN sits strictly between V_LO and V_HI, so holding
-    energy is worth it only while credited at V_HI (i.e. up to NEED above
-    the firmware floor) -- and not worth it once the credit drops to V_LO.
+    state b. COST_PER_BIN sits strictly between SEG2's value and SEG1's
+    value, so the DP should charge through seg1 (where the marginal credit
+    beats the charging cost) and stop exactly there (seg2's lower marginal
+    credit no longer beats the cost).
     """
 
     BIN_KWH = 1.0
@@ -108,17 +112,15 @@ class TestTwoSegmentCredit:
     FW_FLOOR = 0.0
     SOFT_FLOOR = 2.0
     TARGET = 10.0
-    NEED = 4.0
-    V_HI = 0.30
-    V_LO = 0.05
-    COST_PER_BIN = 0.15  # V_LO < COST_PER_BIN < V_HI
+    SEG1 = (2.0, 0.30)  # first 2 kWh above the firmware floor at 0.30
+    SEG2 = (2.0, 0.20)  # next 2 kWh at 0.20
+    V_LO = 0.05  # water_value surplus rate beyond both segments
+    COST_PER_BIN = 0.25  # V_LO, SEG2-value < COST_PER_BIN < SEG1-value
 
-    def _dp_linear_cost(self):
+    def test_piecewise_two_segments_plus_surplus(self):
         to_bin, from_bin = _bins(self.BIN_KWH, self.N_STATES)
         dp = [self.COST_PER_BIN * b for b in range(self.N_STATES)]
-        return dp, to_bin, from_bin
 
-    def _select(self, dp, to_bin, from_bin, *, water_value_hi=None):
         kwargs = dict(
             terminal_mode="water_value",
             water_value=self.V_LO,
@@ -128,56 +130,36 @@ class TestTwoSegmentCredit:
             to_bin=to_bin,
             from_bin=from_bin,
             n_states=self.N_STATES,
+            terminal_segments=[self.SEG1, self.SEG2],
         )
-        if water_value_hi is not None:
-            kwargs["water_value_hi"] = water_value_hi
-            kwargs["overnight_need_kwh"] = self.NEED
-        return select_end_state(dp, **kwargs)
 
-    def test_two_segment_prefers_holding_need(self):
-        """With water_value_hi set, the DP should hold exactly up to NEED
-        above the firmware floor (marginal V_HI credit beats the charging
-        cost there) -- contrasted against the legacy single-rate call on the
-        SAME cost curve, which never recovers the cost and holds nothing."""
-        dp, to_bin, from_bin = self._dp_linear_cost()
+        # Hand-computed credit at three end bins (avail == end_b since
+        # FW_FLOOR == 0):
+        #   end_b=2 (avail=2, all in seg1):          2*0.30                   = 0.60
+        #   end_b=4 (avail=4, seg1+seg2 exactly):    2*0.30 + 2*0.20          = 1.00
+        #   end_b=6 (avail=6, 2 kWh surplus @ v_lo): 2*0.30 + 2*0.20 + 2*0.05 = 1.10
+        # score(b) = dp[b] - credit(b):
+        assert self.COST_PER_BIN * 2 - 0.60 == pytest.approx(-0.10)
+        assert self.COST_PER_BIN * 4 - 1.00 == pytest.approx(0.0)
+        assert self.COST_PER_BIN * 6 - 1.10 == pytest.approx(0.40)
+        # -0.10 < 0.0 < 0.40 -- the optimum sits at the end of seg1: marginal
+        # cost 0.25 beats seg1's 0.30 but loses to seg2's 0.20, so the DP
+        # charges through seg1 and stops there.
 
-        best_end_b, best_cost, infeasible = self._select(dp, to_bin, from_bin, water_value_hi=self.V_HI)
+        best_end_b, best_cost, infeasible = select_end_state(dp, **kwargs)
         assert not infeasible
-        assert best_end_b == 4  # firmware_floor(0) + NEED(4)
-        assert best_cost == pytest.approx(0.6)
-
-        legacy_end_b, legacy_cost, legacy_infeasible = self._select(dp, to_bin, from_bin)
-        assert not legacy_infeasible
-        assert legacy_end_b == 0  # V_LO alone never beats COST_PER_BIN -- holds nothing
-        assert legacy_cost == pytest.approx(0.0)
-
-    def test_surplus_still_low_valued(self):
-        """Beyond NEED the credit reverts to V_LO (not V_HI) -- so each extra
-        bin costs (COST_PER_BIN - V_LO) net, and the optimum does not creep
-        past the NEED boundary."""
-        dp, to_bin, from_bin = self._dp_linear_cost()
-
-        def score(b: int) -> float:
-            avail = b - self.FW_FLOOR
-            credit = self.V_HI * min(avail, self.NEED) + self.V_LO * max(0.0, avail - self.NEED)
-            return dp[b] - credit
-
-        assert score(5) - score(4) == pytest.approx(self.COST_PER_BIN - self.V_LO)
-        assert score(5) > score(4)  # surplus bin doesn't pay for its own charging cost
-
-        best_end_b, _best_cost, infeasible = self._select(dp, to_bin, from_bin, water_value_hi=self.V_HI)
-        assert not infeasible
-        assert best_end_b == 4
+        assert best_end_b == 2
+        assert best_cost == pytest.approx(0.5)
 
 
 class TestAnchorIsFirmwareFloor:
-    """econ-F4: the credit anchor shifts from the SOFT floor_kwh down to the
-    HARD firmware_floor_kwh iff water_value_hi is set. Isolated by placing
-    a tiny charging cost at end_b=1 (inside (fw_floor=0, soft_floor=2]) --
-    a cost cheap enough that it's only worth paying if that bin earns
-    credit."""
+    """econ-F4/rev-3: the credit anchor shifts from the SOFT floor_kwh down
+    to the HARD firmware_floor_kwh iff terminal_segments is set. Isolated by
+    placing a tiny charging cost at end_b=1 (inside (fw_floor=0,
+    soft_floor=2]) -- a cost cheap enough that it's only worth paying if
+    that bin earns credit."""
 
-    def test_credit_in_subfloor_band_only_when_vhi_set(self):
+    def test_anchor_is_firmware_floor(self):
         to_bin, from_bin = _bins(1.0, 3)
         dp = [0.0, 0.01, INF]  # end_b=2 unreachable/irrelevant; restrict scan via target_kwh
 
@@ -192,8 +174,8 @@ class TestAnchorIsFirmwareFloor:
             n_states=3,
         )
 
-        with_hi = select_end_state(dp, water_value_hi=0.30, overnight_need_kwh=4.0, **common)
-        assert with_hi[0] == 1  # credit at b=1 (0.30) easily beats the 0.01 cost
+        with_segments = select_end_state(dp, terminal_segments=[(4.0, 0.30)], **common)
+        assert with_segments[0] == 1  # credit at b=1 (0.30) easily beats the 0.01 cost
 
         legacy = select_end_state(dp, **common)
         assert legacy[0] == 0  # anchored at soft floor_kwh=2 -> b=1 earns zero credit
@@ -201,12 +183,12 @@ class TestAnchorIsFirmwareFloor:
 
 class TestM2FallbackUsesSameFormula:
     """The M2 fallback (main scan finds nothing in [floor_b, target_b]) must
-    price candidates with the exact same two-segment formula as the main
-    scan. Verified by forcing the SAME reachable states to be found via two
+    price candidates with the exact same piecewise formula as the main scan.
+    Verified by forcing the SAME reachable states to be found via two
     different code paths (direct main-scan hit vs. fallback) and asserting
     byte-identical output."""
 
-    def test_fallback_matches_direct_main_scan(self):
+    def test_m2_fallback_same_formula(self):
         to_bin, from_bin = _bins(1.0, 11)
         # States 0..5 unreachable; 6..10 reachable at a linear cost.
         dp = [INF] * 6 + [0.15 * b for b in range(6, 11)]
@@ -219,8 +201,7 @@ class TestM2FallbackUsesSameFormula:
             to_bin=to_bin,
             from_bin=from_bin,
             n_states=11,
-            water_value_hi=0.30,
-            overnight_need_kwh=4.0,
+            terminal_segments=[(4.0, 0.30)],
         )
 
         # target_kwh=10 -> main scan alone covers b=6..10 directly.
@@ -232,3 +213,28 @@ class TestM2FallbackUsesSameFormula:
         assert via_main_scan == via_fallback
         assert via_main_scan[0] == 6
         assert via_main_scan[2] is False
+
+
+class TestUnsortedSegmentsSortedDefensively:
+    """Caller-supplied segment order must not matter -- select_end_state
+    sorts by value descending internally, once per call."""
+
+    def test_unsorted_segments_sorted_defensively(self):
+        to_bin, from_bin = _bins(1.0, 11)
+        dp = [0.25 * b for b in range(11)]
+
+        common = dict(
+            terminal_mode="water_value",
+            water_value=0.05,
+            firmware_floor_kwh=0.0,
+            floor_kwh=2.0,
+            target_kwh=10.0,
+            to_bin=to_bin,
+            from_bin=from_bin,
+            n_states=11,
+        )
+
+        sorted_desc = select_end_state(dp, terminal_segments=[(2.0, 0.30), (2.0, 0.20)], **common)
+        unsorted = select_end_state(dp, terminal_segments=[(2.0, 0.20), (2.0, 0.30)], **common)
+        assert sorted_desc == unsorted
+        assert sorted_desc[0] == 2  # same optimum as TestPiecewiseTwoSegmentsPlusSurplus

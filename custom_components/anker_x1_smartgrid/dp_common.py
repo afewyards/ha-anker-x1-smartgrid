@@ -60,8 +60,7 @@ def select_end_state(
     to_bin: Callable[[float], int],
     from_bin: Callable[[int], float],
     n_states: int,
-    water_value_hi: float | None = None,
-    overnight_need_kwh: float = 0.0,
+    terminal_segments: list[tuple[float, float]] | None = None,
 ) -> tuple[int, float, bool]:
     """Select the DP terminal end state: ``(best_end_b, best_cost, infeasible)``.
 
@@ -80,17 +79,20 @@ def select_end_state(
     case (``best_end_b`` left at -1) signals a problem, and handling that is
     left to the caller.
 
-    When ``water_value_hi`` is set, the credit is two-segment (spec
-    econ-F4): the first ``overnight_need_kwh`` of energy above the HARD
-    ``firmware_floor_kwh`` is credited at the richer ``water_value_hi`` (the
-    "must survive the night" slice); the surplus above that is credited at
-    the original ``water_value`` (``v``). This also shifts the credit anchor
-    itself from the SOFT ``floor_kwh`` down to ``firmware_floor_kwh`` — the
-    (firmware_floor_kwh, floor_kwh] sub-margin band earns credit too, where
-    the legacy single-rate formula gave it none. When ``water_value_hi`` is
-    None (legacy/default), the credit is the original single-rate formula,
-    anchored at ``floor_kwh``, byte-identical to the pre-two-segment
-    behaviour.
+    When ``terminal_segments`` is set, the credit is piecewise (spec
+    rev-3 of the overnight terminal value): ``terminal_segments`` is a list
+    of ``(dc_kwh, value_eur_per_dc_kwh)`` pairs, sorted by value descending
+    defensively (once per call, not per bin — the caller's ordering is not
+    trusted). Energy available above the HARD ``firmware_floor_kwh`` is
+    walked through the sorted segments richest-first, each segment consuming
+    up to its own ``dc_kwh`` at its own rate; any surplus beyond all
+    segments is credited at the original ``water_value`` (``v``). This also
+    shifts the credit anchor itself from the SOFT ``floor_kwh`` down to
+    ``firmware_floor_kwh`` — the (firmware_floor_kwh, floor_kwh] sub-margin
+    band earns credit too, where the legacy single-rate formula gave it
+    none. When ``terminal_segments`` is None (legacy/default), the credit is
+    the original single-rate formula, anchored at ``floor_kwh``,
+    byte-identical to the pre-piecewise-credit behaviour.
 
     ``terminal_mode="reserve"`` (default): select the minimum-cost end state
     with SoC >= soc_target; if unreachable, fall back to the best achievable
@@ -99,11 +101,19 @@ def select_end_state(
     INF = float("inf")
     if terminal_mode == "water_value":
         v = water_value if water_value is not None else 0.0
+        _segs = sorted(terminal_segments, key=lambda s: -s[1]) if terminal_segments is not None else None
 
         def _credit(end_b: int) -> float:
-            if water_value_hi is not None:
+            if _segs is not None:
                 avail = max(0.0, from_bin(end_b) - firmware_floor_kwh)
-                return water_value_hi * min(avail, overnight_need_kwh) + v * max(0.0, avail - overnight_need_kwh)
+                credit = 0.0
+                for seg_kwh, seg_v in _segs:
+                    take = min(avail, seg_kwh)
+                    credit += take * seg_v
+                    avail -= take
+                    if avail <= 0.0:
+                        break
+                return credit + max(0.0, avail) * v
             return max(0.0, from_bin(end_b) - floor_kwh) * v
 
         # Scan from the firmware floor (widened): sub-soft-floor end states

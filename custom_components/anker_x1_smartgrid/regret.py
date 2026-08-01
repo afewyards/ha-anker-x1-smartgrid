@@ -577,8 +577,7 @@ def hindsight_optimal_grid(
         to_bin=to_bin,
         from_bin=from_bin,
         n_states=n_states,
-        water_value_hi=water_value_hi,
-        overnight_need_kwh=overnight_need_kwh,
+        terminal_segments=None,
     )
 
     if best_end_b == -1:
