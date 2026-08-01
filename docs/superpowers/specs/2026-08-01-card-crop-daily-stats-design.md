@@ -273,6 +273,18 @@ paste-able alongside the existing plan card.
    sensor or the card. A gappy day still renders as a plain (small) number, indistinguishable
    from a genuinely quiet day. The counters are retained in `DayTotals` for future use;
    surfacing them in the merged row is not part of this design.
+7. **The in-progress slot's planned remainder is omitted from today's row.**
+   `aggregate_planned_days` drops every row whose slot has already started
+   (`start <= now`), because `past_actuals` stops strictly before the current
+   clock-hour — so those rows are not `mode == "actual"` and their modelled energy
+   would be added on top of the ledger's real figure for the same minutes. Today's
+   planned half therefore under-reports by at most one slot's not-yet-delivered
+   plan (15 min on both live deployments, 60 min at the legacy resolution). Chosen
+   deliberately over the alternative error, which was a systematic multi-x
+   *over*-report. The separate `delivered_at` subtraction handles the rest of the
+   current clock-hour exactly, so nothing beyond that one slot is lost: the
+   remaining quarters keep their genuine modelled remainder, minus only the
+   already-delivered kWh the ledger already holds.
 
 ## Testing
 
