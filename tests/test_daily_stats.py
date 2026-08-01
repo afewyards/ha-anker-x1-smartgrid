@@ -125,7 +125,9 @@ class TestLedgerParity:
         tick_h = 60.0 / 3600.0
         fee = 0.015
         # (meter_w, batt_w) pairs: grid charge, PV-covered charge, battery
-        # export, PV-spill export, mixed idle, and a negative-price hour.
+        # export (cap ties with discharge), PV-spill export (discharge
+        # binds), idle, a partially-covered charge, and export-cap-binds
+        # (discharge exceeds what actually leaves via the meter).
         ticks = [
             (1500.0, -2000.0),
             (200.0, -2000.0),
@@ -133,6 +135,11 @@ class TestLedgerParity:
             (-3000.0, 1000.0),
             (0.0, 0.0),
             (900.0, -400.0),
+            # Export cap binds: battery discharges 1500 W but only 500 W
+            # leaves via the meter — the rest served house load. Without
+            # the grid_export_kwh cap this tick's credit would be
+            # over-attributed to the battery leg.
+            (-500.0, 1500.0),
         ]
         import_price, raw_export_price = 0.31, 0.24
 
