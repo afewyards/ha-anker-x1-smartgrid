@@ -96,6 +96,7 @@ All tunables are editable via the integration's options flow (**Configure** butt
 | `sensor.smartgrid_load_forecast_pinball_p50` | W | P50 pinball loss (calibration metric) |
 | `sensor.smartgrid_load_forecast_pinball_p80` | W | P80 pinball loss (calibration metric) |
 | `sensor.smartgrid_active_load_model` | — | Which forecasting tier is active |
+| `sensor.smartgrid_daily_stats` | — | Row count; `days` attribute contains the per-day grid/€ statistics table |
 
 ### Plan sensor attributes
 
@@ -107,13 +108,22 @@ The `sensor.smartgrid_plan` entity exposes the full schedule as attributes:
 - **`slot_minutes`** — planning slot length (60 or 15)
 - **`efficiency_curve`** — measured efficiency bin table (when enabled)
 
+### Daily stats sensor attributes
+
+The `sensor.smartgrid_daily_stats` entity exposes the per-day table as attributes:
+
+- **`days`** — ordered list of per-day dicts, each with `date` (ISO `YYYY-MM-DD`), `grid_charge_kwh`, `grid_export_kwh`, `cost_eur`, `revenue_eur`, `net_eur`, `source` (`actual` / `mixed` / `plan`), `actual_net_eur`, `planned_net_eur`. Past days are measured, today is measured-so-far plus planned-remainder, future days are plan-only
+- **`window_days`** — rolling history depth of the table, in days back from today
+
 ## Dashboard
 
-A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan visualization card is included in [`lovelace/apexcharts-plan-card.yaml`](lovelace/apexcharts-plan-card.yaml). It shows the price curve, charge/export schedule (kWh per slot), and SoC trajectory on a single chart.
+A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan visualization card is included in [`lovelace/apexcharts-plan-card.yaml`](lovelace/apexcharts-plan-card.yaml). It shows the price curve, charge/export schedule (kWh per slot), and SoC trajectory on a single chart. The chart now ends at the last real tariff slot — the estimated-tomorrow tail is no longer drawn.
 
 **Requires** two HACS frontend cards:
 - `apexcharts-card`
 - `config-template-card`
+
+A second card, [`lovelace/daily-stats-card.yaml`](lovelace/daily-stats-card.yaml), shows a per-day table of grid charge, export, and net € (paste it below the chart card). It needs no HACS dependency — `markdown` is a core Lovelace card.
 
 ## Add-on
 
