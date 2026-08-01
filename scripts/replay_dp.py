@@ -25,6 +25,16 @@ Usage
 Optional overrides: ``--now ISO``, ``--soc PCT``, ``--capacity-kwh KWH``,
 ``--max-charge-w W``, ``--max-export-w W`` (see ``_ALWAYS_DERIVED_DEFAULTS``
 below for why these three have no fixture value to read).
+
+``--hedge-drain-kwh KWH`` (default 0.0) / ``--hedge-drain-hour ISO`` (default:
+auto-picks the cheapest real-priced hour in the window, mirroring
+``controller._apply_drift_hedge``'s own trough placement) model the SoC
+drift-hedge (``cfg.soc_hedge_fraction``, 0.5 in options-2026-08-01.json — LIVE,
+not the memory'd OFF default). The hedge accumulator is stateful cross-tick
+(measured-vs-expected SoC drift, decayed/deadbanded) and cannot be
+reconstructed from a single snapshot + options fixture, so 0.0 is the
+byte-parity default; nonzero values are a sensitivity knob, not a
+reconstruction of the live value — see task-1-report.md's hedge caveat.
 """
 
 from __future__ import annotations
@@ -175,6 +185,25 @@ def _build_intervals(
     return intervals
 
 
+def _pick_hedge_hour(real_slots: list[PriceSlot], now_h: datetime, horizon_edge: datetime) -> datetime:
+    """Cheapest real-priced hour in ``[now_h, horizon_edge)``.
+
+    Approximates ``controller._apply_drift_hedge``'s own placement (front-load
+    the debit at the cheapest forward clock-hour) — the live code bounds its
+    search at ``scheduler.compute_deadline(now, sunset, slots, cfg)`` (the
+    shorter evening-peak/sunset-buffer deadline), which needs a ``sunset``
+    input this harness does not have (no sun-times fixture). Bounding at the
+    full ``horizon_edge`` instead can only pick an EARLIER-or-equal hour than
+    the real deadline would (a superset window), never a later one — the
+    fixture's own cheapest hour (12:00 UTC) sits well before any plausible
+    evening-peak deadline, so this simplification is unlikely to matter here.
+    """
+    fwd = [s for s in real_slots if now_h <= s.start < horizon_edge]
+    if not fwd:
+        return now_h
+    return resolution.hour_floor(min(fwd, key=lambda s: s.price).start)
+
+
 def replay(
     plan_path: Path,
     options_path: Path,
@@ -184,6 +213,8 @@ def replay(
     capacity_kwh: float,
     max_charge_w: float,
     max_export_w: float,
+    hedge_drain_kwh: float = 0.0,
+    hedge_drain_hour_override: str | None = None,
 ) -> dict:
     plan_root, attrs, options_raw = _load_fixtures(plan_path, options_path)
     options = {
@@ -296,6 +327,13 @@ def replay(
     peak = max((s.price for s in real_slots if now_h <= s.start < horizon_edge), default=None)
     ceiling = scheduler.charge_price_ceiling(peak, cfg)
 
+    hedge_hour = (
+        datetime.fromisoformat(hedge_drain_hour_override)
+        if hedge_drain_hour_override
+        else _pick_hedge_hour(real_slots, now_h, horizon_edge)
+    )
+    hedge_drain_by_hour = {hedge_hour: hedge_drain_kwh} if hedge_drain_kwh > 0.0 else None
+
     inputs = PlantInputs(soc=soc_start, meter_w=0.0, now=now)
 
     captured: dict = {}
@@ -338,7 +376,7 @@ def replay(
             reserve_by_hour=reserve_list,
             sun_times=None,
             intervals=intervals,
-            hedge_drain_by_hour=None,
+            hedge_drain_by_hour=hedge_drain_by_hour,
             slot_minutes=slot_minutes,
             dt_h=dt_h,
             eta_curve=eta_curve,
@@ -362,6 +400,8 @@ def replay(
         "slot_minutes": slot_minutes,
         "soc_start": soc_start,
         "cfg": cfg,
+        "hedge_drain_kwh": hedge_drain_kwh,
+        "hedge_drain_by_hour": hedge_drain_by_hour,
         "water_value": water_value,
         "water_value_hi": water_value_hi,
         "overnight_need_kwh": overnight_need_kwh,
@@ -395,6 +435,17 @@ def main() -> None:
     ap.add_argument("--capacity-kwh", type=float, default=CAPACITY_KWH_DEFAULT)
     ap.add_argument("--max-charge-w", type=float, default=MAX_CHARGE_W_DEFAULT)
     ap.add_argument("--max-export-w", type=float, default=MAX_EXPORT_W_DEFAULT)
+    ap.add_argument(
+        "--hedge-drain-kwh",
+        type=float,
+        default=0.0,
+        help="SoC drift-hedge sensitivity knob (DC kWh, applied at one hour); see module docstring",
+    )
+    ap.add_argument(
+        "--hedge-drain-hour",
+        default=None,
+        help="ISO hour override for the hedge debit (default: auto-pick the cheapest real-priced hour)",
+    )
     args = ap.parse_args()
 
     r = replay(
@@ -405,6 +456,8 @@ def main() -> None:
         capacity_kwh=args.capacity_kwh,
         max_charge_w=args.max_charge_w,
         max_export_w=args.max_export_w,
+        hedge_drain_kwh=args.hedge_drain_kwh,
+        hedge_drain_hour_override=args.hedge_drain_hour,
     )
     cfg: Config = r["cfg"]
 
@@ -420,6 +473,11 @@ def main() -> None:
     )
     print(f"water_value(v_lo)={_fmt(r['water_value'])}  water_value_hi={_fmt(r['water_value_hi'])}  "
           f"overnight_need_kwh={_fmt(r['overnight_need_kwh'])}")
+    if r["hedge_drain_by_hour"]:
+        hh, hkwh = next(iter(r["hedge_drain_by_hour"].items()))
+        print(f"hedge_drain_by_hour={{{hh.isoformat()}: {hkwh:.3f} kWh}}  (sensitivity knob — see docstring)")
+    else:
+        print("hedge_drain_by_hour=None  (baseline — --hedge-drain-kwh not set)")
     print()
 
     print("--- (a) reserve_by_hour (DC kWh) at 17/18/19/20 UTC, raw dict vs padded DP list ---")
