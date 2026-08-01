@@ -118,8 +118,10 @@ Groups recorder sample rows (column-keyed dicts from `DataRecorder.read_feature_
 explicit `tzinfo` parameter — the module stays HA-free, and the controller passes
 `dt_util.DEFAULT_TIME_ZONE` so bucketing matches the ledger's `dt_util.as_local` day key. Rows with NULL v9 deltas contribute
 nothing and are counted in `coverage_ticks` / `null_ticks` so a gappy day is visible
-rather than silently small. No mean-W fallback — pre-v9 rows are outside the window by
-construction (v9 landed 2026-07-06; a 14-day window reaches 2026-07-18).
+rather than silently small **within this dict** (see Accepted consequences #6 — the
+counters do not currently reach the merged row). No mean-W fallback — pre-v9 rows are
+outside the window by construction (v9 landed 2026-07-06; a 14-day window reaches
+2026-07-18).
 
 ```
 aggregate_planned_days(horizon, export_price_at) -> dict[date, DayTotals]
@@ -155,9 +157,9 @@ actual-so-far and planned-remainder halves; both halves stay visible in
 `actual_net_eur` / `planned_net_eur`.
 
 **Precedence rule:** for `date == today`, `today_totals` (live ledger) wins over any
-`actual[today]` entry the samples pass may have produced. The two disagree by the dt
-seam in "Accepted consequences" #4; the ledger is authoritative for today because the
-card subtitle already publishes it.
+`actual[today]` entry the samples pass may have produced. The two disagree by the
+coverage seam in "Accepted consequences" #4; the ledger is authoritative for today
+because the card subtitle already publishes it.
 
 ### Where today's actuals come from
 
@@ -220,9 +222,52 @@ paste-able alongside the existing plan card.
    `cfg.export_fee_eur_per_kwh`. Same simplification the ledger makes forward.
 3. **History floor ~2026-07-06** (v9 delta columns). A 14-day window clears it today;
    widening the window later hits it.
-4. **Today-vs-past method seam.** Today uses the ledger's fixed `TICK_SECONDS` dt; past
-   days use the recorded clamped dt. A day can shift by a few cents when it rolls from
-   `mixed` to `actual`. Accepted in exchange for today matching the headline number.
+4. **Today-vs-past seam is coverage, not dt.** Ticks where the controller is DISABLED
+   still call `_record_sample` (controller.py:1258) with real `p1_w`/`batt_w`, so the
+   recorder's v9 deltas are written — but `_accumulate_cash_ledger` never runs on that
+   path (the disabled branch returns at controller.py:1351, well before the ledger call
+   at controller.py:1514). Failsafe ticks are worse: the guard at controller.py:1360-1364
+   returns before `_record_sample` is ever reached, so those minutes write **nothing** to
+   either side. The call site's own comment concedes this: "Disabled-path and failsafe
+   ticks return before this point: accepted spec limitation" (controller.py:1513). So
+   `aggregate_actual_days` (replaying samples) and the live `CashLedger` (which skips
+   those ticks entirely) are not two prices for the same energy — they cover genuinely
+   different sets of ticks. A day can therefore shift by **euros, not cents**, when it
+   rolls from `mixed` to `actual`: this system has already seen a single night swing about
+   €5.58 (memory: release-workmode-app-managed-pump, 2026-07-30 — an App-managed release
+   grid-charged 12 kW in every released window, energy the ledger path never saw). Today's
+   row is still ledger-sourced (`merge_days`' precedence rule) and still matches the card
+   subtitle's headline number exactly — that part is unchanged and remains the reason the
+   precedence rule exists.
+5. **Open — not a settled decision: static tariff mode reads €0 for every past day.**
+   Under `price_mode == static` (`tariff.py`'s synthetic flat/HP-HC price slots),
+   `CONF_ENT_PRICE` / `CONF_ENT_EXPORT_PRICE` are unconfigured, so the recorder's direct
+   entity reads (controller.py:1963, 1980-1981) leave `samples.import_price` /
+   `samples.export_price` NULL on every tick, and `aggregate_actual_days` prices every
+   past day at €0. The live ledger does not share this hole: `CashLedger.accumulate`
+   prices through `resolution.price_at(slots, now, slot_minutes)` (ledger.py:97), which
+   reads the synthesized `PriceSlot` list rather than the entity — its own docstring says
+   the direct-entity read is deliberately avoided because it "is empty under static
+   tariff mode and would silently zero this leg" (ledger.py:85-86). Net effect: every
+   replayed past day shows €0 while today's ledger-sourced row shows real money. The
+   parity test (`TestLedgerParity.test_recorded_replay_equals_live_ledger_euros`,
+   tests/test_daily_stats.py:113) cannot catch this — it feeds one identical
+   `import_price`/`raw_export_price` pair into both paths, so it proves the `min()`
+   attribution matches, not that the price *source* matches. The same blind spot already
+   exists in `regret_job.py`, which reads `s.get("import_price")` / `s.get("export_price")`
+   off the same sample rows (regret_job.py:193,229). Unlike the other items in this
+   section, this one has not been ruled on — it is arguably a bug, not an accepted
+   tradeoff, and is left open for the user to decide (fix the sample columns, hide the €
+   columns under static mode, or accept it).
+6. **`coverage_ticks` / `null_ticks` are retained, not surfaced.** The module description
+   above states NULL-delta rows are counted so "a gappy day is visible" — true only inside
+   `aggregate_actual_days`' own `DayTotals` dict (daily_stats.py:79,81). `merge_days`
+   (daily_stats.py:136-188) builds each output row from a fixed 9-key shape (`date,
+   grid_charge_kwh, grid_export_kwh, cost_eur, revenue_eur, net_eur, source,
+   actual_net_eur, planned_net_eur`) that includes neither counter, so nothing reaches the
+   sensor or the card. A gappy day still renders as a plain (small) number, indistinguishable
+   from a genuinely quiet day. The counters are retained in `DayTotals` for future use;
+   surfacing them in the merged row is not part of this design.
 
 ## Testing
 
