@@ -282,3 +282,64 @@ class TestCashLedgerPersistence:
         ctrl, _hass = _ledger_ctrl()
         ctrl.restore({"total_net_eur": "not-a-number"})
         assert ctrl.total_net_eur == 0.0
+
+
+class TestLedgerEnergyAccumulators:
+    def _ledger(self):
+        from custom_components.anker_x1_smartgrid.ledger import CashLedger
+
+        return CashLedger()
+
+    def test_new_ledger_starts_at_zero(self):
+        led = self._ledger()
+        assert led.today_grid_charge_kwh == 0.0
+        assert led.today_export_kwh == 0.0
+
+    def test_rollover_resets_both_energy_accumulators(self):
+        led = self._ledger()
+        led.day = "2026-07-31"
+        led.today_grid_charge_kwh = 4.0
+        led.today_export_kwh = 2.0
+        led.today_charge_cost_eur = 1.0
+        # 12:00 UTC (not 03:00): the pytest-homeassistant-custom-component
+        # `hass` fixture forces hass.config.time_zone = "US/Pacific" for the
+        # duration of every test in this suite (pulled in transitively via
+        # conftest.py's autouse enable_custom_integrations, even though this
+        # test never touches hass) — dt_util.as_local() resolves through that
+        # zone. 03:00 UTC is still 20:00 the PREVIOUS day in US/Pacific, so
+        # the boundary never crosses; 12:00 UTC clears it with margin, same
+        # pattern as this file's existing BASE = ...14:00 UTC.
+        led.rollover(datetime(2026, 8, 1, 12, 0, tzinfo=UTC))
+        assert led.today_grid_charge_kwh == 0.0
+        assert led.today_export_kwh == 0.0
+        assert led.today_charge_cost_eur == 0.0
+
+    def test_same_day_rollover_preserves_energy_accumulators(self):
+        led = self._ledger()
+        led.rollover(datetime(2026, 8, 1, 3, 0, tzinfo=UTC))
+        led.today_grid_charge_kwh = 4.0
+        led.rollover(datetime(2026, 8, 1, 4, 0, tzinfo=UTC))
+        assert led.today_grid_charge_kwh == 4.0
+
+
+class TestLedgerEnergyPersistence:
+    async def test_energy_accumulators_survive_persist_restore(self):
+        from tests.helpers import CapturingStore, make_controller
+
+        # make_controller returns (controller, actuator) and always builds its
+        # own StubStore — swap in a CapturingStore to read the payload back.
+        ctrl, _act = make_controller()
+        ctrl._store = CapturingStore()
+        ctrl.today_grid_charge_kwh = 3.5
+        ctrl.today_export_kwh = 1.25
+        await ctrl._persist()
+
+        # CapturingStore.saved holds the LAST payload (a dict, not a list).
+        payload = ctrl._store.saved
+        assert payload["today_grid_charge_kwh"] == pytest.approx(3.5)
+        assert payload["today_export_kwh"] == pytest.approx(1.25)
+
+        fresh, _ = make_controller()
+        fresh.restore(payload)
+        assert fresh.today_grid_charge_kwh == pytest.approx(3.5)
+        assert fresh.today_export_kwh == pytest.approx(1.25)

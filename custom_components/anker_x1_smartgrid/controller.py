@@ -144,6 +144,8 @@ _PERSIST_GROUPS = [
         ("today_charge_cost_eur", "today_charge_cost_eur", lambda v: v, float, False),
         ("today_export_revenue_eur", "today_export_revenue_eur", lambda v: v, float, False),
         ("total_net_eur", "total_net_eur", lambda v: v, float, False),
+        ("today_grid_charge_kwh", "today_grid_charge_kwh", lambda v: v, float, False),
+        ("today_export_kwh", "today_export_kwh", lambda v: v, float, False),
     ],
     # SoC drift-hedge accumulator: a restart must resume from the same
     # closed-loop state rather than re-accumulating from scratch; all six
@@ -358,6 +360,22 @@ class Controller:
     @total_net_eur.setter
     def total_net_eur(self, value: float) -> None:
         self._ledger.total_net_eur = value
+
+    @property
+    def today_grid_charge_kwh(self) -> float:
+        return self._ledger.today_grid_charge_kwh
+
+    @today_grid_charge_kwh.setter
+    def today_grid_charge_kwh(self, value: float) -> None:
+        self._ledger.today_grid_charge_kwh = value
+
+    @property
+    def today_export_kwh(self) -> float:
+        return self._ledger.today_export_kwh
+
+    @today_export_kwh.setter
+    def today_export_kwh(self, value: float) -> None:
+        self._ledger.today_export_kwh = value
 
     async def _refresh_efficiency_curve(self, now: datetime) -> None:
         """Rebuild the measured efficiency curve from recent recorder samples.

@@ -691,6 +691,8 @@ async def test_persist_writes_wrapped_payload():
         "today_charge_cost_eur",
         "today_export_revenue_eur",
         "total_net_eur",
+        "today_grid_charge_kwh",
+        "today_export_kwh",
         "soc_drift_kwh",
         "soc_drift_day",
         "soc_drift_last_update",

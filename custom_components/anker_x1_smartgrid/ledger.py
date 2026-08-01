@@ -35,6 +35,11 @@ class CashLedger:
     today_charge_cost_eur: float = 0.0
     today_export_revenue_eur: float = 0.0
     total_net_eur: float = 0.0
+    # Measured kWh companions to the € legs above, same attribution
+    # (optimize.cash_energy_kwh) and same daily reset — daily_stats reports
+    # today's row from these rather than re-querying samples.
+    today_grid_charge_kwh: float = 0.0
+    today_export_kwh: float = 0.0
     # Local-date string of the day the daily fields cover (YYYY-MM-DD).
     # None on first tick so the day-rollover logic fires immediately to initialise.
     day: str | None = None
@@ -54,6 +59,8 @@ class CashLedger:
             self.today_export_pnl_eur = 0.0
             self.today_charge_cost_eur = 0.0
             self.today_export_revenue_eur = 0.0
+            self.today_grid_charge_kwh = 0.0
+            self.today_export_kwh = 0.0
             self.day = _today
 
     def accumulate(
@@ -98,6 +105,16 @@ class CashLedger:
             export_price_eff,
             const.TICK_SECONDS / 3600.0,
         )
+        charge_kwh, export_kwh = optimize_mod.cash_energy_kwh(
+            inputs.meter_w,
+            batt_w,
+            const.TICK_SECONDS / 3600.0,
+        )
         self.today_charge_cost_eur += cost
         self.today_export_revenue_eur += credit
         self.total_net_eur += credit - cost
+        # Energy legs accumulate unconditionally — unlike the € legs they do
+        # not depend on a price being available (France runs with no
+        # export-price entity but still exports real kWh).
+        self.today_grid_charge_kwh += charge_kwh
+        self.today_export_kwh += export_kwh
