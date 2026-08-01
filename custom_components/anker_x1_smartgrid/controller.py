@@ -1791,23 +1791,41 @@ class Controller:
             raw_export_price,
         )
 
+    def _read_daily_actuals_sync(self, since_iso: str, tz) -> dict[date, dict]:
+        """Synchronous: read the samples window AND aggregate it into per-day totals.
+
+        Both halves belong off the event loop.  The read is the largest in the
+        codebase (``SELECT *`` over WINDOW_DAYS+1 days ≈ 21k rows) and
+        ``aggregate_actual_days`` then runs ``fromisoformat`` + ``astimezone`` +
+        dict work on every one of them — a few hundred ms of blocking on
+        HAOS-class hardware if left on the loop.  ``tz`` is resolved by the
+        caller (``dt_util.DEFAULT_TIME_ZONE`` touches hass config) and passed in
+        as a plain ``tzinfo``, which is thread-safe to use here.
+
+        Raises whatever the read or the aggregation raises — the caller's single
+        try/except decides what that means for the cache.
+        """
+        rows = self._recorder.read_feature_rows(since_iso)
+        return daily_stats.aggregate_actual_days(rows, self.cfg.export_fee_eur_per_kwh, tz)
+
     async def _refresh_daily_actuals(self, now: datetime) -> None:
         """Re-aggregate the closed-day actuals cache (startup + once per local day).
 
         WINDOW_DAYS+1 days of samples is ~20k rows — far too heavy for a 60s
         tick — but closed days never change, so this only runs when the local
-        day key moves (``None`` on the first tick after a restart).  A failed
-        read leaves both the cache AND the key untouched so the next tick
-        retries rather than pinning an empty table for the rest of the day.
+        day key moves (``None`` on the first tick after a restart).  Read AND
+        aggregation run in one executor job (``_read_daily_actuals_sync``); a
+        failure in either leaves both the cache AND the key untouched — the
+        assignment below is never reached — so the next tick retries rather than
+        pinning an empty table for the rest of the day.
         """
         _today = dt_util.as_local(now).date().isoformat()
         if self._daily_actuals_day == _today:
             return
         _since = (now - timedelta(days=daily_stats.WINDOW_DAYS + 1)).isoformat()
         try:
-            rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, _since)
-            self._daily_actuals = daily_stats.aggregate_actual_days(
-                rows, self.cfg.export_fee_eur_per_kwh, dt_util.DEFAULT_TIME_ZONE
+            self._daily_actuals = await self._hass.async_add_executor_job(
+                self._read_daily_actuals_sync, _since, dt_util.DEFAULT_TIME_ZONE
             )
             self._daily_actuals_day = _today
         except Exception:
