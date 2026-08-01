@@ -90,3 +90,44 @@ def aggregate_actual_days(
         if export_price is not None:
             rec["revenue_eur"] += batt_export_kwh * (float(export_price) - export_fee_eur_per_kwh)
     return out
+
+
+def aggregate_planned_days(
+    horizon: list[dict] | None,
+    export_price_at,
+    tz: tzinfo,
+) -> dict[date, dict]:
+    """Group forward plan-horizon rows into planned per-local-day totals.
+
+    Skips two row classes:
+
+    - ``estimated`` rows — the estimated-tomorrow tail past the real price
+      edge.  Same rule the card applies (spec 2026-08-01-card-crop): the
+      table reports only what real tariff supports.
+    - ``mode == "actual"`` rows — past slots back-filled from measurements by
+      ``past_actuals``.  Counting them here would double-count against the
+      ledger figures ``merge_days`` uses for today.
+
+    ``export_price_at(start) -> float | None`` is caller-supplied (keeps this
+    module HA-free) and MUST already be post-fee — see
+    ``optimize.effective_export_price``.  ``None`` zeroes the revenue leg only.
+    """
+    out: dict[date, dict] = {}
+    for row in horizon or []:
+        if row.get("estimated") or row.get("mode") == "actual":
+            continue
+        start = _parse(row.get("start"))
+        if start is None:
+            continue
+        rec = out.setdefault(start.astimezone(tz).date(), new_day_totals())
+        charge_kwh = float(row.get("grid_charge_kwh") or 0.0)
+        export_kwh = float(row.get("grid_export_kwh") or 0.0)
+        rec["grid_charge_kwh"] += charge_kwh
+        rec["grid_export_kwh"] += export_kwh
+        price = row.get("price")
+        if price is not None:
+            rec["cost_eur"] += charge_kwh * float(price)
+        export_price = export_price_at(start)
+        if export_price is not None:
+            rec["revenue_eur"] += export_kwh * float(export_price)
+    return out

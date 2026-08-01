@@ -168,3 +168,79 @@ class TestLedgerParity:
         day = out[date(2026, 7, 20)]
         assert day["cost_eur"] == pytest.approx(live_cost, abs=1e-9)
         assert day["revenue_eur"] == pytest.approx(live_credit, abs=1e-9)
+
+
+def _plan_row(start: datetime, **cols) -> dict:
+    base = {
+        "start": start.isoformat(),
+        "price": 0.30,
+        "grid_charge_kwh": 0.0,
+        "grid_export_kwh": 0.0,
+        "estimated": False,
+        "mode": "idle",
+    }
+    base.update(cols)
+    return base
+
+
+def _flat_export(_start):
+    return 0.20
+
+
+class TestAggregatePlannedDays:
+    def test_sums_charge_cost_and_export_revenue(self):
+        horizon = [
+            _plan_row(datetime(2026, 8, 2, 2, 0, tzinfo=UTC), grid_charge_kwh=2.0, mode="grid"),
+            _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), grid_export_kwh=1.5, mode="export"),
+        ]
+        out = daily_stats.aggregate_planned_days(horizon, _flat_export, CEST)
+        day = out[date(2026, 8, 2)]
+        assert day["grid_charge_kwh"] == pytest.approx(2.0)
+        assert day["grid_export_kwh"] == pytest.approx(1.5)
+        assert day["cost_eur"] == pytest.approx(2.0 * 0.30)
+        assert day["revenue_eur"] == pytest.approx(1.5 * 0.20)
+
+    def test_estimated_rows_are_excluded(self):
+        horizon = [
+            _plan_row(datetime(2026, 8, 3, 2, 0, tzinfo=UTC), grid_charge_kwh=5.0, estimated=True, mode="estimated"),
+        ]
+        assert daily_stats.aggregate_planned_days(horizon, _flat_export, CEST) == {}
+
+    def test_actual_mode_rows_are_excluded(self):
+        # Past plan rows are back-filled measurements; counting them here
+        # would double-count against the ledger's today figures.
+        horizon = [
+            _plan_row(datetime(2026, 8, 1, 8, 0, tzinfo=UTC), grid_charge_kwh=3.0, mode="actual"),
+        ]
+        assert daily_stats.aggregate_planned_days(horizon, _flat_export, CEST) == {}
+
+    def test_export_price_none_zeroes_only_the_revenue_leg(self):
+        horizon = [
+            _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), grid_export_kwh=1.5, grid_charge_kwh=1.0, mode="export"),
+        ]
+        out = daily_stats.aggregate_planned_days(horizon, lambda _s: None, CEST)
+        day = out[date(2026, 8, 2)]
+        assert day["revenue_eur"] == 0.0
+        assert day["grid_export_kwh"] == pytest.approx(1.5)
+        assert day["cost_eur"] == pytest.approx(1.0 * 0.30)
+
+    def test_per_slot_export_curve_is_honoured(self):
+        peak = datetime(2026, 8, 2, 17, 0, tzinfo=UTC)
+        off = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+        curve = {peak: 0.40, off: 0.05}
+        horizon = [
+            _plan_row(peak, grid_export_kwh=1.0, mode="export"),
+            _plan_row(off, grid_export_kwh=1.0, mode="export"),
+        ]
+        out = daily_stats.aggregate_planned_days(horizon, lambda s: curve.get(s), CEST)
+        assert out[date(2026, 8, 2)]["revenue_eur"] == pytest.approx(0.45)
+
+    def test_buckets_on_the_local_day(self):
+        # 22:30Z is 00:30 the next day in CEST.
+        horizon = [_plan_row(datetime(2026, 8, 2, 22, 30, tzinfo=UTC), grid_charge_kwh=1.0, mode="grid")]
+        out = daily_stats.aggregate_planned_days(horizon, _flat_export, CEST)
+        assert set(out) == {date(2026, 8, 3)}
+
+    def test_empty_and_none_horizon(self):
+        assert daily_stats.aggregate_planned_days([], _flat_export, CEST) == {}
+        assert daily_stats.aggregate_planned_days(None, _flat_export, CEST) == {}
