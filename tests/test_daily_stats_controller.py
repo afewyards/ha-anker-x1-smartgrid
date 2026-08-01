@@ -137,3 +137,44 @@ class TestPublishDailyStats:
 
         future = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "plan")
         assert future["revenue_eur"] == pytest.approx(2.0 * 0.20)
+
+    async def test_per_slot_export_curve_prices_each_slot_and_falls_back_flat(self):
+        """The curve branch of ``_export_price_at`` — previously untested.
+
+        Three future export slots: two covered by the per-slot export curve at
+        DIFFERENT prices (so a single flat price cannot fake the result), one
+        past the curve's end which must fall back to the flat entity price.
+        Every leg is asserted post-fee, which pins that the fee is subtracted
+        exactly once — neither skipped on the curve branch nor applied twice
+        (once by resample and again by effective_export_price).
+        """
+        from custom_components.anker_x1_smartgrid.models import PriceSlot
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {}
+        ctrl._daily_actuals_day = None
+        ctrl.cfg = replace(ctrl.cfg, export_fee_eur_per_kwh=0.02)
+
+        now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+        _t17 = datetime(2026, 8, 2, 17, 0, tzinfo=UTC)
+        _t18 = datetime(2026, 8, 2, 18, 0, tzinfo=UTC)
+        _t19 = datetime(2026, 8, 2, 19, 0, tzinfo=UTC)
+        export_slots = [PriceSlot(start=_t17, price=0.40), PriceSlot(start=_t18, price=0.10)]
+        horizon = [
+            {
+                "start": start.isoformat(),
+                "price": 0.30,
+                "grid_charge_kwh": 0.0,
+                "grid_export_kwh": kwh,
+                "estimated": False,
+                "mode": "export",
+            }
+            for start, kwh in ((_t17, 2.0), (_t18, 1.0), (_t19, 1.0))
+        ]
+        ctrl._publish_daily_stats(now, horizon, export_price=0.22, export_slots=export_slots, slot_minutes=60)
+
+        future = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "plan")
+        # 2.0 x (0.40-0.02) + 1.0 x (0.10-0.02) + 1.0 x (0.22-0.02) uncovered
+        assert future["revenue_eur"] == pytest.approx(0.76 + 0.08 + 0.20)
+
