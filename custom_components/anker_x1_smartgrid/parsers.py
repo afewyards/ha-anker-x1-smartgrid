@@ -25,13 +25,18 @@ _ZONNEPLAN_START = "datetime"
 _ZONNEPLAN_PRICE = "electricity_price"
 _FRANK_START = "from"
 _FRANK_PRICE = "price"
+_ZONNEPLAN_Q_START = "start_date"
+_ZONNEPLAN_Q_PRICE = "price_tax_included"
+_ZONNEPLAN_Q_AMOUNT = "amount"
 
 
 def _decode_price_entry(entry: dict) -> tuple[datetime, float] | None:
     """Decode one forecast entry to (start_utc, price €/kWh), or None.
 
-    Zonneplan — ``{"datetime": ISO, "electricity_price": int}``, price ÷ PRICE_SCALE.
+    Zonneplan (hourly) — ``{"datetime": ISO, "electricity_price": int}``, price ÷ PRICE_SCALE.
     Frank Energie — ``{"from": ISO, "price": float}``, price already €/kWh.
+    Zonneplan (quarter-hourly) — ``{"start_date": ISO, "price_tax_included": {"amount": int}}``,
+    price ÷ PRICE_SCALE (tax-included matches the legacy ``electricity_price`` semantics).
     Unrecognised / malformed / non-finite entries return None so the caller skips them.
     """
     if _ZONNEPLAN_START in entry and _ZONNEPLAN_PRICE in entry:
@@ -42,6 +47,11 @@ def _decode_price_entry(entry: dict) -> tuple[datetime, float] | None:
         start = _parse_dt(entry.get(_FRANK_START))
         raw = entry.get(_FRANK_PRICE)
         scale = 1.0
+    elif _ZONNEPLAN_Q_START in entry and _ZONNEPLAN_Q_PRICE in entry:
+        start = _parse_dt(entry.get(_ZONNEPLAN_Q_START))
+        price_obj = entry.get(_ZONNEPLAN_Q_PRICE)
+        raw = price_obj.get(_ZONNEPLAN_Q_AMOUNT) if isinstance(price_obj, dict) else None
+        scale = const.PRICE_SCALE
     else:
         return None
     if start is None or raw is None:
@@ -58,9 +68,10 @@ def _decode_price_entry(entry: dict) -> tuple[datetime, float] | None:
 def parse_price_curve(forecast_attr: list[dict] | None) -> list[PriceSlot]:
     """Map a price-sensor forecast attribute to sorted PriceSlots (price in €/kWh).
 
-    Accepts both the Zonneplan (``datetime``/``electricity_price``, integer-scaled)
-    and Frank Energie (``from``/``price``, plain €/kWh) entry shapes; the key sets
-    are disjoint so per-entry sniffing is unambiguous.
+    Accepts the Zonneplan hourly (``datetime``/``electricity_price``, integer-scaled),
+    Frank Energie (``from``/``price``, plain €/kWh), and Zonneplan quarter-hourly
+    (``start_date``/``price_tax_included.amount``, integer-scaled) entry shapes; the
+    key sets are disjoint so per-entry sniffing is unambiguous.
 
     Duplicate starts are collapsed **keep-first** — the HiDiHo01 ``frank_energie``
     integration publishes every slot exactly twice.  Without the collapse the

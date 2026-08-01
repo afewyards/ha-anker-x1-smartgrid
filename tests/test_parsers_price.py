@@ -122,3 +122,62 @@ def test_parse_price_curve_mixed_shapes_both_decoded():
     ]
     slots = parsers.parse_price_curve(attr)
     assert [s.price for s in slots] == pytest.approx([0.20, 0.30])
+
+
+def test_parse_price_curve_quarter_hourly_shape():
+    """Zonneplan quarter-hourly: {start_date, price_tax_included:{amount}} — scaled, sorted."""
+    attr = [
+        {
+            "start_date": "2026-07-31T07:15:00+00:00",
+            "end_date": "2026-07-31T07:30:00+00:00",
+            "price_tax_included": {"amount": 2136119},
+            "price_tax_excluded": {"amount": 1500000},
+            "sustainability_score": {"permille": 400},
+        },
+        {
+            "start_date": "2026-07-31T07:00:00+00:00",
+            "end_date": "2026-07-31T07:15:00+00:00",
+            "price_tax_included": {"amount": 3244600},
+            "price_tax_excluded": {"amount": 2136119},
+            "sustainability_score": {"permille": 396},
+        },
+        {
+            "start_date": "2026-07-31T07:30:00+00:00",
+            "end_date": "2026-07-31T07:45:00+00:00",
+            "price_tax_included": {"amount": 2000000},
+            "price_tax_excluded": {"amount": 1400000},
+            "sustainability_score": {"permille": 410},
+        },
+    ]
+    slots = parsers.parse_price_curve(attr)
+    assert len(slots) == 3
+    assert slots[0].start == datetime(2026, 7, 31, 7, 0, tzinfo=UTC)  # sorted ascending
+    assert slots[0].price == pytest.approx(0.32446)
+    assert slots[1].price == pytest.approx(0.2136119)
+    assert slots[2].price == pytest.approx(0.20)
+    assert [s.duration_min for s in slots] == [15.0, 15.0, 15.0]
+
+
+def test_parse_price_curve_quarter_hourly_skips_malformed_nested_price():
+    """A malformed/missing/non-dict/non-finite nested price is skipped; valid siblings survive."""
+    attr = [
+        {"start_date": "2026-07-31T07:00:00+00:00"},  # price_tax_included missing entirely
+        {"start_date": "2026-07-31T07:15:00+00:00", "price_tax_included": {}},  # no amount
+        {"start_date": "2026-07-31T07:30:00+00:00", "price_tax_included": "3244600"},  # non-dict
+        {"start_date": "2026-07-31T07:45:00+00:00", "price_tax_included": {"amount": "NaN"}},  # non-finite
+        {"start_date": "2026-07-31T08:00:00+00:00", "price_tax_included": {"amount": 2500000}},  # valid
+    ]
+    slots = parsers.parse_price_curve(attr)
+    assert len(slots) == 1
+    assert slots[0].price == pytest.approx(0.25)
+
+
+def test_parse_price_curve_mixed_all_three_shapes_decoded():
+    """A list mixing legacy Zonneplan, Frank, and quarter-hourly entries decodes all three."""
+    attr = [
+        {"datetime": "2026-07-31T08:00:00Z", "electricity_price": 2000000},
+        {"from": "2026-07-31T09:00:00Z", "price": 0.30},
+        {"start_date": "2026-07-31T10:00:00Z", "price_tax_included": {"amount": 3200000}},
+    ]
+    slots = parsers.parse_price_curve(attr)
+    assert [s.price for s in slots] == pytest.approx([0.20, 0.30, 0.32])
