@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from . import const, coordinator
+from . import const, coordinator, daily_stats
 from .const import DOMAIN
 
 
@@ -372,6 +372,36 @@ class X1FictivePlanSensor(_Base):
         return {"horizon": plan.get("horizon", []), "deadline": plan.get("deadline")}
 
 
+class X1DailyStatsSensor(_Base):
+    """Per-day grid-charge / grid-export kWh + net € table (spec 2026-08-01).
+
+    Reads ``last_status["daily_stats"]`` published by the controller's
+    ``_publish_daily_stats``.  Entity-id: sensor.smartgrid_daily_stats.
+
+    State is the ROW COUNT, deliberately not today's € — that number already
+    has an entity (sensor.smartgrid_battery_net_today) and two entities
+    publishing the same figure would eventually be seen to disagree.
+    """
+
+    # A ~15-row list that changes every tick bloats the recorder DB for no
+    # gain; the card reads live state. Same reasoning as X1PlanSensor.horizon.
+    _unrecorded_attributes = frozenset({"days"})
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "daily_stats", "SmartGrid daily stats")
+
+    @property
+    def native_value(self):
+        return len(self._controller.last_status.get("daily_stats") or [])
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "days": self._controller.last_status.get("daily_stats") or [],
+            "window_days": daily_stats.WINDOW_DAYS,
+        }
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]["controller"]
     # Merged entry data (post Anker-device resolution) — same dict the
@@ -407,6 +437,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             spec_sensors["active_model"],
             X1PlanSensor(controller, entry.entry_id),
             X1FictivePlanSensor(controller, entry.entry_id),
+            X1DailyStatsSensor(controller, entry.entry_id),
             spec_sensors["regret_eur"],
             spec_sensors["dp_regret_7d"],
             spec_sensors["over_buy_kwh"],
