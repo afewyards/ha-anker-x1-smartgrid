@@ -180,16 +180,15 @@ _HOURLY_WATTS = [50.0 * h for h in range(24)]
 
 def _hourly_today_watts() -> list[list[tuple[datetime, float]]]:
     samples = [(_T2_BASE + timedelta(hours=h), _HOURLY_WATTS[h]) for h in range(24)]
-    # Trailing 25th sample, one hour PAST the window: build_pv_curve_from_watts's
-    # own tail-mirror rule only fills forward while the PREVIOUS inter-sample
-    # gap was < 1h ("at/beyond 1h it stays 0.0" -- see its docstring). Without
-    # this extra sample, hour 23 (the source's actual last real bucket) would
-    # be treated as a stale tail and its own 23:15/23:30/23:45Z quarters would
-    # fill with 0.0 instead of holding 23:00's value -- an edge artifact of
-    # the fixture, not something either resolution should differ on. The
-    # trailing sample sits outside the decision window (no price slot exists
-    # at 24:00Z) and only ever serves as hour 23's "next real bucket" for the
-    # interior gap-fill, exactly like every other hour of the day.
+    # Trailing 25th sample, one hour PAST the window: with it, hour 23's curve
+    # buckets are interior-gap-filled dense like every other hour's. Without it
+    # the CURVE would simply end at 23:00 (hourly tail gap >= 1h -> no tail
+    # mirror) -- but conservation would STILL hold, because
+    # build_display_intervals' interval-level <1h hold carries the 23:00 point
+    # across the 23:15/23:30/23:45Z slots anyway. The sample is kept purely so
+    # the fixture treats hour 23 uniformly with hours 0-22 (single code path
+    # under test), not because either resolution's total depends on it. It sits
+    # outside the decision window (no price slot exists at 24:00Z).
     samples.append((_T2_BASE + timedelta(hours=24), _HOURLY_WATTS[23]))
     return [samples]
 

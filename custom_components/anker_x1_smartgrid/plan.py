@@ -57,9 +57,16 @@ def build_display_intervals(
         # cursor only ever advances) to the last point at or before this slot's
         # start, then use its watts iff that point is < 1h old, else 0.0. This
         # reproduces the legacy hourly-fan behavior byte-identically for
-        # one-point-per-hour curves while giving dense sub-hourly curves (Task-1
-        # from_watts output) each slot's own value instead of the hour's SUM
-        # fanned across every quarter (was 2x/4x live PV energy).
+        # HOUR-ALIGNED one-point-per-hour curves while giving dense sub-hourly
+        # curves (Task-1 from_watts output) each slot's own value instead of the
+        # hour's SUM fanned across every quarter (was 2x/4x live PV energy).
+        # Caveat (accepted 2026-08-01 final review): non-hour-aligned hourly
+        # curves (synth_pv_curve / arrays anchored at now/sunrise, degraded-data
+        # fallback paths only) read one point LATER than the old hour-sum did —
+        # a <=1-slot temporal shift, energy-conserved. Also accepted: with a
+        # source that truncates mid-generation, this <1h hold composes with the
+        # from_watts cadence tail-fill to <2h of last-value extrapolation (never
+        # occurs live — every real source ends in explicit trailing zeros).
         # Precondition: pv_curve is expected to carry at most one point per
         # timestamp (all four parsers.py builders — build_pv_curve_from_watts/
         # build_two_day_pv_curve/build_pv_curve_from_arrays/synth_pv_curve —
