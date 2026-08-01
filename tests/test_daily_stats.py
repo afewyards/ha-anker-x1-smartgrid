@@ -244,3 +244,84 @@ class TestAggregatePlannedDays:
     def test_empty_and_none_horizon(self):
         assert daily_stats.aggregate_planned_days([], _flat_export, CEST) == {}
         assert daily_stats.aggregate_planned_days(None, _flat_export, CEST) == {}
+
+
+def _totals(charge=0.0, export=0.0, cost=0.0, revenue=0.0) -> dict:
+    out = daily_stats.new_day_totals()
+    out.update(
+        {"grid_charge_kwh": charge, "grid_export_kwh": export, "cost_eur": cost, "revenue_eur": revenue}
+    )
+    return out
+
+
+TODAY = date(2026, 8, 1)
+
+
+class TestMergeDays:
+    def test_past_day_is_actual_only(self):
+        actual = {date(2026, 7, 31): _totals(charge=4.0, export=2.0, cost=1.20, revenue=0.60)}
+        rows = daily_stats.merge_days(actual, {}, _totals(), TODAY)
+        row = next(r for r in rows if r["date"] == "2026-07-31")
+        assert row["source"] == "actual"
+        assert row["net_eur"] == pytest.approx(-0.60)
+        assert row["actual_net_eur"] == pytest.approx(-0.60)
+        assert row["planned_net_eur"] is None
+
+    def test_future_day_is_plan_only(self):
+        planned = {date(2026, 8, 2): _totals(charge=6.0, export=3.0, cost=1.50, revenue=1.10)}
+        rows = daily_stats.merge_days({}, planned, _totals(), TODAY)
+        row = next(r for r in rows if r["date"] == "2026-08-02")
+        assert row["source"] == "plan"
+        assert row["net_eur"] == pytest.approx(-0.40)
+        assert row["actual_net_eur"] is None
+        assert row["planned_net_eur"] == pytest.approx(-0.40)
+
+    def test_today_sums_actual_so_far_and_planned_remainder(self):
+        today_totals = _totals(charge=2.0, export=1.0, cost=0.50, revenue=0.30)
+        planned = {TODAY: _totals(charge=1.0, export=4.0, cost=0.25, revenue=1.40)}
+        rows = daily_stats.merge_days({}, planned, today_totals, TODAY)
+        row = next(r for r in rows if r["date"] == "2026-08-01")
+        assert row["source"] == "mixed"
+        assert row["grid_charge_kwh"] == pytest.approx(3.0)
+        assert row["grid_export_kwh"] == pytest.approx(5.0)
+        assert row["actual_net_eur"] == pytest.approx(-0.20)
+        assert row["planned_net_eur"] == pytest.approx(1.15)
+        assert row["net_eur"] == pytest.approx(0.95)
+
+    def test_live_ledger_wins_over_a_samples_entry_for_today(self):
+        # The samples pass also covers today; the ledger is authoritative
+        # because the card subtitle already publishes it.
+        actual = {TODAY: _totals(charge=99.0, cost=99.0)}
+        rows = daily_stats.merge_days(actual, {}, _totals(charge=2.0, cost=0.50), TODAY)
+        row = next(r for r in rows if r["date"] == "2026-08-01")
+        assert row["grid_charge_kwh"] == pytest.approx(2.0)
+        assert row["cost_eur"] == pytest.approx(0.50)
+
+    def test_today_always_present_even_with_no_data(self):
+        rows = daily_stats.merge_days({}, {}, _totals(), TODAY)
+        assert [r["date"] for r in rows] == ["2026-08-01"]
+
+    def test_rows_are_ordered_oldest_first(self):
+        actual = {date(2026, 7, 30): _totals(), date(2026, 7, 31): _totals()}
+        planned = {date(2026, 8, 2): _totals()}
+        rows = daily_stats.merge_days(actual, planned, _totals(), TODAY)
+        assert [r["date"] for r in rows] == ["2026-07-30", "2026-07-31", "2026-08-01", "2026-08-02"]
+
+    def test_days_older_than_the_window_are_dropped(self):
+        actual = {
+            date(2026, 7, 18): _totals(charge=1.0),  # exactly 14 days back — kept
+            date(2026, 7, 17): _totals(charge=1.0),  # 15 days back — dropped
+        }
+        rows = daily_stats.merge_days(actual, {}, _totals(), TODAY)
+        dates = [r["date"] for r in rows]
+        assert "2026-07-18" in dates
+        assert "2026-07-17" not in dates
+
+    def test_window_days_is_configurable(self):
+        actual = {date(2026, 7, 30): _totals(charge=1.0), date(2026, 7, 29): _totals(charge=1.0)}
+        rows = daily_stats.merge_days(actual, {}, _totals(), TODAY, window_days=2)
+        assert [r["date"] for r in rows] == ["2026-07-30", "2026-08-01"]
+
+    def test_date_is_an_iso_string_not_a_date_object(self):
+        rows = daily_stats.merge_days({}, {}, _totals(), TODAY)
+        assert isinstance(rows[0]["date"], str)

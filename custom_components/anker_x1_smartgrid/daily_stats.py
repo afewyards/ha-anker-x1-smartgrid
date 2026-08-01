@@ -131,3 +131,58 @@ def aggregate_planned_days(
         if export_price is not None:
             rec["revenue_eur"] += export_kwh * float(export_price)
     return out
+
+
+def merge_days(
+    actual: dict[date, dict],
+    planned: dict[date, dict],
+    today_totals: dict,
+    today: date,
+    window_days: int = WINDOW_DAYS,
+) -> list[dict]:
+    """Stitch measured past / mixed today / planned future into one table.
+
+    ``today_totals`` is the LIVE ledger's ``DayTotals`` for ``today``; it wins
+    over any ``actual[today]`` the samples pass produced, so the table's today
+    row equals the number the card subtitle already publishes.  The two differ
+    by the dt seam documented in the spec's "Accepted consequences".
+
+    ``today`` always yields a row even with no data, so an empty table still
+    shows the current day.  Rows more than ``window_days`` before ``today``
+    are dropped; future rows are bounded by the plan horizon itself.
+    """
+    days = {d for d in actual if d < today} | {d for d in planned if d > today} | {today}
+    rows: list[dict] = []
+    for day in sorted(days):
+        if (today - day).days > window_days:
+            continue
+        if day < today:
+            a, p = actual.get(day), None
+        elif day > today:
+            a, p = None, planned.get(day)
+        else:
+            a, p = today_totals, planned.get(day)
+        if a is None and p is None:
+            continue
+        a_cost = a["cost_eur"] if a else 0.0
+        a_rev = a["revenue_eur"] if a else 0.0
+        p_cost = p["cost_eur"] if p else 0.0
+        p_rev = p["revenue_eur"] if p else 0.0
+        rows.append(
+            {
+                "date": day.isoformat(),
+                "grid_charge_kwh": round(
+                    (a["grid_charge_kwh"] if a else 0.0) + (p["grid_charge_kwh"] if p else 0.0), 3
+                ),
+                "grid_export_kwh": round(
+                    (a["grid_export_kwh"] if a else 0.0) + (p["grid_export_kwh"] if p else 0.0), 3
+                ),
+                "cost_eur": round(a_cost + p_cost, 3),
+                "revenue_eur": round(a_rev + p_rev, 3),
+                "net_eur": round((a_rev - a_cost) + (p_rev - p_cost), 3),
+                "source": "mixed" if (a is not None and p is not None) else ("actual" if a is not None else "plan"),
+                "actual_net_eur": round(a_rev - a_cost, 3) if a is not None else None,
+                "planned_net_eur": round(p_rev - p_cost, 3) if p is not None else None,
+            }
+        )
+    return rows
