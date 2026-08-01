@@ -70,6 +70,34 @@ class TestCashFlowsEur:
         assert credit == 0.0
 
 
+class TestCashEnergyKwh:
+    def test_returns_the_same_attribution_cash_flows_prices(self):
+        from custom_components.anker_x1_smartgrid.optimize import cash_energy_kwh
+
+        # Importing 1500 W while the battery charges 2000 W: grid-attributed
+        # charge = min(1500, 2000) = 1500 W.
+        charge_kwh, export_kwh = cash_energy_kwh(1500.0, -2000.0, TICK_H)
+        assert charge_kwh == pytest.approx(1500.0 / 1000.0 * TICK_H)
+        assert export_kwh == 0.0
+
+    def test_export_leg_is_battery_sourced_only(self):
+        from custom_components.anker_x1_smartgrid.optimize import cash_energy_kwh
+
+        # Exporting 3000 W but the battery only discharges 1000 W: the other
+        # 2000 W is PV spill, out of scope.
+        charge_kwh, export_kwh = cash_energy_kwh(-3000.0, 1000.0, TICK_H)
+        assert charge_kwh == 0.0
+        assert export_kwh == pytest.approx(1000.0 / 1000.0 * TICK_H)
+
+    def test_cash_flows_eur_is_energy_times_price(self):
+        from custom_components.anker_x1_smartgrid.optimize import cash_energy_kwh
+
+        charge_kwh, export_kwh = cash_energy_kwh(1500.0, -2000.0, TICK_H)
+        cost, credit = cash_flows_eur(1500.0, -2000.0, 0.30, 0.25, TICK_H)
+        assert cost == pytest.approx(charge_kwh * 0.30)
+        assert credit == pytest.approx(export_kwh * 0.25)
+
+
 class TestPriceAt:
     def test_finds_containing_slot_at_60min(self):
         slots = [

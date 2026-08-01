@@ -300,6 +300,23 @@ def export_pnl_eur(
     return revenue - cost - opportunity
 
 
+def cash_energy_kwh(meter_w: float, batt_w: float, tick_h: float) -> tuple[float, float]:
+    """``(grid_charge_kwh, batt_export_kwh)`` attributed for one tick interval.
+
+    THE single definition of the cash-ledger attribution rule.  Sign
+    conventions: ``meter_w`` positive = grid import, negative = export;
+    ``batt_w`` positive = battery discharge, negative = charge.  PV covers the
+    house first, so each leg is the ``min()`` of its two signed readings and
+    PV-spill export is excluded.
+
+    Both ``cash_flows_eur`` (live ledger) and ``daily_stats`` (recorded-sample
+    replay) derive from this, so the two paths cannot drift.
+    """
+    grid_charge_w = min(max(0.0, meter_w), max(0.0, -batt_w))
+    batt_export_w = min(max(0.0, -meter_w), max(0.0, batt_w))
+    return grid_charge_w / 1000.0 * tick_h, batt_export_w / 1000.0 * tick_h
+
+
 def cash_flows_eur(
     meter_w: float,
     batt_w: float,
@@ -323,10 +340,9 @@ def cash_flows_eur(
     NO cycle-cost / eta / opportunity deductions: this is the cash ledger,
     distinct from the economic ``export_pnl_eur``.
     """
-    grid_charge_w = min(max(0.0, meter_w), max(0.0, -batt_w))
-    batt_export_w = min(max(0.0, -meter_w), max(0.0, batt_w))
-    cost = grid_charge_w / 1000.0 * tick_h * import_price if import_price is not None else 0.0
-    credit = batt_export_w / 1000.0 * tick_h * export_price_eff if export_price_eff is not None else 0.0
+    grid_charge_kwh, batt_export_kwh = cash_energy_kwh(meter_w, batt_w, tick_h)
+    cost = grid_charge_kwh * import_price if import_price is not None else 0.0
+    credit = batt_export_kwh * export_price_eff if export_price_eff is not None else 0.0
     return cost, credit
 
 
