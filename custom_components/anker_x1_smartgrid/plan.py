@@ -60,6 +60,13 @@ def build_display_intervals(
         # one-point-per-hour curves while giving dense sub-hourly curves (Task-1
         # from_watts output) each slot's own value instead of the hour's SUM
         # fanned across every quarter (was 2x/4x live PV energy).
+        # Precondition: pv_curve is expected to carry at most one point per
+        # timestamp (all four parsers.py builders — build_pv_curve_from_watts/
+        # build_two_day_pv_curve/build_pv_curve_from_arrays/synth_pv_curve —
+        # guarantee this). Points sharing a timestamp are NOT summed here; the
+        # cursor keeps only the last one at that timestamp (dict-assignment/
+        # last-wins), unlike the pre-2026-08 hour-sum behavior which summed
+        # every point in a bucket including exact-duplicate timestamps.
         while pv_idx + 1 < pv_n and pv_sorted[pv_idx + 1][0] <= slot.start:
             pv_idx += 1
         if pv_idx < pv_n and pv_sorted[pv_idx][0] <= slot.start and (
