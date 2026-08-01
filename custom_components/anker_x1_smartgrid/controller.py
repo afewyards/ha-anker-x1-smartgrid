@@ -1632,7 +1632,7 @@ class Controller:
             "deadline": deadline.isoformat() if deadline else None,
             "planned_grid_hours": _grid_slots * (_slot_minutes / 60.0),
         }
-        self._publish_daily_stats(now, horizon, _export_price, _export_slots, _slot_minutes)
+        self._publish_daily_stats(now, horizon, _export_price, _export_slots, _slot_minutes, delivered_now)
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
@@ -1839,6 +1839,7 @@ class Controller:
         export_price: float | None,
         export_slots: list[PriceSlot] | None,
         slot_minutes: int,
+        delivered_by_hour: dict | None = None,
     ) -> None:
         """Merge cached actuals + live ledger + plan horizon into last_status.
 
@@ -1846,6 +1847,12 @@ class Controller:
         memory, so this runs every tick.  Export is valued at the per-slot
         curve where one is supplied, else the flat entity price; both are put
         through effective_export_price so the fee is applied exactly once.
+
+        ``delivered_by_hour`` is the SAME dict this tick handed to
+        ``plan.build_display_horizon``, so the delivered add-back subtracted
+        out of the planned half below is exactly the one folded in there.  See
+        ``daily_stats.aggregate_planned_days`` for why both it and ``now`` are
+        needed to keep today's row from counting the in-progress hour twice.
         """
         _curve = resolution.resample_price_map(export_slots, slot_minutes) if export_slots else {}
         _flat = optimize_mod.effective_export_price(export_price, self.cfg) if export_price is not None else None
@@ -1853,6 +1860,12 @@ class Controller:
         def _export_price_at(start: datetime) -> float | None:
             _raw = _curve.get(start)
             return _flat if _raw is None else optimize_mod.effective_export_price(_raw, self.cfg)
+
+        def _delivered_at(start: datetime) -> float:
+            # hour_floor matches plan.build_horizon's own lookup key for
+            # deliv_by_hour (kept clock-hour-granular there on purpose).
+            _rec = (delivered_by_hour or {}).get(resolution.hour_floor(start))
+            return float((_rec or {}).get("grid_charge_kwh") or 0.0)
 
         _tz = dt_util.DEFAULT_TIME_ZONE
         _today_totals = daily_stats.new_day_totals()
@@ -1866,7 +1879,7 @@ class Controller:
         )
         self.last_status["daily_stats"] = daily_stats.merge_days(
             self._daily_actuals,
-            daily_stats.aggregate_planned_days(horizon, _export_price_at, _tz),
+            daily_stats.aggregate_planned_days(horizon, _export_price_at, _tz, now, _delivered_at),
             _today_totals,
             dt_util.as_local(now).date(),
         )

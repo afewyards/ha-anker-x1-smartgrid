@@ -96,10 +96,12 @@ def aggregate_planned_days(
     horizon: list[dict] | None,
     export_price_at,
     tz: tzinfo,
+    now: datetime | None = None,
+    delivered_at=None,
 ) -> dict[date, dict]:
     """Group forward plan-horizon rows into planned per-local-day totals.
 
-    Skips two row classes:
+    Skips three row classes:
 
     - ``estimated`` rows — the estimated-tomorrow tail past the real price
       edge.  Same rule the card applies (spec 2026-08-01-card-crop): the
@@ -107,6 +109,25 @@ def aggregate_planned_days(
     - ``mode == "actual"`` rows — past slots back-filled from measurements by
       ``past_actuals``.  Counting them here would double-count against the
       ledger figures ``merge_days`` uses for today.
+    - rows whose slot has ALREADY STARTED (``start <= now``), when ``now`` is
+      given.  ``past_actuals`` stops strictly BEFORE the current clock-hour,
+      so the elapsed part of that hour is NOT ``mode == "actual"`` and its
+      modelled energy would be claimed by the planned half while the live
+      ledger has already booked what really flowed there.  The cost is that
+      the in-progress slot's not-yet-delivered planned remainder is omitted —
+      bounded by one slot, and strictly better than double-counting.
+
+    ``delivered_at(start) -> float`` (kWh, caller-supplied, optional) closes
+    the other half of the same seam.  ``plan.build_horizon`` folds energy
+    already delivered in the in-progress CLOCK-HOUR back into every row of
+    that hour (its ``delivered_by_hour`` lookup is clock-hour keyed, not slot
+    keyed, so at 15-min slots all four quarters each receive the FULL hour's
+    kWh).  ``start <= now`` alone therefore still leaves that hour's
+    not-yet-started quarters carrying a copy each.  The add-back contributes
+    exactly its kWh to a row — ``+w * 1000/dt_h`` then ``* dt_h/1000``
+    cancels — so subtracting the same number per row reverses it exactly,
+    preserving the genuine modelled remainder instead of dropping it.
+    Clamped at zero.
 
     ``export_price_at(start) -> float | None`` is caller-supplied (keeps this
     module HA-free) and MUST already be post-fee — see
@@ -119,8 +140,12 @@ def aggregate_planned_days(
         start = _parse(row.get("start"))
         if start is None:
             continue
+        if now is not None and start <= now:
+            continue
         rec = out.setdefault(start.astimezone(tz).date(), new_day_totals())
         charge_kwh = float(row.get("grid_charge_kwh") or 0.0)
+        if delivered_at is not None:
+            charge_kwh = max(0.0, charge_kwh - float(delivered_at(start) or 0.0))
         export_kwh = float(row.get("grid_export_kwh") or 0.0)
         rec["grid_charge_kwh"] += charge_kwh
         rec["grid_export_kwh"] += export_kwh

@@ -178,6 +178,51 @@ class TestPublishDailyStats:
         # 2.0 x (0.40-0.02) + 1.0 x (0.10-0.02) + 1.0 x (0.22-0.02) uncovered
         assert future["revenue_eur"] == pytest.approx(0.76 + 0.08 + 0.20)
 
+    async def test_todays_row_does_not_count_the_in_progress_hour_twice(self):
+        """Review finding I1, at the 15-min resolution both deployments run.
+
+        The tick hands ``_publish_daily_stats`` the same ``delivered_by_hour``
+        it handed ``build_display_horizon``, so the hour's already-delivered
+        kWh — which that builder folded into EVERY quarter row of the hour, and
+        which the live ledger has ALREADY booked — is taken back out of the
+        planned half.  Elapsed quarters are dropped outright.
+
+        Before the fix this row read 2.0 (ledger) + 4 x 2.5 (quarters) = 12.0
+        kWh for 2.5 kWh of real activity.
+        """
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {}
+        ctrl._daily_actuals_day = None
+        # The ledger already holds this clock-hour's delivered charge.
+        ctrl.today_grid_charge_kwh = 2.0
+        ctrl.today_charge_cost_eur = 0.60
+
+        now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)  # mid 10:00 clock-hour
+        _hour = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+        delivered = {_hour: {"grid_charge_kwh": 2.0}}
+        horizon = [
+            {
+                "start": (_hour + timedelta(minutes=15 * i)).isoformat(),
+                "price": 0.30,
+                # 0.5 modelled remainder + the 2.0 hour-wide add-back, exactly
+                # as plan.build_horizon emits it for the in-progress hour.
+                "grid_charge_kwh": 2.5,
+                "grid_export_kwh": 0.0,
+                "estimated": False,
+                "mode": "grid",
+            }
+            for i in range(4)
+        ]
+        ctrl._publish_daily_stats(now, horizon, None, None, 15, delivered)
+
+        today_row = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "mixed")
+        # 2.0 measured (ledger) + 0.5 still-planned remainder of the 10:45 slot.
+        assert today_row["grid_charge_kwh"] == pytest.approx(2.5)
+        assert today_row["cost_eur"] == pytest.approx(0.60 + 0.5 * 0.30)
+
+
 class TestStatusCarriesTheTable:
     """``_status`` REBINDS last_status, and only the enabled path republishes
     ``daily_stats`` — so without an explicit carry-over a single transient

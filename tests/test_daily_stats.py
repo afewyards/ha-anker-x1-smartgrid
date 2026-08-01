@@ -246,6 +246,77 @@ class TestAggregatePlannedDays:
         assert daily_stats.aggregate_planned_days(None, _flat_export, CEST) == {}
 
 
+class TestAggregatePlannedDaysInProgressSlot:
+    """The in-progress clock-hour seam (review finding I1).
+
+    ``past_actuals`` stops strictly BEFORE the current clock-hour, so no row of
+    that hour is ``mode == "actual"`` — yet the live ledger has already booked
+    every kWh that flowed in it.  Two independent leaks therefore have to be
+    closed, and at 15-min slots (live on both deployments) they compound:
+
+    1. Elapsed slots of the current hour still carry their modelled energy.
+    2. ``plan.build_horizon`` adds the hour's ALREADY-DELIVERED kWh to EVERY
+       row of that hour (its ``delivered_by_hour`` lookup is clock-hour keyed,
+       not slot keyed), so all four quarters each claim the full hour's charge.
+    """
+
+    # 10:37Z, mid-way through the 10:00 clock-hour, at 15-min slot resolution.
+    NOW = datetime(2026, 8, 2, 10, 37, tzinfo=UTC)
+    HOUR = datetime(2026, 8, 2, 10, 0, tzinfo=UTC)
+    DELIVERED = 2.0  # kWh already delivered this clock-hour, per the recorder
+
+    def _quarters(self, modelled: float) -> list[dict]:
+        # What build_horizon really emits for the in-progress hour: the
+        # modelled remainder for that slot PLUS the whole hour's delivered kWh.
+        return [
+            _plan_row(self.HOUR + timedelta(minutes=15 * i), grid_charge_kwh=modelled + self.DELIVERED, mode="grid")
+            for i in range(4)
+        ]
+
+    def _delivered_at(self, start):
+        return self.DELIVERED if start.replace(minute=0) == self.HOUR else 0.0
+
+    def test_already_started_slots_are_skipped(self):
+        # 10:00 / 10:15 / 10:30 have elapsed; only 10:45 is still ahead.
+        out = daily_stats.aggregate_planned_days(self._quarters(0.5), _flat_export, CEST, self.NOW)
+        assert out[date(2026, 8, 2)]["grid_charge_kwh"] == pytest.approx(0.5 + self.DELIVERED)
+
+    def test_delivered_add_back_is_subtracted_from_the_remaining_slots(self):
+        out = daily_stats.aggregate_planned_days(
+            self._quarters(0.5), _flat_export, CEST, self.NOW, self._delivered_at
+        )
+        day = out[date(2026, 8, 2)]
+        # Only 10:45 survives, and its 2.5 is the 0.5 modelled remainder plus
+        # the 2.0 the ledger already holds. Without BOTH guards this reads
+        # 4 x 2.5 = 10.0 kWh -- a 20x overstatement of the real remainder.
+        assert day["grid_charge_kwh"] == pytest.approx(0.5)
+        assert day["cost_eur"] == pytest.approx(0.5 * 0.30)
+
+    def test_future_hours_are_untouched(self):
+        # The delivered dict only ever holds the current clock-hour, so a
+        # later slot must keep its full modelled energy.
+        later = _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), grid_charge_kwh=3.0, mode="grid")
+        out = daily_stats.aggregate_planned_days(
+            [later], _flat_export, CEST, self.NOW, self._delivered_at
+        )
+        assert out[date(2026, 8, 2)]["grid_charge_kwh"] == pytest.approx(3.0)
+
+    def test_subtraction_clamps_at_zero(self):
+        # An idle in-progress hour: the row is pure add-back, nothing modelled.
+        rows = [_plan_row(self.HOUR + timedelta(minutes=45), grid_charge_kwh=self.DELIVERED, mode="grid")]
+        out = daily_stats.aggregate_planned_days(rows, _flat_export, CEST, self.NOW, self._delivered_at)
+        assert out[date(2026, 8, 2)]["grid_charge_kwh"] == 0.0
+        assert out[date(2026, 8, 2)]["cost_eur"] == 0.0
+
+    def test_defaults_stay_byte_identical_when_neither_is_supplied(self):
+        # Both parameters are optional; omitting them must reproduce the
+        # pre-fix behaviour exactly (no accidental filtering).
+        rows = self._quarters(0.5)
+        assert daily_stats.aggregate_planned_days(rows, _flat_export, CEST) == daily_stats.aggregate_planned_days(
+            rows, _flat_export, CEST, None, None
+        )
+
+
 def _totals(charge=0.0, export=0.0, cost=0.0, revenue=0.0) -> dict:
     out = daily_stats.new_day_totals()
     out.update(
