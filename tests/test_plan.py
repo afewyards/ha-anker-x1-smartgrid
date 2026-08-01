@@ -290,6 +290,27 @@ def test_display_intervals_pv_energy_conserved_at_15min():
     assert energy_15 == pytest.approx(energy_hourly)
 
 
+def test_display_intervals_dense_30min_curve_no_doubling():
+    """Dense sub-hourly curve (post-Task-1 from_watts shape): each quarter reads ITS OWN
+    value — the old hour-SUM would have read 386+2145=2531 in every quarter (2x energy)."""
+    now = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(minutes=15 * i), 0.20) for i in range(4)]
+    pv_curve = [(now, 386.0), (now + timedelta(minutes=15), 386.0),
+                (now + timedelta(minutes=30), 2145.0), (now + timedelta(minutes=45), 2145.0)]
+    ivs = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=15)
+    assert [iv.pv_w for iv in ivs] == [386.0, 386.0, 2145.0, 2145.0]
+    assert sum(iv.pv_w * iv.dt_h for iv in ivs) / 1000 == pytest.approx(1.2655)
+
+
+def test_display_intervals_stale_point_zeroes_after_1h():
+    now = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+    slots = [PriceSlot(now + timedelta(minutes=15 * i), 0.20) for i in range(10)]
+    pv_curve = [(now, 1000.0)]  # single point, no successor
+    ivs = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=15)
+    assert [iv.pv_w for iv in ivs][:4] == [1000.0] * 4
+    assert all(iv.pv_w == 0.0 for iv in ivs[4:])
+
+
 def test_soc_discharges_on_deficit():
     # idle hour with load > pv must LOWER soc by discharge energy / eta_discharge
     cfg = Config(

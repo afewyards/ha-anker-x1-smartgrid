@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import const
 from .models import Config, ForecastInterval, PriceSlot
@@ -24,8 +24,8 @@ def build_display_intervals(
 ) -> list[ForecastInterval]:
     """One ForecastInterval per distinct price-slot at the slot_minutes grid, >= now's slot.
 
-    Display-only. pv_w = that slot's HOUR's pv_curve value (0.0 when no curve point for
-    that hour, e.g. overnight) — see the D2 comment below; load_w =
+    Display-only. pv_w = a step-function lookup on pv_curve (0.0 when no curve point
+    covers the slot, e.g. overnight) — see the D2 comment below; load_w =
     predictor.predict(slot, h_temp, fallback_w, quantile=quantile) where h_temp is looked
     up from temp_by_hour (per-hour forecast, HOUR-floored — the temp forecast is
     intrinsically hourly) falling back to cur_temp.  dt_h = slot_minutes / 60.0.
@@ -34,14 +34,13 @@ def build_display_intervals(
     """
     if not slots:
         return []
-    pv_by_hour: dict[datetime, float] = {}
-    for start, watts in pv_curve:
-        h = hour_floor(start)
-        pv_by_hour[h] = pv_by_hour.get(h, 0.0) + watts
+    pv_sorted = sorted(pv_curve, key=lambda p: p[0])
+    pv_n = len(pv_sorted)
     now_h = floor_to_slot(now, slot_minutes)
     dt_h = slot_minutes / 60.0
     out: list[ForecastInterval] = []
     seen: set[datetime] = set()
+    pv_idx = 0
     for slot in sorted(slots, key=lambda s: s.start):
         h = floor_to_slot(slot.start, slot_minutes)
         if h < now_h or h in seen:
@@ -51,15 +50,24 @@ def build_display_intervals(
         # though the PV/dedup grid is per-slot (else 3-of-4 quarters fall back to
         # cur_temp instead of the actual hourly-forecast temp).
         h_temp = temp_by_hour.get(hour_floor(slot.start), cur_temp) if temp_by_hour else cur_temp
-        # D2: the PV curve is intrinsically HOURLY too (one point/hour from every
-        # builder in parsers.py — build_pv_curve_from_watts/build_two_day_pv_curve/
-        # build_pv_curve_from_arrays/synth_pv_curve), so keep the PV lookup HOUR-
-        # floored same as the D1 temp lookup above: every sub-hour slot inherits
-        # its hour's watts instead of only the :00 quarter getting PV and
-        # :15/:30/:45 reading 0.0 (live France defect — pv_w = 2391.6 at 15:00
-        # then 0.0/0.0/0.0). If the PV curve ever goes 15-min native, this
-        # bucketing (and D1's) need revisiting.
-        pv_w = pv_by_hour.get(hour_floor(slot.start), 0.0)
+        # D2: pv_curve is a step function, not a per-hour sum — a curve point's
+        # watts hold from its own timestamp until the NEXT point supersedes it (or
+        # it goes stale after 1h with no successor, e.g. overnight). Walk a forward
+        # cursor (slots and pv_curve are both processed start-ascending, so the
+        # cursor only ever advances) to the last point at or before this slot's
+        # start, then use its watts iff that point is < 1h old, else 0.0. This
+        # reproduces the legacy hourly-fan behavior byte-identically for
+        # one-point-per-hour curves while giving dense sub-hourly curves (Task-1
+        # from_watts output) each slot's own value instead of the hour's SUM
+        # fanned across every quarter (was 2x/4x live PV energy).
+        while pv_idx + 1 < pv_n and pv_sorted[pv_idx + 1][0] <= slot.start:
+            pv_idx += 1
+        if pv_idx < pv_n and pv_sorted[pv_idx][0] <= slot.start and (
+            slot.start - pv_sorted[pv_idx][0] < timedelta(hours=1)
+        ):
+            pv_w = pv_sorted[pv_idx][1]
+        else:
+            pv_w = 0.0
         out.append(
             ForecastInterval(
                 h,
