@@ -178,3 +178,29 @@ class TestPublishDailyStats:
         # 2.0 x (0.40-0.02) + 1.0 x (0.10-0.02) + 1.0 x (0.22-0.02) uncovered
         assert future["revenue_eur"] == pytest.approx(0.76 + 0.08 + 0.20)
 
+class TestStatusCarriesTheTable:
+    """``_status`` REBINDS last_status, and only the enabled path republishes
+    ``daily_stats`` — so without an explicit carry-over a single transient
+    failsafe tick (price entity reloading, a startup race) blanks the card,
+    and a disabled period hides the table entirely even though every past day
+    is still sitting in the recorder.
+    """
+
+    async def test_failsafe_status_rebuild_keeps_the_previous_table(self):
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        _table = [{"date": "2026-07-31", "net_eur": 1.5, "source": "actual"}]
+        ctrl.last_status["daily_stats"] = _table
+
+        status = ctrl._status(datetime(2026, 8, 1, 10, 0, tzinfo=UTC), 0.0, None, "failsafe")
+
+        assert status["daily_stats"] == _table
+        assert ctrl.last_status["daily_stats"] == _table
+
+    async def test_status_does_not_invent_the_key_when_nothing_was_published(self):
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        status = ctrl._status(datetime(2026, 8, 1, 10, 0, tzinfo=UTC), 0.0, None, "failsafe")
+        assert "daily_stats" not in status

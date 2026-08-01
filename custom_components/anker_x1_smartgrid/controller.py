@@ -1605,10 +1605,11 @@ class Controller:
         self.last_status["export_setpoint_w"] = _export_setpoint_w
         # T16: surface the live per-tick house load for observability. Mirrors
         # export_setpoint_w above — this line only runs in the enabled/"ok" tick
-        # path. last_status is a persistent dict mutated in place (same as
-        # export_setpoint_w), so a disabled/failsafe tick does NOT remove this
-        # key — it simply leaves whatever value the last enabled tick wrote.
-        # A dedicated sensor reads the key.
+        # path. CORRECTION: _status() REBINDS last_status (it does not mutate a
+        # persistent dict), so a disabled/failsafe tick DOES drop this key until
+        # the next enabled tick re-adds it — same as export_setpoint_w and
+        # terminal_v_hi. Only "daily_stats" is deliberately carried across the
+        # rebuild (see _status). A dedicated sensor reads the key.
         self.last_status["house_load_w"] = _house_load_now_w
         # Task 4: surface the DP optimizer's terminal water-value artefacts for
         # dashboard/diagnostic observability only. Absent from _dp_out on DP
@@ -1719,6 +1720,13 @@ class Controller:
 
     def _status(self, now, setpoint, deadline, reason, solar_charge: float = 0.0) -> dict:
         """Build + stash self.last_status for this tick. See snapshot.build_status."""
+        # last_status is REBOUND here, not mutated — every key written outside
+        # build_status is dropped unless the tick re-adds it. Only the enabled
+        # path reaches _publish_daily_stats, so a disabled or failsafe tick would
+        # otherwise delete "daily_stats" and blank the table's card until the next
+        # ok tick. The table is explicitly a history view: stale-but-present beats
+        # blank, and the enabled path overwrites this a few lines later anyway.
+        _prev_daily_stats = self.last_status.get("daily_stats")
         self.last_status = snapshot.build_status(
             now=now,
             setpoint=setpoint,
@@ -1755,6 +1763,8 @@ class Controller:
             efficiency_curve_attrs=self._eta_curve.as_attributes(),
             use_measured_eta=self.cfg.use_measured_eta,
         )
+        if _prev_daily_stats is not None:
+            self.last_status["daily_stats"] = _prev_daily_stats
         return self.last_status
 
     def _rollover_daily_ledgers(self, now: datetime) -> None:
