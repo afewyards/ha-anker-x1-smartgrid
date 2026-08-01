@@ -133,7 +133,14 @@ def test_export_curve_at_finer_resolution_than_window(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Overnight v_hi clamp must use the same export curve the DP uses
+# DP window anchor at 15-min mid-hour
+#
+# This section used to ALSO cover the overnight v_hi clamp (it had to share
+# the DP's own window anchor). The piecewise per-hour terminal credit
+# (spec rev-3, Task 5 of the terminal-piecewise-credit wave) replaced the
+# scalar two-segment credit -- and its window-max export clamp -- with one
+# (dc_kwh, value) segment per priced gap hour; there is no clamp left to
+# test. Only the DP-window half of the regression below remains relevant.
 # ---------------------------------------------------------------------------
 
 _PREDICTOR = LoadPredictor.from_profile({})
@@ -161,52 +168,6 @@ def _wv_cfg(**overrides) -> Config:
     )
 
 
-def _clamp_from_compute_decision(monkeypatch, *, export_slots) -> float:
-    """Spy on the terminal builder and return the max_export_dc_value it received."""
-    captured: dict = {}
-
-    def _spy_builder(*, max_export_dc_value, v_lo, **_):
-        captured["max_export_dc_value"] = max_export_dc_value
-        return (v_lo, 0.0)
-
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _spy_builder)
-    cfg = _wv_cfg()
-    compute_decision(
-        PlanState(ControllerState.PASSIVE, _WV_BASE - timedelta(hours=2), ()),
-        PlantInputs(soc=80.0, meter_w=0.0, now=_WV_BASE),
-        _slots(_WV_IMPORT, base=_WV_BASE),
-        0.0,
-        _WV_BASE + timedelta(hours=len(_WV_IMPORT)),
-        _PREDICTOR,
-        None,
-        cfg,
-        export_price=0.06,
-        export_price_matches_import=False,
-        export_slots=export_slots,
-        _out={},
-    )
-    return captured["max_export_dc_value"]
-
-
-def test_v_hi_clamp_uses_export_curve_max(monkeypatch):
-    """With a covering export curve, the clamp is max(export curve), not the import max."""
-    cfg = _wv_cfg()
-    clamp = _clamp_from_compute_decision(monkeypatch, export_slots=_slots(_WV_EXPORT, base=_WV_BASE))
-    best_eff = max(optimize_mod.effective_export_price(p, cfg) for p in _WV_EXPORT)
-    expected = best_eff * cfg.eta_discharge_static() - cfg.cycle_cost_eur_per_kwh
-    assert clamp == pytest.approx(expected)
-
-
-def test_v_hi_clamp_without_curve_keeps_ratio_scale(monkeypatch):
-    """No curve → unchanged legacy ratio-scale clamp."""
-    cfg = _wv_cfg()
-    clamp = _clamp_from_compute_decision(monkeypatch, export_slots=None)
-    ratio = 0.06 / _WV_IMPORT[0]
-    best_eff = max(optimize_mod.effective_export_price(p * ratio, cfg) for p in _WV_IMPORT)
-    expected = best_eff * cfg.eta_discharge_static() - cfg.cycle_cost_eur_per_kwh
-    assert clamp == pytest.approx(expected)
-
-
 def _quarter_slots(hourly_prices: list[float], *, base: datetime) -> list[PriceSlot]:
     """Forward-fill hourly prices onto a 15-min grid (4 slots/hour)."""
     return [
@@ -216,15 +177,20 @@ def _quarter_slots(hourly_prices: list[float], *, base: datetime) -> list[PriceS
     ]
 
 
-def test_v_hi_clamp_and_dp_share_window_anchor_at_15min_mid_hour(monkeypatch):
-    """Regression (finding 3): the v_hi clamp used to filter its window from
-    ``resolution.hour_floor(inputs.now)`` while the DP window (and the export-
-    curve coverage check) uses ``resolution.floor_to_slot(inputs.now,
-    slot_minutes)``. At slot_minutes=15 with ``now`` mid-hour those two
-    anchors diverge by up to 3 slots, so a curve that (correctly) starts at
-    the DP's own window edge used to fail the clamp's stricter coverage check
-    and silently fall back to the ratio-scaled import curve, even though the
-    DP itself used the curve verbatim. Both must now agree.
+def test_dp_window_anchor_at_15min_mid_hour(monkeypatch):
+    """Regression (finding 3): the DP window (and the export-curve coverage
+    check) anchors on ``resolution.floor_to_slot(inputs.now, slot_minutes)``,
+    NOT ``resolution.hour_floor(inputs.now)``. At slot_minutes=15 with ``now``
+    mid-hour those two anchors diverge by up to 3 slots -- a curve that
+    (correctly) starts at the DP's own window edge must be used verbatim, not
+    silently fall back to the ratio-scaled import curve because a stricter
+    hour-floored anchor demanded coverage of already-elapsed quarters the DP
+    window never even spans.
+
+    (The overnight v_hi clamp used to share this same anchor and this same
+    test also pinned that half of the regression; the clamp mechanism was
+    removed by the piecewise per-hour terminal credit -- see the section
+    comment above -- so only the DP-window half remains here.)
     """
     cfg = _wv_cfg()
     now = _WV_BASE + timedelta(minutes=30)  # hour_floor=14:00, floor_to_slot(15)=14:30
@@ -245,15 +211,6 @@ def test_v_hi_clamp_and_dp_share_window_anchor_at_15min_mid_hour(monkeypatch):
 
     monkeypatch.setattr(optimize_mod, "optimize_grid", _fake_optimize_grid)
 
-    clamp_captured: dict = {}
-
-    def _spy_builder(*, max_export_dc_value, v_lo, **_):
-        clamp_captured["max_export_dc_value"] = max_export_dc_value
-        return (v_lo, 0.0)
-
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _spy_builder)
-
-    out: dict = {}
     compute_decision(
         PlanState(ControllerState.PASSIVE, now - timedelta(hours=2), ()),
         PlantInputs(soc=80.0, meter_w=0.0, now=now),
@@ -267,22 +224,12 @@ def test_v_hi_clamp_and_dp_share_window_anchor_at_15min_mid_hour(monkeypatch):
         export_price_matches_import=False,
         export_slots=export_curve,
         slot_minutes=15,
-        _out=out,
     )
 
-    # The DP used the curve verbatim for its own first (14:30) window slot.
+    # The DP used the curve verbatim for its own first (14:30) window slot --
+    # proving the DP window itself is anchored at floor_to_slot, not hour_floor.
     fee = cfg.export_fee_eur_per_kwh
     assert dp_captured["export_price"][0] == pytest.approx(_WV_EXPORT[0] - fee)
-
-    # The v_hi clamp must ALSO have used the curve -- not fallen back to the
-    # ratio-scaled import curve -- proving both share the same window anchor.
-    best_eff = max(optimize_mod.effective_export_price(p, cfg) for p in _WV_EXPORT)
-    expected_clamp = best_eff * cfg.eta_discharge_static() - cfg.cycle_cost_eur_per_kwh
-    assert clamp_captured["max_export_dc_value"] == pytest.approx(expected_clamp)
-
-    # Finding 2 tie-in: the diagnostic must also report the curve as covered.
-    assert out["export_curve_covered"] is True
-    assert out["export_curve_slots"] == len(export_curve)
 
 
 # ---------------------------------------------------------------------------

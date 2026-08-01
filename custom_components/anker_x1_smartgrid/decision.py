@@ -162,8 +162,7 @@ def _dp_select_slots(
     slot_minutes: int = 60,
     dt_h: float = 1.0,
     eta_curve: EfficiencyCurve | None = None,
-    water_value_hi: float | None = None,
-    overnight_need_kwh: float = 0.0,
+    terminal_segments: list[tuple[float, float]] | None = None,
     export_slots: list[PriceSlot] | None = None,
     _out: dict | None = None,
 ) -> tuple[
@@ -449,10 +448,7 @@ def _dp_select_slots(
         hedge_drain_kwh=hedge_drain_kwh,
         dt_h=dt_h,
         eta_curve=eta_curve,
-        # terminal_segments intentionally NOT threaded here (default None,
-        # transitionally inert) -- optimize_grid's water_value_hi/
-        # overnight_need_kwh params were removed in favor of terminal_segments;
-        # wiring real segments through this call site is Task 5.
+        terminal_segments=terminal_segments,
     )
     schedule: list[float] = result["schedule"]
     export_kwh_by_hour: list[float] = result.get("export_schedule", [0.0] * window_len)
@@ -1036,9 +1032,39 @@ def compute_decision(
     # Build per-hour reserve dict (DC kWh) anchored to the next solar pickup, over the
     # two-day reserve intervals.  Feeds BOTH the display horizon (reserve_soc line) and
     # the DP export floor (window-aligned list below).
+    # Task 5 (spec rev-3 fix 4): build the overnight estimate slots BEFORE the
+    # is_cheap map so the reserve walk's forward-min window can see past the
+    # real-price truncation edge into the genuine overnight estimate. Without
+    # this, a truncated real horizon's last hour is trivially "cheap" (its own
+    # forward-min window has no later data to compare against) and the
+    # ride-out walk breaks right there, collapsing the reserve to a few hours
+    # instead of the true overnight need ("is_cheap stub collapse", design doc
+    # point 4). Gated by the same terminal_overnight_credit flag as the
+    # terminal credit below (one umbrella: "use estimates pre-publication");
+    # flag OFF -> _est_slot_list stays [] -> today's real-only map, byte
+    # identical. `_pickup` only needs `horizon_edge` + `intervals_reserve`,
+    # both already built above.
+    _est_slot_list: list[PriceSlot] = []
+    _pickup: datetime | None = None
+    if cfg.terminal_overnight_credit:
+        _pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or _next_synthetic_pickup(
+            horizon_edge
+        )
+        _est_slot_list = (
+            pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)
+            if estimated_tomorrow is not None
+            else []
+        )
+
     # rev-2 ride-to-trough: precompute the cheap-relief map ONCE, thread to the walk.
+    # Widened with the estimated tail (when present, i.e. flag ON) so the
+    # forward-min window sees the estimated tomorrow trough -- estimated slot
+    # OBJECTS still never reach the DP; only their hour/price pair feeds this
+    # dict[datetime, bool] (test_dp_never_sees_estimated_slots stays green).
     _is_cheap = (
-        _build_is_cheap_by_hour(slots, cfg, slot_minutes) if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH else None
+        _build_is_cheap_by_hour(slots + _est_slot_list, cfg, slot_minutes)
+        if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH
+        else None
     )
     _reserve_by_hour = _build_reserve_by_hour(
         inputs.now,
@@ -1096,85 +1122,37 @@ def compute_decision(
         for i in range(_win_len)
     ]
 
-    # --- Overnight terminal credit (two-segment water value) -------------------
+    # --- Overnight terminal credit (piecewise per-hour segments, spec rev-3) ---
     # When the flag is ON, credit end-of-horizon energy that serves the post-
-    # horizon overnight gap [horizon_edge → next solar pickup) at the richer
-    # estimated overnight price (water_value_hi) for the first overnight_need_kwh
-    # above the FIRMWARE floor, with any true surplus still anchored to v_lo.  The
-    # gap is unpriced (last real slot ends at horizon_edge, solar only resumes at
-    # pickup), so its value comes from the persistence estimate (estimated_tomorrow,
-    # non-None on the live tick only).  With no estimate the builder still runs but
-    # returns (v_lo, need) → v_hi=v_lo with the FIRMWARE-floor anchor (spec F4), NOT
-    # the legacy soft-floor terminal.  The parity boundary is the FLAG: OFF →
-    # water_value_hi=None → select_end_state takes the byte-identical legacy branch.
-    water_value_hi: float | None = None
-    overnight_need_kwh: float = 0.0
-    _est_slot_list: list[PriceSlot] = []
+    # horizon overnight gap [horizon_edge → next solar pickup) with one
+    # (dc_kwh, value) segment per PRICED gap hour -- dp_common.select_end_state
+    # consumes the segments richest-first -- replacing the legacy scalar
+    # two-segment credit.  The gap is unpriced (last real slot ends at
+    # horizon_edge, solar only resumes at pickup), so its value comes from the
+    # persistence estimate (estimated_tomorrow, non-None on the live tick
+    # only; `_pickup`/`_est_slot_list` were already built above, feeding the
+    # widened is_cheap map).  With no estimate (or no priced gap hour) the
+    # builder still runs (flag ON) and returns ([], 0.0, v_lo) --
+    # terminal_segments=[] (empty, NOT None) so the credit anchor still shifts
+    # from the soft floor_kwh down to the HARD firmware_floor_kwh (spec F4),
+    # matching the legacy degraded behaviour in valuation terms.  The parity
+    # boundary is the FLAG: OFF → terminal_segments=None → select_end_state
+    # takes the byte-identical legacy branch.
+    terminal_segments: list[tuple[float, float]] | None = None
+    need_kwh: float = 0.0
+    v_hi_mean: float | None = None
     if cfg.terminal_overnight_credit:
-        _pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or _next_synthetic_pickup(
-            horizon_edge
-        )
-        _est_slot_list = (
-            pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)
-            if estimated_tomorrow is not None
-            else []
-        )
         _est_price_by_hour = {s.start: s.price for s in _est_slot_list}
         # Predicted hour-of-day load (W), same source the reserve walk uses.
         _load_by_hod: dict[int, float] = {}
         for _iv in intervals_reserve:
             _load_by_hod[_iv.start.hour] = _iv.load_w
-        # Upper clamp for v_hi = best in-window export DC value (holding can never
-        # beat exporting above this).  Mirrors the DP's own window_export_price
-        # derivation (static flat / same-entity per-hour / ratio-scaled).  Export
-        # off → clamp degrades to v_lo (the refill anchor).
-        if export_price is None:
-            _max_export_dc_value = water_value
-        else:
-            _eta_d = cfg.eta_discharge_static()
-            # Anchor on `_slot_now_h` (this function's own `_dp_window(...,
-            # slot_minutes)` result, computed above) — NOT the hour-floored
-            # `now_h` local. At slot_minutes=60 the two are identical
-            # (parity); at 15-min they diverge by up to 3 slots whenever
-            # `inputs.now` sits outside the hour's first slot, so the old
-            # hour-floor anchor demanded coverage of already-elapsed
-            # quarter-slots the DP window never even spans. A curve
-            # correctly scoped to the DP's own window then failed this
-            # stricter check and silently fell back to ratio-scale while
-            # the DP itself used the curve (window-anchor mismatch).
-            _win_slots = [s for s in slots if _slot_now_h <= s.start < horizon_edge]
-            _win_prices = [s.price for s in _win_slots]
-            # Same span as the DP window ([_slot_now_h, horizon_edge)); every
-            # import slot in it is "required", so coverage here matches the
-            # DP's own all-or-nothing test.  Partial coverage → None → the
-            # legacy branches below.
-            _win_export = _export_window_curve(
-                export_slots,
-                [s.start for s in _win_slots],
-                [True] * len(_win_slots),
-                slot_minutes,
-            )
-            if cfg.price_mode == const.PRICE_MODE_STATIC:
-                _eff = [optimize_mod.effective_export_price(export_price, cfg)]
-            elif _win_export is not None:
-                _eff = [optimize_mod.effective_export_price(p, cfg) for p in _win_export]
-            elif export_price_matches_import:
-                _eff = [optimize_mod.effective_export_price(p, cfg) for p in _win_prices]
-            else:
-                _cur_import = _win_prices[0] if _win_prices else 0.0
-                if _cur_import > 1e-9:
-                    _ratio = export_price / _cur_import
-                    _eff = [optimize_mod.effective_export_price(p * _ratio, cfg) for p in _win_prices]
-                else:
-                    _eff = [optimize_mod.effective_export_price(export_price, cfg)]
-            _max_export_dc_value = (max(_eff) * _eta_d - cfg.cycle_cost_eur_per_kwh) if _eff else water_value
-        water_value_hi, overnight_need_kwh = optimize_mod.overnight_terminal_params(
+        terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
             gap_start=horizon_edge,
             pickup=_pickup,
             est_price_by_hour=_est_price_by_hour,
             load_w_by_hod=_load_by_hod,
             v_lo=water_value,
-            max_export_dc_value=_max_export_dc_value,
             cfg=cfg,
             eta_curve=eta_curve,
         )
@@ -1201,8 +1179,7 @@ def compute_decision(
             slot_minutes=slot_minutes,
             dt_h=dt_h,
             eta_curve=eta_curve,
-            water_value_hi=water_value_hi,
-            overnight_need_kwh=overnight_need_kwh,
+            terminal_segments=terminal_segments,
             _out=_out,
         )
         # Live path: DP replaces heuristic selected slots.
@@ -1218,8 +1195,9 @@ def compute_decision(
             _out["intervals"] = intervals  # P50 intervals for horizon building
             _out["dp_infeasible"] = _dp_infeasible
             _out["export_revenue_eur"] = _dp_export_rev
-            _out["terminal_v_hi"] = water_value_hi
-            _out["terminal_need_kwh"] = overnight_need_kwh
+            _out["terminal_v_hi"] = v_hi_mean
+            _out["terminal_need_kwh"] = need_kwh
+            _out["terminal_segments"] = terminal_segments
     except Exception:
         _LOGGER.warning(
             "DP optimizer path failed; falling back to PASSIVE (no charge slots selected)",
@@ -1343,7 +1321,7 @@ def compute_decision(
             slot_minutes=slot_minutes,
             eta_curve=eta_curve,
             est_slots=_est_slot_list,
-            terminal_need_kwh=overnight_need_kwh,
+            terminal_need_kwh=need_kwh,
         )
     else:
         horizon = plan_mod.build_plan_horizon(

@@ -2,11 +2,17 @@
 
 The DP horizon always ends at ``horizon_edge`` (last priced slot + 1h), so an
 unpriced post-horizon night exists on essentially every plan.  When
-``cfg.terminal_overnight_credit`` is ON, ``compute_decision`` builds
-``(water_value_hi, overnight_need_kwh)`` from the persistence price estimate for
-the gap ``[horizon_edge, next solar pickup)`` and threads them through
-``_dp_select_slots -> optimize_grid -> select_end_state`` so end-of-horizon
-energy that serves the overnight load earns the richer overnight credit.
+``cfg.terminal_overnight_credit`` is ON, ``compute_decision`` builds one
+``(dc_kwh, value)`` piecewise segment per PRICED gap hour
+``[horizon_edge, next solar pickup)`` from the persistence price estimate
+(spec rev-3, :func:`optimize.overnight_terminal_segments`) and threads them
+through ``_dp_select_slots -> optimize_grid -> select_end_state`` so
+end-of-horizon energy that serves the overnight load earns the richer
+per-hour credit.  The same flag also widens the reserve ``is_cheap`` map
+(``decision._build_is_cheap_by_hour``) with the estimated tail so a
+truncated real price horizon's last hour no longer reads "cheap" purely
+because there is no later real data to compare against (design doc point 4,
+"is_cheap tail collapse").
 
 Scenario design
 ---------------
@@ -18,12 +24,15 @@ the pre-publication regime the feature targets.  Behavioural scenarios read the
 DP's chosen terminal SoC directly via a ``select_end_state`` spy, which bypasses
 display-SoC clamping and grid-charge tie-break noise.
 
-Scenarios (spec "Call sites" #1 + "Testing"):
-  * threading pin — the built params reach the builder, ``optimize_grid`` + ``_out``
-  * expensive overnight estimate → DP holds for the night (OFF over-liquidates)
-  * cheap overnight estimate      → v_hi collapses to v_lo → liquidates like OFF
-  * tall evening peak over a cheap-ish est → burst still fires (F1 over-hold band)
-  * flag explicitly False         → water_value_hi=None → byte-identical legacy
+Scenarios:
+  * threading pin — the real per-hour segments reach the builder, ``optimize_grid`` + ``_out``
+  * est hour above the hold-vs-burst hurdle → that hour's load slice is held
+  * est hour below the hurdle               → the tall evening peak still bursts
+  * truncated real horizon ("stub") + a genuine estimated trough deep in the
+    gap → the widened is_cheap map stops the reserve from collapsing at the
+    stub's edge
+  * is_cheap map is widened only when the flag is ON
+  * flag explicitly False → terminal_segments=None → byte-identical legacy
 """
 
 from __future__ import annotations
@@ -62,22 +71,43 @@ _HORIZON_EDGE = BASE + timedelta(hours=13)  # 03:00 next day (last slot 02:00 + 
 _GAP_UTC_HOURS = (3, 4, 5, 6, 7)
 
 
+def _estimate(gap_prices: list[float], fallback: float = 0.05) -> list[float]:
+    """24-entry hour-of-LOCAL-day estimate: one entry per ``_GAP_UTC_HOURS``
+    index (in the given order), ``fallback`` everywhere else.
+
+    ``build_estimated_slots`` indexes the estimate by ``as_local(h).hour``, so
+    the mapping is keyed to the LOCAL hour each gap UTC hour maps to under the
+    harness default timezone (built at call time, not import time).
+    """
+    est = [fallback] * 24
+    for utc_h, price in zip(_GAP_UTC_HOURS, gap_prices):
+        local_h = dt_util.as_local(datetime(2026, 7, 19, utc_h, 0, tzinfo=UTC)).hour
+        est[local_h] = price
+    return est
+
+
 def _expensive_estimate() -> list[float]:
     """24-entry hour-of-LOCAL-day estimate: expensive + gently sloped over the gap
     hours, cheap elsewhere.
 
-    ``build_estimated_slots`` indexes the estimate by ``as_local(h).hour``, so the
-    ramp is keyed to the LOCAL hour each gap UTC hour maps to under the harness
-    default timezone (built at call time, not import time).  The downward slope
-    keeps the ride-out walk from an early is_cheap break so ``need`` spans the
-    night (a flat estimate looks "cheap within its own band" → breaks at h+1).
+    The downward slope keeps every gap hour genuinely priced (no flat-band
+    coincidences) so the segments builder always has real per-hour data to
+    chew on.
     """
-    est = [0.10] * 24
-    ramp = [0.40, 0.40, 0.40, 0.40, 0.30]  # last gap hour is the cheap break
-    for utc_h, price in zip(_GAP_UTC_HOURS, ramp):
-        local_h = dt_util.as_local(datetime(2026, 7, 19, utc_h, 0, tzinfo=UTC)).hour
-        est[local_h] = price
-    return est
+    return _estimate([0.40, 0.40, 0.40, 0.40, 0.30])
+
+
+def _hold_hurdle(cfg: Config, prices: list[float]) -> float:
+    """Hold-vs-burst hurdle price for a gap hour: ``ep_peak_eff - cycle_cost/eta_d``.
+
+    A gap-hour estimate priced above this makes the DP prefer crediting that
+    hour's load-serving slice via the terminal segment over exporting it at
+    the best in-window peak; below it, exporting still wins (the F1 over-hold
+    guard).
+    """
+    eta_d = cfg.eta_discharge_static()
+    ep_peak_eff = optimize_mod.effective_export_price(max(prices), cfg)
+    return ep_peak_eff - cfg.cycle_cost_eur_per_kwh / eta_d
 
 
 def _cfg(**overrides) -> Config:
@@ -161,55 +191,47 @@ def _end_state_kwh(cfg: Config, *, soc: float, prices: list[float], estimated_to
     return captured[-1], out
 
 
+def _row_start(row: dict):
+    return datetime.fromisoformat(row["start"])
+
+
 # ---------------------------------------------------------------------------
-# 1. Threading pins: built params reach the builder, optimize_grid + _out
+# 1. Threading pin: the real per-hour segments reach the builder, optimize_grid
+#    + _out.
 # ---------------------------------------------------------------------------
 
 
 def test_wiring_threads_params_to_optimize_grid_and_out(monkeypatch):
-    """The (v_hi, need) built in the wv block flow to optimize_grid and _out.
+    """The segments built in the wv block flow to optimize_grid and _out.
 
-    Spies replace the builder (returns a sentinel) and ``optimize_grid`` (records
-    the pass-through kwargs), so the test pins the wiring — arguments handed to the
-    builder, and the sentinel forwarded downstream — without depending on the DP's
-    internal end-state arithmetic (covered by the Task 3 helper tests).
+    Wraps the REAL ``overnight_terminal_segments`` builder (records its
+    return value) and the REAL ``optimize_grid`` (records the pass-through
+    kwargs), so the test pins the wiring end-to-end against the actual DP
+    economics rather than a sentinel.
 
-    Task 4 removed optimize_grid's water_value_hi/overnight_need_kwh params in
-    favor of terminal_segments; decision.py's own forwarding into optimize_grid
-    was silenced (not yet re-wired to terminal_segments — that lands in Task 5),
-    so the sentinel now stops at ``_out`` and never reaches optimize_grid's
-    kwargs. Task 5 re-adapts this test to assert real segments threading.
+    Task 4 removed optimize_grid's water_value_hi/overnight_need_kwh params
+    in favor of terminal_segments; decision.py's own forwarding into
+    optimize_grid was silenced (not yet re-wired to terminal_segments — that
+    landed in Task 5). This test now asserts the REAL segments threading.
     """
-    captured_builder: dict = {}
+    captured_builder_returns: list = []
     captured_dp: dict = {}
 
-    def _spy_builder(*, gap_start, pickup, est_price_by_hour, load_w_by_hod, v_lo, max_export_dc_value, cfg, eta_curve):
-        captured_builder.update(
-            gap_start=gap_start,
-            pickup=pickup,
-            est_price_by_hour=est_price_by_hour,
-            load_w_by_hod=load_w_by_hod,
-            v_lo=v_lo,
-            max_export_dc_value=max_export_dc_value,
-            eta_curve=eta_curve,
-        )
-        return (0.99, 3.33)
+    real_builder = optimize_mod.overnight_terminal_segments
+
+    def _spy_builder(*args, **kwargs):
+        result = real_builder(*args, **kwargs)
+        captured_builder_returns.append(result)
+        return result
+
+    real_dp = optimize_mod.optimize_grid
 
     def _spy_dp(*args, **kwargs):
         captured_dp.clear()
         captured_dp.update(kwargs)
-        wl = kwargs["window_len"]
-        return {
-            "schedule": [0.0] * wl,
-            "kwh": 0.0,
-            "eur": 0.0,
-            "export_schedule": [0.0] * wl,
-            "export_kwh": 0.0,
-            "export_revenue_eur": 0.0,
-            "infeasible": False,
-        }
+        return real_dp(*args, **kwargs)
 
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _spy_builder)
+    monkeypatch.setattr(optimize_mod, "overnight_terminal_segments", _spy_builder)
     monkeypatch.setattr(optimize_mod, "optimize_grid", _spy_dp)
 
     cfg = _cfg()
@@ -217,154 +239,181 @@ def test_wiring_threads_params_to_optimize_grid_and_out(monkeypatch):
     out: dict = {}
     _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, out=out)
 
-    # gap = [horizon_edge, synthetic pickup)
-    assert captured_builder["gap_start"] == _HORIZON_EDGE
-    assert captured_builder["pickup"] == _next_synthetic_pickup(_HORIZON_EDGE)
-    # v_lo is the horizon-min water value.
-    assert captured_builder["v_lo"] == pytest.approx(optimize_mod.compute_water_value(min(_PRICES), cfg))
-    # est_price_by_hour == build_estimated_slots over the gap, keyed by start.
-    expected_est = {
-        s.start: s.price
-        for s in pricing_store.build_estimated_slots(est, _HORIZON_EDGE, captured_builder["pickup"])
-    }
-    assert captured_builder["est_price_by_hour"] == expected_est
-    assert expected_est, "gap must be priced by the estimate (non-empty)"
-    assert captured_builder["eta_curve"] is None
+    assert captured_builder_returns, "the live DP path must call overnight_terminal_segments"
+    segments, need, v_hi_mean = captured_builder_returns[-1]
+    assert segments, "gap must be priced by the estimate (non-empty segments)"
 
-    # sentinel stashed on _out regardless (builder computation is untouched)...
-    assert out["terminal_v_hi"] == 0.99
-    assert out["terminal_need_kwh"] == 3.33
-    # ...but Task 4 silenced decision.py's forwarding into optimize_grid, so the
-    # old kwarg names never reach it (transitionally inert until Task 5).
+    # ...the REAL segments reach optimize_grid verbatim...
+    assert captured_dp.get("terminal_segments") == segments
+    # ...and the old (Task 4-removed) kwarg names never reach it.
     assert "water_value_hi" not in captured_dp
     assert "overnight_need_kwh" not in captured_dp
-    assert captured_dp.get("terminal_segments") is None
 
-
-def test_max_export_dc_value_is_best_in_window_export(monkeypatch):
-    """The upper clamp handed to the builder = max_h(eff_export·η_d) − cycle_cost."""
-    captured: dict = {}
-
-    def _spy_builder(*, max_export_dc_value, v_lo, **_):
-        captured["max_export_dc_value"] = max_export_dc_value
-        captured["v_lo"] = v_lo
-        return (v_lo, 0.0)
-
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _spy_builder)
-    cfg = _cfg()
-    _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=_expensive_estimate(), out={})
-
-    eta_d = cfg.eta_discharge_static()
-    best_eff = max(optimize_mod.effective_export_price(p, cfg) for p in _PRICES)  # export == import
-    assert captured["max_export_dc_value"] == pytest.approx(best_eff * eta_d - cfg.cycle_cost_eur_per_kwh)
-
-
-def test_export_off_clamps_max_export_at_v_lo(monkeypatch):
-    """Export disabled → the upper clamp degrades to v_lo (the refill anchor)."""
-    captured: dict = {}
-
-    def _spy_builder(*, max_export_dc_value, v_lo, **_):
-        captured["max_export_dc_value"] = max_export_dc_value
-        captured["v_lo"] = v_lo
-        return (v_lo, 0.0)
-
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _spy_builder)
-    cfg = _cfg()
-    _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=_expensive_estimate(), out={}, export_price=None)
-    assert captured["max_export_dc_value"] == pytest.approx(captured["v_lo"])
+    # ..._out stashes match the builder's own return values.
+    assert out["terminal_v_hi"] == pytest.approx(v_hi_mean)
+    assert out["terminal_need_kwh"] == pytest.approx(need)
+    assert out["terminal_segments"] == segments
 
 
 # ---------------------------------------------------------------------------
-# 2. Expensive overnight estimate → DP holds for the night
+# 2. Est hour above the hold-vs-burst hurdle → the DP holds that hour's slice
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "transitional: two-segment terminal credit inert until terminal_segments is "
-        "threaded (Task 4) and decision wiring lands (Task 5)"
-    ),
-    strict=True,
-)
-def test_truncated_morning_holds_overnight_need():
-    """An expensive overnight estimate makes the DP hold energy it would else burst.
-
-    Flag OFF over-liquidates to the firmware floor (the pre-publication pathology);
-    flag ON, valuing the held energy at the overnight v_hi, ends materially higher.
-    """
-    cfg_on = _cfg()  # terminal_overnight_credit defaults ON
-    cfg_off = _cfg(terminal_overnight_credit=False)
-
-    end_on, out_on = _end_state_kwh(cfg_on, soc=90.0, prices=_PRICES, estimated_tomorrow=_expensive_estimate())
-    end_off, _ = _end_state_kwh(cfg_off, soc=90.0, prices=_PRICES, estimated_tomorrow=_expensive_estimate())
-
-    v_lo = optimize_mod.compute_water_value(min(_PRICES), cfg_on)
-    assert out_on["terminal_v_hi"] is not None
-    assert out_on["terminal_v_hi"] > v_lo  # credit is active (richer than the refill anchor)
-    assert out_on["terminal_need_kwh"] > 0.0
-    # ON retains energy for the night; OFF liquidates to (near) the firmware floor.
-    assert end_on > end_off
-    assert end_on >= cfg_on.firmware_floor_kwh + out_on["terminal_need_kwh"] - 1e-6
-
-
-# ---------------------------------------------------------------------------
-# 3. Cheap overnight estimate → v_hi collapses to v_lo → liquidates like OFF
-# ---------------------------------------------------------------------------
-
-
-def test_cheap_overnight_estimate_keeps_burst():
-    """A cheap overnight estimate → v_hi == v_lo → same liquidation as flag-off."""
-    cfg_on = _cfg()
-    cfg_off = _cfg(terminal_overnight_credit=False)
-    est_cheap = [0.10] * 24  # below v_lo after wear → v_hi floors at v_lo
-
-    end_on, out_on = _end_state_kwh(cfg_on, soc=90.0, prices=_PRICES, estimated_tomorrow=est_cheap)
-    end_off, out_off = _end_state_kwh(cfg_off, soc=90.0, prices=_PRICES, estimated_tomorrow=est_cheap)
-
-    v_lo = optimize_mod.compute_water_value(min(_PRICES), cfg_on)
-    assert out_on["terminal_v_hi"] == pytest.approx(v_lo)
-    # v_hi == v_lo and floor_kwh == firmware_floor_kwh → the two-segment credit
-    # collapses to the legacy single-rate formula → identical terminal + schedule.
-    assert end_on == pytest.approx(end_off)
-    assert out_on["export_request"] == out_off["export_request"]
-
-
-# ---------------------------------------------------------------------------
-# 4. Tall evening peak over a cheap-ish overnight estimate → burst still fires
-# ---------------------------------------------------------------------------
-
-
-def test_tall_peak_over_cheap_overnight_still_bursts():
-    """Guards the F1 over-hold band: ep_eff > gap ⇒ export wins despite the credit.
-
-    Overnight estimate 0.28 is decent, but the 22:00 peak (0.45) clears it after
-    wear (``ep_eff·η_d − cc > v_hi``); the wear-symmetric v_hi must not suppress
-    that genuinely-profitable burst.
+def test_est_hour_above_hurdle_held():
+    """A gap-hour estimate priced above the hold-vs-burst hurdle
+    (``ep_peak_eff - cycle_cost/eta_d``) makes the DP retain that hour's
+    load-serving slice at the end of the horizon, instead of liquidating
+    everything through the evening-peak export like the cheap baseline.
     """
     cfg = _cfg()
+    hurdle = _hold_hurdle(cfg, _PRICES)
+    # Only the FIRST gap hour is priced rich (well above the hurdle); the
+    # rest stay cheap so the "held" and "sold" runs differ by exactly one
+    # segment's worth of credit.
+    est_held = _estimate([hurdle + 0.40, 0.05, 0.05, 0.05, 0.05])
+    est_sold = _estimate([0.05] * 5)
+
+    end_held, out_held = _end_state_kwh(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=est_held)
+    end_sold, out_sold = _end_state_kwh(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=est_sold)
+
+    held_segments = out_held["terminal_segments"]
+    assert held_segments, "the rich gap hour must produce a segment"
+    held_slice_kwh = out_held["terminal_need_kwh"]
+    assert held_slice_kwh > 0.0, "the rich hour's slice must count toward the overnight need"
+    # The cheap baseline's segments are all floored at v_lo -> no genuine need.
+    assert out_sold["terminal_need_kwh"] == 0.0
+
+    # The rich estimate retains materially more energy than the cheap
+    # baseline -- well clear of a single DP bin (~0.05 kWh) so this is not
+    # rounding noise.
+    assert end_held > end_sold + 0.1
+    # Sanity: the held run's terminal SoC is consistent with retaining at
+    # least the rich slice above the hard firmware floor.
+    assert end_held >= cfg.firmware_floor_kwh + held_slice_kwh - 1e-6
+
+
+# ---------------------------------------------------------------------------
+# 3. Est hour below the hurdle → the tall evening peak still bursts (F1 guard)
+# ---------------------------------------------------------------------------
+
+
+def test_est_below_hurdle_sold():
+    """A gap-hour estimate priced below the hold-vs-burst hurdle must not
+    suppress the tall evening-peak export -- the burst still fires.
+
+    Guards the F1 over-hold band: a merely decent (but sub-hurdle) overnight
+    estimate must not out-value a genuinely profitable peak-hour export.
+    """
+    cfg = _cfg()
+    hurdle = _hold_hurdle(cfg, _PRICES)
+    est = _estimate([hurdle - 0.10] * 5)  # clearly below the hurdle, with margin
+
     out: dict = {}
-    _call(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=[0.28] * 24, out=out)
+    _call(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=est, out=out)
 
+    assert out.get("terminal_segments"), "gap must be priced (mechanism engaged) for this to be a real check"
     assert _PEAK_HOUR in out.get("export_request", {}), (
         f"tall 0.45 peak must still export; got {sorted(out.get('export_request', {}))}"
     )
 
 
 # ---------------------------------------------------------------------------
-# 5. Flag explicitly False → byte-identical legacy terminal
+# 4. Truncated real horizon ("stub") → widened is_cheap prevents the reserve
+#    from collapsing at the stub's edge (design doc point 4).
+# ---------------------------------------------------------------------------
+
+# A short real price stub: only 3 hours (14:00, 15:00, 16:00 -> horizon_edge
+# 17:00). Its own last hour (0.13) is trivially "cheap" relative to itself
+# under a real-only is_cheap map -- there is no later real data to compare
+# against -- even though it is far from the genuine overnight relief.
+_STUB_PRICES = [0.20, 0.20, 0.13]
+
+
+def test_truncated_reserve_no_collapse():
+    """With only a short real price stub, the real-only is_cheap map's
+    forward-min window has nothing past the stub to compare against, so the
+    stub's last hour reads "cheap" trivially and the ride-out walk breaks
+    there -- collapsing the reserve to a few hours instead of the true
+    overnight need. Widening the map with the estimated tail (flag ON) fixes
+    this: a genuine estimated trough deep in the gap (near the solar pickup)
+    pulls the forward-min down so the stub's tail no longer reads cheap, and
+    the walk correctly carries the reserve through to the real relief point.
+    """
+    cfg_on = _cfg()  # terminal_overnight_credit defaults ON
+    cfg_off = _cfg(terminal_overnight_credit=False)
+    # Expensive gap except right before the synthetic pickup (08:00 UTC) --
+    # the genuine relief sits deep in the gap, not at the real-price edge.
+    est = _estimate([0.30, 0.30, 0.30, 0.30, 0.02])
+
+    _, _, _, horizon_on, _, _ = _call(cfg_on, soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
+    _, _, _, horizon_off, _, _ = _call(cfg_off, soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
+
+    row_on = next(r for r in horizon_on if _row_start(r) == BASE)
+    row_off = next(r for r in horizon_off if _row_start(r) == BASE)
+
+    # OFF: real-only is_cheap trivially flags the stub's last hour cheap --
+    # the reserve collapses to (near) the short stub's own ride-out.
+    assert row_off["reserve_soc"] < 20.0
+    # ON: widened is_cheap sees past the stub into the genuine overnight need
+    # -- reserve at this (burst) hour reaches materially further than the
+    # collapsed OFF figure.
+    assert row_on["reserve_soc"] > 50.0
+    assert row_on["reserve_soc"] > row_off["reserve_soc"] + 20.0
+
+
+# ---------------------------------------------------------------------------
+# 5. The is_cheap map is widened with the estimated tail ONLY when the flag
+#    is ON.
+# ---------------------------------------------------------------------------
+
+
+def test_is_cheap_real_only_when_flag_off(monkeypatch):
+    """``_build_is_cheap_by_hour`` receives ``slots + est slots`` only when
+    ``terminal_overnight_credit`` is ON; flag OFF keeps today's real-only map
+    (same slot count as the real price horizon)."""
+    real_build = decision._build_is_cheap_by_hour
+    captured_lens: list[int] = []
+
+    def _spy(slots, cfg, slot_minutes=60):
+        captured_lens.append(len(slots))
+        return real_build(slots, cfg, slot_minutes)
+
+    monkeypatch.setattr(decision, "_build_is_cheap_by_hour", _spy)
+
+    est = _expensive_estimate()
+    pickup = _next_synthetic_pickup(_HORIZON_EDGE)
+    n_est_slots = len(pricing_store.build_estimated_slots(est, _HORIZON_EDGE, pickup))
+    assert n_est_slots > 0, "the gap must be estimate-priced for this to be a real check"
+
+    cfg_on = _cfg()  # terminal_overnight_credit defaults ON
+    captured_lens.clear()
+    _call(cfg_on, soc=80.0, prices=_PRICES, estimated_tomorrow=est)
+    assert captured_lens, "is_cheap map must be built (reserve_anchor defaults to trough)"
+    assert captured_lens[-1] == len(_PRICES) + n_est_slots
+
+    cfg_off = _cfg(terminal_overnight_credit=False)
+    captured_lens.clear()
+    _call(cfg_off, soc=80.0, prices=_PRICES, estimated_tomorrow=est)
+    assert captured_lens, "is_cheap map must still be built when the credit flag is off"
+    assert captured_lens[-1] == len(_PRICES)
+
+
+# ---------------------------------------------------------------------------
+# 6. Flag explicitly False → byte-identical legacy terminal
 # ---------------------------------------------------------------------------
 
 
 def test_flag_off_byte_identical(monkeypatch):
-    """Flag False → water_value_hi=None, builder never called, legacy schedule."""
+    """Flag False → terminal_segments=None, builder never called, legacy schedule."""
     calls: list = []
-    real_builder = optimize_mod.overnight_terminal_params
+    real_builder = optimize_mod.overnight_terminal_segments
 
     def _tracking_builder(*a, **k):
         calls.append(1)
         return real_builder(*a, **k)
 
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_params", _tracking_builder)
+    monkeypatch.setattr(optimize_mod, "overnight_terminal_segments", _tracking_builder)
 
     cfg = _cfg(terminal_overnight_credit=False)
     out_est: dict = {}
@@ -375,6 +424,7 @@ def test_flag_off_byte_identical(monkeypatch):
     assert calls == [], "builder must not run when the flag is OFF"
     assert out_est["terminal_v_hi"] is None
     assert out_est["terminal_need_kwh"] == 0.0
+    assert out_est["terminal_segments"] is None
     # The estimate must not leak into the DP result when the flag is OFF.
     assert out_est["export_request"] == out_none["export_request"]
     assert out_est["grid_request"] == out_none["grid_request"]
@@ -382,7 +432,7 @@ def test_flag_off_byte_identical(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 6. Task 3 — the estimated tomorrow tail reaches the live DISPLAY horizon
+# 7. Task 3 — the estimated tomorrow tail reaches the live DISPLAY horizon
 #
 # ``compute_decision`` only threads the tail through ``build_display_horizon``
 # (the ``sun_times is not None`` branch); the degraded ``sun_times=None``
@@ -398,10 +448,6 @@ _SUN_TIMES = (
     BASE + timedelta(hours=18),  # tomorrow_sunrise (08:00 next day)
     BASE + timedelta(hours=30),  # tomorrow_sunset (20:00 next day)
 )
-
-
-def _row_start(row: dict):
-    return datetime.fromisoformat(row["start"])
 
 
 def test_live_horizon_grows_est_tail():
