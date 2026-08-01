@@ -212,7 +212,21 @@ def build_pv_curve_from_watts(
 
     ``step_h`` drives bucket width (1.0h default; 0.25h for 15-min).  At
     ``step_h=1.0`` this reduces byte-identically to the legacy hourly bucketing
-    for a single hourly-cadence source.
+    for a single hourly-cadence source (the sample-and-hold fill below can never
+    fire at step_h=1.0: the next candidate bucket is always exactly 1h away,
+    which fails the strict "< 1h" gate).
+
+    Sample-and-hold gap fill (per source, BEFORE cross-source summing): a coarser-
+    than-``step_h`` cadence (e.g. a 30-min source resampled at step_h=0.25) leaves
+    real buckets with in-between holes. An empty bucket strictly between two real
+    buckets of the SAME source inherits the previous real bucket's value iff that
+    previous real bucket is < 1h older; at/beyond 1h it stays 0.0 (left for the
+    contiguity fill below). After a source's LAST real bucket, the value is
+    mirrored forward for the same duration as the final inter-sample gap (capped
+    at < 1h; a source with only one real bucket, having no gap to mirror, falls
+    back to the flat < 1h cap) — this avoids downstream code doubling/halving
+    energy when it iterates bucket-by-bucket. Leading buckets before a source's
+    first sample stay 0.0 (no look-back).
     """
     sources: list[list[tuple[datetime, float]]] = []
     for group in (today_sources, tomorrow_sources):
@@ -224,6 +238,8 @@ def build_pv_curve_from_watts(
         return []
 
     step_min = max(1, round(step_h * 60))
+    step = timedelta(hours=step_h)
+    hour_cap = timedelta(hours=1)
 
     def _floor(t: datetime) -> datetime:
         minute = (t.minute // step_min) * step_min
@@ -234,9 +250,11 @@ def build_pv_curve_from_watts(
     now_h = _floor(now.astimezone(UTC).replace(tzinfo=UTC))
 
     # Resample EACH source to step_h buckets (mean within bucket) INDEPENDENTLY,
-    # then sum the per-bucket means across sources. A coarse (hourly) source keeps
-    # its full value; a fine (30-min) source averages within its hour — the two
-    # then add, instead of pooling raw samples and diluting the coarse source.
+    # then sample-and-hold fill THIS source's own empty buckets (see docstring),
+    # then sum the per-bucket (real-or-held) values across sources. A coarse
+    # (hourly) source keeps its full value; a fine (30-min) source averages
+    # within its hour — the two then add, instead of pooling raw samples and
+    # diluting the coarse source.
     summed: dict[datetime, float] = {}
     for src in sources:
         buckets: dict[datetime, list[float]] = {}
@@ -246,8 +264,37 @@ def build_pv_curve_from_watts(
             if bucket < now_h:
                 continue
             buckets.setdefault(bucket, []).append(w)
-        for bucket, ws in buckets.items():
-            summed[bucket] = summed.get(bucket, 0.0) + sum(ws) / len(ws)
+        if not buckets:
+            continue
+        real = {bucket: sum(ws) / len(ws) for bucket, ws in buckets.items()}
+        keys = sorted(real)
+        held: dict[datetime, float] = dict(real)
+        n = len(keys)
+        for i, t in enumerate(keys):
+            value = real[t]
+            if i + 1 < n:
+                # Interior gap: hold forward while strictly < 1h old, capped by
+                # the next real bucket (whichever comes first).
+                next_t = keys[i + 1]
+                limit = t + hour_cap
+                b = t + step
+                while b < next_t and b < limit:
+                    held[b] = value
+                    b += step
+            else:
+                # Tail after the source's LAST real bucket: mirror the final
+                # observed inter-sample gap (only if it was < 1h); a lone sample
+                # (no previous gap to mirror) falls back to the flat 1h cap.
+                gap = t - keys[i - 1] if i > 0 else None
+                if gap is not None and gap >= hour_cap:
+                    continue
+                limit = t + (gap if gap is not None else hour_cap)
+                b = t + step
+                while b < limit:
+                    held[b] = value
+                    b += step
+        for bucket, value in held.items():
+            summed[bucket] = summed.get(bucket, 0.0) + value
 
     # Fill every missing bucket between first and last kept bucket with 0.0.
     # This ensures the returned curve is CONTIGUOUS so downstream consumers that

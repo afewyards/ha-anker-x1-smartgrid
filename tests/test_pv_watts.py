@@ -480,6 +480,54 @@ def test_build_pv_curve_from_watts_single_day_no_gap_fill_needed():
 # ===========================================================================
 
 
+# ===========================================================================
+# Sample-and-hold gap fill — per-source, capped at < 1h old
+# (pv-cadence-energy-fix, task 1: fixes live 2x PV-energy doubling caused by
+# a 30-min-cadence source leaving :15/:45 buckets at 0.0 at step_h=0.25)
+# ===========================================================================
+
+
+def _sh(h: int, m: int = 0) -> datetime:
+    """Datetime for 2026-08-02 (sample-and-hold gap-fill test date)."""
+    return datetime(2026, 8, 2, h, m, tzinfo=UTC)
+
+
+def test_30min_source_step15_sample_and_hold():
+    src = [(_sh(11, 0), 386.0), (_sh(11, 30), 2145.0)]
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
+    assert [w for _, w in curve] == [386.0, 386.0, 2145.0, 2145.0]
+    # energy check: sum(w*0.25)/1000 == 0.5*(386+2145)/1000
+    assert sum(w for _, w in curve) * 0.25 / 1000 == pytest.approx(1.2655)
+
+
+def test_hourly_source_step15_fans_flat():
+    src = [(_sh(11, 0), 1200.0), (_sh(12, 0), 800.0)]
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
+    assert [w for _, w in curve] == [1200.0] * 4 + [800.0]
+
+
+def test_hold_capped_at_1h_across_gap():
+    src = [(_sh(11, 0), 1200.0), (_sh(14, 0), 500.0)]
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
+    w = dict((t.strftime("%H:%M"), v) for t, v in curve)
+    assert w["11:15"] == 1200.0 and w["11:45"] == 1200.0  # < 1h hold
+    assert w["12:00"] == 0.0 and w["13:45"] == 0.0  # >= 1h: zero
+    assert w["14:00"] == 500.0
+
+
+def test_step_1h_hourly_byte_identical():
+    src = [(_sh(11, 0), 1200.0), (_sh(13, 0), 700.0)]  # 12:00 gap bucket
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=1.0)
+    assert [w for _, w in curve] == [1200.0, 0.0, 700.0]  # gap stays 0.0 (>= 1h old)
+
+
+def test_cross_source_sum_after_hold():
+    a = [(_sh(11, 0), 386.0), (_sh(11, 30), 2145.0)]  # 30-min
+    b = [(_sh(11, 0), 100.0)]  # hourly
+    curve = build_pv_curve_from_watts([a, b], None, _sh(11, 0), step_h=0.25)
+    assert [w for _, w in curve] == [486.0, 486.0, 2245.0, 2245.0]
+
+
 async def test_read_pv_today_watts_naive_key_treated_as_utc(hass):
     """A watts dict key with NO timezone suffix must be interpreted as UTC 11:00Z.
 
