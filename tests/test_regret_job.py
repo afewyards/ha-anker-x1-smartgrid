@@ -165,3 +165,31 @@ def test_flag_off_passes_none_to_both_cores(monkeypatch):
 
     _assert_none_terminal_segments(captured, "oracle")
     _assert_none_terminal_segments(captured, "shadow")
+
+
+def test_empty_segments_preserved_not_collapsed_to_none(monkeypatch):
+    """Flag ON + D+1 prices present, but every priced gap hour resolves to
+    zero DC draw (zero load, zero idle drain) -> the builder returns real
+    (empty) segments, ``([], 0.0, v_lo)``. Both cores must receive
+    ``terminal_segments == []`` UNCHANGED, not collapsed to None: per design
+    spec sec B/D, an empty-but-non-None list still shifts
+    dp_common.select_end_state's credit anchor to firmware_floor_kwh on a
+    real, priced day -- collapsing it to None would silently strip that
+    anchor shift and diverge from the live decision.py path (Task 5), which
+    passes the builder's raw return through verbatim."""
+    monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
+    captured = _spy_terminal_params(monkeypatch)
+    rec = StubRecorder()
+    cfg = _cfg(idle_drain_w=0.0)
+    _seed_day(rec, DAY, soc_start=60.0, load_w=0.0, import_price=0.20)
+    _seed_day(rec, NEXT, soc_start=60.0, load_w=0.0, import_price=0.30, hours=range(14))
+
+    regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
+
+    assert "oracle" in captured and "shadow" in captured
+    assert captured["oracle"].get("terminal_segments") == []
+    assert captured["shadow"].get("terminal_segments") == []
+    # Symmetric (identical) params on both cores -> no phantom regret bias.
+    row = rec.daily_regret_rows[DAY]
+    assert row["dp_regret_eur"] is not None
+    assert abs(row["dp_regret_eur"]) < 1e-6

@@ -404,14 +404,13 @@ def run_daily_regret(
                     cfg=cfg,
                     eta_curve=None,
                 )
-                # An empty segments list (e.g. every priced gap hour resolves to
-                # zero DC draw) carries a different credit anchor than None in
-                # dp_common.select_end_state (firmware_floor_kwh vs floor_kwh) —
-                # collapse it back to None so a degenerate builder result still
-                # reads as "no real segments" rather than a silently-different
-                # anchor.
-                if not _terminal_segments:
-                    _terminal_segments = None
+                # NOTE: an empty list here (every priced gap hour resolves to
+                # zero DC draw) is passed through UNCHANGED, not collapsed to
+                # None. Per design spec §B/§D, `[]` (non-None) still shifts
+                # dp_common.select_end_state's credit anchor from the soft
+                # floor_kwh to the hard firmware_floor_kwh on a real, priced
+                # day -- only a genuinely absent/unpriced gap (handled above,
+                # before this call) stays at the legacy None anchor.
 
         day_data = regret_mod.DayData(
             pv_kwh=pv_kwh,
