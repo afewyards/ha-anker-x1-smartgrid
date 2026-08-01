@@ -89,13 +89,17 @@ class TestCashEnergyKwh:
         assert charge_kwh == 0.0
         assert export_kwh == pytest.approx(1000.0 / 1000.0 * TICK_H)
 
-    def test_cash_flows_eur_is_energy_times_price(self):
-        from custom_components.anker_x1_smartgrid.optimize import cash_energy_kwh
-
-        charge_kwh, export_kwh = cash_energy_kwh(1500.0, -2000.0, TICK_H)
+    def test_cash_flows_eur_prices_each_leg_with_its_own_tariff(self):
+        # Charge leg: min(1500, 2000) = 1500 W for one tick, at IMPORT price.
         cost, credit = cash_flows_eur(1500.0, -2000.0, 0.30, 0.25, TICK_H)
-        assert cost == pytest.approx(charge_kwh * 0.30)
-        assert credit == pytest.approx(export_kwh * 0.25)
+        assert cost == pytest.approx(1500.0 / 1000.0 * TICK_H * 0.30)
+        assert credit == 0.0
+        # Export leg: min(2500, 2500) = 2500 W for one tick, at EXPORT price.
+        # Expectations are literal, not derived from cash_energy_kwh — a leg
+        # swap (crediting at 0.30) or a delegation slip fails this.
+        cost, credit = cash_flows_eur(-2500.0, 2500.0, 0.30, 0.25, TICK_H)
+        assert cost == 0.0
+        assert credit == pytest.approx(2500.0 / 1000.0 * TICK_H * 0.25)
 
 
 class TestPriceAt:
