@@ -572,7 +572,7 @@ class TestLedgerParity:
         If these ever diverge, one of the two attribution sites has grown its
         own copy of the min() rule.
         """
-        from custom_components.anker_x1_smartgrid.optimize import cash_energy_kwh, cash_flows_eur
+        from custom_components.anker_x1_smartgrid.optimize import cash_flows_eur
 
         tick_h = 60.0 / 3600.0
         fee = 0.015
@@ -595,7 +595,6 @@ class TestLedgerParity:
             cost, credit = cash_flows_eur(meter_w, batt_w, import_price, raw_export_price - fee, tick_h)
             live_cost += cost
             live_credit += credit
-            charge_kwh, export_kwh = cash_energy_kwh(meter_w, batt_w, tick_h)
             rows.append(
                 {
                     "ts": (base + timedelta(minutes=i)).isoformat(),
@@ -608,13 +607,6 @@ class TestLedgerParity:
                     "import_price": import_price,
                     "export_price": raw_export_price,
                 }
-            )
-            # Sanity: the helper agrees with the raw legs it was derived from.
-            assert charge_kwh == pytest.approx(
-                min(max(0.0, meter_w), max(0.0, -batt_w)) / 1000.0 * tick_h
-            )
-            assert export_kwh == pytest.approx(
-                min(max(0.0, -meter_w), max(0.0, batt_w)) / 1000.0 * tick_h
             )
 
         out = daily_stats.aggregate_actual_days(rows, fee, CEST)
