@@ -207,6 +207,78 @@ class TestCashLedgerAccumulate:
         assert ctrl.today_export_revenue_eur == pytest.approx(0.00575)
 
 
+class TestCashLedgerAccumulateEnergyKwh:
+    """Pins that accumulate() also increments today_grid_charge_kwh /
+    today_export_kwh — not just the €-legs exercised above. Deleting either
+    ``+=`` line in ledger.py leaves every €-focused test in this file (and
+    the rest of the 2249-test suite) green, so these assert the kWh fields
+    directly. Expected values are literal arithmetic on the tick's raw W
+    readings, not derived from optimize.cash_energy_kwh, so a bug in that
+    function's attribution — or a leg swap in accumulate() — would still be
+    caught rather than silently agreeing with itself.
+    """
+
+    def test_grid_charge_tick_accumulates_kwh(self):
+        # Same tick as TestCashLedgerAccumulate.test_grid_charge_tick_accumulates_cost:
+        # importing 1500 W while the battery charges 2000 W. Grid-attributed
+        # charge = min(1500, 2000) = 1500 W for one 60s tick.
+        # 1500 W / 1000 * (60/3600) h = 0.025 kWh.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")  # charging
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)  # importing
+        slots = [PriceSlot(start=BASE, price=0.30)]
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        assert ctrl.today_grid_charge_kwh == pytest.approx(0.025)
+        assert ctrl.today_export_kwh == 0.0
+
+    def test_export_tick_accumulates_kwh(self):
+        # Same tick as .../test_export_tick_accumulates_credit_at_effective_price:
+        # exporting 1500 W while the battery discharges 1800 W. Battery-sourced
+        # export = min(1500, 1800) = 1500 W for one 60s tick.
+        # 1500 W / 1000 * (60/3600) h = 0.025 kWh.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "1800.0")  # discharging
+        inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)  # exporting
+        ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, 0.25)
+        assert ctrl.today_export_kwh == pytest.approx(0.025)
+        assert ctrl.today_grid_charge_kwh == 0.0
+
+    def test_export_kwh_accumulates_with_no_export_price(self):
+        # France runs with no export-price entity (raw_export_price=None):
+        # the credit leg is skipped (today_export_revenue_eur stays 0) but
+        # the kWh leg is NOT priced — it must still advance. Same tick as
+        # above: min(1500, 1800) = 1500 W -> 0.025 kWh.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "1800.0")  # discharging
+        inputs = PlantInputs(soc=50.0, meter_w=-1500.0, now=BASE)  # exporting
+        ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, None)
+        assert ctrl.today_export_revenue_eur == 0.0
+        assert ctrl.today_export_kwh == pytest.approx(0.025)
+
+    def test_grid_charge_kwh_accumulates_with_no_import_price(self):
+        # Static-tariff / no-matching-slot case: import price unavailable
+        # (empty slots -> price_at returns None). The cost leg is skipped
+        # (today_charge_cost_eur stays 0) but the kWh leg must still
+        # advance: min(1500, 2000) = 1500 W -> 0.025 kWh.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")  # charging
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)  # importing
+        ctrl._accumulate_cash_ledger(BASE, inputs, [], 60, None)
+        assert ctrl.today_charge_cost_eur == 0.0
+        assert ctrl.today_grid_charge_kwh == pytest.approx(0.025)
+
+    def test_energy_accumulators_compound_across_ticks(self):
+        # `+=` not `=`: two identical charging ticks must double the total.
+        # An accidental assignment would pass every single-tick case above.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")  # charging
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)  # importing
+        slots = [PriceSlot(start=BASE, price=0.30)]
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        ctrl._accumulate_cash_ledger(BASE, inputs, slots, 60, None)
+        assert ctrl.today_grid_charge_kwh == pytest.approx(0.05)
+
+
 class TestCashLedgerRollover:
     def test_rollover_resets_daily_fields_not_total(self):
         ctrl, _hass = _ledger_ctrl()
