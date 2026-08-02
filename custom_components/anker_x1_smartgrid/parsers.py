@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta, timezone, UTC
 
 from . import const
+from .interp import MidpointLinear
 from .models import PriceSlot
 from .resolution import hour_floor
 
@@ -234,7 +235,18 @@ def build_pv_curve_from_watts(
     sample rolled before ``now`` would look like a lone sample and wrongly take
     the flat-1h fallback instead of correctly seeing its real (possibly >= 1h,
     tail-suppressing) gap. Leading buckets before a source's first sample stay
-    0.0 (no look-back).
+    0.0 (no look-back) — see below for how bucket VALUES (as opposed to which
+    buckets are held, i.e. the EMISSION set) are actually derived.
+
+    Bucket VALUES are then re-derived by midpoint-anchored linear interpolation
+    (``interp.MidpointLinear``) over the source's full real-bucket sequence:
+    each real bucket is the mean over its own period and is anchored at that
+    period's centre, and every emitted bucket reads the interpolant at ITS own
+    centre.  Which buckets are emitted is decided entirely by the hold rules
+    above and is unchanged.  A source whose cadence equals ``step_h`` is a
+    byte-exact identity (bucket centre == anchor); a coarser source ramps
+    instead of stepping.  Runs split at gaps > 1h, so a data outage is
+    flat-clamped on both sides rather than smeared into a ramp.
     """
     sources: list[list[tuple[datetime, float]]] = []
     for group in (today_sources, tomorrow_sources):
@@ -317,6 +329,24 @@ def build_pv_curve_from_watts(
                 while b < limit:
                     held[b] = value
                     b += step
+
+        # Values: the emission set above (which buckets exist) is unchanged —
+        # only the VALUES are re-derived, by midpoint-anchored linear
+        # interpolation.  Anchors come from the source's FULL unfiltered bucket
+        # sequence (all_keys), not just the emitted ones, so a bucket's value
+        # never depends on where `now` fell — the curve does not shift under
+        # the plan as the clock advances.  Runs split at gaps > 1h, which
+        # reproduces the old hold behaviour across a data outage (each side is
+        # flat-clamped) while still ramping an exactly-hourly source.  When a
+        # source's cadence equals `step_h`, every bucket centre IS its own
+        # anchor and this is a byte-exact identity.
+        resampler = MidpointLinear([(t, all_real[t]) for t in all_keys])
+        half = step / 2
+        for bucket in held:
+            value = resampler.at(bucket + half)
+            if value is not None:
+                held[bucket] = value
+
         for bucket, value in held.items():
             summed[bucket] = summed.get(bucket, 0.0) + value
 

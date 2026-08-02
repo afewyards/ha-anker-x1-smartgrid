@@ -135,8 +135,8 @@ def test_30min_source_hour_energy_not_doubled():
     """386W@11:00Z + 2145W@11:30Z (30-min cadence) fed at slot_minutes=15.
 
     Task 1's sample-and-hold fill turns this into the dense per-quarter watts
-    curve [386, 386, 2145, 2145] over 11:00/11:15/11:30/11:45Z (the exact
-    worked example in ``build_pv_curve_from_watts``'s own docstring). Task
+    curve [386, 825.75, 1705.25, 2145] over 11:00/11:15/11:30/11:45Z (the
+    exact worked example in ``build_pv_curve_from_watts``'s own docstring). Task
     2's step-function lookup carries those values into the ForecastIntervals
     unfiltered, so the 11:00Z hour's window_pv bucket sum is:
 
@@ -195,8 +195,15 @@ def _hourly_today_watts() -> list[list[tuple[datetime, float]]]:
 
 def test_window_pv_energy_conserved_across_slot_minutes():
     """Full synthetic day, single hourly-cadence PV source: total window_pv
-    energy is identical whether the DP window ticks at slot_minutes=60 or
-    slot_minutes=15 -- resolution must not manufacture or destroy PV energy.
+    energy is (near-)identical whether the DP window ticks at slot_minutes=60
+    or slot_minutes=15 -- resolution must not manufacture or destroy PV energy.
+
+    The fixture is a monotone ramp that is still RISING at the window edge, so
+    midpoint interpolation leaves a boundary residue of exactly
+    step_h/2 * (delta_out - delta_in) = 0.25/2 * 50 W = 6.25 Wh (0.045% of the
+    day).  Interior boundaries telescope out exactly.  A curve that is flat at
+    both edges -- i.e. any real PV day, 0 W at night -- conserves exactly; that
+    case is pinned by test_window_pv_energy_conserved_zero_ended_day below.
     """
     today_watts = _hourly_today_watts()
 
@@ -214,5 +221,31 @@ def test_window_pv_energy_conserved_across_slot_minutes():
 
     expected_kwh = sum(_HOURLY_WATTS) / 1000.0
     assert total_60 == pytest.approx(expected_kwh, abs=1e-6)
-    assert total_15 == pytest.approx(expected_kwh, abs=1e-6)
-    assert total_60 == pytest.approx(total_15, abs=1e-6)
+    assert total_15 == pytest.approx(expected_kwh, abs=0.007)
+    assert total_60 == pytest.approx(total_15, abs=0.007)
+
+
+_T3_BASE = datetime(2026, 8, 4, 0, 0, tzinfo=UTC)
+# Realistic day: dark until 04:00Z, bell through the afternoon, dark from 20:00Z.
+_BELL_WATTS = [0.0] * 4 + [200.0, 600.0, 1100.0, 1600.0, 2000.0, 2200.0, 2300.0, 2200.0,
+                           2000.0, 1600.0, 1100.0, 600.0, 200.0] + [0.0] * 7
+
+
+def test_window_pv_energy_conserved_zero_ended_day():
+    """A PV day that is dark at both window edges conserves energy EXACTLY
+    across slot_minutes -- the interpolation residue is a pure boundary term
+    and both boundaries are flat here."""
+    samples = [(_T3_BASE + timedelta(hours=h), _BELL_WATTS[h]) for h in range(24)]
+    samples.append((_T3_BASE + timedelta(hours=24), 0.0))
+    today_watts = [samples]
+
+    slots_60 = _price_slots(_T3_BASE, 24, 60)
+    total_60 = sum(_run_decision(_cfg(), now=_T3_BASE, slots=slots_60, slot_minutes=60,
+                                 today_watts=today_watts)["args"][0])
+
+    slots_15 = _price_slots(_T3_BASE, 96, 15)
+    total_15 = sum(_run_decision(_cfg(), now=_T3_BASE, slots=slots_15, slot_minutes=15,
+                                 today_watts=today_watts)["args"][0])
+
+    assert total_60 == pytest.approx(sum(_BELL_WATTS) / 1000.0, abs=1e-9)
+    assert total_15 == pytest.approx(total_60, abs=1e-9)

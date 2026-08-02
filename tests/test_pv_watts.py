@@ -492,18 +492,58 @@ def _sh(h: int, m: int = 0) -> datetime:
     return datetime(2026, 8, 2, h, m, tzinfo=UTC)
 
 
-def test_30min_source_step15_sample_and_hold():
+def test_30min_source_step15_interpolates():
+    """A 30-min source at 15-min buckets ramps instead of stepping.
+
+    Anchors sit at the period centres 11:15 (386 W) and 11:45 (2145 W); the
+    four bucket centres are 11:07:30 / 11:22:30 / 11:37:30 / 11:52:30, so the
+    first and last clamp flat and the middle two interpolate.  Hour energy is
+    UNCHANGED from the sample-and-hold version (the ramp is symmetric about
+    the two anchors) — this is the same 1.2655 kWh the cadence-doubling fix
+    pinned.
+    """
     src = [(_sh(11, 0), 386.0), (_sh(11, 30), 2145.0)]
     curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
-    assert [w for _, w in curve] == [386.0, 386.0, 2145.0, 2145.0]
-    # energy check: sum(w*0.25)/1000 == 0.5*(386+2145)/1000
+    assert [w for _, w in curve] == pytest.approx([386.0, 825.75, 1705.25, 2145.0])
     assert sum(w for _, w in curve) * 0.25 / 1000 == pytest.approx(1.2655)
 
 
-def test_hourly_source_step15_fans_flat():
+def test_hourly_source_step15_ramps():
+    """An hourly source at 15-min buckets: flat until the first anchor (11:30),
+    then a ramp toward the 12:30 anchor.  Gap == 1 h does NOT split the run."""
     src = [(_sh(11, 0), 1200.0), (_sh(12, 0), 800.0)]
     curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
-    assert [w for _, w in curve] == [1200.0] * 4 + [800.0]
+    assert [w for _, w in curve] == pytest.approx([1200.0, 1200.0, 1150.0, 1050.0, 950.0])
+
+
+def test_cross_source_sum_after_interp():
+    """Each source interpolates on ITS OWN cadence first, then the per-bucket
+    values sum.  The lone-sample source stays flat (single anchor)."""
+    a = [(_sh(11, 0), 386.0), (_sh(11, 30), 2145.0)]  # 30-min
+    b = [(_sh(11, 0), 100.0)]  # lone sample
+    curve = build_pv_curve_from_watts([a, b], None, _sh(11, 0), step_h=0.25)
+    assert [w for _, w in curve] == pytest.approx([486.0, 925.75, 1805.25, 2245.0])
+
+
+def test_tail_gap_uses_unfiltered_predecessor_not_false_lone_sample():
+    """Fix-round-1 regression (task-1 review, Important finding), still pinned.
+
+    The `now_h` drop filter must not blind the tail rule's gap computation: a
+    genuinely multi-sample source whose second-to-last sample rolled before
+    `now` must NOT look like a lone sample (which would wrongly take the flat
+    1h fallback and fabricate held energy). EMISSION is unchanged — exactly
+    one bucket, no fabricated tail extension.
+
+    The VALUE now interpolates against the pre-`now` 10:00 sample (anchors
+    10:30=1200 and 11:30=800; the 11:00 bucket's centre 11:07:30 is 62.5% of
+    the way across).  That is deliberate: anchors come from the source's FULL
+    unfiltered history, so a bucket's value never depends on where `now` fell
+    and the curve does not shift under the plan as the clock advances.
+    """
+    src = [(_sh(10, 0), 1200.0), (_sh(11, 0), 800.0)]
+    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
+    assert [t for t, _ in curve] == [_sh(11, 0)]
+    assert curve[0][1] == pytest.approx(950.0)
 
 
 def test_hold_capped_at_1h_across_gap():
@@ -521,28 +561,13 @@ def test_step_1h_hourly_byte_identical():
     assert [w for _, w in curve] == [1200.0, 0.0, 700.0]  # gap stays 0.0 (>= 1h old)
 
 
-def test_cross_source_sum_after_hold():
-    a = [(_sh(11, 0), 386.0), (_sh(11, 30), 2145.0)]  # 30-min
-    b = [(_sh(11, 0), 100.0)]  # hourly
-    curve = build_pv_curve_from_watts([a, b], None, _sh(11, 0), step_h=0.25)
-    assert [w for _, w in curve] == [486.0, 486.0, 2245.0, 2245.0]
-
-
-def test_tail_gap_uses_unfiltered_predecessor_not_false_lone_sample():
-    """Fix-round-1 regression (task-1 review, Important finding).
-
-    The `now_h` drop filter must not blind the tail rule's gap computation:
-    a genuinely multi-sample source whose second-to-last sample rolled before
-    `now` must NOT look like a lone sample (which would wrongly take the flat
-    1h fallback and fabricate held energy). The tail's "previous real bucket"
-    must be found in the source's FULL unfiltered sample history — here that
-    is 10:00, one hour before the emitted 11:00 sample, so the >= 1h rule
-    correctly suppresses ANY tail extension, matching a plain two-hourly-
-    sample source with no hold at all.
-    """
-    src = [(_sh(10, 0), 1200.0), (_sh(11, 0), 800.0)]
-    curve = build_pv_curve_from_watts([src], None, _sh(11, 0), step_h=0.25)
-    assert curve == [(_sh(11, 0), 800.0)]
+def test_hourly_source_step60_byte_identical_to_input():
+    """Cadence == bucket width: every bucket centre IS its own anchor, so the
+    resampler is an exact identity.  This is the invariant that protects every
+    pre-15-min deployment."""
+    src = [(_sh(h, 0), 100.0 * h) for h in range(9, 16)]
+    curve = build_pv_curve_from_watts([src], None, _sh(9, 0), step_h=1.0)
+    assert [w for _, w in curve] == [100.0 * h for h in range(9, 16)]
 
 
 async def test_read_pv_today_watts_naive_key_treated_as_utc(hass):
