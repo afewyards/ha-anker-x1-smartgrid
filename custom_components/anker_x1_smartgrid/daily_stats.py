@@ -129,9 +129,17 @@ def aggregate_planned_days(
     preserving the genuine modelled remainder instead of dropping it.
     Clamped at zero.
 
-    ``export_price_at(start) -> float | None`` is caller-supplied (keeps this
-    module HA-free) and MUST already be post-fee — see
+    ``export_price_at(start, import_price) -> float | None`` is caller-supplied
+    (keeps this module HA-free) and MUST already be post-fee — see
     ``optimize.effective_export_price``.  ``None`` zeroes the revenue leg only.
+
+    The row's own ``price`` is handed over because two of the DP's four export
+    valuations are FUNCTIONS OF THE IMPORT CURVE, not of the clock: the
+    ``export_price_matches_import`` branch (same entity, salderen) values
+    export at that slot's import price, and the ratio branch scales the import
+    curve.  A callback that only saw ``start`` had nothing but one flat scalar
+    to answer with, which smeared the current spot price over every future
+    slot — see ``controller._publish_daily_stats``.
     """
     out: dict[date, dict] = {}
     for row in horizon or []:
@@ -150,12 +158,37 @@ def aggregate_planned_days(
         rec["grid_charge_kwh"] += charge_kwh
         rec["grid_export_kwh"] += export_kwh
         price = row.get("price")
-        if price is not None:
-            rec["cost_eur"] += charge_kwh * float(price)
-        export_price = export_price_at(start)
+        import_price = None if price is None else float(price)
+        if import_price is not None:
+            rec["cost_eur"] += charge_kwh * import_price
+        export_price = export_price_at(start, import_price)
         if export_price is not None:
             rec["revenue_eur"] += export_kwh * float(export_price)
     return out
+
+
+def current_import_price(horizon: list[dict] | None, now: datetime) -> float | None:
+    """Import price of the horizon slot containing ``now``.
+
+    Mirrors ``decision.py``'s ``window_price[0]`` — the divisor of the DP's
+    ratio-scale export branch.  Both sides have to read it the same way or the
+    stats table drifts from the plan it is reporting.  Falls back to the
+    earliest priced row when every row is still ahead of ``now``.
+    """
+    best: tuple[datetime, float] | None = None
+    first: tuple[datetime, float] | None = None
+    for row in horizon or []:
+        start = _parse(row.get("start"))
+        price = row.get("price")
+        if start is None or price is None:
+            continue
+        if first is None or start < first[0]:
+            first = (start, float(price))
+        if start <= now and (best is None or start > best[0]):
+            best = (start, float(price))
+    if best is not None:
+        return best[1]
+    return first[1] if first is not None else None
 
 
 def merge_days(

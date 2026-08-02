@@ -1632,7 +1632,9 @@ class Controller:
             "deadline": deadline.isoformat() if deadline else None,
             "planned_grid_hours": _grid_slots * (_slot_minutes / 60.0),
         }
-        self._publish_daily_stats(now, horizon, _export_price, _export_slots, _slot_minutes, delivered_now)
+        self._publish_daily_stats(
+            now, horizon, _export_price, _export_slots, _slot_minutes, delivered_now, _export_matches_import
+        )
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
@@ -1840,13 +1842,33 @@ class Controller:
         export_slots: list[PriceSlot] | None,
         slot_minutes: int,
         delivered_by_hour: dict | None = None,
+        export_matches_import: bool = False,
     ) -> None:
         """Merge cached actuals + live ledger + plan horizon into last_status.
 
         Cheap: the measured half is already cached and the horizon is in
-        memory, so this runs every tick.  Export is valued at the per-slot
-        curve where one is supplied, else the flat entity price; both are put
-        through effective_export_price so the fee is applied exactly once.
+        memory, so this runs every tick.
+
+        Export valuation MIRRORS ``decision.py``'s four-branch ladder, because
+        the table's job is to report what the DP planned — value the same kWh
+        differently and the row stops being the plan's net:
+
+        1. static tariff mode → the configured constant, broadcast flat (never
+           ratio-scaled: a fixed credit must not swing with an HP/HC import
+           schedule);
+        2. an explicit per-slot export curve → that slot's price;
+        3. ``export_matches_import`` (one entity for both, i.e. salderen) →
+           THAT ROW's import price.  ``_resolve_export_slots`` returns [] for
+           this config by design, so branch 2 never fires and the old flat
+           fallback booked every future slot at the current spot — live on
+           2026-08-02 that valued a 0.36 €/kWh evening peak at 0.2319 and
+           under-reported today's net by €1.36;
+        4. otherwise → the import curve ratio-scaled by
+           ``export_price / current import``.
+
+        Every branch goes through ``effective_export_price`` so the feed-in fee
+        is subtracted exactly once.  A ``None`` export price zeroes the revenue
+        leg only, matching the DP's own "no export credit" branch.
 
         ``delivered_by_hour`` is the SAME dict this tick handed to
         ``plan.build_display_horizon``, so the delivered add-back subtracted
@@ -1856,10 +1878,21 @@ class Controller:
         """
         _curve = resolution.resample_price_map(export_slots, slot_minutes) if export_slots else {}
         _flat = optimize_mod.effective_export_price(export_price, self.cfg) if export_price is not None else None
+        _static = self.cfg.price_mode == const.PRICE_MODE_STATIC
+        _cur_import = daily_stats.current_import_price(horizon, now)
 
-        def _export_price_at(start: datetime) -> float | None:
+        def _export_price_at(start: datetime, import_price: float | None) -> float | None:
             _raw = _curve.get(start)
-            return _flat if _raw is None else optimize_mod.effective_export_price(_raw, self.cfg)
+            if _raw is not None:
+                return optimize_mod.effective_export_price(_raw, self.cfg)
+            if _static or export_price is None or import_price is None:
+                return _flat
+            if export_matches_import:
+                return optimize_mod.effective_export_price(import_price, self.cfg)
+            if _cur_import is not None and _cur_import > 1e-9:
+                _scaled = import_price * (export_price / _cur_import)
+                return optimize_mod.effective_export_price(_scaled, self.cfg)
+            return _flat
 
         def _delivered_at(start: datetime) -> float:
             # hour_floor matches plan.build_horizon's own lookup key for

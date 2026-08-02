@@ -183,7 +183,7 @@ def _plan_row(start: datetime, **cols) -> dict:
     return base
 
 
-def _flat_export(_start):
+def _flat_export(_start, _import_price):
     return 0.20
 
 
@@ -218,7 +218,7 @@ class TestAggregatePlannedDays:
         horizon = [
             _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), grid_export_kwh=1.5, grid_charge_kwh=1.0, mode="export"),
         ]
-        out = daily_stats.aggregate_planned_days(horizon, lambda _s: None, CEST)
+        out = daily_stats.aggregate_planned_days(horizon, lambda _s, _p: None, CEST)
         day = out[date(2026, 8, 2)]
         assert day["revenue_eur"] == 0.0
         assert day["grid_export_kwh"] == pytest.approx(1.5)
@@ -232,8 +232,26 @@ class TestAggregatePlannedDays:
             _plan_row(peak, grid_export_kwh=1.0, mode="export"),
             _plan_row(off, grid_export_kwh=1.0, mode="export"),
         ]
-        out = daily_stats.aggregate_planned_days(horizon, lambda s: curve.get(s), CEST)
+        out = daily_stats.aggregate_planned_days(horizon, lambda s, _p: curve.get(s), CEST)
         assert out[date(2026, 8, 2)]["revenue_eur"] == pytest.approx(0.45)
+
+    def test_callback_receives_each_rows_own_import_price(self):
+        # The DP values export off the IMPORT curve whenever import and export
+        # point at the same entity (salderen). The table can only mirror that
+        # if the callback sees each row's own price, not just its timestamp —
+        # with a timestamp alone the caller has nothing but one flat scalar.
+        horizon = [
+            _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), price=0.40, grid_export_kwh=1.0, mode="export"),
+            _plan_row(datetime(2026, 8, 2, 11, 0, tzinfo=UTC), price=0.05, grid_export_kwh=1.0, mode="export"),
+        ]
+        out = daily_stats.aggregate_planned_days(horizon, lambda _s, price: price, CEST)
+        assert out[date(2026, 8, 2)]["revenue_eur"] == pytest.approx(0.45)
+
+    def test_callback_receives_none_when_the_row_carries_no_price(self):
+        horizon = [_plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), price=None, grid_export_kwh=1.0, mode="export")]
+        seen = []
+        daily_stats.aggregate_planned_days(horizon, lambda _s, price: seen.append(price) or 0.10, CEST)
+        assert seen == [None]
 
     def test_buckets_on_the_local_day(self):
         # 22:30Z is 00:30 the next day in CEST.
@@ -282,9 +300,7 @@ class TestAggregatePlannedDaysInProgressSlot:
         assert out[date(2026, 8, 2)]["grid_charge_kwh"] == pytest.approx(0.5 + self.DELIVERED)
 
     def test_delivered_add_back_is_subtracted_from_the_remaining_slots(self):
-        out = daily_stats.aggregate_planned_days(
-            self._quarters(0.5), _flat_export, CEST, self.NOW, self._delivered_at
-        )
+        out = daily_stats.aggregate_planned_days(self._quarters(0.5), _flat_export, CEST, self.NOW, self._delivered_at)
         day = out[date(2026, 8, 2)]
         # Only 10:45 survives, and its 2.5 is the 0.5 modelled remainder plus
         # the 2.0 the ledger already holds. Without BOTH guards this reads
@@ -296,9 +312,7 @@ class TestAggregatePlannedDaysInProgressSlot:
         # The delivered dict only ever holds the current clock-hour, so a
         # later slot must keep its full modelled energy.
         later = _plan_row(datetime(2026, 8, 2, 17, 0, tzinfo=UTC), grid_charge_kwh=3.0, mode="grid")
-        out = daily_stats.aggregate_planned_days(
-            [later], _flat_export, CEST, self.NOW, self._delivered_at
-        )
+        out = daily_stats.aggregate_planned_days([later], _flat_export, CEST, self.NOW, self._delivered_at)
         assert out[date(2026, 8, 2)]["grid_charge_kwh"] == pytest.approx(3.0)
 
     def test_subtraction_clamps_at_zero(self):
@@ -319,9 +333,7 @@ class TestAggregatePlannedDaysInProgressSlot:
 
 def _totals(charge=0.0, export=0.0, cost=0.0, revenue=0.0) -> dict:
     out = daily_stats.new_day_totals()
-    out.update(
-        {"grid_charge_kwh": charge, "grid_export_kwh": export, "cost_eur": cost, "revenue_eur": revenue}
-    )
+    out.update({"grid_charge_kwh": charge, "grid_export_kwh": export, "cost_eur": cost, "revenue_eur": revenue})
     return out
 
 

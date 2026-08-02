@@ -178,6 +178,124 @@ class TestPublishDailyStats:
         # 2.0 x (0.40-0.02) + 1.0 x (0.10-0.02) + 1.0 x (0.22-0.02) uncovered
         assert future["revenue_eur"] == pytest.approx(0.76 + 0.08 + 0.20)
 
+    async def test_matching_export_entity_prices_each_slot_off_the_import_curve(self):
+        """The lab / salderen config: ``ent_export_price == ent_price``.
+
+        ``_resolve_export_slots`` returns [] for that config BY DESIGN (a curve
+        would just duplicate the import curve), so the curve branch never fires
+        and every future export slot fell through to the flat CURRENT price.
+        Live on 2026-08-02 that booked an evening peak of 0.36 €/kWh at the
+        midday spot of 0.2319, under-reporting today's net by €1.36.
+
+        ``decision.py`` values this config at ``import price − fee`` per slot
+        (the ``export_price_matches_import`` branch); the table must agree.
+        """
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {}
+        ctrl._daily_actuals_day = None
+        ctrl.cfg = replace(ctrl.cfg, export_fee_eur_per_kwh=0.02)
+
+        now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+        horizon = [
+            {
+                "start": start.isoformat(),
+                "price": price,
+                "grid_charge_kwh": 0.0,
+                "grid_export_kwh": 1.0,
+                "estimated": False,
+                "mode": "export",
+            }
+            for start, price in (
+                (datetime(2026, 8, 2, 17, 0, tzinfo=UTC), 0.36),
+                (datetime(2026, 8, 2, 11, 0, tzinfo=UTC), 0.12),
+            )
+        ]
+        ctrl._publish_daily_stats(
+            now,
+            horizon,
+            export_price=0.2319,
+            export_slots=None,
+            slot_minutes=60,
+            export_matches_import=True,
+        )
+
+        future = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "plan")
+        # 1.0 x (0.36-0.02) + 1.0 x (0.12-0.02) — NOT 2.0 x (0.2319-0.02).
+        assert future["revenue_eur"] == pytest.approx(0.34 + 0.10)
+
+    async def test_separate_scalar_export_entity_ratio_scales_the_import_curve(self):
+        """Mirrors ``decision.py``'s fourth branch: a distinct export entity with
+
+        no per-slot price attribute. The DP scales the import curve by
+        ``export_price / current_import``; the flat fallback would instead
+        smear one price over every slot and lose the curve's shape entirely.
+        """
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {}
+        ctrl._daily_actuals_day = None
+        ctrl.cfg = replace(ctrl.cfg, export_fee_eur_per_kwh=0.0)
+
+        now = datetime(2026, 8, 1, 10, 30, tzinfo=UTC)
+        horizon = [
+            # The slot containing `now` — supplies cur_import, exactly as
+            # decision.py's window_price[0] does.
+            {
+                "start": datetime(2026, 8, 1, 10, 0, tzinfo=UTC).isoformat(),
+                "price": 0.40,
+                "grid_charge_kwh": 0.0,
+                "grid_export_kwh": 0.0,
+                "estimated": False,
+                "mode": "actual",
+            },
+            {
+                "start": datetime(2026, 8, 2, 17, 0, tzinfo=UTC).isoformat(),
+                "price": 0.80,
+                "grid_charge_kwh": 0.0,
+                "grid_export_kwh": 1.0,
+                "estimated": False,
+                "mode": "export",
+            },
+        ]
+        # export 0.20 against a current import of 0.40 → ratio 0.5.
+        ctrl._publish_daily_stats(now, horizon, export_price=0.20, export_slots=None, slot_minutes=60)
+
+        future = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "plan")
+        assert future["revenue_eur"] == pytest.approx(1.0 * 0.80 * 0.5)
+
+    async def test_static_tariff_mode_never_tracks_the_import_curve(self):
+        """Static mode broadcasts the configured constant flat — the same rule
+
+        ``decision.py`` states explicitly: ratio-scaling a fixed export credit
+        would make it swing with an HP/HC import schedule.
+        """
+        from custom_components.anker_x1_smartgrid import const
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._daily_actuals = {}
+        ctrl._daily_actuals_day = None
+        ctrl.cfg = replace(ctrl.cfg, export_fee_eur_per_kwh=0.0, price_mode=const.PRICE_MODE_STATIC)
+
+        now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+        horizon = [
+            {
+                "start": datetime(2026, 8, 2, 17, 0, tzinfo=UTC).isoformat(),
+                "price": 0.30,  # HP hour — must NOT leak into the export leg
+                "grid_charge_kwh": 0.0,
+                "grid_export_kwh": 2.0,
+                "estimated": False,
+                "mode": "export",
+            }
+        ]
+        ctrl._publish_daily_stats(now, horizon, export_price=0.10, export_slots=None, slot_minutes=60)
+
+        future = next(r for r in ctrl.last_status["daily_stats"] if r["source"] == "plan")
+        assert future["revenue_eur"] == pytest.approx(2.0 * 0.10)
+
     async def test_todays_row_does_not_count_the_in_progress_hour_twice(self):
         """Review finding I1, at the 15-min resolution both deployments run.
 
