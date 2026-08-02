@@ -276,10 +276,10 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (
         const.CONF_CHARGE_WINDOW_PRICE_BAND,
         const.DEFAULT_CHARGE_WINDOW_PRICE_BAND,
-        # 0.05 €/kWh ceiling: an order of magnitude above the default and far
-        # past the point where charge_margin + cycle_cost stop admitting new
-        # hours anyway, so it bounds typos without constraining real tuning.
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.05)),
+        # 0.1 €/kWh ceiling: well past the point where charge_margin +
+        # cycle_cost stop admitting new hours anyway, so it bounds typos
+        # without constraining real tuning.
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.1)),
     ),
     (
         const.CONF_EXPORT_FEE_EUR_PER_KWH,
