@@ -33,7 +33,8 @@ type: custom:config-template-card
 # Listed entities trigger a re-render (and thus a graph_span recompute) on update.
 entities:
   - sensor.smartgrid_plan
-  - sensor.smartgrid_battery_net_today
+  # Source of the subtitle's today net (see NET below).
+  - sensor.smartgrid_daily_stats
   # Required for the header title to refresh when the predictor tier or its
   # ETA changes — config-template-card only re-renders on LISTED entities.
   - sensor.smartgrid_active_load_model
@@ -45,12 +46,20 @@ variables:
   # Zonneplan/Frank tariff ends. The plan sensor still EMITS the tail —
   # the DP needs it for terminal value — this only stops drawing it.
   HR: (states['sensor.smartgrid_plan'].attributes.horizon || []).filter(function (h) { return !h.estimated; })
-  PNL: states['sensor.smartgrid_plan'].attributes.arbitrage_pnl
-  # Realized battery cash net for today (spec 2026-07-10). Guarded: missing
-  # entity or unknown/unavailable state renders as null, not NaN.
+  # Today's battery cash net: measured so far PLUS the plan's remainder for the
+  # rest of the LOCAL day — the same figure the daily-stats table's today row
+  # carries. Deliberately NOT the plan sensor's arbitrage_pnl, which spans the
+  # whole ~42h horizon and so answered a different question than the subtitle
+  # implied (a two-day number sitting next to a one-day one).
+  #
+  # Matched on the local date rather than taken as the last row: the table also
+  # carries FUTURE days whenever tomorrow's real tariff has published, so the
+  # today row is not the tail. `new Date()` is browser-local, the same clock
+  # graph_span above already uses.
+  #
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
   # YAML plain scalar ("mapping values are not allowed here").
-  TODAY: "(states['sensor.smartgrid_battery_net_today'] && !isNaN(Number(states['sensor.smartgrid_battery_net_today'].state))) ? Number(states['sensor.smartgrid_battery_net_today'].state) : null"
+  NET: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].net_eur))) return Number(rows[i].net_eur); } return null; })()"
   # Predictor tier status (spec 2026-07-21). Guarded on both the entity and the
   # attribute so a restart mid-render shows "—" rather than "undefined".
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
@@ -198,16 +207,15 @@ card:
     stroke:
       dashArray: [0, 0, 0, 0, 0, 0, 0]
     subtitle:
-      # Realized cash net today (green/red by sign) + the plan's still-
-      # expected export revenue. Either half drops out when its source is
-      # missing; the separator only renders when both are present.
-      text: "${ (TODAY != null ? 'Today ' + (TODAY >= 0 ? '+' : '') + TODAY.toFixed(2) + ' €' : '') + (TODAY != null && PNL != null ? '  ·  ' : '') + (PNL != null ? 'Plan ' + (PNL >= 0 ? '+' : '') + Number(PNL).toFixed(2) + ' €' : '') }"
+      # Today's net only — one number, green/red by sign. Reads "—" until the
+      # stats table has published (first tick after a restart).
+      text: "${ NET != null ? 'Today ' + (NET >= 0 ? '+' : '') + NET.toFixed(2) + ' €' : 'Today —' }"
       align: left
       offsetY: 4
       style:
         fontSize: "13px"
         fontWeight: 600
-        color: "${ TODAY != null && TODAY < 0 ? '#ef4444' : '#10b981' }"
+        color: "${ NET != null && NET < 0 ? '#ef4444' : '#10b981' }"
     legend:
       show: true
       position: bottom
