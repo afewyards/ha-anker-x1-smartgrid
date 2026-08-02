@@ -90,6 +90,10 @@ def build_display_intervals(
         # curves (synth_pv_curve / arrays anchored at now/sunrise, degraded-data
         # fallback paths only) read one point LATER than the old hour-sum did —
         # a <=1-slot temporal shift, energy-conserved.
+        # Caveat: with a source that truncates mid-generation, this <1h hold
+        # composes with the from_watts cadence tail-fill (parsers.py) to <2h of
+        # last-value extrapolation (never occurs live — every real source ends
+        # in explicit trailing zeros).
         # Precondition: pv_curve is expected to carry at most one point per
         # timestamp (all four parsers.py builders guarantee this). Points sharing
         # a timestamp are NOT summed here; the cursor keeps only the last one.

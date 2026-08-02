@@ -115,6 +115,12 @@ center == anchor → **byte-identical to the current output**.
 `build_display_intervals`' D2 cursor lookup needs no change: with the curve on the slot
 grid, the "last point at or before slot start, < 1 h old" rule resolves to exact matches.
 
+There is a fifth PV builder call site, `decision.py:943`
+(`synth_pv_curve(pv_remaining, inputs.now, horizon_edge)`) — the deepest fallback, reached
+only with no watts **and** no sun times **and** no arrays — which deliberately stays hourly.
+It is energy-safe (it normalises power as `energy_wh / step_h`, so an hourly mean across
+four quarters reconstructs the hour), only shape-coarse.
+
 ### D. Load — `plan.build_display_intervals`
 
 > **Amended during implementation.** The original rule — "predict for `hour_floor(slot)`
@@ -145,6 +151,19 @@ interpolation preserves; leaving it alone keeps the blast radius at one function
 Recorded concern (raised, user accepted): the hourly load profile carries no sub-hourly
 information, so this ramp is drawn precision, not measured precision — and it shifts
 per-slot load inside the DP. PV differs: it has genuine 30-min source data.
+
+**Scope note: the identity argument is tier-conditional.** The claim above — "the four
+quarters carried one repeated hourly value, now merely redistributed" — holds for the
+`remote`, `bucketed` and `profile` predictor tiers, which all key on the hour and are
+minute-agnostic: for them this change is a pure redistribution of an already-identical
+value, energy-conserving and shape-only. It does **not** hold for the local `hgbr` tier
+(`controller.py:657`): its lag features (`t−1h`, `t−24h`, `t−168h`, rolling-mean-24h) are
+looked up on exact hour boundaries in `featureset.py:291-299`, so at `slot_minutes=15` the
+OLD per-slot `predict` call produced NaN lags on three of every four quarters — the four
+quarters did *not* carry one value on that tier. On `hgbr`, calling `predict` once per hour
+(this change) is a genuine fix, not a redistribution, and its effect on the plan's total
+load energy is not bounded by the ±1.90% € envelope Task 5 measured — that comparison fed
+identical hourly energy in both shapes, which is exactly the assumption `hgbr` violates.
 
 ### E. Card — no change
 

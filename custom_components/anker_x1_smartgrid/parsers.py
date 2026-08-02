@@ -341,7 +341,14 @@ def build_pv_curve_from_watts(
         # reproduces the old hold behaviour across a data outage (each side is
         # flat-clamped) while still ramping an exactly-hourly source.  When a
         # source's cadence equals `step_h`, every bucket centre IS its own
-        # anchor and this is a byte-exact identity.
+        # anchor and this is a byte-exact identity.  Energy conservation across
+        # the emitted window is exact only when both edges are flat: because
+        # anchors come from unfiltered history while emission starts at `now_h`,
+        # a mid-day rebuild's leading edge sits mid-ramp and the boundary term
+        # does not vanish — bounded in practice (~25-30 Wh for a 30-min source on
+        # a steep midday ramp, well under €0.01).  Unfiltered anchors are still
+        # the right choice: it's what stops the curve shifting under the plan as
+        # the clock advances.
         resampler = MidpointLinear([(t, all_real[t]) for t in all_keys])
         half = step / 2
         for bucket in held:
@@ -406,7 +413,11 @@ def build_two_day_pv_curve(
     ):
         # Snap to the hour boundary at/after the gap start so the first fill point
         # abuts today's last curve point (if any) with neither gap nor overlap.
-        # NOTE: the snap and stride both assume step_h=1.0 (the only value callers pass).
+        # NOTE: callers now pass sub-hour step_h (decision.py, plan.py). The stride below
+        # follows step_h, but this snap stays hour-aligned (hour_floor, then += 1h) —
+        # harmless: build_intervals derives dt_h from point spacing, so the dusk-transition
+        # interval self-describes, and build_display_intervals' D2 lookup tolerates a
+        # non-uniform grid.
         gap_start = max(today_sunset, now)
         fill = hour_floor(gap_start)
         if fill < gap_start:
