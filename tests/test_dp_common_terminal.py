@@ -139,9 +139,12 @@ class TestPiecewiseTwoSegmentsPlusSurplus:
         #   end_b=4 (avail=4, seg1+seg2 exactly):    2*0.30 + 2*0.20          = 1.00
         #   end_b=6 (avail=6, 2 kWh surplus @ v_lo): 2*0.30 + 2*0.20 + 2*0.05 = 1.10
         # score(b) = dp[b] - credit(b):
-        assert self.COST_PER_BIN * 2 - 0.60 == pytest.approx(-0.10)
-        assert self.COST_PER_BIN * 4 - 1.00 == pytest.approx(0.0)
-        assert self.COST_PER_BIN * 6 - 1.10 == pytest.approx(0.40)
+        score_at_2 = self.COST_PER_BIN * 2 - 0.60
+        score_at_4 = self.COST_PER_BIN * 4 - 1.00
+        score_at_6 = self.COST_PER_BIN * 6 - 1.10
+        assert score_at_2 == pytest.approx(-0.10)
+        assert score_at_4 == pytest.approx(0.0)
+        assert score_at_6 == pytest.approx(0.40)
         # -0.10 < 0.0 < 0.40 -- the optimum sits at the end of seg1: marginal
         # cost 0.25 beats seg1's 0.30 but loses to seg2's 0.20, so the DP
         # charges through seg1 and stops there.

@@ -123,10 +123,7 @@ def test_export_price_none_disables_credit_even_with_curve(monkeypatch):
 def test_export_curve_at_finer_resolution_than_window(monkeypatch):
     """A 15-min export curve forward-fills onto a 60-min window grid."""
     cfg = _cfg()
-    fine = [
-        PriceSlot(BASE + timedelta(minutes=15 * i), EXPORT_PRICES[i // 4], duration_min=15.0)
-        for i in range(16)
-    ]
+    fine = [PriceSlot(BASE + timedelta(minutes=15 * i), EXPORT_PRICES[i // 4], duration_min=15.0) for i in range(16)]
     captured = _run(cfg, monkeypatch, export_price=0.05, export_slots=fine)
     fee = cfg.export_fee_eur_per_kwh
     assert captured["export_price"] == pytest.approx([p - fee for p in EXPORT_PRICES])

@@ -34,6 +34,7 @@ def _build_config(options: dict, **overrides) -> Config:
 
 def _build_eta_curve(curve_dict: dict) -> EfficiencyCurve:
     """Reconstruct EfficiencyCurve from the plan sensor attribute dict."""
+
     def _bins(raw: list[dict], direction: str) -> list[BinStat]:
         return [
             BinStat(
@@ -49,6 +50,7 @@ def _build_eta_curve(curve_dict: dict) -> EfficiencyCurve:
             )
             for b in raw
         ]
+
     charge_bins = _bins(curve_dict["charge"], "charge")
     discharge_bins = _bins(curve_dict["discharge"], "discharge")
     fc = charge_bins[0].eta if charge_bins else 0.92
@@ -65,12 +67,14 @@ def _build_slots_and_intervals(horizon: list[dict], now: datetime):
         if start < now:
             continue
         slots.append(PriceSlot(start=start, price=row["price"]))
-        intervals.append(ForecastInterval(
-            start=start,
-            pv_w=row.get("pv_w", 0.0),
-            load_w=row.get("load_w", 400.0),
-            dt_h=1.0,
-        ))
+        intervals.append(
+            ForecastInterval(
+                start=start,
+                pv_w=row.get("pv_w", 0.0),
+                load_w=row.get("load_w", 400.0),
+                dt_h=1.0,
+            )
+        )
     return slots, intervals
 
 

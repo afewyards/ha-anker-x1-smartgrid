@@ -52,10 +52,7 @@ def test_parse_price_curve_drops_non_finite_prices():
 
 def test_parse_price_curve_zonneplan_regression_durations_and_scale():
     """Zonneplan decode is byte-identical: ÷PRICE_SCALE, 60-min derived durations."""
-    attr = [
-        {"datetime": f"2026-06-20T{h:02d}:00:00.000000Z", "electricity_price": 1000000 + h}
-        for h in range(6)
-    ]
+    attr = [{"datetime": f"2026-06-20T{h:02d}:00:00.000000Z", "electricity_price": 1000000 + h} for h in range(6)]
     slots = parsers.parse_price_curve(attr)
     assert [s.duration_min for s in slots] == [60.0] * 6
     assert slots[3].price == pytest.approx(1000003 / 1e7)

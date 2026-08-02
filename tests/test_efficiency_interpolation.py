@@ -35,8 +35,8 @@ def _bin(i, eta, *, confident, reason="", measured="auto", direction="discharge"
 
 
 def test_bin_midpoint_w_uses_lo_for_unbounded_top_bin():
-    assert _bin_midpoint_w(_bin(2, 0.9, confident=True)) == 1150.0   # [800,1500)
-    assert _bin_midpoint_w(_bin(5, 0.9, confident=True)) == 4000.0   # [4000, inf) -> lo_w
+    assert _bin_midpoint_w(_bin(2, 0.9, confident=True)) == 1150.0  # [800,1500)
+    assert _bin_midpoint_w(_bin(5, 0.9, confident=True)) == 4000.0  # [4000, inf) -> lo_w
 
 
 def test_interp_between_two_anchors_discharge():
@@ -109,7 +109,7 @@ def test_over_unity_bin_excluded_as_anchor_but_rewritten():
     assert math.isclose(out[2].eta, expected, rel_tol=1e-12)
     assert out[2].eta <= 1.0
     assert out[2].fallback_reason == "over_unity"  # reason string preserved
-    assert out[2].measured == 1.05                 # raw measured preserved
+    assert out[2].measured == 1.05  # raw measured preserved
     assert out[2].confident is False
 
 
@@ -178,7 +178,7 @@ def test_aggregate_interpolates_gated_bins_through_the_gate():
     dc["discharge"][1] = 5.0
     etas["discharge"][5] = [(0.9879, 0.5)] * 10
     dc["discharge"][5] = 5.0
-    etas["discharge"][3] = [(0.90, 0.5)] * 3      # n=3 -> low_confidence
+    etas["discharge"][3] = [(0.90, 0.5)] * 3  # n=3 -> low_confidence
     dc["discharge"][3] = 1.5
     out = EfficiencyCurve._aggregate("discharge", etas, dc, 0.9239)
     assert out[1].confident is True and out[5].confident is True
@@ -186,4 +186,4 @@ def test_aggregate_interpolates_gated_bins_through_the_gate():
     expected = 0.9658 + (0.9879 - 0.9658) * (2000.0 - 600.0) / (4000.0 - 600.0)
     assert math.isclose(out[3].eta, expected, rel_tol=1e-12)
     assert out[3].measured == 0.90  # median preserved; only eta rewritten
-    assert out[0].eta == 0.9658     # no_data bin0 flat-extended, not 0.9239
+    assert out[0].eta == 0.9658  # no_data bin0 flat-extended, not 0.9239

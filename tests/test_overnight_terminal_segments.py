@@ -54,9 +54,7 @@ def test_empty_gap_returns_empty_segments_zero_need_and_v_lo():
 
 
 def test_gap_start_after_pickup_is_empty():
-    segs, need, v_hi = overnight_terminal_segments(
-        T0, T0 - timedelta(hours=2), {}, {}, v_lo=0.13, cfg=_cfg()
-    )
+    segs, need, v_hi = overnight_terminal_segments(T0, T0 - timedelta(hours=2), {}, {}, v_lo=0.13, cfg=_cfg())
     assert segs == []
     assert need == 0.0
     assert v_hi == 0.13
@@ -220,9 +218,7 @@ def test_eta_curve_honored():
     load = {T0.hour: 600.0}  # falls in discharge bin 1
 
     segs_static, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.0, cfg=cfg)
-    segs_curve, _, _ = overnight_terminal_segments(
-        T0, pickup, prices, load, v_lo=0.0, cfg=cfg, eta_curve=curve
-    )
+    segs_curve, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.0, cfg=cfg, eta_curve=curve)
 
     assert segs_curve[0][0] > segs_static[0][0]  # lower curve eta ⇒ more DC drawn
 

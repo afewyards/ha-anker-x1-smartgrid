@@ -146,12 +146,7 @@ def _interpolate_gated_bins(bins: list[BinStat]) -> list[BinStat]:
     anchors = sorted((_bin_midpoint_w(b), b.eta) for b in bins if b.confident)
     if not anchors:
         return bins
-    return [
-        b
-        if b.confident
-        else replace(b, eta=min(_interp_eta(_bin_midpoint_w(b), anchors), 1.0))
-        for b in bins
-    ]
+    return [b if b.confident else replace(b, eta=min(_interp_eta(_bin_midpoint_w(b), anchors), 1.0)) for b in bins]
 
 
 class EfficiencyCurve:

@@ -99,8 +99,10 @@ def build_display_intervals(
         # a timestamp are NOT summed here; the cursor keeps only the last one.
         while pv_idx + 1 < pv_n and pv_sorted[pv_idx + 1][0] <= slot_start:
             pv_idx += 1
-        if pv_idx < pv_n and pv_sorted[pv_idx][0] <= slot_start and (
-            slot_start - pv_sorted[pv_idx][0] < timedelta(hours=1)
+        if (
+            pv_idx < pv_n
+            and pv_sorted[pv_idx][0] <= slot_start
+            and (slot_start - pv_sorted[pv_idx][0] < timedelta(hours=1))
         ):
             pv_w = pv_sorted[pv_idx][1]
         else:

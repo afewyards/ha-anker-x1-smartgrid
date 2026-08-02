@@ -234,8 +234,11 @@ def test_window_pv_energy_conserved_across_slot_minutes():
 
 _T3_BASE = datetime(2026, 8, 4, 0, 0, tzinfo=UTC)
 # Realistic day: dark until 04:00Z, bell through the afternoon, dark from 20:00Z.
-_BELL_WATTS = [0.0] * 4 + [200.0, 600.0, 1100.0, 1600.0, 2000.0, 2200.0, 2300.0, 2200.0,
-                           2000.0, 1600.0, 1100.0, 600.0, 200.0] + [0.0] * 7
+_BELL_WATTS = (
+    [0.0] * 4
+    + [200.0, 600.0, 1100.0, 1600.0, 2000.0, 2200.0, 2300.0, 2200.0, 2000.0, 1600.0, 1100.0, 600.0, 200.0]
+    + [0.0] * 7
+)
 
 
 def test_window_pv_energy_conserved_zero_ended_day():

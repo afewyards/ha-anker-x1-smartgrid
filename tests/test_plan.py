@@ -264,9 +264,7 @@ def test_display_intervals_pv_slot_minutes_60_byte_identical():
     slots = [PriceSlot(now + timedelta(hours=i), 0.20) for i in range(3)]
     pv_curve = [(now, 2391.6), (now + timedelta(hours=1), 1397.9)]
     implicit = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0)
-    explicit = plan.build_display_intervals(
-        slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=60
-    )
+    explicit = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=60)
     assert implicit == explicit
     assert [iv.pv_w for iv in implicit] == [2391.6, 1397.9, 0.0]
 
@@ -295,8 +293,12 @@ def test_display_intervals_dense_30min_curve_no_doubling():
     value — the old hour-SUM would have read 386+2145=2531 in every quarter (2x energy)."""
     now = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
     slots = [PriceSlot(now + timedelta(minutes=15 * i), 0.20) for i in range(4)]
-    pv_curve = [(now, 386.0), (now + timedelta(minutes=15), 386.0),
-                (now + timedelta(minutes=30), 2145.0), (now + timedelta(minutes=45), 2145.0)]
+    pv_curve = [
+        (now, 386.0),
+        (now + timedelta(minutes=15), 386.0),
+        (now + timedelta(minutes=30), 2145.0),
+        (now + timedelta(minutes=45), 2145.0),
+    ]
     ivs = plan.build_display_intervals(slots, now, pv_curve, _StubPredictor(), None, 400.0, slot_minutes=15)
     assert [iv.pv_w for iv in ivs] == [386.0, 386.0, 2145.0, 2145.0]
     assert sum(iv.pv_w * iv.dt_h for iv in ivs) / 1000 == pytest.approx(1.2655)
@@ -1363,13 +1365,9 @@ class TestEstimatedTail:
         """Last 2 of 6 hours in est_starts → flagged + mode="estimated", overriding solar."""
         cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
         slots = _slots(6)
-        intervals = [
-            ForecastInterval(BASE + timedelta(hours=i), pv_w=1000.0, load_w=200.0, dt_h=1.0) for i in range(6)
-        ]
+        intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=1000.0, load_w=200.0, dt_h=1.0) for i in range(6)]
         est_starts = frozenset({BASE + timedelta(hours=4), BASE + timedelta(hours=5)})
-        out = plan.build_plan_horizon(
-            slots, intervals, [], 50.0, BASE + timedelta(hours=6), cfg, est_starts=est_starts
-        )
+        out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=6), cfg, est_starts=est_starts)
         assert [e["estimated"] for e in out] == [False, False, False, False, True, True]
         assert [e["mode"] for e in out[4:]] == ["estimated", "estimated"]
         assert "solar" not in [e["mode"] for e in out[4:]]
@@ -1380,9 +1378,7 @@ class TestEstimatedTail:
         slots = _slots(2)
         intervals = [ForecastInterval(BASE, pv_w=1000.0, load_w=200.0, dt_h=1.0)]
         est_starts = frozenset({BASE + timedelta(hours=1)})
-        out = plan.build_plan_horizon(
-            slots, intervals, [], 50.0, BASE + timedelta(hours=2), cfg, est_starts=est_starts
-        )
+        out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE + timedelta(hours=2), cfg, est_starts=est_starts)
         est_row = out[1]
         assert est_row["estimated"] is True
         assert est_row["grid_charge_kwh"] == 0.0
@@ -1392,15 +1388,17 @@ class TestEstimatedTail:
         """Low start SoC + heavy est load -> est-row soc clamps at the firmware floor,
         never below it, and the walk stays monotone non-increasing."""
         cfg = Config(
-            capacity_kwh=10.0, soc_floor=0.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0,
+            capacity_kwh=10.0,
+            soc_floor=0.0,
+            soc_target=100.0,
+            max_charge_w=6000.0,
+            eta_charge=1.0,
             round_trip_eff=1.0,
         )
         slots = _slots(3)
         intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=6000.0, dt_h=1.0) for i in range(3)]
         est_starts = frozenset({BASE + timedelta(hours=1), BASE + timedelta(hours=2)})
-        out = plan.build_plan_horizon(
-            slots, intervals, [], 6.0, BASE + timedelta(hours=3), cfg, est_starts=est_starts
-        )
+        out = plan.build_plan_horizon(slots, intervals, [], 6.0, BASE + timedelta(hours=3), cfg, est_starts=est_starts)
         socs = [e["soc"] for e in out]
         assert socs[1] >= const.FIRMWARE_SOC_FLOOR
         assert socs[2] >= const.FIRMWARE_SOC_FLOOR
@@ -1431,9 +1429,7 @@ class TestEstimatedTail:
         intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=1.0)]
         est_starts = frozenset({BASE + timedelta(hours=1)})
         # horizon_edge before the est slot's start -> it must read as past-horizon.
-        out = plan.build_plan_horizon(
-            slots, intervals, [], 50.0, BASE, cfg, est_starts=est_starts
-        )
+        out = plan.build_plan_horizon(slots, intervals, [], 50.0, BASE, cfg, est_starts=est_starts)
         assert out[1]["estimated"] is True
         assert out[1]["is_past_horizon"] is True
 

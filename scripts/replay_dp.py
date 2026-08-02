@@ -522,16 +522,20 @@ def main() -> None:
         f"total_dc_kwh={_fmt(sum(s[0] for s in _kw_segs), 3)}  "
         f"top_value={_fmt(max((s[1] for s in _kw_segs), default=None))}"
     )
-    print(f"  reserve_by_hour passed: len={len(dp_reserve_list) if dp_reserve_list is not None else 0}  "
-          f"min={_fmt(min(dp_reserve_list), 3) if dp_reserve_list else 'None'}  "
-          f"max={_fmt(max(dp_reserve_list), 3) if dp_reserve_list else 'None'}")
+    print(
+        f"  reserve_by_hour passed: len={len(dp_reserve_list) if dp_reserve_list is not None else 0}  "
+        f"min={_fmt(min(dp_reserve_list), 3) if dp_reserve_list else 'None'}  "
+        f"max={_fmt(max(dp_reserve_list), 3) if dp_reserve_list else 'None'}"
+    )
     print()
 
     print("--- (c) DP-internal end state vs displayed 5.0% ---")
     print(f"  DP best_end_b -> end_dc_kwh={_fmt(r['end_dc_kwh'], 3)}  end_soc_pct={_fmt(r['end_soc_pct'], 2)}%")
     print(f"  dp_infeasible={r['dp_infeasible']}  best_cost={_fmt(r['best_cost'], 4)}")
-    print(f"  compare: firmware_floor_kwh={cfg.firmware_floor_kwh:.3f} kWh ({const.FIRMWARE_SOC_FLOOR}%)  "
-          f"soft floor_kwh={cfg.floor_kwh:.3f} kWh ({cfg.soc_floor}%)")
+    print(
+        f"  compare: firmware_floor_kwh={cfg.firmware_floor_kwh:.3f} kWh ({const.FIRMWARE_SOC_FLOOR}%)  "
+        f"soft floor_kwh={cfg.floor_kwh:.3f} kWh ({cfg.soc_floor}%)"
+    )
     print()
 
     print("--- backtracked schedule (selected charge slots / export request) ---")

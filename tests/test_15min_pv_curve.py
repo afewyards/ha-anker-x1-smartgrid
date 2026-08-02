@@ -85,9 +85,7 @@ def test_display_intervals_interpolate_load_across_the_hour():
             return 400.0 if when.hour == 10 else 800.0
 
     ivs = build_display_intervals(slots, base, [], _HourlyPredictor(), 20.0, 300.0, slot_minutes=15)
-    assert [iv.load_w for iv in ivs] == pytest.approx(
-        [400.0, 400.0, 450.0, 550.0, 650.0, 750.0, 800.0, 800.0]
-    )
+    assert [iv.load_w for iv in ivs] == pytest.approx([400.0, 400.0, 450.0, 550.0, 650.0, 750.0, 800.0, 800.0])
 
 
 def test_display_intervals_load_identical_at_60min():
@@ -131,7 +129,7 @@ def test_display_horizon_builds_watts_curve_on_the_slot_grid():
     slots = [PriceSlot(base + timedelta(minutes=15 * i), 0.20) for i in range(4)]
     today_watts = [[(base, 386.0), (base + timedelta(minutes=30), 2145.0)]]
     sun_times = (
-        base + timedelta(hours=8),   # today_sunset
+        base + timedelta(hours=8),  # today_sunset
         base + timedelta(hours=20),  # tomorrow_sunrise
         base + timedelta(hours=32),  # tomorrow_sunset
     )
