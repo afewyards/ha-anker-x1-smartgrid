@@ -209,15 +209,25 @@ def build_plan_horizon(
     req_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (grid_request_by_hour or {}).items()}
     exp_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (export_request_by_hour or {}).items()}
     ceil_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (ceiling_by_hour or {}).items()}
-    # rsv_by_hour/hedge_by_hour/deliv_by_hour stay HOUR-keyed on purpose: their
-    # producers (decision._build_reserve_by_hour, controller._apply_drift_hedge,
-    # controller._get_current_delivered) hand back ONE value per clock-hour by
-    # design (out of this fix's scope to make slot-granular) — floor_to_slot on
-    # the lookup key would miss the dict for 3-of-4 quarters and silently fall
-    # back to the default instead of the real value. hour_floor at
-    # slot_minutes=60 IS floor_to_slot, so this is still byte-identical there.
+    # rsv_by_hour/deliv_by_hour stay HOUR-keyed on purpose: their producers
+    # (decision._build_reserve_by_hour, controller._get_current_delivered) hand
+    # back ONE value per clock-hour by design (out of this fix's scope to make
+    # slot-granular) — floor_to_slot on the lookup key would miss the dict for
+    # 3-of-4 quarters and silently fall back to the default instead of the real
+    # value. hour_floor at slot_minutes=60 IS floor_to_slot, so this is still
+    # byte-identical there.
+    #
+    # hedge_by_hour is SLOT-keyed, unlike the two above, because its producer
+    # (controller._apply_drift_hedge) emits a ONE-SHOT kWh debit parked on a
+    # single clock-hour — `{trough_hour: hedge_kwh}` — not a per-hour rate.
+    # The DP consumes it on slot-stride keys (decision.py's
+    # `hedge_drain_by_hour.get(now_h + h * stride)`), so it lands on exactly one
+    # slot; hour-keying it here re-applied the FULL debit to all four quarters
+    # of that hour, sinking the published SoC curve ~4x the intended kWh while
+    # the DP's own track (and the charge columns below) stayed correct.
+    # "Missing" 3-of-4 quarters is the CORRECT behaviour for a one-shot debit.
     rsv_by_hour = {hour_floor(k): v for k, v in (reserve_by_hour or {}).items()}
-    hedge_by_hour = {hour_floor(k): v for k, v in (hedge_drain_by_hour or {}).items()}
+    hedge_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (hedge_drain_by_hour or {}).items()}
     deliv_by_hour = {hour_floor(k): v for k, v in (delivered_by_hour or {}).items()}
     est_set = {hour_floor(s) for s in (est_starts or ())}
     cap_wh = cfg.capacity_kwh * 1000.0
@@ -347,7 +357,7 @@ def build_plan_horizon(
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         if hedge_by_hour and cfg.capacity_kwh > 0:
-            soc_sim -= cfg.kwh_to_pct(hedge_by_hour.get(hour, 0.0))
+            soc_sim -= cfg.kwh_to_pct(hedge_by_hour.get(slot_key, 0.0))
         soc_sim = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
         # reserve_soc: ride-out reserve as % on the SoC axis, or cfg.soc_floor as default.
         if rsv_by_hour:
