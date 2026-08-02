@@ -69,3 +69,26 @@ def test_blend_stale_accumulator_hour_passthrough():
     _fill(acc, H - timedelta(hours=1), 30, 2000.0)  # accumulator on previous hour
     p = intra_hour.CurrentHourBlendPredictor(_Base(), acc, H)
     assert p.predict(H, 20.0, 250.0) == 1000.0
+
+
+def test_blend_engages_across_the_whole_current_hour_at_15min():
+    """Pins the CURRENT semantic (2026-08-02): build_display_intervals predicts
+    once per HOUR, not once per slot, so a blend keyed on when == now_h now
+    engages for every sub-hour row of the current hour -- not only a slot whose
+    OWN start happened to land exactly on the hour floor. If a future change
+    reverts build_display_intervals to a per-slot predict() timestamp, this
+    test breaks instead of the blend silently going dormant again at
+    slot_minutes=15."""
+    from custom_components.anker_x1_smartgrid.models import PriceSlot
+    from custom_components.anker_x1_smartgrid.plan import build_display_intervals
+
+    acc = intra_hour.HourAccumulator()
+    _fill(acc, H, 30, 2000.0)  # 1.0 kWh observed over 30 min, >= MIN_COVERAGE_S
+    p = intra_hour.CurrentHourBlendPredictor(_Base(), acc, H)
+    slots = [PriceSlot(H + timedelta(minutes=15 * i), 0.2) for i in range(4)]
+    ivs = build_display_intervals(slots, H, [], p, 20.0, 250.0, slot_minutes=15)
+    # est = 1.0 kWh + 1000 W x 0.5h remaining fraction = 1500 W, applied to the
+    # single hourly anchor that all four quarters interpolate from.
+    assert len(ivs) == 4
+    for iv in ivs:
+        assert abs(iv.load_w - 1500.0) < 1e-6

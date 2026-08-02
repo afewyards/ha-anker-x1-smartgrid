@@ -5,9 +5,15 @@ accumulator (mirrors recorder's per-tick ``_kwh`` derivation), plus a
 predictor wrapper that replaces the CURRENT hour's model value with
 ``observed kWh so far + model × remaining fraction``.  Applied as the
 OUTERMOST wrapper so the load-adapt log never records a blended value.
-Blend keys on an exact ``when == now_h`` (hour-floored) match: in dormant
-15-min slot mode the current slot start differs and the blend is a safe
-no-op.  Pure module: no HA imports, no I/O.
+Blend keys on an exact ``when == now_h`` (hour-floored) match.  Since
+``build_display_intervals`` (plan.py) predicts once per HOUR rather than once
+per slot, that match is on the hour itself and the blend engages at ANY slot
+width, not only when ``slot_minutes == 60``.  Caveat: at sub-hour slot widths
+the emitted rows for the current hour cover only the remaining part of that
+hour, while the blend's value is a whole-hour mean that already includes
+observed (elapsed) energy — so enabling ``current_hour_blend`` at sub-hour
+resolution feeds elapsed energy into forward slots.  Pure module: no HA
+imports, no I/O.
 """
 
 from __future__ import annotations

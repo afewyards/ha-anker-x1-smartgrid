@@ -45,10 +45,13 @@ def test_display_intervals_predicts_once_per_hour_with_hour_floored_temp():
     base = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
     slots = [PriceSlot(base + timedelta(minutes=15 * i), 0.2) for i in range(4)]
     seen = {}
+    calls = []  # dict-keyed `seen` alone would collapse N identical-hour calls to
+    # one entry and pass regardless of count -- track the call count separately.
 
     class _RecordingPredictor:
         def predict(self, when, temp, fallback_w, *, quantile=0.5):
             seen[when] = temp
+            calls.append(when)
             return 300.0
 
     temp_by_hour = {base: 7.0}  # only the hour key (10:00) is present
@@ -64,6 +67,7 @@ def test_display_intervals_predicts_once_per_hour_with_hour_floored_temp():
     )
     assert len(ivs) == 4
     assert seen == {base: 7.0}  # one call, the hour's own temp -- not cur_temp
+    assert calls == [base]  # exactly one call -- not four with identical args
     assert [iv.load_w for iv in ivs] == [300.0] * 4  # constant model -> constant output
 
 

@@ -102,6 +102,9 @@ def build_display_intervals(
         else:
             pv_w = 0.0
         load_w = load_curve.at(h + half)
+        # `at()` returns None only when load_curve has no points; load_points is
+        # built from `rows`, which is non-empty by the `if not rows: return []`
+        # guard above -- so this fallback is defensive; unreachable today.
         out.append(ForecastInterval(h, pv_w, load_w if load_w is not None else fallback_w, dt_h))
     return out
 
