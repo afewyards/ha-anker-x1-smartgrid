@@ -37,7 +37,15 @@ reason: the load model is hour-bucketed and `build_display_intervals` calls
 
 ## Fix
 
-### A. Shared helper — `resolution.midpoint_linear`
+### A. Shared helper — `interp.MidpointLinear`
+
+> **Amended during implementation.** Originally specced as `resolution.midpoint_linear`.
+> The helper lives in a **new module `interp.py`** instead: `resolution.py`'s stated scope
+> is price-slot *resolution detection* (slot-width sniffing, slot flooring, price resampling),
+> and a general-purpose numeric resampler does not belong to that concern. Shipped as a
+> class (`MidpointLinear(points, *, max_gap_h, default_width_h)` with `.at(when)`) rather
+> than the free function sketched below, so a curve is built once and queried per output
+> instant instead of rebuilding the anchor table for every output grid.
 
 ```python
 def midpoint_linear(
@@ -60,10 +68,21 @@ Properties (all test-pinned):
 - **Non-negative** — linear between non-negative endpoints.
 - **No temporal shift** — anchoring at period centers (not left edges) is what buys this;
   left-edge anchoring would drag the curve ~½ period late.
-- **Per-period mean preserved to second order** — exact when the interpolant's slope is
-  symmetric about the anchor, curvature-limited otherwise. Not exactly conservative;
-  accepted (error is orders below PV forecast error). A conservative PCHIP-on-cumulative
-  variant was considered and rejected as not worth the review cost.
+- **Total energy exactly conserved** (*amended — the original "preserved to second order"
+  understated this*). Each output bucket is a convex combination of two anchors, and
+  summing over a uniform output grid the weights landing on any one anchor add to exactly
+  1.0. So the **total** over the resampled window is exact, not approximate — the only
+  imbalance is a boundary term `step_h/2 × (Δ_out − Δ_in)`, where `Δ_in`/`Δ_out` are the
+  first and last anchor-to-anchor steps. That term vanishes whenever the curve is flat at
+  both window edges, which is true of every real PV day (night zeros on both sides).
+  Measured on 48 h of live 30-min lab data resampled to 15-min buckets: day total moved
+  **0.0000 %**. What interpolation *does* change is the distribution *within* the window:
+  energy moves across bucket and hour boundaries in equal-and-opposite amounts (e.g. the
+  `17:45` bucket loses exactly what the `18:00` bucket gains). Per-**hour** means are
+  therefore **not** individually preserved — the largest measured single-hour move was
+  **8.14 Wh** (0.39 % of that day's peak hour), concentrated at the dawn/dusk shoulders
+  where the curve is most convex. A conservative PCHIP-on-cumulative variant was considered
+  and rejected as not worth the review cost.
 - Irregular gaps handled per-interval (no global cadence detection).
 
 ### B. PV — `parsers.build_pv_curve_from_watts`
@@ -98,9 +117,21 @@ grid, the "last point at or before slot start, < 1 h old" rule resolves to exact
 
 ### D. Load — `plan.build_display_intervals`
 
-Per slot: predict for `hour_floor(slot)` and for `hour_floor(slot) + 1 h` (memoized per
-hour so `predict` is called once per hour, not once per slot), anchor both at `HH:30`,
-evaluate at the slot center. Same helper. The `quantile` argument passes through
+> **Amended during implementation.** The original rule — "predict for `hour_floor(slot)`
+> **and for `hour_floor(slot) + 1 h`**" — would probe one hour *past the horizon* on the
+> final hour's slots. `predictor.predict` has no data there and answers with its fallback,
+> so the last hour's quarters would ramp toward a value **no displayed row ever shows**:
+> fabricated shape contaminating the visible tail. Replaced by the **emitted-hours-only**
+> rule below. Accepted consequence: with no anchor beyond the last emitted hour, the
+> resampler's flat-clamp applies and **the final hour's late quarters stay flat** at that
+> hour's value. That is the correct trade — a flat tail is honest about the absence of
+> data; a ramp toward a fallback is not.
+
+Anchors are exactly the **hours that actually have emitted slots** — never a probe past the
+horizon. `predict` is called once per such hour (with that hour's own `temp_by_hour` value),
+each hourly value is treated as that hour's **mean** and anchored at the hour centre
+(`HH:30`), and every slot reads the interpolant at **its own** centre. Same helper. The
+`quantile` argument passes through
 untouched — interpolation is applied to whichever quantile the caller asked for, so a P80
 caller gets an interpolated P80 curve, never a mixed one.
 
@@ -144,6 +175,45 @@ total within tolerance.
 `scripts/replay_dp.py` against captured live data, hold vs interpolated: compare charge/
 export slot placement and daily €. Material movement (beyond slot-boundary jitter) blocks
 the deploy and reopens the design. Then lab deploy + morning card check.
+
+## Decisions taken during implementation
+
+### `current_hour_blend` stays OFF and unchanged
+
+`intra_hour.py`'s current-hour blend replaces the current hour's model value with
+`observed kWh so far + model × remaining fraction`. Its docstring previously claimed the
+blend was "a safe no-op" in 15-min slot mode, on the reasoning that it keys on an exact
+`when == now_h` (hour-floored) match which the current *slot* start would miss.
+
+Section D's change invalidates that reasoning: `build_display_intervals` now predicts once
+per **HOUR**, so the blend's hour-floored key matches and its trigger re-activates at **any**
+slot width. The docstring was corrected accordingly (and a test pins the real behaviour) —
+but the flag itself was deliberately **left OFF** (`DEFAULT_CURRENT_HOUR_BLEND = False`, no
+code path changed). Two independent reasons:
+
+1. **It would double-correct.** `load_adapt.py` (Layer A, the intraday ratio corrector)
+   already performs actual-vs-forecast correction for forward hours. The blend would stack a
+   second actuals-based correction on top of it.
+2. **Units mismatch at sub-hour resolution.** The blend's output is a **whole-hour** quantity
+   that already contains *elapsed* energy. At 15-min slots the emitted rows for the current
+   hour cover only the hour's **remaining** quarters, so feeding them a whole-hour blended
+   mean pushes already-consumed energy into forward slots. The quantity has no meaning for
+   those rows.
+
+Turning it on is therefore a separate design question (it needs a remaining-fraction-aware
+formulation first), not a follow-on to this wave.
+
+### Verification harness limitation (found in Task 5)
+
+`scripts/replay_dp.py` cannot verify this wave end-to-end, for a stronger reason than the
+plan anticipated. It never calls `build_pv_curve_from_watts` / `build_display_intervals`
+(it rebuilds intervals straight from the fixture's own rows), **and** `_build_intervals`
+emits **hourly** `ForecastInterval`s (`dt_h=1.0`) even for a `slot_minutes=15` fixture. So
+the stock replay is blind to a within-hour shape change by construction, and indeed returns
+**byte-identical** output before and after the wave. Decision stability was instead measured
+with a throwaway harness that swaps in 15-min intervals in both shapes (flat fan vs
+midpoint-interpolated); see `task-5-report.md`. Making the replay harness slot-native would
+be a worthwhile standalone improvement.
 
 ## Rollback
 
