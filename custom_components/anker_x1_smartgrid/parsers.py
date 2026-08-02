@@ -218,7 +218,9 @@ def build_pv_curve_from_watts(
     ``step_h=1.0`` this reduces byte-identically to the legacy hourly bucketing
     for a single hourly-cadence source (the sample-and-hold fill below can never
     fire at step_h=1.0: the next candidate bucket is always exactly 1h away,
-    which fails the strict "< 1h" gate).
+    which fails the strict "< 1h" gate) -- and the VALUE re-derivation below is
+    itself an exact identity at that cadence, since every bucket centre IS its
+    own interpolation anchor; see the "Bucket VALUES" paragraph further down.
 
     Sample-and-hold gap fill (per source, BEFORE cross-source summing): a coarser-
     than-``step_h`` cadence (e.g. a 30-min source resampled at step_h=0.25) leaves
@@ -344,6 +346,10 @@ def build_pv_curve_from_watts(
         half = step / 2
         for bucket in held:
             value = resampler.at(bucket + half)
+            # at() only returns None for an empty points list, which cannot
+            # happen here: all_buckets (and therefore all_keys) is non-empty,
+            # or this source already `continue`d above. Guard kept anyway so
+            # a future change to MidpointLinear can't silently poison held.
             if value is not None:
                 held[bucket] = value
 

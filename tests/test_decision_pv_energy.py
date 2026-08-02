@@ -134,13 +134,18 @@ _T1_BASE = datetime(2026, 8, 2, 8, 0, tzinfo=UTC)  # slot-aligned "now"
 def test_30min_source_hour_energy_not_doubled():
     """386W@11:00Z + 2145W@11:30Z (30-min cadence) fed at slot_minutes=15.
 
-    Task 1's sample-and-hold fill turns this into the dense per-quarter watts
-    curve [386, 825.75, 1705.25, 2145] over 11:00/11:15/11:30/11:45Z (the
-    exact worked example in ``build_pv_curve_from_watts``'s own docstring). Task
-    2's step-function lookup carries those values into the ForecastIntervals
-    unfiltered, so the 11:00Z hour's window_pv bucket sum is:
+    The sample-and-hold rules emit four quarter buckets over
+    11:00/11:15/11:30/11:45Z; midpoint-anchored interpolation then supplies
+    their VALUES, [386, 825.75, 1705.25, 2145]. Task 2's step-function lookup
+    carries those values into the ForecastIntervals unfiltered, so the
+    11:00Z hour's window_pv bucket sum is:
 
-        (386 + 386 + 2145 + 2145) W * 0.25 h / 1000 = 1.2655 kWh
+        (386 + 825.75 + 1705.25 + 2145) W * 0.25 h / 1000 = 1.2655 kWh
+
+    That total equals the old sample-and-hold curve's (386 + 386 + 2145 +
+    2145 = 5062 W either way) because the ramp is symmetric about the two
+    anchors -- which is exactly why the cadence-doubling pin survives
+    unchanged.
 
     Pre-fix (main @ df87248), the hour-summing fan handed EVERY quarter in
     the hour the raw 30-min SUM (386+2145=2531 W) instead of each point's own
@@ -242,12 +247,16 @@ def test_window_pv_energy_conserved_zero_ended_day():
     today_watts = [samples]
 
     slots_60 = _price_slots(_T3_BASE, 24, 60)
-    total_60 = sum(_run_decision(_cfg(), now=_T3_BASE, slots=slots_60, slot_minutes=60,
-                                 today_watts=today_watts)["args"][0])
+    captured_60 = _run_decision(_cfg(), now=_T3_BASE, slots=slots_60, slot_minutes=60, today_watts=today_watts)
+    window_pv_60 = captured_60["args"][0]
+    assert len(window_pv_60) == 24
+    total_60 = sum(window_pv_60)
 
     slots_15 = _price_slots(_T3_BASE, 96, 15)
-    total_15 = sum(_run_decision(_cfg(), now=_T3_BASE, slots=slots_15, slot_minutes=15,
-                                 today_watts=today_watts)["args"][0])
+    captured_15 = _run_decision(_cfg(), now=_T3_BASE, slots=slots_15, slot_minutes=15, today_watts=today_watts)
+    window_pv_15 = captured_15["args"][0]
+    assert len(window_pv_15) == 96
+    total_15 = sum(window_pv_15)
 
     assert total_60 == pytest.approx(sum(_BELL_WATTS) / 1000.0, abs=1e-9)
     assert total_15 == pytest.approx(total_60, abs=1e-9)
