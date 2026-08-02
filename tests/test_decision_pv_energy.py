@@ -195,7 +195,7 @@ def _hourly_today_watts() -> list[list[tuple[datetime, float]]]:
 
 def test_window_pv_energy_conserved_across_slot_minutes():
     """Full synthetic day, single hourly-cadence PV source: total window_pv
-    energy is (near-)identical whether the DP window ticks at slot_minutes=60
+    energy is identical whether the DP window ticks at slot_minutes=60
     or slot_minutes=15 -- resolution must not manufacture or destroy PV energy.
 
     Exact at BOTH resolutions because both window edges are flat: the leading
