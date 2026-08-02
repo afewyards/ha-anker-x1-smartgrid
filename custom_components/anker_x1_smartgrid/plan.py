@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from . import const
+from .interp import MidpointLinear
 from .models import Config, ForecastInterval, PriceSlot
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
 from .resolution import floor_to_slot, hour_floor
@@ -25,10 +26,13 @@ def build_display_intervals(
     """One ForecastInterval per distinct price-slot at the slot_minutes grid, >= now's slot.
 
     Display-only. pv_w = a step-function lookup on pv_curve (0.0 when no curve point
-    covers the slot, e.g. overnight) — see the D2 comment below; load_w =
-    predictor.predict(slot, h_temp, fallback_w, quantile=quantile) where h_temp is looked
-    up from temp_by_hour (per-hour forecast, HOUR-floored — the temp forecast is
-    intrinsically hourly) falling back to cur_temp.  dt_h = slot_minutes / 60.0.
+    covers the slot, e.g. overnight) — see the D2 comment below;
+    load_w = a midpoint-anchored linear interpolation (D3) of the per-HOUR
+    predictor.predict(hour, h_temp, fallback_w, quantile=quantile) values, where
+    h_temp is looked up from temp_by_hour (per-hour forecast, HOUR-floored) falling
+    back to cur_temp.  predict is called once per hour, not once per slot.  At
+    slot_minutes=60 the slot centre is the hour anchor, so this is byte-identical
+    to the legacy per-slot call.  dt_h = slot_minutes / 60.0.
     Slots before floor_to_slot(now, slot_minutes) are omitted (left null in the horizon; the card
     clips them).  At slot_minutes=60 this reduces byte-identically to the legacy hourly build.
     """
@@ -38,58 +42,67 @@ def build_display_intervals(
     pv_n = len(pv_sorted)
     now_h = floor_to_slot(now, slot_minutes)
     dt_h = slot_minutes / 60.0
-    out: list[ForecastInterval] = []
+    # Pass 1: the emitted slot grid (dedup + >= now filter), keeping each row's
+    # ORIGINAL slot.start for the PV cursor below — flooring it would change the
+    # D2 lookup for non-slot-aligned price starts.
+    rows: list[tuple[datetime, datetime]] = []
     seen: set[datetime] = set()
-    pv_idx = 0
     for slot in sorted(slots, key=lambda s: s.start):
         h = floor_to_slot(slot.start, slot_minutes)
         if h < now_h or h in seen:
             continue
         seen.add(h)
-        # D1: temp forecast is per-hour — keep the temp lookup HOUR-floored even
-        # though the PV/dedup grid is per-slot (else 3-of-4 quarters fall back to
-        # cur_temp instead of the actual hourly-forecast temp).
-        h_temp = temp_by_hour.get(hour_floor(slot.start), cur_temp) if temp_by_hour else cur_temp
+        rows.append((h, slot.start))
+    if not rows:
+        return []
+    # D1: the temp forecast is per-hour — keep the temp lookup HOUR-floored even
+    # though the PV/dedup grid is per-slot (else 3-of-4 quarters fall back to
+    # cur_temp instead of the actual hourly-forecast temp).
+    # D3: the load model is hour-bucketed too, so predict ONCE per hour (with
+    # that hour's own temp) and read each slot from a midpoint-anchored linear
+    # interpolation of those hourly values — the hourly value is the hour's
+    # MEAN, anchored at the hour centre, and each slot reads at ITS own centre.
+    # At slot_minutes=60 the slot centre IS the anchor, so this is an exact
+    # identity. Anchors are only the hours that actually have emitted slots: no
+    # predict() probe past the horizon, whose fallback would ramp the final
+    # hour toward a value no row displays. Consequence: the last hour's late
+    # quarters stay flat at that hour's value.
+    load_points: list[tuple[datetime, float]] = []
+    for hour in sorted({hour_floor(start) for _, start in rows}):
+        h_temp = temp_by_hour.get(hour, cur_temp) if temp_by_hour else cur_temp
+        load_points.append((hour, predictor.predict(hour, h_temp, fallback_w, quantile=quantile)))
+    load_curve = MidpointLinear(load_points)
+    half = timedelta(minutes=slot_minutes / 2)
+    out: list[ForecastInterval] = []
+    pv_idx = 0
+    for h, slot_start in rows:
         # D2: pv_curve is a step function, not a per-hour sum — a curve point's
         # watts hold from its own timestamp until the NEXT point supersedes it (or
         # it goes stale after 1h with no successor, e.g. overnight). Walk a forward
-        # cursor (slots and pv_curve are both processed start-ascending, so the
+        # cursor (rows and pv_curve are both processed start-ascending, so the
         # cursor only ever advances) to the last point at or before this slot's
         # start, then use its watts iff that point is < 1h old, else 0.0. This
         # reproduces the legacy hourly-fan behavior byte-identically for
         # HOUR-ALIGNED one-point-per-hour curves while giving dense sub-hourly
-        # curves (Task-1 from_watts output) each slot's own value instead of the
-        # hour's SUM fanned across every quarter (was 2x/4x live PV energy).
+        # curves (from_watts output at the live slot width) each slot's own value
+        # instead of the hour's SUM fanned across every quarter.
         # Caveat (accepted 2026-08-01 final review): non-hour-aligned hourly
         # curves (synth_pv_curve / arrays anchored at now/sunrise, degraded-data
         # fallback paths only) read one point LATER than the old hour-sum did —
-        # a <=1-slot temporal shift, energy-conserved. Also accepted: with a
-        # source that truncates mid-generation, this <1h hold composes with the
-        # from_watts cadence tail-fill to <2h of last-value extrapolation (never
-        # occurs live — every real source ends in explicit trailing zeros).
+        # a <=1-slot temporal shift, energy-conserved.
         # Precondition: pv_curve is expected to carry at most one point per
-        # timestamp (all four parsers.py builders — build_pv_curve_from_watts/
-        # build_two_day_pv_curve/build_pv_curve_from_arrays/synth_pv_curve —
-        # guarantee this). Points sharing a timestamp are NOT summed here; the
-        # cursor keeps only the last one at that timestamp (dict-assignment/
-        # last-wins), unlike the pre-2026-08 hour-sum behavior which summed
-        # every point in a bucket including exact-duplicate timestamps.
-        while pv_idx + 1 < pv_n and pv_sorted[pv_idx + 1][0] <= slot.start:
+        # timestamp (all four parsers.py builders guarantee this). Points sharing
+        # a timestamp are NOT summed here; the cursor keeps only the last one.
+        while pv_idx + 1 < pv_n and pv_sorted[pv_idx + 1][0] <= slot_start:
             pv_idx += 1
-        if pv_idx < pv_n and pv_sorted[pv_idx][0] <= slot.start and (
-            slot.start - pv_sorted[pv_idx][0] < timedelta(hours=1)
+        if pv_idx < pv_n and pv_sorted[pv_idx][0] <= slot_start and (
+            slot_start - pv_sorted[pv_idx][0] < timedelta(hours=1)
         ):
             pv_w = pv_sorted[pv_idx][1]
         else:
             pv_w = 0.0
-        out.append(
-            ForecastInterval(
-                h,
-                pv_w,
-                predictor.predict(h, h_temp, fallback_w, quantile=quantile),
-                dt_h,
-            )
-        )
+        load_w = load_curve.at(h + half)
+        out.append(ForecastInterval(h, pv_w, load_w if load_w is not None else fallback_w, dt_h))
     return out
 
 
