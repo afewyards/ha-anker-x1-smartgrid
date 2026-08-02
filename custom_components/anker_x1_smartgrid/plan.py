@@ -497,10 +497,16 @@ def build_display_horizon(
         return []
     today_sunset, tomorrow_sunrise, tomorrow_sunset = sun_times
     if today_watts is not None or tomorrow_watts is not None:
-        # Preferred path: real per-15-min Open-Meteo watts → correct midday bell.
-        curve = build_pv_curve_from_watts(today_watts, tomorrow_watts, now)
+        # Preferred path: real sub-hourly watts -> correct midday bell.  step_h
+        # MUST be the live slot width: without it this built the curve at the
+        # 1.0h default and build_display_intervals then fanned one hourly mean
+        # across every quarter, so the card drew a coarser staircase than the
+        # curve the DP was actually optimizing on (decision.py passes dt_h).
+        curve = build_pv_curve_from_watts(today_watts, tomorrow_watts, now, step_h=slot_minutes / 60.0)
     else:
         # Fallback: synthetic quarter-sine from daily kWh totals (tests + degraded data).
+        # Same slot-width rule as above, else the staircase returns whenever the
+        # watts source drops out.
         curve = build_two_day_pv_curve(
             today_arrays,
             tomorrow_arrays,
@@ -508,7 +514,7 @@ def build_display_horizon(
             today_sunset,
             tomorrow_sunrise,
             tomorrow_sunset,
-            step_h=1.0,
+            step_h=slot_minutes / 60.0,
         )
     # Estimated tomorrow tail: appended to the price-slot list BEFORE building
     # intervals, so pv/load for those hours are derived from this same two-day

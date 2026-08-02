@@ -936,9 +936,9 @@ def compute_decision(
         # This avoids the monotonic-rise bug in the quarter-sine synthesis.
         _wv_curve = build_pv_curve_from_watts(today_watts, tomorrow_watts, inputs.now, step_h=dt_h)
     elif sun_times is not None:
-        _wv_curve = build_two_day_pv_curve(today_arrays, tomorrow_arrays, inputs.now, *sun_times)
+        _wv_curve = build_two_day_pv_curve(today_arrays, tomorrow_arrays, inputs.now, *sun_times, step_h=dt_h)
     elif today_arrays:
-        _wv_curve = build_pv_curve_from_arrays(today_arrays, inputs.now, horizon_edge)
+        _wv_curve = build_pv_curve_from_arrays(today_arrays, inputs.now, horizon_edge, step_h=dt_h)
     else:
         _wv_curve = synth_pv_curve(pv_remaining, inputs.now, horizon_edge)
     # Full horizon: every future slot is in-window (no trough truncation).

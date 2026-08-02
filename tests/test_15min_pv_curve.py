@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timedelta, timezone, UTC
 from custom_components.anker_x1_smartgrid.parsers import build_pv_curve_from_watts
 from custom_components.anker_x1_smartgrid.plan import build_display_intervals
@@ -81,3 +82,40 @@ def test_synthetic_overnight_fill_stays_hourly_stride():
     # 8h * 500W = 4 kWh AC of overnight load — reserve must reflect the full night,
     # not be ~1/4-sized from a mistaken dt_h=0.25 on hourly-stride rows.
     assert r > 3.0
+
+
+def test_display_horizon_builds_watts_curve_on_the_slot_grid():
+    """The display path dropped step_h, so it built the PV curve at 1.0h and
+    fanned one value across all four quarters -- a coarser picture than the DP
+    was optimizing on (live lab evidence 2026-08-02: 08:00/08:15/08:30/08:45
+    all read pv_w 276.7995 from a 30-min source)."""
+    from custom_components.anker_x1_smartgrid.models import Config
+    from custom_components.anker_x1_smartgrid.plan import build_display_horizon
+
+    base = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+    slots = [PriceSlot(base + timedelta(minutes=15 * i), 0.20) for i in range(4)]
+    today_watts = [[(base, 386.0), (base + timedelta(minutes=30), 2145.0)]]
+    sun_times = (
+        base + timedelta(hours=8),   # today_sunset
+        base + timedelta(hours=20),  # tomorrow_sunrise
+        base + timedelta(hours=32),  # tomorrow_sunset
+    )
+    rows = build_display_horizon(
+        slots,
+        base,
+        None,
+        None,
+        sun_times,
+        _P(),
+        20.0,
+        300.0,
+        50.0,
+        [],
+        base + timedelta(hours=1),
+        Config(capacity_kwh=10.0, max_charge_w=3000.0, eta_charge=1.0),
+        today_watts=today_watts,
+        slot_minutes=15,
+    )
+    pv = [r["pv_w"] for r in rows]
+    assert len(pv) == 4
+    assert pv == pytest.approx([386.0, 825.75, 1705.25, 2145.0])
