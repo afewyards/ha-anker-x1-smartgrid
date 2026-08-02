@@ -198,12 +198,14 @@ def test_window_pv_energy_conserved_across_slot_minutes():
     energy is (near-)identical whether the DP window ticks at slot_minutes=60
     or slot_minutes=15 -- resolution must not manufacture or destroy PV energy.
 
-    The fixture is a monotone ramp that is still RISING at the window edge, so
-    midpoint interpolation leaves a boundary residue of exactly
-    step_h/2 * (delta_out - delta_in) = 0.25/2 * 50 W = 6.25 Wh (0.045% of the
-    day).  Interior boundaries telescope out exactly.  A curve that is flat at
-    both edges -- i.e. any real PV day, 0 W at night -- conserves exactly; that
-    case is pinned by test_window_pv_energy_conserved_zero_ended_day below.
+    Exact at BOTH resolutions because both window edges are flat: the leading
+    buckets clamp to v_0 (no extrapolation before the first anchor) and the
+    fixture's trailing sample repeats hour 23's value, so the final anchor
+    segment is flat too.  Midpoint interpolation moves energy across bucket
+    boundaries, but the imbalance telescopes out and its only surviving term is
+    the boundary one, step_h/2 * (delta_out - delta_in) -- zero when both edges
+    are flat.  A curve still RAMPING at a window edge would leave that term
+    behind; that is a property of the edge, not of the resolution.
     """
     today_watts = _hourly_today_watts()
 
@@ -221,8 +223,8 @@ def test_window_pv_energy_conserved_across_slot_minutes():
 
     expected_kwh = sum(_HOURLY_WATTS) / 1000.0
     assert total_60 == pytest.approx(expected_kwh, abs=1e-6)
-    assert total_15 == pytest.approx(expected_kwh, abs=0.007)
-    assert total_60 == pytest.approx(total_15, abs=0.007)
+    assert total_15 == pytest.approx(expected_kwh, abs=1e-6)
+    assert total_60 == pytest.approx(total_15, abs=1e-6)
 
 
 _T3_BASE = datetime(2026, 8, 4, 0, 0, tzinfo=UTC)
