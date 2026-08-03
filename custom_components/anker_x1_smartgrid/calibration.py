@@ -1,0 +1,83 @@
+"""Periodic full-charge calibration policy — pure decision logic.
+
+Design: docs/superpowers/specs/2026-08-03-battery-calibration-policy-design.md
+
+The pack strands ~3.6 kWh below ~21% SoC (measured 2026-08-03) and has had no
+opportunity to top-balance: on 2026-08-02 it reached 99% and then held 0 W for
+2.5 h while PV was exported.  This module decides when to drive the pack to the
+top of its range and dwell there so the module BMSs get taper current.
+
+No HA imports, no I/O, no clock reads — ``now`` is always a parameter.  A
+completed cycle is READ BACK from SoC history rather than stored, so there is
+no new table, no Store, and the policy is restart-safe by construction.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+# Two adjacent samples further apart than this do not belong to the same run —
+# otherwise an HA outage spanning a high-SoC period fakes a completed dwell.
+MAX_SAMPLE_GAP_MIN: float = 15.0
+
+
+@dataclass(frozen=True)
+class CalibAction:
+    """An active calibration slot.  ``phase`` is for reporting only —
+    both phases actuate identically (FORCING at max rate; the BMS taper
+    turns that into a hold once the pack is full)."""
+
+    phase: str  # "charging" | "holding"
+    window_start: datetime
+    window_end: datetime
+
+
+def _parse(ts: str) -> datetime:
+    return datetime.fromisoformat(ts)
+
+
+def history_span_days(soc_samples: list[tuple[str, float]]) -> float:
+    """Wall-clock days covered by the sample series (0.0 when < 2 rows)."""
+    if len(soc_samples) < 2:
+        return 0.0
+    return (_parse(soc_samples[-1][0]) - _parse(soc_samples[0][0])).total_seconds() / 86400.0
+
+
+def last_success_end(
+    soc_samples: list[tuple[str, float]],
+    *,
+    top_soc: float,
+    dwell_h: float,
+) -> datetime | None:
+    """End timestamp of the most recent completed calibration dwell.
+
+    A dwell is a maximal block of consecutive samples at/above ``top_soc``
+    with no adjacent gap over ``MAX_SAMPLE_GAP_MIN``, spanning at least
+    ``dwell_h``.  Returns the block's LAST timestamp, so an in-progress hold
+    keeps the clock at ~now and the policy goes idle as soon as it qualifies.
+
+    Returns None when no block qualifies — including an empty series.
+    """
+    best: datetime | None = None
+    run_start: datetime | None = None
+    run_end: datetime | None = None
+    max_gap = timedelta(minutes=MAX_SAMPLE_GAP_MIN)
+    need = timedelta(hours=dwell_h)
+
+    for ts_s, soc in soc_samples:
+        ts = _parse(ts_s)
+        if soc >= top_soc and run_end is not None and ts - run_end <= max_gap:
+            run_end = ts
+            continue
+        # Close the open run (if any) before starting a new one.
+        if run_start is not None and run_end is not None and run_end - run_start >= need:
+            best = run_end
+        if soc >= top_soc:
+            run_start, run_end = ts, ts
+        else:
+            run_start, run_end = None, None
+
+    if run_start is not None and run_end is not None and run_end - run_start >= need:
+        best = run_end
+    return best
