@@ -328,6 +328,12 @@ class X1PlanSensor(_Base):
             # matching INFO log in decision.py).
             "export_curve_covered": self._controller.last_status.get("export_curve_covered"),
             "export_curve_slots": self._controller.last_status.get("export_curve_slots"),
+            # Calibration policy (spec 2026-08-03): "idle" | "charging" | "holding".
+            "calibration_state": self._controller.last_status.get("calibration_state", "idle"),
+            "calibration_window_start": self._controller.last_status.get("calibration_window_start"),
+            "calibration_window_end": self._controller.last_status.get("calibration_window_end"),
+            "calibration_last_success": self._controller.last_status.get("calibration_last_success"),
+            "calibration_days_since": self._controller.last_status.get("calibration_days_since"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),
             "load_adapt_ratio_raw": self._controller.last_status.get("load_adapt_ratio_raw"),

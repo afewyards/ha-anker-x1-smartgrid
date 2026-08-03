@@ -64,6 +64,39 @@ def test_plan_sensor_export_curve_diagnostics_default_none():
     assert attrs["export_curve_slots"] is None
 
 
+def test_plan_sensor_surfaces_calibration_state():
+    from custom_components.anker_x1_smartgrid.sensor import X1PlanSensor
+
+    class _C:
+        last_status = {
+            "plan": {"horizon": [], "deadline": None, "planned_grid_hours": 0},
+            "calibration_state": "holding",
+            "calibration_window_start": "2026-08-03T02:00:00+00:00",
+            "calibration_window_end": "2026-08-03T04:00:00+00:00",
+            "calibration_last_success": "2026-07-29T05:00:00+00:00",
+            "calibration_days_since": 5.0,
+        }
+
+    attrs = X1PlanSensor(_C(), "e").extra_state_attributes
+    assert attrs["calibration_state"] == "holding"
+    assert attrs["calibration_window_end"] == "2026-08-03T04:00:00+00:00"
+    assert attrs["calibration_days_since"] == 5.0
+
+
+def test_plan_sensor_calibration_defaults_to_idle():
+    """Absent from last_status (feature off / tick never ran) -> idle + Nones."""
+    from custom_components.anker_x1_smartgrid.sensor import X1PlanSensor
+
+    class _C:
+        last_status = {"plan": {"horizon": [], "deadline": None, "planned_grid_hours": 0}}
+
+    attrs = X1PlanSensor(_C(), "e").extra_state_attributes
+    assert attrs["calibration_state"] == "idle"
+    assert attrs["calibration_window_start"] is None
+    assert attrs["calibration_last_success"] is None
+    assert attrs["calibration_days_since"] is None
+
+
 # ---------------------------------------------------------------------------
 # T16/T22: house load sensor — event-driven, reads live HA state directly
 # (not last_status / the 60s controller tick).
