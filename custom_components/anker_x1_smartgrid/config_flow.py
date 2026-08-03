@@ -397,6 +397,23 @@ _TUNABLES: list[tuple[str, object, object]] = [
     ),
     (const.CONF_CURRENT_HOUR_BLEND, const.DEFAULT_CURRENT_HOUR_BLEND, cv.boolean),
     (const.CONF_LOAD_ADAPT_PARTIAL_HOUR, const.DEFAULT_LOAD_ADAPT_PARTIAL_HOUR, cv.boolean),
+    (const.CONF_CALIBRATION_ENABLED, const.DEFAULT_CALIBRATION_ENABLED, cv.boolean),
+    (
+        const.CONF_CALIBRATION_INTERVAL_DAYS,
+        const.DEFAULT_CALIBRATION_INTERVAL_DAYS,
+        vol.All(vol.Coerce(int), vol.Range(min=1, max=90)),
+    ),
+    (
+        const.CONF_CALIBRATION_TOP_SOC,
+        const.DEFAULT_CALIBRATION_TOP_SOC,
+        # Floor at 80: below that this stops being a top-of-range dwell.
+        vol.All(vol.Coerce(float), vol.Range(min=80.0, max=100.0)),
+    ),
+    (
+        const.CONF_CALIBRATION_DWELL_H,
+        const.DEFAULT_CALIBRATION_DWELL_H,
+        vol.All(vol.Coerce(float), vol.Range(min=0.25, max=12.0)),
+    ),
 ]
 
 # Multi-select entity pickers whose suggested_value is simply

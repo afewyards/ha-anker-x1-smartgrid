@@ -111,6 +111,11 @@ class Config:
     static_price_offpeak: float = const.DEFAULT_STATIC_PRICE_OFFPEAK
     static_offpeak_hours: str = const.DEFAULT_STATIC_OFFPEAK_HOURS
     static_price_export: float = const.DEFAULT_STATIC_PRICE_EXPORT
+    # Periodic full-charge calibration (spec 2026-08-03). Ships OFF.
+    calibration_enabled: bool = const.DEFAULT_CALIBRATION_ENABLED
+    calibration_interval_days: int = const.DEFAULT_CALIBRATION_INTERVAL_DAYS
+    calibration_top_soc: float = const.DEFAULT_CALIBRATION_TOP_SOC
+    calibration_dwell_h: float = const.DEFAULT_CALIBRATION_DWELL_H
 
     @classmethod
     def from_dict(cls, d: dict) -> Config:

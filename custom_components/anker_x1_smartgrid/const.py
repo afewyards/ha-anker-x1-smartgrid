@@ -25,6 +25,10 @@ CONF_ROUND_TRIP_EFF = "round_trip_eff"
 CONF_CHARGE_MARGIN_EUR_PER_KWH = "charge_margin_eur_per_kwh"
 CONF_IDLE_DRAIN_W = "idle_drain_w"
 CONF_TERMINAL_OVERNIGHT_CREDIT = "terminal_overnight_credit"
+CONF_CALIBRATION_ENABLED = "calibration_enabled"
+CONF_CALIBRATION_INTERVAL_DAYS = "calibration_interval_days"
+CONF_CALIBRATION_TOP_SOC = "calibration_top_soc"
+CONF_CALIBRATION_DWELL_H = "calibration_dwell_h"
 CONF_RESERVE_ANCHOR = "reserve_anchor"
 CONF_RESERVE_CHEAP_BAND = "reserve_cheap_band"
 CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
@@ -114,6 +118,24 @@ DEFAULT_IDLE_DRAIN_W = 0.0
 # default-ON flag in this file: it corrects DP behavior, byte-identity is not
 # preserved at default. False reverts to the single-segment terminal.
 DEFAULT_TERMINAL_OVERNIGHT_CREDIT = True
+
+# Periodic full-charge calibration (see
+# docs/superpowers/specs/2026-08-03-battery-calibration-policy-design.md).
+# Ships OFF. 5 days suits summer, where natural full days mostly satisfy it;
+# raise in winter, when it will force a grid charge instead.
+DEFAULT_CALIBRATION_ENABLED = False
+DEFAULT_CALIBRATION_INTERVAL_DAYS = 5
+# 97 sits below the observed 99% stall (2026-08-02: reached 99%, then 0 W for
+# 2.5 h), so the dwell is actually reachable.
+DEFAULT_CALIBRATION_TOP_SOC = 97.0
+DEFAULT_CALIBRATION_DWELL_H = 2.0
+
+# Tuning consts, deliberately not user-facing.
+# A window is cheap enough when its mean slot price is at or below this
+# percentile of all slot prices in PriceHistoryStore.history.
+CALIBRATION_PRICE_PERCENTILE = 30.0
+# Past interval + grace days, take the cheapest visible window regardless.
+CALIBRATION_GRACE_DAYS = 7
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
