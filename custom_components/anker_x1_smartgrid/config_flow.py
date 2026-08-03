@@ -172,6 +172,10 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_GRID_IMPORT_LIMIT_W,
         const.CONF_CHARGE_WINDOW_PRICE_BAND,
         const.CONF_RESTORE_WORKMODE,
+        const.CONF_CALIBRATION_ENABLED,
+        const.CONF_CALIBRATION_INTERVAL_DAYS,
+        const.CONF_CALIBRATION_TOP_SOC,
+        const.CONF_CALIBRATION_DWELL_H,
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
