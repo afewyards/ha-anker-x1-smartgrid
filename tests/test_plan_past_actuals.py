@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, UTC
+from datetime import datetime, timedelta, timezone, UTC
 
 from custom_components.anker_x1_smartgrid.models import Config, ForecastInterval, PriceSlot
 from custom_components.anker_x1_smartgrid.plan import build_plan_horizon
@@ -41,7 +41,7 @@ def test_past_slot_uses_actuals_and_leaves_forward_soc_unchanged():
     }
     horizon_edge = datetime(2026, 6, 29, 12, tzinfo=UTC)
 
-    with_past = build_plan_horizon(slots, intervals, [], 50.0, horizon_edge, cfg, past_actuals_by_hour=past)
+    with_past = build_plan_horizon(slots, intervals, [], 50.0, horizon_edge, cfg, past_actuals_by_slot=past)
     without = build_plan_horizon(slots, intervals, [], 50.0, horizon_edge, cfg)
 
     by_start = {e["start"]: e for e in with_past}
@@ -63,7 +63,7 @@ def test_default_none_is_byte_identical_legacy():
     intervals = [ForecastInterval(datetime(2026, 6, 29, 10, tzinfo=UTC), 1000.0, 300.0, 1.0)]
     edge = datetime(2026, 6, 29, 11, tzinfo=UTC)
     a = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg)
-    b = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_hour=None)
+    b = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_slot=None)
     assert a == b
 
 
@@ -73,7 +73,7 @@ def test_hour_absent_from_map_stays_legacy_none():
     intervals = [ForecastInterval(datetime(2026, 6, 29, 10, tzinfo=UTC), 1000.0, 300.0, 1.0)]
     edge = datetime(2026, 6, 29, 11, tzinfo=UTC)
     # Empty map -> hour 8 stays the legacy None/flat slot.
-    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_hour={})
+    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_slot={})
     h8 = [e for e in out if e["start"] == "2026-06-29T08:00:00+00:00"][0]
     assert h8["pv_w"] is None and h8["load_w"] is None
 
@@ -155,7 +155,7 @@ def test_past_slot_kwh_passthrough_from_actuals():
         },
     }
     edge = datetime(2026, 6, 29, 11, tzinfo=UTC)
-    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_hour=past)
+    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_slot=past)
     h8 = [e for e in out if e["start"] == "2026-06-29T08:00:00+00:00"][0]
     assert h8["pv_kwh"] == 0.9
     assert h8["load_kwh"] == 0.25
@@ -181,10 +181,62 @@ def test_past_slot_kwh_none_when_actual_predates_new_keys():
         },
     }
     edge = datetime(2026, 6, 29, 11, tzinfo=UTC)
-    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_hour=past)
+    out = build_plan_horizon(slots, intervals, [], 50.0, edge, cfg, past_actuals_by_slot=past)
     h8 = [e for e in out if e["start"] == "2026-06-29T08:00:00+00:00"][0]
     assert h8["pv_kwh"] is None
     assert h8["load_kwh"] is None
     assert h8["solar_charge_kwh"] is None
     assert h8["grid_charge_kwh"] is None
     assert h8["grid_export_kwh"] is None
+
+
+def test_no_gap_between_last_actual_and_now_at_15min():
+    """Regression (2026-08-03, live lab): at slot_minutes=15 the elapsed quarters
+    of the RUNNING clock hour rendered with pv_w/load_w/pv_kwh/load_kwh = None,
+    because past actuals stopped at hour_floor(now) while display intervals
+    start at floor_to_slot(now, 15).  The card mapped those to nulls and broke
+    the solar and load lines for up to 45 min before `now`.  With slot-bucketed
+    actuals every row up to now's quarter carries a measurement, and every row
+    from now's quarter on carries a forecast -- no row is left with neither.
+    """
+    cfg = _cfg()
+    hour = datetime(2026, 6, 29, 10, tzinfo=UTC)
+    # now = 10:47 -> now's slot is 10:45; 10:00/10:15/10:30 are elapsed quarters
+    # of the running hour, exactly the rows that used to fall through the crack.
+    quarters = [hour + timedelta(minutes=15 * i) for i in range(4)]
+    slots = [PriceSlot(q, 0.20) for q in quarters]
+    intervals = [ForecastInterval(quarters[3], 1000.0, 300.0, 0.25)]
+    past = {
+        q: {
+            "pv_w": 500.0 + 100.0 * i,
+            "load_w": 250.0,
+            "soc": 40.0,
+            "solar_charge_w": 0.0,
+            "grid_charge_w": 0.0,
+            "grid_export_w": 0.0,
+            "pv_kwh": (500.0 + 100.0 * i) * 0.25 / 1000.0,
+            "load_kwh": 0.0625,
+            "solar_charge_kwh": 0.0,
+            "grid_charge_kwh": 0.0,
+            "grid_export_kwh": 0.0,
+        }
+        for i, q in enumerate(quarters[:3])
+    }
+    out = build_plan_horizon(
+        slots,
+        intervals,
+        [],
+        50.0,
+        hour + timedelta(hours=1),
+        cfg,
+        past_actuals_by_slot=past,
+        slot_minutes=15,
+    )
+    assert len(out) == 4
+    # First three read as measured; the last is the forecast row (pv > load).
+    assert [e["mode"] for e in out] == ["actual", "actual", "actual", "solar"]
+    for e in out:
+        for key in ("pv_w", "load_w", "pv_kwh", "load_kwh"):
+            assert e[key] is not None, f"{key} is None at {e['start']} -- the card would break the line here"
+    # The three elapsed quarters keep their own measurement, not a repeated mean.
+    assert [e["pv_w"] for e in out[:3]] == [500.0, 600.0, 700.0]

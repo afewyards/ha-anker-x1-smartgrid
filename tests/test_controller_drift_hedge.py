@@ -240,7 +240,7 @@ def _make_stub(
         _shadow_dp=False,
         export_price_matches_import=False,
         estimated_tomorrow=None,
-        past_actuals_by_hour=None,
+        past_actuals_by_slot=None,
         hedge_drain_by_hour=None,
         temp_by_hour=None,
         **kwargs,

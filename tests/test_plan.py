@@ -180,7 +180,7 @@ def test_delivered_ignored_on_past_slots():
         49.0,
         BASE + timedelta(hours=1),
         cfg,
-        past_actuals_by_hour={BASE: act},
+        past_actuals_by_slot={BASE: act},
         delivered_by_hour={BASE: {"grid_charge_kwh": 2.5}},
     )
     assert out[0]["mode"] == "actual"
@@ -1551,26 +1551,32 @@ def test_build_display_horizon_slot_minutes_60_is_byte_identical_to_implicit():
     assert implicit, "expected non-empty horizon"
 
 
-def test_past_slot_kwh_divided_across_quarters_at_15min():
-    """A3 regression: at slot_minutes=15, each of the hour's 4 quarter rows must
-    carry an EVEN SHARE of the hour's measured actual, not the full hour total
-    stamped onto every quarter (4x inflated column totals when summed)."""
+def test_past_slot_kwh_read_per_slot_at_15min():
+    """At slot_minutes=15 the actuals arrive already bucketed per SLOT, so each
+    quarter row carries its own measurement verbatim — no hour total stamped
+    onto every quarter (the 4x-inflated column totals of finding A3), and no
+    even split of an hour total either (which flattened four real quarters into
+    one repeated mean; superseded 2026-08-03 by slot-grid bucketing)."""
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)
     hour_start = BASE
-    act = {
-        "pv_w": 800.0,
-        "load_w": 400.0,
-        "soc": 50.0,
-        "solar_charge_w": 400.0,
-        "grid_charge_w": 0.0,
-        "grid_export_w": 0.0,
-        "pv_kwh": 0.8,
-        "load_kwh": 0.4,
-        "solar_charge_kwh": 0.4,
-        "grid_charge_kwh": 0.0,
-        "grid_export_kwh": 0.0,
-    }
     quarters = [hour_start + timedelta(minutes=15 * i) for i in range(4)]
+    # A rising PV quarter-hour: the four buckets must stay distinguishable.
+    per_slot = {
+        q: {
+            "pv_w": pv,
+            "load_w": 400.0,
+            "soc": 50.0,
+            "solar_charge_w": 400.0,
+            "grid_charge_w": 0.0,
+            "grid_export_w": 0.0,
+            "pv_kwh": pv * 0.25 / 1000.0,
+            "load_kwh": 0.1,
+            "solar_charge_kwh": 0.1,
+            "grid_charge_kwh": 0.0,
+            "grid_export_kwh": 0.0,
+        }
+        for q, pv in zip(quarters, (200.0, 600.0, 1000.0, 1400.0))
+    }
     slots = [PriceSlot(q, 0.30) for q in quarters]
     out = plan.build_plan_horizon(
         slots,
@@ -1579,14 +1585,13 @@ def test_past_slot_kwh_divided_across_quarters_at_15min():
         49.0,
         hour_start + timedelta(hours=1),
         cfg,
-        past_actuals_by_hour={hour_start: act},
+        past_actuals_by_slot=per_slot,
         slot_minutes=15,
     )
     assert len(out) == 4
     assert all(e["mode"] == "actual" for e in out)
-    assert out[0]["pv_kwh"] == pytest.approx(0.2)  # 0.8 / 4
-    assert out[0]["load_kwh"] == pytest.approx(0.1)  # 0.4 / 4
-    assert sum(e["pv_kwh"] for e in out) == pytest.approx(0.8)
+    assert [e["pv_w"] for e in out] == [200.0, 600.0, 1000.0, 1400.0]
+    assert [e["pv_kwh"] for e in out] == pytest.approx([0.05, 0.15, 0.25, 0.35])
     assert sum(e["load_kwh"] for e in out) == pytest.approx(0.4)
 
 
@@ -1614,7 +1619,7 @@ def test_past_slot_kwh_unscaled_at_default_slot_minutes():
         49.0,
         BASE + timedelta(hours=1),
         cfg,
-        past_actuals_by_hour={BASE: act},
+        past_actuals_by_slot={BASE: act},
     )
     assert out[0]["pv_kwh"] == 0.837
     assert out[0]["load_kwh"] == 0.412

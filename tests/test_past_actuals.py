@@ -167,3 +167,79 @@ def test_w_keys_unchanged():
     assert rec["grid_charge_w"] == 100.0
     # grid_export_w = mean(max(0, -p1_w)) = 200
     assert rec["grid_export_w"] == 200.0
+
+
+# --- Slot-grid bucketing (2026-08-03 history-gap fix) -----------------------
+#
+# aggregate_past_actuals buckets by clock hour by default. At sub-hour display
+# resolution the caller passes slot_minutes so each display slot gets its OWN
+# measurement instead of the hour mean repeated across its quarters -- and, more
+# importantly, so the elapsed quarters of the CURRENT hour become available as
+# actuals (the hour bucket is only complete, and only released, after the hour
+# ends, which left those quarters with neither an actual nor a forecast).
+
+
+def test_slot_bucketing_splits_the_hour_into_its_own_slots():
+    # One tick per quarter, each with a distinct pv/load: at slot_minutes=15 the
+    # hour must yield 4 buckets carrying their own values, not one hour mean.
+    rows = [
+        {"ts": _ts(10, m), "pv_w": pv, "load_w": 200.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0}
+        for m, pv in ((0, 400.0), (15, 800.0), (30, 1200.0), (45, 1600.0))
+    ]
+    out = aggregate_past_actuals(rows, slot_minutes=15)
+    assert len(out) == 4
+    for m, pv in ((0, 400.0), (15, 800.0), (30, 1200.0), (45, 1600.0)):
+        assert out[datetime(2026, 6, 29, 10, m, tzinfo=UTC)]["pv_w"] == pv
+
+
+def test_slot_bucketing_default_is_byte_identical_to_hour_bucketing():
+    rows = [
+        {"ts": _ts(10, m), "pv_w": 1000.0, "load_w": 500.0, "batt_w": -600.0, "p1_w": -200.0, "soc": 50.0}
+        for m in range(60)
+    ]
+    assert aggregate_past_actuals(rows, slot_minutes=60) == aggregate_past_actuals(rows)
+
+
+def test_slot_bucket_energy_is_per_slot_not_per_hour():
+    # v9 delta path: each slot sums only ITS OWN ticks, so the four quarters add
+    # back up to exactly the hour total (no double-count, no quartering).
+    rows = [
+        {
+            "ts": _ts(10, m),
+            "pv_w": 1000.0,
+            "pv_kwh": 0.02,
+            "load_w": 500.0,
+            "house_load_kwh": 0.01,
+            "batt_w": 0.0,
+            "p1_w": 0.0,
+            "soc": 50.0,
+        }
+        for m in range(60)
+    ]
+    per_slot = aggregate_past_actuals(rows, slot_minutes=15)
+    hourly = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=UTC)]
+    assert len(per_slot) == 4
+    assert all(round(r["pv_kwh"], 3) == round(0.02 * 15, 3) for r in per_slot.values())
+    assert round(sum(r["pv_kwh"] for r in per_slot.values()), 3) == hourly["pv_kwh"]
+    assert round(sum(r["load_kwh"] for r in per_slot.values()), 3) == hourly["load_kwh"]
+
+
+def test_mean_w_fallback_coverage_denominator_follows_slot_width():
+    # Pre-v9 rows (no delta columns) fall back to mean-W x slot_h x coverage.
+    # A FULL quarter is 15 ticks, not 60: with the hour's denominator this
+    # 15-tick quarter would have read as 25% covered and under-reported 4x.
+    rows = [
+        {"ts": _ts(10, m), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0} for m in range(15)
+    ]
+    rec = aggregate_past_actuals(rows, slot_minutes=15)[datetime(2026, 6, 29, 10, tzinfo=UTC)]
+    assert rec["pv_kwh"] == 0.25  # 1000 W over a full 15-min slot
+    assert rec["load_kwh"] == 0.125
+
+
+def test_mean_w_fallback_partial_slot_still_scaled_down():
+    # 5 of 15 ticks in the quarter -> a third of the slot's worth of energy.
+    rows = [
+        {"ts": _ts(10, m), "pv_w": 1000.0, "load_w": 500.0, "batt_w": 0.0, "p1_w": 0.0, "soc": 50.0} for m in range(5)
+    ]
+    rec = aggregate_past_actuals(rows, slot_minutes=15)[datetime(2026, 6, 29, 10, tzinfo=UTC)]
+    assert rec["pv_kwh"] == round(1.0 * 0.25 * 5 / 15, 3)

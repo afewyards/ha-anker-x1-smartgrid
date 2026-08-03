@@ -172,6 +172,15 @@ _PERSIST_FIELDS = [field for group in _PERSIST_GROUPS for field in group]
 
 
 class Controller:
+    # Pure per-tick caches, declared at class level (and re-initialised in
+    # __init__) so they read as "empty" rather than raising AttributeError on a
+    # partially constructed instance — the __new__-without-__init__ stub the
+    # controller tests build. Caches only: never carry state control depends on.
+    _running_rows: list | None = None
+    _running_rows_at: datetime | None = None
+    _past_actuals_slot_cache: dict | None = None
+    _past_actuals_slot_minutes: int | None = None
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -271,10 +280,22 @@ class Controller:
         # every tick the DP runs.  Drives the card's arbitrage_pnl attribute so it
         # shows the plan, not just realized ticks (which stay 0.0 until export fires).
         self.planned_export_revenue_eur: float = 0.0
-        # Past-actuals cache: per-clock-hour measured values for the display horizon.
-        # Refreshed at most once per clock-hour (past hours never change).
+        # Past-actuals cache: measured values for the display horizon, aggregated
+        # at BOTH granularities from one recorder read — per clock-hour (what
+        # load_adapt matches against its hourly prediction log) and per display
+        # slot (what the plan horizon draws). Refreshed at most once per clock-
+        # hour; both only ever hold COMPLETE hours, which never change. The
+        # running hour's elapsed slots come from _get_running_hour_rows instead,
+        # which must stay fresh within the hour.
         self._past_actuals_cache: dict | None = None
+        self._past_actuals_slot_cache: dict | None = None
+        self._past_actuals_slot_minutes: int | None = None
         self._past_actuals_hour: datetime | None = None
+        # Running-hour rows, memoised on the tick's own `now` so the two
+        # consumers (delivered add-back + the elapsed slots of the running hour)
+        # share one read per tick instead of querying twice.
+        self._running_rows: list | None = None
+        self._running_rows_at: datetime | None = None
         # Per-day statistics: closed days never change, so the measured half
         # is aggregated once per local day (see _refresh_daily_actuals) rather
         # than re-querying ~20k sample rows every 60s tick.
@@ -426,27 +447,104 @@ class Controller:
         c = self._planner_curve()
         return optimize_mod.eta_discharge(self.cfg) if c is None else c.eta_discharge(power_w)
 
-    async def _get_past_actuals(self, now) -> dict:
-        """Measured actuals per past clock-hour for the display horizon.
+    async def _refresh_past_actuals(self, now, slot_minutes: int = 60) -> None:
+        """Rebuild both past-actuals caches from ONE 48h recorder read.
 
-        Built once per clock-hour from the recorder (completed past hours never
-        change) and filtered to hours strictly before now_h so the forward
-        projection is untouched. Returns {} on error (past slots stay empty).
+        Completed past hours never change, so this runs at most once per clock-
+        hour. Both caches are filtered to strictly before now_h — the running
+        hour is deliberately excluded here (its rows are still arriving) and is
+        served per-slot by ``_get_past_actuals_slots``. Leaves the caches empty
+        on error; both getters then return {} and past slots stay blank.
         """
         now_h = resolution.hour_floor(now)
-        if self._past_actuals_hour == now_h and self._past_actuals_cache is not None:
-            return self._past_actuals_cache
+        if (
+            self._past_actuals_hour == now_h
+            and self._past_actuals_cache is not None
+            and self._past_actuals_slot_minutes == slot_minutes
+        ):
+            return
         try:
             since_iso = (now - timedelta(hours=48)).isoformat()
             rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, since_iso)
-            actuals = past_actuals_mod.aggregate_past_actuals(rows)
-            actuals = {h: v for h, v in actuals.items() if h < now_h}
-            self._past_actuals_cache = actuals
+            hourly = past_actuals_mod.aggregate_past_actuals(rows)
+            self._past_actuals_cache = {h: v for h, v in hourly.items() if h < now_h}
+            if slot_minutes == 60:
+                # Same bucketing — reuse rather than aggregate the rows twice.
+                self._past_actuals_slot_cache = self._past_actuals_cache
+            else:
+                by_slot = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+                self._past_actuals_slot_cache = {h: v for h, v in by_slot.items() if h < now_h}
+            self._past_actuals_slot_minutes = slot_minutes
             self._past_actuals_hour = now_h
-            return actuals
         except Exception:
             _LOGGER.warning("past-actuals build failed; horizon past slots stay empty", exc_info=True)
-            return {}
+            self._past_actuals_cache = None
+            self._past_actuals_slot_cache = None
+            self._past_actuals_hour = None
+            self._past_actuals_slot_minutes = None
+
+    async def _get_past_actuals(self, now, slot_minutes: int = 60) -> dict:
+        """Measured actuals per past CLOCK-HOUR — the load_adapt input.
+
+        Hour-granular on purpose: ``load_adapt.residual_ratio`` matches
+        ``now_h - back`` against an hourly prediction log and reads ``load_kwh``
+        as a whole clock-hour's energy. Filtered to hours strictly before now_h
+        so the forward projection is untouched. Returns {} on error.
+        """
+        await self._refresh_past_actuals(now, slot_minutes)
+        return self._past_actuals_cache or {}
+
+    async def _get_past_actuals_slots(self, now, slot_minutes: int = 60) -> dict:
+        """Measured actuals per past DISPLAY SLOT — the plan-horizon input.
+
+        Two parts, because they have different freshness needs:
+
+        - completed hours, from the once-per-hour cache, bucketed on the slot
+          grid so each 15-min row shows its own measurement rather than four
+          copies of the hour's mean;
+        - the elapsed slots of the RUNNING hour, re-read every tick. These are
+          the rows the hourly aggregate could never provide (its bucket is only
+          released once the hour completes) while ``build_display_intervals``
+          starts at ``floor_to_slot(now, slot_minutes)`` — so at 15-min they had
+          neither an actual nor a forecast and the card drew a hole of up to
+          45 min just before ``now`` (live lab, fixed 2026-08-03).
+
+        The running-hour slice stops strictly before now's own slot, which is
+        the exact complement of where the forecast begins: every row is covered
+        once, none twice. At slot_minutes=60 the second part is always empty
+        (now's slot IS now's hour), so this reduces to the hourly cache.
+        """
+        await self._refresh_past_actuals(now, slot_minutes)
+        out = dict(self._past_actuals_slot_cache or {})
+        now_slot = resolution.floor_to_slot(now, slot_minutes)
+        if now_slot > resolution.hour_floor(now):
+            try:
+                rows = await self._get_running_hour_rows(now)
+                running = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+                out.update({s: v for s, v in running.items() if s < now_slot})
+            except Exception:
+                _LOGGER.warning(
+                    "running-hour slot actuals failed; the card's solar/load history "
+                    "may break between the last full hour and now",
+                    exc_info=True,
+                )
+        return out
+
+    async def _get_running_hour_rows(self, now) -> list:
+        """Recorder rows for the current clock-hour, memoised per tick.
+
+        Both consumers (``_get_current_delivered`` and the running-hour slice of
+        ``_get_past_actuals_slots``) run inside the same tick with the same
+        ``now``, so this is one read per tick, not two. Never cached ACROSS
+        ticks — the whole point is that this hour is still filling.
+        """
+        if self._running_rows_at == now and self._running_rows is not None:
+            return self._running_rows
+        now_h = resolution.hour_floor(now)
+        rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, now_h.isoformat())
+        self._running_rows = rows
+        self._running_rows_at = now
+        return rows
 
     async def _get_current_delivered(self, now) -> dict:
         """Grid energy already delivered in the CURRENT, still-running clock-hour.
@@ -464,21 +562,22 @@ class Controller:
         tick), never the 48 h window. Returns {} on error — the card degrades to
         the old under-report rather than the tick failing.
 
-        DEFERRED (finding A4): at 15-min slot resolution, up to 3 completed
-        sibling quarters fold into "current" here (``now_h`` is a clock-hour
-        floor, not a slot floor).  NOT switched to ``floor_to_slot(now,
-        slot_minutes)`` — ``aggregate_past_actuals`` buckets recorder samples
-        by ``hour_floor`` internally (past_actuals.py), regardless of what key
-        we filter on here, so a slot-floored ``now_h`` would simply never
-        match any key in ``actuals`` and this would start returning {} on
-        every 15-min tick (losing the delivered-energy add-back entirely,
-        worse than the current over-report). Fixing it for real needs
-        ``aggregate_past_actuals`` itself to bucket on the slot grid, which is
-        out of this fix's file scope (past_actuals.py).
+        Stays CLOCK-HOUR keyed (both the aggregation and the filter): its
+        consumer ``plan.build_horizon`` looks it up hour-floored, so a
+        slot-floored key here would never match and the add-back would vanish.
+
+        Finding A4 (partially closed 2026-08-03): the add-back lands on every
+        row of the running hour, so at 15-min the hour's delivered kWh is
+        counted once per remaining quarter. The elapsed quarters no longer
+        take it — they are now real ``mode="actual"`` rows fed by
+        ``_get_past_actuals_slots`` — so the over-report shrinks as the hour
+        runs out, but it is not gone. Closing it properly means giving the
+        add-back its own slot-grid key, which belongs with its producer
+        (``executor``/``plan``), not here.
         """
         now_h = resolution.hour_floor(now)
         try:
-            rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, now_h.isoformat())
+            rows = await self._get_running_hour_rows(now)
             actuals = past_actuals_mod.aggregate_past_actuals(rows)
             return {h: v for h, v in actuals.items() if h == now_h}
         except Exception:
@@ -937,7 +1036,7 @@ class Controller:
         dp_out: dict,
         shadow: bool = False,
         estimated_tomorrow=None,
-        past_actuals_by_hour: dict | None = None,
+        past_actuals_by_slot: dict | None = None,
         hedge_drain_by_hour: dict | None = None,
         delivered_by_hour: dict | None = None,
     ):
@@ -945,7 +1044,7 @@ class Controller:
 
         ``shadow=True`` mirrors the disabled-path call site exactly: sets
         ``_shadow_dp=True`` and omits the live-only kwargs (estimated_tomorrow /
-        past_actuals_by_hour / hedge_drain_by_hour / delivered_by_hour — these
+        past_actuals_by_slot / hedge_drain_by_hour / delivered_by_hour — these
         already default to None in ``compute_decision``, so omitting == passing
         None). The guard
         (whether to call at all) and the try/except around the shadow call
@@ -967,7 +1066,7 @@ class Controller:
             kwargs["_shadow_dp"] = True
         else:
             kwargs["estimated_tomorrow"] = estimated_tomorrow
-            kwargs["past_actuals_by_hour"] = past_actuals_by_hour
+            kwargs["past_actuals_by_slot"] = past_actuals_by_slot
             kwargs["hedge_drain_by_hour"] = hedge_drain_by_hour
             kwargs["delivered_by_hour"] = delivered_by_hour
         return await self._hass.async_add_executor_job(
@@ -1413,7 +1512,11 @@ class Controller:
                 _tom,
                 weight_today=self.cfg.price_blend_weight_today,
             )
-        past_actuals = await self._get_past_actuals(now)
+        # Two granularities, one recorder read: hourly for load_adapt (which is
+        # hour-semantic), slot-gridded for the plan horizon (which draws one row
+        # per display slot, including the elapsed slots of the running hour).
+        past_actuals = await self._get_past_actuals(now, _slot_minutes)
+        past_actuals_slots = await self._get_past_actuals_slots(now, _slot_minutes)
         # Current, still-running hour — rebuilt every tick so an in-progress grid
         # charge stays on the card (display-only; see _get_current_delivered).
         delivered_now = await self._get_current_delivered(now)
@@ -1447,7 +1550,7 @@ class Controller:
             slot_minutes=_slot_minutes,
             dp_out=_dp_out,
             estimated_tomorrow=_estimated_tomorrow,
-            past_actuals_by_hour=past_actuals,
+            past_actuals_by_slot=past_actuals_slots,
             hedge_drain_by_hour=hedge_drain_by_hour,
             delivered_by_hour=delivered_now,
         )

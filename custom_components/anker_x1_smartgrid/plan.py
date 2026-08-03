@@ -126,7 +126,7 @@ def build_plan_horizon(
     export_request_by_hour: dict[datetime, float] | None = None,
     reserve_by_hour: dict[datetime, float] | None = None,
     ceiling_by_hour: dict[datetime, float] | None = None,
-    past_actuals_by_hour: dict[datetime, dict] | None = None,
+    past_actuals_by_slot: dict[datetime, dict] | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     slot_minutes: int = 60,
     delivered_by_hour: dict[datetime, dict] | None = None,
@@ -162,7 +162,7 @@ def build_plan_horizon(
     reflects export hours correctly.
 
     ``delivered_by_hour`` maps an hour-start datetime to a partial-actuals record
-    (``{"grid_charge_kwh": ...}``, same shape as ``past_actuals_by_hour``) for grid
+    (``{"grid_charge_kwh": ...}``, same shape as ``past_actuals_by_slot``) for grid
     energy ALREADY DELIVERED in a slot that is still in progress.  In practice only
     the current slot ever has an entry.  Without it, an in-progress grid charge
     disappears from the card as it is delivered: ``grid_charge_w`` below is the
@@ -211,7 +211,7 @@ def build_plan_horizon(
     DP's native unit, for planning/charting (e.g. the Lovelace energy card).
     For future (planned) slots these are ``watts * dt_h / 1000`` derived from
     the corresponding ``*_w`` field. For past slots they are the measured
-    ``∫P dt`` energy sums passed through verbatim from ``past_actuals_by_hour``
+    ``∫P dt`` energy sums passed through verbatim from ``past_actuals_by_slot``
     (``None`` when a cached actual predates these keys). The ``*_w`` fields
     are retained unchanged for back-compat (average power over the slot).
     """
@@ -254,7 +254,6 @@ def build_plan_horizon(
     est_set = {hour_floor(s) for s in (est_starts or ())}
     cap_wh = cfg.capacity_kwh * 1000.0
     cap_kwh = cap_wh / 1000.0
-    _slot_frac = slot_minutes / 60.0
     eta = cfg.eta_charge_safe()
     # NOTE: guard applied to the whole expression (not just eta_charge in the
     # divisor) — diverges from Config.eta_discharge_static() in the
@@ -270,7 +269,7 @@ def build_plan_horizon(
         # est_set/rsv/hedge/deliv, which are genuinely per-clock-hour. Equal to
         # `hour` at slot_minutes=60.
         slot_key = floor_to_slot(slot.start, slot_minutes)
-        act = past_actuals_by_hour.get(hour) if past_actuals_by_hour else None
+        act = past_actuals_by_slot.get(slot_key) if past_actuals_by_slot else None
         if act is not None:
             # Past slot: emit recorded actuals verbatim and DO NOT advance soc_sim,
             # so the forward projection from the current SoC at now_h is unchanged.
@@ -281,13 +280,19 @@ def build_plan_horizon(
                 reserve_soc = cfg.soc_floor
             solar_charge_w = act["solar_charge_w"]
             grid_charge_w = act["grid_charge_w"]
-            # A3: aggregate_past_actuals bucketing is genuinely per-clock-hour (the
-            # recorder samples are hour-keyed), so every slot row sharing this hour
-            # looks up the SAME hour-total actual. At 15-min that stamped the FULL
-            # hour's energy onto each of the 4 quarter rows (4x inflated column
-            # totals when summed). Split it evenly across the hour's slot rows
-            # instead — _slot_frac = slot_minutes/60 is 1.0 (no-op) at the legacy
-            # 60-min resolution.
+            # Keyed on slot_key, and the energies pass through UNSCALED: since
+            # 2026-08-03 the caller buckets the recorder samples on this same
+            # display slot grid (aggregate_past_actuals(rows, slot_minutes)), so
+            # each row's record is already its own slot's measurement.
+            #
+            # History: this used to look up `hour` and divide by slot_minutes/60,
+            # because the actuals were bucketed per clock-hour — first stamping
+            # the FULL hour's energy onto each of 4 quarter rows (finding A3, 4x
+            # inflated totals), then splitting it evenly (correct totals, but all
+            # four quarters showed one repeated mean). Neither could fill the
+            # elapsed quarters of the RUNNING hour, whose bucket does not exist
+            # until the hour completes — that hole is what broke the card's
+            # solar/load lines for up to 45 min before `now`.
             _pv_kwh = act.get("pv_kwh")
             _load_kwh = act.get("load_kwh")
             _solar_charge_kwh = act.get("solar_charge_kwh")
@@ -309,11 +314,11 @@ def build_plan_horizon(
                     "grid_export_w": act["grid_export_w"],
                     "self_discharge_w": 0.0,
                     "reserve_soc": round(reserve_soc, 1),
-                    "pv_kwh": _pv_kwh * _slot_frac if _pv_kwh is not None else None,
-                    "load_kwh": _load_kwh * _slot_frac if _load_kwh is not None else None,
-                    "solar_charge_kwh": _solar_charge_kwh * _slot_frac if _solar_charge_kwh is not None else None,
-                    "grid_charge_kwh": _grid_charge_kwh * _slot_frac if _grid_charge_kwh is not None else None,
-                    "grid_export_kwh": _grid_export_kwh * _slot_frac if _grid_export_kwh is not None else None,
+                    "pv_kwh": _pv_kwh,
+                    "load_kwh": _load_kwh,
+                    "solar_charge_kwh": _solar_charge_kwh,
+                    "grid_charge_kwh": _grid_charge_kwh,
+                    "grid_export_kwh": _grid_export_kwh,
                 }
             )
             continue
@@ -457,7 +462,7 @@ def build_display_horizon(
     ceiling_by_hour: dict[datetime, float] | None = None,
     today_watts: list[list[tuple[datetime, float]]] | None = None,
     tomorrow_watts: list[list[tuple[datetime, float]]] | None = None,
-    past_actuals_by_hour: dict[datetime, dict] | None = None,
+    past_actuals_by_slot: dict[datetime, dict] | None = None,
     hedge_drain_by_hour: dict[datetime, float] | None = None,
     temp_by_hour: dict[datetime, float | None] | None = None,
     delivered_by_hour: dict[datetime, dict] | None = None,
@@ -565,7 +570,7 @@ def build_display_horizon(
         export_request_by_hour=export_request_by_hour,
         reserve_by_hour=reserve_by_hour,
         ceiling_by_hour=ceiling_by_hour,
-        past_actuals_by_hour=past_actuals_by_hour,
+        past_actuals_by_slot=past_actuals_by_slot,
         hedge_drain_by_hour=hedge_drain_by_hour,
         delivered_by_hour=delivered_by_hour,
         slot_minutes=slot_minutes,

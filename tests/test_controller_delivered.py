@@ -7,7 +7,7 @@ See plan.build_plan_horizon's ``delivered_by_hour`` contract and the live
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 
 import pytest
 
@@ -88,8 +88,15 @@ async def test_get_current_delivered_returns_only_the_in_progress_hour():
 
 
 @pytest.mark.asyncio
-async def test_get_current_delivered_is_not_cached_within_the_hour():
-    """The in-progress hour changes under us — unlike completed past hours."""
+async def test_get_current_delivered_is_not_cached_across_ticks_within_the_hour():
+    """The in-progress hour changes under us — unlike completed past hours.
+
+    Every LATER ``now`` must re-read, even though the clock-hour is unchanged.
+    Repeat calls at the SAME ``now`` share one read on purpose (the per-tick
+    memo added 2026-08-03, so the delivered add-back and the running-hour slot
+    actuals don't query the recorder twice per tick) — that is not caching
+    across time, and the assertion below pins both halves.
+    """
 
     class _Rec:
         def __init__(self):
@@ -107,7 +114,9 @@ async def test_get_current_delivered_is_not_cached_within_the_hour():
     now = datetime(2026, 7, 29, 11, 24, tzinfo=UTC)
     await c._get_current_delivered(now)
     await c._get_current_delivered(now)
-    assert c._recorder.n == 2
+    assert c._recorder.n == 1  # same tick → one read
+    await c._get_current_delivered(now + timedelta(minutes=1))
+    assert c._recorder.n == 2  # next tick, same hour → re-read
 
 
 @pytest.mark.asyncio

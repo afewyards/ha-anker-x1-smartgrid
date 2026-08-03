@@ -3,7 +3,7 @@ _get_past_actuals caches per clock-hour and filters to hours < now_h."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, UTC
+from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
@@ -53,7 +53,7 @@ def test_compute_decision_threads_past_actuals_into_horizon():
         15.0,
         cfg,
         sun_times=None,
-        past_actuals_by_hour=past,
+        past_actuals_by_slot=past,
     )
     h8 = [e for e in horizon if e["start"] == "2026-06-29T08:00:00+00:00"]
     assert h8 and h8[0]["pv_w"] == 800.0 and h8[0]["mode"] == "actual"
@@ -97,3 +97,105 @@ async def test_get_past_actuals_caches_per_hour_and_filters_future():
     assert datetime(2026, 6, 29, 9, tzinfo=UTC) in out1
     assert calls["n"] == 1  # second call served from cache (same clock-hour)
     assert out1 == out2
+
+
+# --- Slot-grid display actuals (2026-08-03 history-gap fix) ----------------
+
+
+def _tick_rows(hour, minutes):
+    return [
+        {
+            "ts": datetime(2026, 6, 29, hour, m, tzinfo=UTC).isoformat(),
+            "pv_w": 500.0,
+            "load_w": 200.0,
+            "batt_w": 0.0,
+            "p1_w": 0.0,
+            "soc": 40.0,
+        }
+        for m in minutes
+    ]
+
+
+def _stub_controller(rows):
+    class _Rec:
+        def __init__(self):
+            self.n = 0
+
+        def read_feature_rows(self, since_iso=None):
+            self.n += 1
+            return [r for r in rows if r["ts"] >= (since_iso or "")]
+
+    c = ctrl.Controller.__new__(ctrl.Controller)
+    c._hass = _Hass()
+    c._recorder = _Rec()
+    c.cfg = Config()
+    c._past_actuals_cache = None
+    c._past_actuals_slot_cache = None
+    c._past_actuals_slot_minutes = None
+    c._past_actuals_hour = None
+    c._running_rows = None
+    c._running_rows_at = None
+    return c
+
+
+@pytest.mark.asyncio
+async def test_slot_actuals_cover_the_elapsed_quarters_of_the_running_hour():
+    """The reported gap: at 15-min, 10:00/10:15/10:30 are past but their CLOCK
+    HOUR is still running, so the hourly aggregate never released them and the
+    forecast (which starts at now's slot, 10:45) never covered them either."""
+    rows = _tick_rows(9, range(60)) + _tick_rows(10, range(47))
+    c = _stub_controller(rows)
+    now = datetime(2026, 6, 29, 10, 47, tzinfo=UTC)
+
+    out = await c._get_past_actuals_slots(now, 15)
+
+    assert datetime(2026, 6, 29, 10, 30, tzinfo=UTC) in out, "elapsed quarter missing → card draws a hole"
+    assert sorted(out) == [datetime(2026, 6, 29, 9, m, tzinfo=UTC) for m in (0, 15, 30, 45)] + [
+        datetime(2026, 6, 29, 10, m, tzinfo=UTC) for m in (0, 15, 30)
+    ]
+    # now's own slot is the forecast's first row — it must NOT also be an actual.
+    assert datetime(2026, 6, 29, 10, 45, tzinfo=UTC) not in out
+
+
+@pytest.mark.asyncio
+async def test_load_adapt_input_stays_hour_bucketed_at_15min():
+    """load_adapt matches now_h - back against an HOURLY prediction log and reads
+    load_kwh as a whole clock-hour's energy — it must not see slot buckets."""
+    rows = _tick_rows(9, range(60)) + _tick_rows(10, range(47))
+    c = _stub_controller(rows)
+    now = datetime(2026, 6, 29, 10, 47, tzinfo=UTC)
+
+    hourly = await c._get_past_actuals(now, 15)
+
+    assert list(hourly) == [datetime(2026, 6, 29, 9, tzinfo=UTC)]
+
+
+@pytest.mark.asyncio
+async def test_slot_actuals_reduce_to_the_hourly_cache_at_60min():
+    """slot_minutes=60: now's slot IS now's hour, so there is no running-hour
+    slice and no second recorder read — byte-identical to the legacy path."""
+    rows = _tick_rows(9, range(60)) + _tick_rows(10, range(47))
+    c = _stub_controller(rows)
+    now = datetime(2026, 6, 29, 10, 47, tzinfo=UTC)
+
+    slots = await c._get_past_actuals_slots(now, 60)
+    hourly = await c._get_past_actuals(now, 60)
+
+    assert slots == hourly
+    assert c._recorder.n == 1  # one 48h read, no running-hour read
+
+
+@pytest.mark.asyncio
+async def test_slot_actuals_share_one_recorder_read_per_tick():
+    """The 48h read is cached per clock-hour; the running-hour read is memoised
+    on the tick's own `now` and shared with the delivered add-back."""
+    rows = _tick_rows(9, range(60)) + _tick_rows(10, range(47))
+    c = _stub_controller(rows)
+    now = datetime(2026, 6, 29, 10, 47, tzinfo=UTC)
+
+    await c._get_past_actuals_slots(now, 15)
+    await c._get_current_delivered(now)
+    assert c._recorder.n == 2  # one 48h + one running-hour, not three
+
+    await c._get_past_actuals_slots(now + timedelta(minutes=1), 15)
+    assert c._recorder.n == 3  # next tick re-reads the running hour only

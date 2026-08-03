@@ -523,7 +523,7 @@ def _capture_plan_stub(captured: dict):
         _shadow_dp=False,
         export_price_matches_import=False,
         estimated_tomorrow=None,
-        past_actuals_by_hour=None,
+        past_actuals_by_slot=None,
         **kwargs,
     ):
         captured["plan"] = plan
