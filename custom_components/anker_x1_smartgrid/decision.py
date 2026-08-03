@@ -890,15 +890,12 @@ def compute_decision(
             docstring); surfaced on the plan sensor for rollout observability.
         _out["export_curve_slots"]   — int, count of ``export_slots`` supplied as
             parsed (0 when none), independent of whether coverage passed.
-        _out["now_selected"] — bool, whether ``inputs.now``'s own slot is a
-            member of the FINAL ``selected_slots`` passed to
-            ``scheduler.decide_state`` this tick (identical formula, same
-            slot-floor, same list — after the edge-hysteresis/anti-fight-guard
-            adjustments, not the raw DP output). The one exception to the
-            "only on DP success" rule below: always written when ``_out`` is
-            provided, because "the DP does not currently want this hour" is
-            equally true (and equally load-bearing for callers) on a DP
-            failure, where ``selected_slots`` is the empty-list fallback.
+        _out["now_selected"] — bool, whether ``inputs.now``'s own slot is in
+            the FINAL ``selected_slots`` passed to ``scheduler.decide_state``
+            this tick (post edge-hysteresis/anti-fight-guard, not the raw DP
+            output). Exception to the "only on DP success" rule below: always
+            written when ``_out`` is provided, since ``selected_slots`` is
+            the empty-list fallback on a DP failure too.
     All other keys are written only when the DP actually runs and succeeds;
     the dict is left untouched for those when the DP raises.
 
@@ -1264,11 +1261,8 @@ def compute_decision(
         committed_cur_kwh = 0.0
 
     if _out is not None:
-        # Mirrors scheduler.decide_state's own `now_selected` formula exactly
-        # (scheduler.py's `_slot_start(now, slot_minutes) in {_slot_start(s,
-        # slot_minutes) for s in selected_slots}`) against the SAME `selected`
-        # about to be passed below — real, not inferred: this can never
-        # disagree with what decide_state computes internally this tick.
+        # Same formula scheduler.decide_state uses internally, against the
+        # SAME `selected` about to be passed to it below.
         _out["now_selected"] = scheduler._slot_start(inputs.now, slot_minutes) in {
             scheduler._slot_start(s, slot_minutes) for s in selected
         }
