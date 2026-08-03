@@ -88,6 +88,49 @@ async def test_get_current_delivered_returns_only_the_in_progress_hour():
 
 
 @pytest.mark.asyncio
+async def test_get_current_delivered_is_scoped_to_the_in_progress_slot_at_15_min():
+    """At 15-min the add-back must carry ONE quarter's energy, not the hour's.
+
+    The elapsed quarters are already drawn as ``mode="actual"`` rows by
+    ``_get_past_actuals_slots`` (which stops strictly before now's slot), so
+    handing the whole hour back here both double-counts them and inflates the
+    in-progress quarter — the live 2026-08-03 42 kW row.
+    """
+    rows = [
+        {
+            "ts": datetime(2026, 7, 29, 11, m, tzinfo=UTC).isoformat(),
+            "pv_w": 0.0,
+            "load_w": 0.0,
+            "batt_w": -6000.0,
+            "p1_w": 6000.0,
+            "soc": 40.0,
+            "batt_charge_kwh": 0.1,
+            "pv_kwh": 0.0,
+            "house_load_kwh": 0.0,
+            "grid_export_kwh": 0.0,
+        }
+        for m in (10, 35, 50)
+    ]
+
+    class _Rec:
+        def read_feature_rows(self, since_iso=None):
+            return [r for r in rows if r["ts"] >= (since_iso or "")]
+
+    c = ctrl.Controller.__new__(ctrl.Controller)
+    c._hass = _Hass()
+    c._recorder = _Rec()
+    c.cfg = Config()
+
+    now = datetime(2026, 7, 29, 11, 52, tzinfo=UTC)
+    out = await c._get_current_delivered(now, 15)
+
+    cur_slot = datetime(2026, 7, 29, 11, 45, tzinfo=UTC)
+    assert list(out) == [cur_slot]
+    # The 11:50 row alone (0.1 kWh) — not the 0.3 kWh of the whole hour.
+    assert out[cur_slot]["grid_charge_kwh"] == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
 async def test_get_current_delivered_is_not_cached_across_ticks_within_the_hour():
     """The in-progress hour changes under us — unlike completed past hours.
 

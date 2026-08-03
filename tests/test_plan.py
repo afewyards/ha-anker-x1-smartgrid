@@ -157,6 +157,62 @@ def test_delivered_adds_to_a_still_running_modelled_grid_charge():
     assert out[0]["grid_charge_kwh"] == pytest.approx(2.5)
 
 
+def test_delivered_lands_only_on_the_in_progress_slot_at_15_min():
+    """The add-back is ONE slot's own delivered kWh, on that slot only.
+
+    Live lab 2026-08-03: ``delivered_by_hour`` was clock-hour keyed AND
+    hour-floored on lookup, so every not-yet-elapsed quarter of the running
+    hour received a copy of the WHOLE hour's delivered energy — the 13:45
+    quarter rendered 42.2 kW / 10.56 kWh on a 12 kW inverter (finding A4).
+
+    Ceiling 50% with the SoC at 40% leaves 2 kWh of headroom, which the first
+    quarter consumes in full; the remaining three are modelled at 0. Only the
+    in-progress quarter (:45) may carry the 0.5 kWh already delivered.
+    """
+    cfg = Config(capacity_kwh=20.0, soc_target=100.0, max_charge_w=12000.0, eta_charge=1.0)
+    starts = [BASE + timedelta(minutes=15 * i) for i in range(4)]
+    slots = [PriceSlot(s, 0.30) for s in starts]
+    intervals = [ForecastInterval(s, pv_w=0.0, load_w=0.0, dt_h=0.25) for s in starts]
+    out = plan.build_plan_horizon(
+        slots,
+        intervals,
+        starts,
+        40.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        ceiling_by_hour={s: 50.0 for s in starts},
+        delivered_by_hour={starts[3]: {"grid_charge_kwh": 0.5}},
+        slot_minutes=15,
+    )
+    assert [e["grid_charge_kwh"] for e in out] == [2.0, 0.0, 0.0, 0.5]
+    assert [e["grid_charge_w"] for e in out] == [8000.0, 0.0, 0.0, 2000.0]
+
+
+def test_delivered_cannot_push_a_slot_past_its_physical_import_cap():
+    """A slot can never import more than the connection allows for its duration.
+
+    The modelled remainder is a FULL-slot rate. When the charge is RATE-bound
+    (deep in a cheap window, ceiling far above) rather than headroom-bound, it
+    and the already-delivered kWh both cover the minutes already elapsed, so
+    they no longer sum to the slot total. Live lab 2026-08-03: 12 kW modelled
+    + 2.3 kWh delivered = 5.3 kWh into a 15-min quarter — still impossible
+    even once the add-back stopped being hour-keyed.
+    """
+    cfg = Config(capacity_kwh=20.0, soc_target=100.0, max_charge_w=12000.0, eta_charge=1.0)
+    out = plan.build_plan_horizon(
+        [PriceSlot(BASE, 0.30)],
+        [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=0.25)],
+        [BASE],
+        40.0,
+        BASE + timedelta(minutes=15),
+        cfg,
+        delivered_by_hour={BASE: {"grid_charge_kwh": 2.3}},
+        slot_minutes=15,
+    )
+    assert out[0]["grid_charge_w"] == 12000.0
+    assert out[0]["grid_charge_kwh"] == 3.0
+
+
 def test_delivered_ignored_on_past_slots():
     """Past slots already carry measured actuals; delivered must not double up."""
     cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0)

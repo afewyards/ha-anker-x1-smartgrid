@@ -161,10 +161,13 @@ def build_plan_horizon(
     remainder).  Export DRAINS the SoC simulation so the projected-SoC line
     reflects export hours correctly.
 
-    ``delivered_by_hour`` maps an hour-start datetime to a partial-actuals record
+    ``delivered_by_hour`` maps a SLOT-start datetime (hour-start only when
+    ``slot_minutes=60``; the name is legacy) to a partial-actuals record
     (``{"grid_charge_kwh": ...}``, same shape as ``past_actuals_by_slot``) for grid
-    energy ALREADY DELIVERED in a slot that is still in progress.  In practice only
-    the current slot ever has an entry.  Without it, an in-progress grid charge
+    energy ALREADY DELIVERED in a slot that is still in progress.  Exactly one
+    entry — now's slot — is expected, and it is matched on the slot grid: an
+    hour-keyed value would be re-applied to every quarter of that hour (finding
+    A4, fixed 2026-08-03).  Without it, an in-progress grid charge
     disappears from the card as it is delivered: ``grid_charge_w`` below is the
     energy still needed to reach ``ceiling_by_hour``, computed from the LIVE SoC, so
     it decays to 0 exactly as the charge completes (live 2026-07-29: a 2.5 kWh
@@ -231,13 +234,23 @@ def build_plan_horizon(
     req_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (grid_request_by_hour or {}).items()}
     exp_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (export_request_by_hour or {}).items()}
     ceil_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (ceiling_by_hour or {}).items()}
-    # rsv_by_hour/deliv_by_hour stay HOUR-keyed on purpose: their producers
-    # (decision._build_reserve_by_hour, controller._get_current_delivered) hand
-    # back ONE value per clock-hour by design (out of this fix's scope to make
-    # slot-granular) — floor_to_slot on the lookup key would miss the dict for
-    # 3-of-4 quarters and silently fall back to the default instead of the real
-    # value. hour_floor at slot_minutes=60 IS floor_to_slot, so this is still
-    # byte-identical there.
+    # rsv_by_hour stays HOUR-keyed on purpose: its producer
+    # (decision._build_reserve_by_hour) hands back ONE value per clock-hour by
+    # design (out of this fix's scope to make slot-granular) — floor_to_slot on
+    # the lookup key would miss the dict for 3-of-4 quarters and silently fall
+    # back to the default instead of the real value. hour_floor at
+    # slot_minutes=60 IS floor_to_slot, so this is still byte-identical there.
+    #
+    # deliv_by_slot is SLOT-keyed (was hour-keyed until 2026-08-03, finding A4).
+    # It is a one-shot "energy already delivered in the slot now in progress"
+    # figure, not a per-hour rate: hour-keying it handed a copy of the WHOLE
+    # hour's delivered kWh to every not-yet-elapsed quarter of that hour, on top
+    # of the elapsed quarters that already draw it as mode="actual" rows. Live
+    # lab 2026-08-03: 7.56 kWh delivered + 12 kW modelled rendered the 13:45
+    # quarter as 42.2 kW / 10.56 kWh on a 12 kW inverter. Its producer
+    # (controller._get_current_delivered) now buckets on this same slot grid and
+    # returns only now's slot, so exactly one row can match — "missing" for
+    # every other slot is the CORRECT behaviour for a one-shot add-back.
     #
     # hedge_by_hour is SLOT-keyed, unlike the two above, because its producer
     # (controller._apply_drift_hedge) emits a ONE-SHOT kWh debit parked on a
@@ -250,7 +263,7 @@ def build_plan_horizon(
     # "Missing" 3-of-4 quarters is the CORRECT behaviour for a one-shot debit.
     rsv_by_hour = {hour_floor(k): v for k, v in (reserve_by_hour or {}).items()}
     hedge_by_hour = {floor_to_slot(k, slot_minutes): v for k, v in (hedge_drain_by_hour or {}).items()}
-    deliv_by_hour = {hour_floor(k): v for k, v in (delivered_by_hour or {}).items()}
+    deliv_by_slot = {floor_to_slot(k, slot_minutes): v for k, v in (delivered_by_hour or {}).items()}
     est_set = {hour_floor(s) for s in (est_starts or ())}
     cap_wh = cfg.capacity_kwh * 1000.0
     cap_kwh = cap_wh / 1000.0
@@ -413,10 +426,21 @@ def build_plan_horizon(
         # (which must keep advancing on the modelled remainder alone — the live
         # SoC it started from already contains the delivered energy).
         grid_charge_w_disp = grid_charge_w
-        if deliv_by_hour and dt_h > 0:
-            _deliv_kwh = (deliv_by_hour.get(hour) or {}).get("grid_charge_kwh")
+        if deliv_by_slot and dt_h > 0:
+            _deliv_kwh = (deliv_by_slot.get(slot_key) or {}).get("grid_charge_kwh")
             if _deliv_kwh:
                 grid_charge_w_disp += float(_deliv_kwh) * 1000.0 / dt_h
+                # ...but never past what the connection can physically deliver
+                # over one slot. The modelled remainder is a FULL-slot rate: it
+                # is disjoint from the delivered kWh only while the charge is
+                # HEADROOM-bound (what is left shrinks as the live SoC rises).
+                # Rate-bound — deep in a cheap window with the ceiling far above
+                # — both terms cover the minutes already elapsed and the sum runs
+                # past the slot's physical maximum. Live lab 2026-08-03: 12 kW
+                # modelled + 7.56 kWh delivered rendered a 15-min quarter as
+                # 42.2 kW / 10.56 kWh; slot-keying the add-back (above) took that
+                # to 5.3 kWh, and this clamp to the true 3.0.
+                grid_charge_w_disp = min(grid_charge_w_disp, cfg.max_charge_w, cfg.grid_import_limit_w)
         out.append(
             {
                 "start": slot.start.isoformat(),

@@ -546,8 +546,8 @@ class Controller:
         self._running_rows_at = now
         return rows
 
-    async def _get_current_delivered(self, now) -> dict:
-        """Grid energy already delivered in the CURRENT, still-running clock-hour.
+    async def _get_current_delivered(self, now, slot_minutes: int = 60) -> dict:
+        """Grid energy already delivered in the CURRENT, still-running display slot.
 
         Display-only. ``_get_past_actuals`` stops strictly before ``now_h``, so the
         current slot is modelled from scratch off the live SoC every tick — and its
@@ -562,24 +562,25 @@ class Controller:
         tick), never the 48 h window. Returns {} on error — the card degrades to
         the old under-report rather than the tick failing.
 
-        Stays CLOCK-HOUR keyed (both the aggregation and the filter): its
-        consumer ``plan.build_horizon`` looks it up hour-floored, so a
-        slot-floored key here would never match and the add-back would vanish.
+        SLOT-keyed (both the aggregation and the filter), matching the lookup in
+        ``plan.build_plan_horizon``. This is the exact complement of
+        ``_get_past_actuals_slots``, which stops strictly BEFORE now's slot:
+        between them every row is covered once, none twice.
 
-        Finding A4 (partially closed 2026-08-03): the add-back lands on every
-        row of the running hour, so at 15-min the hour's delivered kWh is
-        counted once per remaining quarter. The elapsed quarters no longer
-        take it — they are now real ``mode="actual"`` rows fed by
-        ``_get_past_actuals_slots`` — so the over-report shrinks as the hour
-        runs out, but it is not gone. Closing it properly means giving the
-        add-back its own slot-grid key, which belongs with its producer
-        (``executor``/``plan``), not here.
+        Finding A4 (closed 2026-08-03): this used to aggregate and filter per
+        CLOCK-HOUR, so at 15-min it handed back the whole running hour's kWh —
+        which ``plan`` then re-applied to each not-yet-elapsed quarter, on top of
+        the elapsed quarters already drawn as ``mode="actual"`` rows. Live lab:
+        7.56 kWh delivered + 12 kW modelled rendered the 13:45 quarter as
+        42.2 kW / 10.56 kWh on a 12 kW inverter. At slot_minutes=60 now's slot
+        IS now's hour and ``aggregate_past_actuals`` defaults to 60, so the
+        hourly behaviour is byte-identical.
         """
-        now_h = resolution.hour_floor(now)
+        now_slot = resolution.floor_to_slot(now, slot_minutes)
         try:
             rows = await self._get_running_hour_rows(now)
-            actuals = past_actuals_mod.aggregate_past_actuals(rows)
-            return {h: v for h, v in actuals.items() if h == now_h}
+            actuals = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+            return {s: v for s, v in actuals.items() if s == now_slot}
         except Exception:
             _LOGGER.warning(
                 "current-hour delivered build failed; an active grid charge may not show on the card",
@@ -1517,9 +1518,9 @@ class Controller:
         # per display slot, including the elapsed slots of the running hour).
         past_actuals = await self._get_past_actuals(now, _slot_minutes)
         past_actuals_slots = await self._get_past_actuals_slots(now, _slot_minutes)
-        # Current, still-running hour — rebuilt every tick so an in-progress grid
+        # Current, still-running slot — rebuilt every tick so an in-progress grid
         # charge stays on the card (display-only; see _get_current_delivered).
-        delivered_now = await self._get_current_delivered(now)
+        delivered_now = await self._get_current_delivered(now, _slot_minutes)
 
         # Layer A: residual-corrected predictor for the LIVE plan only (shadow,
         # fictive and disabled paths keep the base tier — parity preserved).
@@ -1998,9 +1999,13 @@ class Controller:
             return _flat
 
         def _delivered_at(start: datetime) -> float:
-            # hour_floor matches plan.build_horizon's own lookup key for
-            # deliv_by_hour (kept clock-hour-granular there on purpose).
-            _rec = (delivered_by_hour or {}).get(resolution.hour_floor(start))
+            # floor_to_slot matches plan.build_plan_horizon's own lookup key for
+            # deliv_by_slot. Since 2026-08-03 the add-back lands on now's slot
+            # ALONE, and aggregate_planned_days already skips every row with
+            # start <= now, so this subtraction has nothing left to reverse —
+            # kept (and kept key-aligned) so the two halves cannot drift if that
+            # skip rule ever changes.
+            _rec = (delivered_by_hour or {}).get(resolution.floor_to_slot(start, slot_minutes))
             return float((_rec or {}).get("grid_charge_kwh") or 0.0)
 
         _tz = dt_util.DEFAULT_TIME_ZONE

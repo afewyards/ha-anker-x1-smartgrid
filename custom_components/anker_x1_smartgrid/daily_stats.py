@@ -118,15 +118,15 @@ def aggregate_planned_days(
       bounded by one slot, and strictly better than double-counting.
 
     ``delivered_at(start) -> float`` (kWh, caller-supplied, optional) closes
-    the other half of the same seam.  ``plan.build_horizon`` folds energy
-    already delivered in the in-progress CLOCK-HOUR back into every row of
-    that hour (its ``delivered_by_hour`` lookup is clock-hour keyed, not slot
-    keyed, so at 15-min slots all four quarters each receive the FULL hour's
-    kWh).  ``start <= now`` alone therefore still leaves that hour's
-    not-yet-started quarters carrying a copy each.  The add-back contributes
-    exactly its kWh to a row — ``+w * 1000/dt_h`` then ``* dt_h/1000``
-    cancels — so subtracting the same number per row reverses it exactly,
-    preserving the genuine modelled remainder instead of dropping it.
+    the other half of the same seam.  ``plan.build_plan_horizon`` folds energy
+    already delivered in the in-progress SLOT back into that slot's row.  Since
+    2026-08-03 that lookup is slot-keyed, so the add-back can only ever land on
+    the row containing ``now`` — which ``start <= now`` above already skips,
+    leaving this a no-op in practice.  It is kept because the reversal has to
+    stay exact if that skip rule changes: the add-back contributes exactly its
+    kWh to a row (``+w * 1000/dt_h`` then ``* dt_h/1000`` cancels), so
+    subtracting the same number preserves the genuine modelled remainder
+    instead of dropping it.  Callers MUST key it on the same slot grid.
     Clamped at zero.
 
     ``export_price_at(start, import_price) -> float | None`` is caller-supplied

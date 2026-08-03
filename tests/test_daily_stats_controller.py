@@ -300,12 +300,15 @@ class TestPublishDailyStats:
         """Review finding I1, at the 15-min resolution both deployments run.
 
         The tick hands ``_publish_daily_stats`` the same ``delivered_by_hour``
-        it handed ``build_display_horizon``, so the hour's already-delivered
-        kWh — which that builder folded into EVERY quarter row of the hour, and
-        which the live ledger has ALREADY booked — is taken back out of the
-        planned half.  Elapsed quarters are dropped outright.
+        it handed ``build_display_horizon``.  That kWh is ALREADY booked by the
+        live ledger, so the planned half must not book it again: the elapsed
+        quarters are ``mode="actual"`` rows and the in-progress one sits at
+        ``start <= now`` — all four are dropped, leaving only the genuinely
+        future quarter.
 
-        Before the fix this row read 2.0 (ledger) + 4 x 2.5 (quarters) = 12.0
+        Fixture mirrors the post-A4 producer (fixed 2026-08-03): the add-back
+        lands on the in-progress SLOT alone.  When it was hour-keyed every
+        quarter carried a copy and this row read 2.0 (ledger) + 4 x 2.5 = 12.0
         kWh for 2.5 kWh of real activity.
         """
         from tests.helpers import make_controller
@@ -317,21 +320,24 @@ class TestPublishDailyStats:
         ctrl.today_grid_charge_kwh = 2.0
         ctrl.today_charge_cost_eur = 0.60
 
-        now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)  # mid 10:00 clock-hour
+        now = datetime(2026, 8, 1, 10, 37, tzinfo=UTC)  # mid the 10:30 quarter
         _hour = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
-        delivered = {_hour: {"grid_charge_kwh": 2.0}}
+        _cur_slot = _hour + timedelta(minutes=30)
+        delivered = {_cur_slot: {"grid_charge_kwh": 2.0}}
+        # Elapsed quarters draw as measured rows; the in-progress one carries
+        # 0.5 modelled remainder + the 2.0 add-back; the last is plan-only.
         horizon = [
             {
                 "start": (_hour + timedelta(minutes=15 * i)).isoformat(),
                 "price": 0.30,
-                # 0.5 modelled remainder + the 2.0 hour-wide add-back, exactly
-                # as plan.build_horizon emits it for the in-progress hour.
-                "grid_charge_kwh": 2.5,
+                "grid_charge_kwh": kwh,
                 "grid_export_kwh": 0.0,
                 "estimated": False,
-                "mode": "grid",
+                "mode": mode,
             }
-            for i in range(4)
+            for i, (kwh, mode) in enumerate(
+                [(1.0, "actual"), (1.0, "actual"), (2.5, "grid"), (0.5, "grid")]
+            )
         ]
         ctrl._publish_daily_stats(now, horizon, None, None, 15, delivered)
 
