@@ -18,7 +18,10 @@
 - Nothing forces a charge on absent/short data. Fail-closed everywhere.
 - Recorder reads from the controller go through `await self._hass.async_add_executor_job(...)` — sqlite must not block the event loop.
 - Run `bunx ruff check` and `bunx ruff format` before each commit; lint is blocking in this repo.
-- Full suite must stay green: `pytest -q`.
+- **Use `.venv/bin/python -m pytest`.** The system `python3` is 3.9.6 with no `homeassistant`; the project venv is 3.12.13. Lint and manual inspection never substitute for running the suite — a broken interpreter is a BLOCKED report, not a reason to commit.
+- Full suite must stay green: `.venv/bin/python -m pytest -q` (baseline 2295 passed).
+- **Any new option key needs TWO registrations:** `config_flow._TUNABLES` *and* `config_flow.OPTIONS_SECTIONS` (calibration keys belong in `SECTION_BATTERY`). `_TUNABLES` alone fails `test_config_flow.py::test_sections_cover_all_option_fields`.
+- **Editing a vendored module requires a re-sync.** Eight modules are vendored byte-identically into the add-on under a SHA-manifest gate (`tests/test_vendored_parity.py`): `backtest, const, dataquality, featureset, hgbr, loadmodel, recorder, rollup`. After touching any of them under `custom_components/anker_x1_smartgrid/`, run `./addon/anker_x1_forecast/sync_core.sh` and commit the regenerated `forecast_core/` copy plus `SOURCE_SHA256`. **This binds Task 1 (`const.py`) and Task 2 (`recorder.py`).**
 
 ---
 
