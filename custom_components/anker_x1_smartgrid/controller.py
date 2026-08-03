@@ -351,6 +351,15 @@ class Controller:
         self._calibration: calibration.CalibAction | None = None
         self._calibration_last_success: datetime | None = None
         self._calibration_days_since: float | None = None
+        # True iff self.plan is currently FORCING BECAUSE of calibration (as
+        # opposed to a genuine economic decision). Read at the top of the next
+        # tick's override block (before self.plan is superseded) to tell "the
+        # scheduler is coasting on a plan calibration itself injected" apart
+        # from "the DP genuinely wants this hour" — see the override block in
+        # _tick_impl for why that distinction matters. Not persisted: a
+        # restart degrades to treating any in-progress cycle as freshly
+        # starting, same as the scheduler's own restart self-heal.
+        self._calibration_engaged: bool = False
 
     # ── Cash ledger delegating properties (Task C4) ────────────────────────────
     # Preserve the pre-extraction attribute surface (direct get/set, and
@@ -1630,41 +1639,75 @@ class Controller:
         # economic-only charging removed the rest.  Quarantined here rather
         # than expressed as a DP constraint so the parity-gated core is
         # untouched.  See the spec for the stranded-capacity evidence.
+        #
+        # `_calibration_was_engaged` is whether the OLD self.plan (the plan
+        # `new_plan` is about to supersede) is FORCING because of calibration,
+        # as of the end of the PREVIOUS tick. Must be captured before
+        # self._calibration_engaged is updated below, and before self.plan is
+        # reassigned (still several lines down, at `self.plan = new_plan`).
+        _calibration_was_engaged = self._calibration_engaged
         self._calibration = None
         self._calibration_last_success = None
         self._calibration_days_since = None
-        if self.cfg.calibration_enabled:
+        if self.cfg.calibration_enabled and self._recorder is not None:
             try:
-                _soc_rows = await self._hass.async_add_executor_job(
-                    self._recorder.read_soc_samples,
-                    (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat(),
-                )
-                self._calibration_last_success = calibration.last_success_end(
-                    _soc_rows,
-                    top_soc=self.cfg.calibration_top_soc,
-                    dwell_h=self.cfg.calibration_dwell_h,
+                _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
+                _price_hist = self._price_store.history if self._price_store is not None else {}
+                self._calibration_last_success, self._calibration = await self._hass.async_add_executor_job(
+                    self._calibration_compute_sync, _since_iso, now, inputs.soc, slots, _price_hist
                 )
                 self._calibration_days_since = (
                     (now - self._calibration_last_success).total_seconds() / 86400.0
                     if self._calibration_last_success is not None
                     else None
                 )
-                self._calibration = calibration.calibration_action(
-                    now,
-                    inputs.soc,
-                    slots,
-                    _soc_rows,
-                    self._price_store.history if self._price_store is not None else {},
-                    self.cfg,
-                )
             except Exception:
                 # Fail-closed: never force a charge on a failed read.
                 _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
                 self._calibration = None
-        if self._calibration is not None and new_plan.state is not ControllerState.FORCING:
-            # state_since moves only on the transition, so the executor's
-            # dwell hysteresis still sees a stable timestamp.
-            new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=now)
+                self._calibration_last_success = None
+                self._calibration_days_since = None
+
+        if self._calibration is not None:
+            self._calibration_engaged = True
+            if new_plan.state is not ControllerState.FORCING:
+                # Preserve the ORIGINAL calibration engagement timestamp
+                # across consecutive ticks rather than re-stamping `now`.
+                # scheduler.decide_state constructs a FRESH PlanState every
+                # time its own dwell/now_selected logic would bail to PASSIVE
+                # (the high-SoC guard once soc reaches calibration_top_soc
+                # ~= soc_target; or, below that, once min_dwell_min elapses
+                # and the hour isn't economically selected) — re-stamping on
+                # every such bail corrupts the executor's dwell hysteresis
+                # and the published state_since. Only reuse the OLD plan's
+                # state_since when that plan was ITSELF calibration-forced
+                # (`_calibration_was_engaged`); an economic FORCING plan's
+                # state_since belongs to the DP's own decision, not ours.
+                _since = (
+                    self.plan.state_since
+                    if (self.plan.state is ControllerState.FORCING and _calibration_was_engaged)
+                    else now
+                )
+                new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=_since)
+            # else: new_plan is already FORCING — either the scheduler is
+            # coasting on the (correctly-timestamped) plan we set last tick,
+            # or a genuine economic FORCING coincides with calibration.
+            # Either way state_since already means what it should; leave it.
+        else:
+            self._calibration_engaged = False
+            if _calibration_was_engaged and new_plan is self.plan and new_plan.state is ControllerState.FORCING:
+                # Calibration just stopped, but the scheduler only returned
+                # the SAME PlanState object it was handed (scheduler.py's
+                # `if not dwell_elapsed: return plan` / `if now_selected:
+                # return plan` short-circuits) rather than constructing a
+                # fresh one — i.e. it is coasting on the FORCING state WE
+                # injected for calibration, not making an independent
+                # decision. Nothing currently authorises this charge, so
+                # cancel it instead of letting it ride the dwell timer for up
+                # to min_dwell_min. A genuine economic FORCING always
+                # constructs a NEW PlanState (scheduler.py's PASSIVE->FORCING
+                # branch), so this identity check never touches one.
+                new_plan = dataclasses.replace(new_plan, state=ControllerState.PASSIVE, state_since=now)
 
         # FORCING charge actuation + C3 live export executor (Task E2: moved
         # verbatim to executor.py — mutually-exclusive branches, self ->
@@ -1813,6 +1856,33 @@ class Controller:
         a complete 12-key dict matching append_decision's kwargs signature.
         """
         self._recorder.append_decision(**snapshot)
+
+    def _calibration_compute_sync(
+        self,
+        since_iso: str,
+        now: datetime,
+        soc_pct: float,
+        slots: list[PriceSlot],
+        price_history: dict,
+    ) -> tuple[datetime | None, calibration.CalibAction | None]:
+        """Synchronous: recorder read + calibration policy evaluation, together.
+
+        ``calibration.py`` is pure (no HA, no I/O) but its inputs are the full
+        SoC-history window — up to ~130k rows at the max configurable
+        ``calibration_interval_days`` (90) * 3 lookback, twice per tick
+        (``last_success_end`` here, then again inside ``calibration_action``).
+        Parsing every row via ``fromisoformat`` on the event loop would repeat
+        the exact mistake ``_refresh_daily_actuals``'s own comment warns
+        against — read AND parse belong in the SAME executor job.
+        """
+        soc_rows = self._recorder.read_soc_samples(since_iso)
+        last_success = calibration.last_success_end(
+            soc_rows,
+            top_soc=self.cfg.calibration_top_soc,
+            dwell_h=self.cfg.calibration_dwell_h,
+        )
+        action = calibration.calibration_action(now, soc_pct, slots, soc_rows, price_history, self.cfg)
+        return last_success, action
 
     def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str) -> None:
         """Synchronous: roll up completed clock-hours into samples_hourly and purge old rows.

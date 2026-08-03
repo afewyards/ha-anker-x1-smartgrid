@@ -158,9 +158,14 @@ class StubRecorder:
         return [(ts, w) for ts, w in self._load_samples if ts >= since_iso]
 
     def read_soc_samples(self, since_iso=None):
+        # Real recorder.read_soc_samples is `ORDER BY ts ASC` -- a documented
+        # precondition of calibration.last_success_end/history_span_days.
+        # Sort here too so a test that seeds rows out of order fails against
+        # the stub instead of only in production.
+        rows = sorted(self._soc_samples, key=lambda r: r[0])
         if since_iso is None:
-            return list(self._soc_samples)
-        return [(ts, soc) for ts, soc in self._soc_samples if ts >= since_iso]
+            return rows
+        return [(ts, soc) for ts, soc in rows if ts >= since_iso]
 
     def read_persons_home_samples(self, since_iso=None):
         return []
