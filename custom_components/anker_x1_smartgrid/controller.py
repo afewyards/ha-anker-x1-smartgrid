@@ -1651,14 +1651,18 @@ class Controller:
             try:
                 _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
                 _price_hist = self._price_store.history if self._price_store is not None else {}
-                self._calibration_last_success, self._calibration = await self._hass.async_add_executor_job(
+                self._calibration_last_success, self._calibration, _span_days = await self._hass.async_add_executor_job(
                     self._calibration_compute_sync, _since_iso, now, inputs.soc, slots, _price_hist
                 )
-                self._calibration_days_since = (
-                    (now - self._calibration_last_success).total_seconds() / 86400.0
-                    if self._calibration_last_success is not None
-                    else None
-                )
+                if self._calibration_last_success is not None:
+                    self._calibration_days_since = (now - self._calibration_last_success).total_seconds() / 86400.0
+                elif _span_days >= self.cfg.calibration_interval_days:
+                    # Mirrors calibration_action's own fallback (calibration.py):
+                    # no qualifying dwell yet, but the history is long enough to
+                    # call it overdue -- the moment this number is most useful.
+                    self._calibration_days_since = _span_days
+                else:
+                    self._calibration_days_since = None
             except Exception:
                 # Fail-closed: never force a charge on a failed read.
                 _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
@@ -1860,7 +1864,7 @@ class Controller:
         soc_pct: float,
         slots: list[PriceSlot],
         price_history: dict,
-    ) -> tuple[datetime | None, calibration.CalibAction | None]:
+    ) -> tuple[datetime | None, calibration.CalibAction | None, float]:
         """Synchronous: recorder read + calibration policy evaluation, together.
 
         ``calibration.py`` is pure (no HA, no I/O) but its inputs are the full
@@ -1878,7 +1882,7 @@ class Controller:
             dwell_h=self.cfg.calibration_dwell_h,
         )
         action = calibration.calibration_action(now, soc_pct, slots, soc_rows, price_history, self.cfg)
-        return last_success, action
+        return last_success, action, calibration.history_span_days(soc_rows)
 
     def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str) -> None:
         """Synchronous: roll up completed clock-hours into samples_hourly and purge old rows.

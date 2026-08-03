@@ -428,3 +428,28 @@ async def test_calibration_engaging_mid_economic_forcing_preserves_state_since(m
     assert ctrl.plan.state_since == economic_since, (
         "state_since must not re-stamp when calibration engages mid-economic-FORCING"
     )
+
+
+@pytest.mark.asyncio
+async def test_calibration_days_since_falls_back_to_history_span_when_never_calibrated(monkeypatch):
+    """Minor 6 (Task 6 review): calibration.calibration_action itself falls
+    back to history_span_days for days_since when last_success_end returns
+    None (no qualifying dwell yet) -- exactly the "overdue, about to force a
+    charge" case. The controller's published calibration_days_since must
+    mirror that fallback rather than reporting None right when the number
+    is most useful.
+    """
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_interval_days=90)
+    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: None)
+
+    start = BASE - timedelta(days=120)
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0), (BASE.isoformat(), 50.0)]
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+
+    expected_span = (BASE - start).total_seconds() / 86400.0
+    assert ctrl.last_status["calibration_days_since"] == pytest.approx(expected_span)
