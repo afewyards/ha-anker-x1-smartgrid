@@ -190,3 +190,89 @@ def test_insufficient_total_slots_returns_none():
     `force` -- there simply is no candidate to accept."""
     slots = _slots(BASE, [0.05], minutes=60)  # only 1 h available; need ~2.18 h
     assert calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.10, force=True) is None
+
+
+from custom_components.anker_x1_smartgrid import const
+
+ON = Config(
+    capacity_kwh=20.0,
+    max_charge_w=12000.0,
+    eta_charge=0.92,
+    calibration_enabled=True,
+    calibration_interval_days=5,
+    calibration_top_soc=97.0,
+    calibration_dwell_h=2.0,
+)
+CHEAP_HISTORY = {"2026-07-30": {str(h): 0.30 for h in range(24)}}
+
+
+def _stale_history(now, days):
+    """SoC series spanning exactly `days`, never reaching top_soc.
+
+    With no qualifying run, days_since == the series span, so this controls
+    the policy's notion of "days since last success" directly.
+    """
+    start = now - timedelta(days=days)
+    return _series(start, 60, [50.0] * (int(days * 24) + 1))
+
+
+def test_disabled_is_always_none():
+    now = BASE
+    assert (
+        calibration.calibration_action(
+            now, 50.0, _slots(now, [0.01] * 6), _stale_history(now, 30), CHEAP_HISTORY, Config()
+        )
+        is None
+    )
+
+
+def test_not_due_inside_the_interval():
+    now = BASE
+    recent = _series(now - timedelta(days=1), 15, [98.0] * 13)
+    assert calibration.calibration_action(now, 50.0, _slots(now, [0.01] * 6), recent, CHEAP_HISTORY, ON) is None
+
+
+def test_due_and_cheap_returns_charging():
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    act = calibration.calibration_action(now, 50.0, slots, _stale_history(now, 30), CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "charging"
+    assert act.window_start <= now < act.window_end
+
+
+def test_at_top_soc_reports_holding():
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    act = calibration.calibration_action(now, 98.0, slots, _stale_history(now, 30), CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "holding"
+
+
+def test_holds_through_even_without_a_cheap_window():
+    """A dwell in progress must complete regardless of the price curve."""
+    now = BASE
+    act = calibration.calibration_action(now, 98.0, _slots(now, [0.90] * 6), _stale_history(now, 6), CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "holding"
+
+
+def test_fresh_install_short_history_is_idle():
+    """No qualifying run AND too little history => idle, never 'charge now'."""
+    now = BASE
+    short = _series(now - timedelta(hours=6), 15, [50.0] * 24)
+    assert calibration.calibration_action(now, 50.0, _slots(now, [0.01] * 6), short, CHEAP_HISTORY, ON) is None
+
+
+def test_empty_soc_history_is_idle():
+    now = BASE
+    assert calibration.calibration_action(now, 50.0, _slots(now, [0.01] * 6), [], CHEAP_HISTORY, ON) is None
+
+
+def test_empty_price_history_blocks_percentile_but_not_deadline():
+    now = BASE
+    slots = _slots(now, [0.90] * 6)
+    just_due = _stale_history(now, ON.calibration_interval_days + 1)
+    assert calibration.calibration_action(now, 50.0, slots, just_due, {}, ON) is None
+    past_grace = _stale_history(now, ON.calibration_interval_days + const.CALIBRATION_GRACE_DAYS + 1)
+    assert calibration.calibration_action(now, 50.0, slots, past_grace, {}, ON) is not None

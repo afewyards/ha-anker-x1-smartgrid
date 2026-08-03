@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from . import const
 from .models import Config, PriceSlot
 
 # Two adjacent samples further apart than this do not belong to the same run —
@@ -214,3 +215,60 @@ def select_window(
         if force or (bar is not None and mean_price <= bar):
             return (start, end)
     return None
+
+
+def calibration_action(
+    now: datetime,
+    soc_pct: float,
+    slots: list,
+    soc_samples: list[tuple[str, float]],
+    price_history: dict[str, dict[str, float]],
+    cfg,
+) -> CalibAction | None:
+    """Whether a calibration cycle is running in the slot containing ``now``.
+
+    Fail-closed: absent or too-short history yields None rather than
+    "never calibrated, charge now".
+    """
+    if not cfg.calibration_enabled:
+        return None
+
+    last = last_success_end(soc_samples, top_soc=cfg.calibration_top_soc, dwell_h=cfg.calibration_dwell_h)
+    if last is None:
+        # No qualifying dwell.  Only treat that as "overdue" once the series is
+        # long enough to have shown one — otherwise a fresh install charges.
+        if history_span_days(soc_samples) < cfg.calibration_interval_days:
+            return None
+        days_since = history_span_days(soc_samples)
+    else:
+        days_since = (now - last).total_seconds() / 86400.0
+
+    if days_since < cfg.calibration_interval_days:
+        return None
+
+    # Hold-through: once the pack is AT the top and a cycle is due, keep
+    # holding until the dwell completes, independent of the window.  The price
+    # curve's back-horizon is not guaranteed deep enough to keep re-selecting a
+    # window that started hours ago (coordinator.read_price_slots passes the
+    # sensor's curve through verbatim), and a stranded half-dwell buys the
+    # charge without the balancing it was for.  Ends by itself: the moment the
+    # run reaches dwell_h, last_success_end returns and days_since drops to ~0.
+    if soc_pct >= cfg.calibration_top_soc:
+        return CalibAction(
+            phase="holding",
+            window_start=now,
+            window_end=now + timedelta(hours=cfg.calibration_dwell_h),
+        )
+
+    force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
+    bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)
+    win = select_window(now, soc_pct, slots, cfg=cfg, bar=bar, force=force)
+    if win is None:
+        return None
+
+    start, end = win
+    if not (start <= now < end):
+        return None  # accepted a future window; nothing to do yet
+
+    phase = "holding" if soc_pct >= cfg.calibration_top_soc else "charging"
+    return CalibAction(phase=phase, window_start=start, window_end=end)
