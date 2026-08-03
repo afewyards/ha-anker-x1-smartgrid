@@ -1671,7 +1671,7 @@ class Controller:
         if self._calibration is not None:
             self._calibration_engaged = True
             if new_plan.state is not ControllerState.FORCING:
-                # Preserve the ORIGINAL calibration engagement timestamp
+                # Preserve the device's ACTUAL continuous FORCING start time
                 # across consecutive ticks rather than re-stamping `now`.
                 # scheduler.decide_state constructs a FRESH PlanState every
                 # time its own dwell/now_selected logic would bail to PASSIVE
@@ -1679,15 +1679,14 @@ class Controller:
                 # ~= soc_target; or, below that, once min_dwell_min elapses
                 # and the hour isn't economically selected) — re-stamping on
                 # every such bail corrupts the executor's dwell hysteresis
-                # and the published state_since. Only reuse the OLD plan's
-                # state_since when that plan was ITSELF calibration-forced
-                # (`_calibration_was_engaged`); an economic FORCING plan's
-                # state_since belongs to the DP's own decision, not ours.
-                _since = (
-                    self.plan.state_since
-                    if (self.plan.state is ControllerState.FORCING and _calibration_was_engaged)
-                    else now
-                )
+                # and the published state_since. Reuse self.plan.state_since
+                # whenever self.plan is ALREADY FORCING, regardless of
+                # whether that run started for economic or calibration
+                # reasons: the device never left FORCING, so the "since" of
+                # its current continuous run doesn't change either way. Only
+                # a genuine PASSIVE->FORCING entry (self.plan not FORCING)
+                # gets a fresh `now`.
+                _since = self.plan.state_since if self.plan.state is ControllerState.FORCING else now
                 new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=_since)
             # else: new_plan is already FORCING — either the scheduler is
             # coasting on the (correctly-timestamped) plan we set last tick,
@@ -1707,7 +1706,24 @@ class Controller:
                 # to min_dwell_min. A genuine economic FORCING always
                 # constructs a NEW PlanState (scheduler.py's PASSIVE->FORCING
                 # branch), so this identity check never touches one.
-                new_plan = dataclasses.replace(new_plan, state=ControllerState.PASSIVE, state_since=now)
+                #
+                # state_since=self.plan.state_since (NOT `now`): a fresh
+                # `now` would restart the PASSIVE dwell timer, and
+                # scheduler.decide_state's own PASSIVE->FORCING re-entry is
+                # itself dwell-gated (`if not dwell_elapsed: return plan`) --
+                # so stamping `now` would dwell-LOCK a legitimate economic
+                # re-charge for up to min_dwell_min instead of freeing it
+                # after one tick. self.plan.state_since is the timestamp the
+                # (still-)FORCING run actually began, so dwell_elapsed
+                # against it reflects the real elapsed time in the current
+                # continuous run rather than an artificial reset.
+                # PlanState.state_since has exactly one other reader in this
+                # codebase (scheduler.decide_state's own dwell_elapsed); nothing
+                # in _record_sample, build_status, or any sensor surfaces it,
+                # so reusing the old timestamp here cannot mislead anything else.
+                new_plan = dataclasses.replace(
+                    new_plan, state=ControllerState.PASSIVE, state_since=self.plan.state_since
+                )
 
         # FORCING charge actuation + C3 live export executor (Task E2: moved
         # verbatim to executor.py — mutually-exclusive branches, self ->

@@ -162,3 +162,82 @@ async def test_calibration_stop_cancels_coasting_forcing(monkeypatch):
     assert any(c[0] == "release_to_self" for c in act.calls), (
         "actuator must be released when the calibration-induced FORCING ends"
     )
+
+
+@pytest.mark.asyncio
+async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypatch):
+    """N1: the (B) cancel must not restart the PASSIVE dwell timer.
+
+    Regression for the bug where cancelling a coasting calibration FORCING
+    stamped state_since=now on the resulting PASSIVE plan. scheduler.decide_state's
+    own PASSIVE->FORCING re-entry is itself dwell-gated
+    (`if not dwell_elapsed: return plan`, scheduler.py:246-247), so a fresh
+    `now` there would dwell-LOCK a legitimate, DP-wanted charge for up to
+    min_dwell_min (~15 min) instead of freeing it after the one cancel tick.
+
+    The fake `decide_state` below honours `plan.state_since` for the dwell
+    check exactly as the real scheduler does, but keeps "does the DP want
+    this hour" (`now_selected`) as an external toggle -- isolating the one
+    thing this fix controls: the state_since value the override's cancel
+    writes.
+    """
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    calibration_active = True
+    now_selected = False
+    action = calibration.CalibAction(
+        phase="charging",
+        window_start=BASE,
+        window_end=BASE + timedelta(hours=3),
+    )
+
+    def _fake_action(*a, **k):
+        return action if calibration_active else None
+
+    def _fake_decide_state(plan, *, now, cfg, **kwargs):
+        # Simplified stand-in for scheduler.decide_state -- real enough about
+        # the ONE mechanic this test cares about (dwell gated on
+        # plan.state_since), not a full reimplementation.
+        if plan.state is ControllerState.FORCING:
+            return plan  # always coast while FORCING, as in the round-1 test
+        dwell_elapsed = (now - plan.state_since) >= timedelta(minutes=cfg.min_dwell_min)
+        if not dwell_elapsed:
+            return plan
+        if now_selected:
+            return PlanState(ControllerState.FORCING, now, ())
+        return plan
+
+    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(scheduler, "decide_state", _fake_decide_state)
+
+    tick_time = BASE
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
+
+    # Tick 1: calibration engages.
+    result1 = await ctrl.tick()
+    assert result1["state"] == "forcing"
+
+    # Tick 2, well past min_dwell_min later: calibration still active, still coasting.
+    tick_time = BASE + timedelta(minutes=30)
+    result2 = await ctrl.tick()
+    assert result2["state"] == "forcing"
+
+    # Tick 3: calibration stops. The DP ALSO now wants this hour (now_selected=True)
+    # -- a coincidental overlap, deliberately, so a correctly-bounded cancel must
+    # still let the very next tick re-enter FORCING economically.
+    calibration_active = False
+    now_selected = True
+    tick_time = BASE + timedelta(minutes=31)
+    result3 = await ctrl.tick()
+    assert result3["state"] == "passive"  # cancelled, per C1(B)
+
+    # Tick 4, only 30 SECONDS later: must be free to re-enter FORCING -- not
+    # dwell-blocked for another ~15 minutes.
+    tick_time = BASE + timedelta(minutes=31, seconds=30)
+    result4 = await ctrl.tick()
+    assert result4["state"] == "forcing", (
+        "a calibration cancel must not dwell-lock the next tick's economic FORCING re-entry"
+    )
