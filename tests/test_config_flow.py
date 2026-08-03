@@ -1410,6 +1410,30 @@ def test_options_schema_range_bounds_on_soc_floor_target_eta():
     assert ok[const.CONF_SOC_FLOOR] == 10.0
 
 
+def test_options_schema_range_bounds_on_calibration_fields():
+    """Calibration numeric validators reject just past their edge and accept the edge itself."""
+    import pytest
+    import voluptuous as vol
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({})
+
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_CALIBRATION_INTERVAL_DAYS: 91})
+    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_INTERVAL_DAYS: 90})
+    assert ok[const.CONF_CALIBRATION_INTERVAL_DAYS] == 90
+
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_CALIBRATION_TOP_SOC: 79.9})
+    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_TOP_SOC: 80.0})
+    assert ok[const.CONF_CALIBRATION_TOP_SOC] == 80.0
+
+    with pytest.raises(vol.Invalid):
+        _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.24})
+    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.25})
+    assert ok[const.CONF_CALIBRATION_DWELL_H] == 0.25
+
+
 async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog):
     """A soc_floor above the firmware 5% floor logs an INFO about the new
     semantics: soc_floor is export margin only, passive drain modeled to
