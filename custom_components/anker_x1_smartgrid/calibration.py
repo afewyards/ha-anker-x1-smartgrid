@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from .models import Config, PriceSlot
+
 # Two adjacent samples further apart than this do not belong to the same run —
 # otherwise an HA outage spanning a high-SoC period fakes a completed dwell.
 MAX_SAMPLE_GAP_MIN: float = 15.0
@@ -95,3 +97,87 @@ def last_success_end(
     if run_start is not None and run_end is not None and run_end - run_start >= need:
         best = run_end
     return best
+
+
+def price_percentile(price_history: dict[str, dict[str, float]], pct: float) -> float | None:
+    """Linear-interpolated percentile of every slot price in the history ring.
+
+    Returns None for an empty history — the caller must then refuse the
+    percentile path and let only the deadline path fire.
+    """
+    values = sorted(v for day in price_history.values() for v in day.values())
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    pos = (pct / 100.0) * (len(values) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(values) - 1)
+    return values[lo] + (values[hi] - values[lo]) * (pos - lo)
+
+
+def _charge_h(soc_pct: float, cfg: Config) -> float:
+    """Hours to lift SoC from ``soc_pct`` to the calibration top, at max rate."""
+    gap_kwh = max(0.0, (cfg.calibration_top_soc - soc_pct) / 100.0 * cfg.capacity_kwh)
+    rate_kw = cfg.max_charge_w / 1000.0 * cfg.eta_charge_safe()
+    if rate_kw <= 0.0:
+        return 0.0
+    return gap_kwh / rate_kw
+
+
+def select_window(
+    now: datetime,
+    soc_pct: float,
+    slots: list[PriceSlot],
+    *,
+    cfg: Config,
+    bar: float | None,
+    force: bool,
+) -> tuple[datetime, datetime] | None:
+    """Cheapest acceptable contiguous window, or None.
+
+    Deterministic in (now, slots, soc, cfg, bar, force): published prices do
+    not change within a day, so re-running each tick yields the same answer
+    and no commitment needs storing.
+    """
+    if not slots:
+        return None
+    need_h = _charge_h(soc_pct, cfg) + cfg.calibration_dwell_h
+    ordered = sorted(slots, key=lambda s: s.start)
+    slot_h = (ordered[0].duration_min or 60.0) / 60.0
+    if slot_h <= 0.0:
+        return None
+    n = max(1, int(need_h / slot_h + 0.999999))
+    if n > len(ordered):
+        return None
+
+    # Build candidates: contiguous runs of n slots that have not fully elapsed.
+    candidates: list[tuple[float, datetime, datetime]] = []
+    for i in range(len(ordered) - n + 1):
+        block = ordered[i : i + n]
+        start = block[0].start
+        end = start + timedelta(hours=slot_h * n)
+        if end <= now:
+            continue
+        mean_price = sum(s.price for s in block) / n
+        candidates.append((mean_price, start, end))
+    if not candidates:
+        return None
+
+    # One candidate per local start-date (the cheapest) => one attempt per day.
+    per_day: dict[object, tuple[float, datetime, datetime]] = {}
+    for cand in candidates:
+        key = cand[1].date()
+        if key not in per_day or cand[0] < per_day[key][0]:
+            per_day[key] = cand
+
+    # Earliest date with an acceptable window wins.  Taking the EARLIEST rather
+    # than the globally cheapest is what stops the 13:00 publication of
+    # tomorrow's prices from pulling a cycle off a today window that already
+    # qualified — the "never abandon a started window" rule, expressed without
+    # storing any commitment.
+    for key in sorted(per_day):
+        mean_price, start, end = per_day[key]
+        if force or (bar is not None and mean_price <= bar):
+            return (start, end)
+    return None
