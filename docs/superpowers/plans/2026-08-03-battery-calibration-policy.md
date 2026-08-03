@@ -540,6 +540,21 @@ Expected: FAIL — `AttributeError: module 'calibration' has no attribute 'price
 
 - [ ] **Step 3: Implement**
 
+> **SUPERSEDED during execution (commit 4d0bb8f).** The `select_window` code below
+> extrapolates the window end as `start + slot_h * n`, sampling `slot_h` from the
+> first slot only. That is wrong whenever a price curve mixes cadences — and
+> `parsers.py:103-104` assigns each slot its own duration from the gap to the next
+> entry, so a live hourly→quarter-hourly migration produces mixed widths in one
+> list. Consequences: wrong slot count, wrong wall-clock `end` (which Task 6 turns
+> into a real FORCING window), and a `mean_price` that weights a 15-minute slot
+> like a 60-minute one. Caught by the Task 4 review; user authorised fixing it in
+> place. The shipped implementation accumulates each slot's real duration, derives
+> `end` from the block's own last slot, weights `mean_price` by duration, and
+> rejects blocks spanning a discontinuity (`_CONTIGUITY_TOLERANCE`). The rules
+> below that are NOT superseded — one candidate per local date, and earliest
+> acceptable date wins over globally cheapest — remain load-bearing and are pinned
+> by `test_does_not_skip_today_for_a_cheaper_tomorrow`.
+
 Append to `calibration.py`:
 
 ```python
