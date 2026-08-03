@@ -241,3 +241,184 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
     assert result4["state"] == "forcing", (
         "a calibration cancel must not dwell-lock the next tick's economic FORCING re-entry"
     )
+
+
+def _wrap_compute_decision(monkeypatch, now_selected_holder):
+    """Patch controller.compute_decision to force _out["now_selected"] to a
+    test-controlled value, otherwise delegating to the REAL function.
+
+    now_selected is computed deep inside decision.compute_decision from the
+    real DP/heuristic `selected` list -- monkeypatching scheduler.decide_state
+    (as every other test in this file does) does NOT touch it, since that
+    computation is independent of decide_state's own return value. Wrapping
+    (not replacing) compute_decision keeps deadline/horizon/intervals_reserve
+    and every other _out key fully real and valid; only now_selected is
+    overridden, deterministically, after the real call already ran.
+    """
+    real_compute_decision = controller.compute_decision
+
+    def _fake(*args, **kwargs):
+        result = real_compute_decision(*args, **kwargs)
+        _out = kwargs.get("_out")
+        if _out is not None:
+            _out["now_selected"] = now_selected_holder["value"]
+        return result
+
+    monkeypatch.setattr(controller, "compute_decision", _fake)
+
+
+@pytest.mark.asyncio
+async def test_calibration_disengage_does_not_cancel_dp_wanted_forcing(monkeypatch):
+    """N3: an economic FORCING that calibration merely coincided with must
+    survive calibration disengaging, when the DP still wants this hour.
+
+    The round-1/2 premise that only ENTRY (scheduler.py:249) constructs a
+    fresh PlanState was wrong: every SUBSEQUENT tick of a still-running
+    economic FORCING ALSO coasts through the identical `return plan`
+    short-circuits (scheduler.py:233-234/241-242) that calibration's own
+    coasting goes through -- the identity check alone cannot tell them apart.
+    now_selected (threaded out of decision.compute_decision via `_out`, from
+    the SAME `selected_slots` passed to decide_state this tick) is the real
+    signal that closes the gap.
+    """
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    calibration_active = True
+    action = calibration.CalibAction(
+        phase="charging",
+        window_start=BASE,
+        window_end=BASE + timedelta(hours=3),
+    )
+
+    def _fake_action(*a, **k):
+        return action if calibration_active else None
+
+    def _fake_decide_state(plan, *, now, **kwargs):
+        # Tick 1: genuine PASSIVE->FORCING entry (mirrors scheduler.py:249),
+        # a FRESH PlanState -- exactly like a real DP decision. Every later
+        # tick: pure coasting (mirrors scheduler.py:233-234/241-242's
+        # `return plan`) -- the ambiguous-identity case this fix closes.
+        if plan.state is ControllerState.FORCING:
+            return plan
+        return PlanState(ControllerState.FORCING, now, ())
+
+    now_selected_holder = {"value": True}
+    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(scheduler, "decide_state", _fake_decide_state)
+    _wrap_compute_decision(monkeypatch, now_selected_holder)
+
+    tick_time = BASE
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
+
+    # Tick 1: the DP enters FORCING economically (fresh PlanState). Calibration
+    # is ALSO active this tick, sees new_plan already FORCING, leaves it alone.
+    result1 = await ctrl.tick()
+    assert result1["state"] == "forcing"
+
+    # Tick 2: calibration disengages. The scheduler only coasts (same
+    # object) -- but the DP still wants this hour (now_selected=True), so the
+    # cancel must NOT fire.
+    calibration_active = False
+    tick_time = BASE + timedelta(minutes=1)
+    result2 = await ctrl.tick()
+
+    assert result2["state"] == "forcing", "a DP-wanted FORCING must survive calibration disengaging"
+
+
+@pytest.mark.asyncio
+async def test_calibration_stop_still_cancels_when_dp_does_not_want_the_hour(monkeypatch):
+    """N3 complement: with now_selected explicitly False, the (B) cancel must
+    still fire -- the new now_selected gate must not neuter C1(B) for the
+    exact case it was built for.
+
+    test_calibration_stop_cancels_coasting_forcing already exercises this via
+    the REAL DP's incidental now_selected=False in that scenario (soc=50,
+    flat cheap prices, confirmed unchanged by this fix). This test pins the
+    same requirement explicitly and deterministically, independent of
+    whatever the real DP happens to decide.
+    """
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    calibration_active = True
+    action = calibration.CalibAction(
+        phase="charging",
+        window_start=BASE,
+        window_end=BASE + timedelta(hours=3),
+    )
+
+    def _fake_action(*a, **k):
+        return action if calibration_active else None
+
+    now_selected_holder = {"value": False}
+    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
+    _wrap_compute_decision(monkeypatch, now_selected_holder)
+
+    tick_time = BASE
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
+
+    result1 = await ctrl.tick()
+    assert result1["state"] == "forcing"
+
+    calibration_active = False
+    tick_time = BASE + timedelta(minutes=1)
+    result2 = await ctrl.tick()
+
+    assert result2["state"] == "passive", "the cancel must still fire when the DP does not want this hour"
+
+
+@pytest.mark.asyncio
+async def test_calibration_engaging_mid_economic_forcing_preserves_state_since(monkeypatch):
+    """N2 regression: state_since must not re-stamp when calibration engages
+    for the FIRST time on a tick where self.plan is ALREADY FORCING for a
+    genuine economic reason (calibration was never engaged before this tick).
+
+    Reverting N2 alone (restoring `and _calibration_was_engaged` to the (A)
+    branch's condition) makes this fail: `_calibration_was_engaged` is False
+    on calibration's first tick regardless of self.plan's own state, so the
+    pre-N2 code re-stamped state_since=now even though the device never left
+    FORCING.
+    """
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    # Seed an ALREADY-FORCING plan with nothing to do with calibration --
+    # self._calibration_engaged stays False (its __init__ default) since
+    # calibration has never run a tick yet.
+    economic_since = BASE - timedelta(hours=1)
+    ctrl.plan = PlanState(ControllerState.FORCING, economic_since, ())
+
+    action = calibration.CalibAction(
+        phase="charging",
+        window_start=BASE,
+        window_end=BASE + timedelta(hours=3),
+    )
+    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: action)
+
+    def _always_bail(plan, *, now, **kwargs):
+        # Mirrors scheduler.py's dwell-elapsed-but-not-selected bail -- the
+        # SAME fake as the C1(A) test, so the (A) replace branch actually
+        # fires and the two conditions (pre-/post-N2) can diverge.
+        if plan.state is ControllerState.FORCING:
+            return PlanState(ControllerState.PASSIVE, now, ())
+        return plan
+
+    monkeypatch.setattr(scheduler, "decide_state", _always_bail)
+
+    tick_time = BASE
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
+
+    result = await ctrl.tick()
+
+    assert result["state"] == "forcing"
+    assert ctrl.plan.state_since == economic_since, (
+        "state_since must not re-stamp when calibration engages mid-economic-FORCING"
+    )

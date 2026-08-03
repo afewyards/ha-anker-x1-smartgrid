@@ -1694,18 +1694,31 @@ class Controller:
             # Either way state_since already means what it should; leave it.
         else:
             self._calibration_engaged = False
-            if _calibration_was_engaged and new_plan is self.plan and new_plan.state is ControllerState.FORCING:
+            if (
+                _calibration_was_engaged
+                and new_plan is self.plan
+                and new_plan.state is ControllerState.FORCING
+                and not _dp_out.get("now_selected", False)
+            ):
                 # Calibration just stopped, but the scheduler only returned
                 # the SAME PlanState object it was handed (scheduler.py's
                 # `if not dwell_elapsed: return plan` / `if now_selected:
                 # return plan` short-circuits) rather than constructing a
-                # fresh one — i.e. it is coasting on the FORCING state WE
-                # injected for calibration, not making an independent
-                # decision. Nothing currently authorises this charge, so
-                # cancel it instead of letting it ride the dwell timer for up
-                # to min_dwell_min. A genuine economic FORCING always
-                # constructs a NEW PlanState (scheduler.py's PASSIVE->FORCING
-                # branch), so this identity check never touches one.
+                # fresh one — i.e. it is coasting on WHATEVER FORCING plan it
+                # was handed, not making an independent decision this tick.
+                # The identity check ALONE cannot tell "coasting on the plan
+                # calibration injected" apart from "coasting on a plan the DP
+                # itself entered a few ticks ago and still wants" — entry
+                # constructs a fresh PlanState (scheduler.py's
+                # PASSIVE->FORCING branch), but every SUBSEQUENT tick of a
+                # still-running economic FORCING coasts through the exact
+                # same `return plan` short-circuits calibration's own
+                # coasting goes through. `_dp_out["now_selected"]` (written by
+                # decision.py from the SAME `selected_slots` passed to
+                # decide_state this tick — real, not inferred) is the extra
+                # gate: only cancel when the DP does NOT currently want this
+                # hour, so a genuinely DP-wanted charge that calibration
+                # merely happened to coincide with is never dropped.
                 #
                 # state_since=self.plan.state_since (NOT `now`): a fresh
                 # `now` would restart the PASSIVE dwell timer, and
@@ -1717,10 +1730,14 @@ class Controller:
                 # (still-)FORCING run actually began, so dwell_elapsed
                 # against it reflects the real elapsed time in the current
                 # continuous run rather than an artificial reset.
-                # PlanState.state_since has exactly one other reader in this
-                # codebase (scheduler.decide_state's own dwell_elapsed); nothing
-                # in _record_sample, build_status, or any sensor surfaces it,
-                # so reusing the old timestamp here cannot mislead anything else.
+                # PlanState.state_since has exactly two other readers in this
+                # codebase: scheduler.decide_state's own dwell_elapsed, and
+                # PlanState.to_dict/from_dict (models.py) which round-trips it
+                # through self._persist() purely for restart continuity —
+                # feeding back into that same one functional consumer after a
+                # reload. Nothing in _record_sample, build_status, or any
+                # sensor surfaces it, so reusing the old timestamp here
+                # cannot mislead anything else.
                 new_plan = dataclasses.replace(
                     new_plan, state=ControllerState.PASSIVE, state_since=self.plan.state_since
                 )
