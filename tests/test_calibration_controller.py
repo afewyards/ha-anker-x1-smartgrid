@@ -10,6 +10,30 @@ from custom_components.anker_x1_smartgrid.models import ControllerState, PlanSta
 from tests.helpers import BASE, StubHass, make_controller, seed_valid_inputs
 
 
+def _wrap_compute_decision(monkeypatch, now_selected_holder):
+    """Patch controller.compute_decision to force _out["now_selected"] to a
+    test-controlled value, otherwise delegating to the REAL function.
+
+    now_selected is computed deep inside decision.compute_decision from the
+    real DP/heuristic `selected` list -- monkeypatching scheduler.decide_state
+    (as most tests in this file do) does NOT touch it, since that computation
+    is independent of decide_state's own return value. Wrapping (not
+    replacing) compute_decision keeps deadline/horizon/intervals_reserve and
+    every other _out key fully real and valid; only now_selected is
+    overridden, deterministically, after the real call already ran.
+    """
+    real_compute_decision = controller.compute_decision
+
+    def _fake(*args, **kwargs):
+        result = real_compute_decision(*args, **kwargs)
+        _out = kwargs.get("_out")
+        if _out is not None:
+            _out["now_selected"] = now_selected_holder["value"]
+        return result
+
+    monkeypatch.setattr(controller, "compute_decision", _fake)
+
+
 @pytest.mark.asyncio
 async def test_disabled_never_consults_the_policy(monkeypatch):
     """calibration_enabled=False => behaviour identical to today."""
@@ -118,7 +142,10 @@ async def test_calibration_stop_cancels_coasting_forcing(monkeypatch):
     unchanged -- faking that unconditionally means the scheduler never
     independently re-approves FORCING, so a FORCING outcome on the third tick
     here can only be because the override failed to cancel calibration's own
-    stale mandate once calibration said stop.
+    stale mandate once calibration said stop. now_selected is forced False
+    explicitly (via _wrap_compute_decision) rather than left to whatever the
+    real DP happens to decide for this fixture, so the cancel firing is not
+    hostage to incidental DP behaviour.
     """
     hass = StubHass()
     ctrl, act = make_controller(hass)
@@ -126,6 +153,7 @@ async def test_calibration_stop_cancels_coasting_forcing(monkeypatch):
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
     calibration_active = True
+    now_selected_holder = {"value": False}
     action = calibration.CalibAction(
         phase="charging",
         window_start=BASE,
@@ -137,6 +165,7 @@ async def test_calibration_stop_cancels_coasting_forcing(monkeypatch):
 
     monkeypatch.setattr(calibration, "calibration_action", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
+    _wrap_compute_decision(monkeypatch, now_selected_holder)
 
     tick_time = BASE
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
@@ -175,11 +204,12 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
     `now` there would dwell-LOCK a legitimate, DP-wanted charge for up to
     min_dwell_min (~15 min) instead of freeing it after the one cancel tick.
 
-    The fake `decide_state` below honours `plan.state_since` for the dwell
-    check exactly as the real scheduler does, but keeps "does the DP want
-    this hour" (`now_selected`) as an external toggle -- isolating the one
-    thing this fix controls: the state_since value the override's cancel
-    writes.
+    `now_selected_holder` is the ONE "does the DP want this hour" signal,
+    fed to both the fake `decide_state` (which honours `plan.state_since` for
+    the dwell check exactly as the real scheduler does -- a simplified
+    stand-in, not a full reimplementation) and, via `_wrap_compute_decision`,
+    the REAL `_dp_out["now_selected"]` the controller's override gate reads.
+    One holder, not two independent toggles, so the two can't drift apart.
     """
     hass = StubHass()
     ctrl, _act = make_controller(hass)
@@ -187,7 +217,7 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
     calibration_active = True
-    now_selected = False
+    now_selected_holder = {"value": False}
     action = calibration.CalibAction(
         phase="charging",
         window_start=BASE,
@@ -206,12 +236,13 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
         dwell_elapsed = (now - plan.state_since) >= timedelta(minutes=cfg.min_dwell_min)
         if not dwell_elapsed:
             return plan
-        if now_selected:
+        if now_selected_holder["value"]:
             return PlanState(ControllerState.FORCING, now, ())
         return plan
 
     monkeypatch.setattr(calibration, "calibration_action", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", _fake_decide_state)
+    _wrap_compute_decision(monkeypatch, now_selected_holder)
 
     tick_time = BASE
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
@@ -225,46 +256,21 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
     result2 = await ctrl.tick()
     assert result2["state"] == "forcing"
 
-    # Tick 3: calibration stops. The DP ALSO now wants this hour (now_selected=True)
-    # -- a coincidental overlap, deliberately, so a correctly-bounded cancel must
-    # still let the very next tick re-enter FORCING economically.
+    # Tick 3: calibration stops. The DP does NOT want this hour, so the (B)
+    # cancel fires -- a prerequisite for tick 4's dwell-lock check below.
     calibration_active = False
-    now_selected = True
     tick_time = BASE + timedelta(minutes=31)
     result3 = await ctrl.tick()
     assert result3["state"] == "passive"  # cancelled, per C1(B)
 
-    # Tick 4, only 30 SECONDS later: must be free to re-enter FORCING -- not
-    # dwell-blocked for another ~15 minutes.
+    # Tick 4, only 30 SECONDS later: the DP NOW wants this hour. Must be free
+    # to re-enter FORCING -- not dwell-blocked for another ~15 minutes.
+    now_selected_holder["value"] = True
     tick_time = BASE + timedelta(minutes=31, seconds=30)
     result4 = await ctrl.tick()
     assert result4["state"] == "forcing", (
         "a calibration cancel must not dwell-lock the next tick's economic FORCING re-entry"
     )
-
-
-def _wrap_compute_decision(monkeypatch, now_selected_holder):
-    """Patch controller.compute_decision to force _out["now_selected"] to a
-    test-controlled value, otherwise delegating to the REAL function.
-
-    now_selected is computed deep inside decision.compute_decision from the
-    real DP/heuristic `selected` list -- monkeypatching scheduler.decide_state
-    (as every other test in this file does) does NOT touch it, since that
-    computation is independent of decide_state's own return value. Wrapping
-    (not replacing) compute_decision keeps deadline/horizon/intervals_reserve
-    and every other _out key fully real and valid; only now_selected is
-    overridden, deterministically, after the real call already ran.
-    """
-    real_compute_decision = controller.compute_decision
-
-    def _fake(*args, **kwargs):
-        result = real_compute_decision(*args, **kwargs)
-        _out = kwargs.get("_out")
-        if _out is not None:
-            _out["now_selected"] = now_selected_holder["value"]
-        return result
-
-    monkeypatch.setattr(controller, "compute_decision", _fake)
 
 
 @pytest.mark.asyncio

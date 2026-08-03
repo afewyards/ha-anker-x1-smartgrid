@@ -890,14 +890,15 @@ def compute_decision(
             docstring); surfaced on the plan sensor for rollout observability.
         _out["export_curve_slots"]   — int, count of ``export_slots`` supplied as
             parsed (0 when none), independent of whether coverage passed.
-        _out["now_selected"] — bool, whether ``inputs.now``'s own slot is in
-            the FINAL ``selected_slots`` passed to ``scheduler.decide_state``
-            this tick (post edge-hysteresis/anti-fight-guard, not the raw DP
-            output). Exception to the "only on DP success" rule below: always
-            written when ``_out`` is provided, since ``selected_slots`` is
-            the empty-list fallback on a DP failure too.
-    All other keys are written only when the DP actually runs and succeeds;
-    the dict is left untouched for those when the DP raises.
+    Those keys are written only when the DP actually runs and succeeds; the
+    dict is left untouched for them when the DP raises.
+
+    ``_out["now_selected"]`` (bool) is different: written whenever ``_out``
+    is provided, regardless of DP success, because it's whether
+    ``inputs.now``'s own slot is in the FINAL ``selected_slots`` passed to
+    ``scheduler.decide_state`` this tick — ``selected_slots`` is the
+    empty-list fallback on a DP failure too, and that's an equally real
+    answer.
 
     ``_shadow_dp`` enables shadow mode: the DP runs but the returned plan and
     setpoint are discarded by the caller (master-switch-OFF path).  DP artefacts
