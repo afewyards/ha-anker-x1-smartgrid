@@ -128,6 +128,7 @@ class StubRecorder:
         self.decision_rows: list[dict] = []
         self.daily_regret_rows: dict[str, dict] = {}
         self._load_samples: list[tuple[str, float]] = []
+        self._soc_samples: list[tuple[str, float]] = []
         self._hourly_rows: list[dict] = []
 
     def append(self, row):
@@ -155,6 +156,11 @@ class StubRecorder:
         if since_iso is None:
             return list(self._load_samples)
         return [(ts, w) for ts, w in self._load_samples if ts >= since_iso]
+
+    def read_soc_samples(self, since_iso=None):
+        if since_iso is None:
+            return list(self._soc_samples)
+        return [(ts, soc) for ts, soc in self._soc_samples if ts >= since_iso]
 
     def read_persons_home_samples(self, since_iso=None):
         return []

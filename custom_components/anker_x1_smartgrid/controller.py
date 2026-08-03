@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import importlib.util
 import json
@@ -15,6 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
+from . import calibration
 from .anker_resolver import apply_anker_resolution, resolve_anker_config
 from . import (
     const,
@@ -343,6 +345,12 @@ class Controller:
         # refreshed at most once per EFFICIENCY_CACHE_SECONDS (see _refresh_efficiency_curve).
         self._eta_curve: EfficiencyCurve = EfficiencyCurve.static(self.cfg)
         self._eta_curve_built_at: datetime | None = None
+        # Active calibration cycle for this tick (spec 2026-08-03), or None.
+        # Published as plan-sensor attrs; not persisted — recomputed each tick
+        # from SoC + price history, which is what makes it restart-safe.
+        self._calibration: calibration.CalibAction | None = None
+        self._calibration_last_success: datetime | None = None
+        self._calibration_days_since: float | None = None
 
     # ── Cash ledger delegating properties (Task C4) ────────────────────────────
     # Preserve the pre-extraction attribute surface (direct get/set, and
@@ -1617,6 +1625,47 @@ class Controller:
         # failsafe ticks return before this point: accepted spec limitation.
         self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
 
+        # ── Periodic full-charge calibration override ──────────────────────
+        # Deliberately non-economic, and the ONLY force-charge path left after
+        # economic-only charging removed the rest.  Quarantined here rather
+        # than expressed as a DP constraint so the parity-gated core is
+        # untouched.  See the spec for the stranded-capacity evidence.
+        self._calibration = None
+        self._calibration_last_success = None
+        self._calibration_days_since = None
+        if self.cfg.calibration_enabled:
+            try:
+                _soc_rows = await self._hass.async_add_executor_job(
+                    self._recorder.read_soc_samples,
+                    (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat(),
+                )
+                self._calibration_last_success = calibration.last_success_end(
+                    _soc_rows,
+                    top_soc=self.cfg.calibration_top_soc,
+                    dwell_h=self.cfg.calibration_dwell_h,
+                )
+                self._calibration_days_since = (
+                    (now - self._calibration_last_success).total_seconds() / 86400.0
+                    if self._calibration_last_success is not None
+                    else None
+                )
+                self._calibration = calibration.calibration_action(
+                    now,
+                    inputs.soc,
+                    slots,
+                    _soc_rows,
+                    self._price_store.history if self._price_store is not None else {},
+                    self.cfg,
+                )
+            except Exception:
+                # Fail-closed: never force a charge on a failed read.
+                _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
+                self._calibration = None
+        if self._calibration is not None and new_plan.state is not ControllerState.FORCING:
+            # state_since moves only on the transition, so the executor's
+            # dwell hysteresis still sees a stable timestamp.
+            new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=now)
+
         # FORCING charge actuation + C3 live export executor (Task E2: moved
         # verbatim to executor.py — mutually-exclusive branches, self ->
         # controller). Reads the OLD self.plan for the FORCING->PASSIVE
@@ -1726,6 +1775,18 @@ class Controller:
         # this must be re-added every tick or sensor.py reads permanent None.
         self.last_status["export_curve_covered"] = _dp_out.get("export_curve_covered")
         self.last_status["export_curve_slots"] = _dp_out.get("export_curve_slots")
+        # Periodic full-charge calibration (spec 2026-08-03): observability only.
+        self.last_status["calibration_state"] = self._calibration.phase if self._calibration is not None else "idle"
+        self.last_status["calibration_window_start"] = (
+            self._calibration.window_start.isoformat() if self._calibration is not None else None
+        )
+        self.last_status["calibration_window_end"] = (
+            self._calibration.window_end.isoformat() if self._calibration is not None else None
+        )
+        self.last_status["calibration_last_success"] = (
+            self._calibration_last_success.isoformat() if self._calibration_last_success is not None else None
+        )
+        self.last_status["calibration_days_since"] = self._calibration_days_since
         # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
         # over-report under the "planned_grid_hours" name. Scale by the slot
         # width so the value stays true hours; a no-op at the legacy 60-min
