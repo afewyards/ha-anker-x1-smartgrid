@@ -624,6 +624,24 @@ class DataRecorder:
                 result.append((ts, val))
         return result
 
+    def read_soc_samples(self, since_iso: str | None = None) -> list[tuple[str, float]]:
+        """Return (ts, soc) rows ordered by ts ascending, NULL soc skipped.
+
+        Mirrors :meth:`read_load_samples`' shape (optional ts>=since window,
+        NULL-filtered in SQL). Consumed by ``calibration.last_success_end``
+        to detect a completed full-charge dwell from SoC history without
+        persisting state.
+        """
+        with self._lock:
+            if since_iso is not None:
+                cur = self._conn.execute(
+                    "SELECT ts, soc FROM samples WHERE soc IS NOT NULL AND ts >= ? ORDER BY ts ASC",
+                    (since_iso,),
+                )
+            else:
+                cur = self._conn.execute("SELECT ts, soc FROM samples WHERE soc IS NOT NULL ORDER BY ts ASC")
+            return [(ts, float(soc)) for ts, soc in cur.fetchall()]
+
     def read_persons_home_samples(self, since_iso: str | None = None) -> list[tuple[str, float]]:
         """Return (ts, persons_home) for rows with a non-null persons_home.
 

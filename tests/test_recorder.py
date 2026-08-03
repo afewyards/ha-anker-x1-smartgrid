@@ -86,6 +86,39 @@ def test_read_persons_home_samples_empty_when_no_data(tmp_path):
     rec.close()
 
 
+# ---------------------------------------------------------------------------
+# read_soc_samples: mirrors read_persons_home_samples (calibration dwell detection)
+# ---------------------------------------------------------------------------
+
+
+def test_read_soc_samples_orders_and_skips_nulls(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0})
+    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0})
+    rec.append({"ts": "2026-08-02T03:00:00+00:00", "soc": None})
+    rows = rec.read_soc_samples()
+    assert rows == [
+        ("2026-08-02T01:00:00+00:00", 30.0),
+        ("2026-08-02T02:00:00+00:00", 40.0),
+    ]
+    rec.close()
+
+
+def test_read_soc_samples_since_filter(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0})
+    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0})
+    rows = rec.read_soc_samples("2026-08-02T02:00:00+00:00")
+    assert rows == [("2026-08-02T02:00:00+00:00", 40.0)]
+    rec.close()
+
+
+def test_read_soc_samples_empty_when_no_data(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    assert rec.read_soc_samples() == []
+    rec.close()
+
+
 def test_append_and_count(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append({"ts": "2026-06-20T12:00:00+00:00", "soc": 50.0, "state": "passive"})
