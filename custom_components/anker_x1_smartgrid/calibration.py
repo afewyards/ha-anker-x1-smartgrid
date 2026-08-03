@@ -125,6 +125,25 @@ def _charge_h(soc_pct: float, cfg: Config) -> float:
     return gap_kwh / rate_kw
 
 
+# Tolerance for treating two chronologically-adjacent slots as truly
+# contiguous. Guards against float/second rounding in stored timestamps
+# without letting a REAL price-curve gap be silently spanned as if it were
+# elapsed time — mirrors the gap-awareness MAX_SAMPLE_GAP_MIN already gives
+# the SoC-history path above, just for the price-slot path.
+_CONTIGUITY_TOLERANCE = timedelta(minutes=1.0)
+
+
+def _slot_duration_min(slot: PriceSlot) -> float:
+    """This slot's own duration in minutes.
+
+    Falls back to 60.0 for a missing (``None``), zero, or invalid (negative)
+    duration — ``duration_min or 60.0`` alone would NOT catch a negative
+    value (a negative number is truthy), so the sign is checked explicitly.
+    """
+    dur = slot.duration_min
+    return dur if dur and dur > 0.0 else 60.0
+
+
 def select_window(
     now: datetime,
     soc_pct: float,
@@ -142,24 +161,38 @@ def select_window(
     """
     if not slots:
         return None
-    need_h = _charge_h(soc_pct, cfg) + cfg.calibration_dwell_h
+    need_min = (_charge_h(soc_pct, cfg) + cfg.calibration_dwell_h) * 60.0
     ordered = sorted(slots, key=lambda s: s.start)
-    slot_h = (ordered[0].duration_min or 60.0) / 60.0
-    if slot_h <= 0.0:
-        return None
-    n = max(1, int(need_h / slot_h + 0.999999))
-    if n > len(ordered):
-        return None
 
-    # Build candidates: contiguous runs of n slots that have not fully elapsed.
+    # Build candidates: variable-length runs of REAL, chronologically-adjacent
+    # slots — each contributing its OWN duration_min, never a single width
+    # sampled once and extrapolated — whose summed duration covers `need_min`
+    # and that have not fully elapsed. A real gap between two slots forecloses
+    # spanning it (see _CONTIGUITY_TOLERANCE above): the price curve can mix
+    # cadences (e.g. hourly slots followed by 15-min slots, or a genuine
+    # missing-data hole), and neither may be papered over with arithmetic.
     candidates: list[tuple[float, datetime, datetime]] = []
-    for i in range(len(ordered) - n + 1):
-        block = ordered[i : i + n]
-        start = block[0].start
-        end = start + timedelta(hours=slot_h * n)
+    for i in range(len(ordered)):
+        acc_min = 0.0
+        weighted_price = 0.0
+        prev_end: datetime | None = None
+        end: datetime | None = None
+        for slot in ordered[i:]:
+            if prev_end is not None and abs(slot.start - prev_end) > _CONTIGUITY_TOLERANCE:
+                break  # real discontinuity in the price curve — do not span it
+            dur_min = _slot_duration_min(slot)
+            acc_min += dur_min
+            weighted_price += slot.price * dur_min
+            prev_end = slot.start + timedelta(minutes=dur_min)
+            if acc_min >= need_min:
+                end = prev_end
+                break
+        if end is None:
+            continue  # ran out of slots, or hit a gap, before covering need_min
+        start = ordered[i].start
         if end <= now:
             continue
-        mean_price = sum(s.price for s in block) / n
+        mean_price = weighted_price / acc_min
         candidates.append((mean_price, start, end))
     if not candidates:
         return None

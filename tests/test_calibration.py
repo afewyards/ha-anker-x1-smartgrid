@@ -131,3 +131,62 @@ def test_cheapest_window_within_the_day_wins():
     win = calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.30, force=False)
     assert win is not None
     assert win[0] == BASE + timedelta(hours=4)
+
+
+def test_mixed_durations_end_reflects_real_elapsed_time_not_extrapolation():
+    """A block spanning a switch from 60-min to 15-min slots must end where the
+    REAL slots end, not at a naive `n * first_slot_duration` extrapolation.
+
+    Need here is ~130.87 min (soc 87 -> 97 charge + 2h dwell). The real slots
+    (60 + 60 + 15 = 135 min) cover that in 2h15m. A width sampled once from
+    the first (60-min) slot and extrapolated over a 3-slot count would instead
+    land at start + 3h -- 45 minutes late.
+    """
+    slots = [
+        PriceSlot(start=BASE, price=0.30, duration_min=60),
+        PriceSlot(start=BASE + timedelta(hours=1), price=0.30, duration_min=60),
+        PriceSlot(start=BASE + timedelta(hours=2), price=0.05, duration_min=15),
+    ]
+    win = calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.30, force=False)
+    assert win is not None
+    assert win[0] == BASE
+    assert win[1] == BASE + timedelta(hours=2, minutes=15)
+
+
+def test_gap_in_slot_series_forecloses_spanning_it():
+    """A real discontinuity in the price curve must not be silently spanned as
+    if it were elapsed time -- not even under `force`."""
+    slots = [
+        PriceSlot(start=BASE, price=0.05, duration_min=60),
+        PriceSlot(start=BASE + timedelta(hours=1), price=0.05, duration_min=60),
+        # 3 h gap: only 2 h of real, contiguous duration precedes it -- below
+        # the ~2.18 h need, and the slot after the gap cannot be borrowed.
+        PriceSlot(start=BASE + timedelta(hours=5), price=0.05, duration_min=60),
+    ]
+    assert calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.10, force=True) is None
+
+
+def test_duration_min_none_falls_back_to_sixty_minutes():
+    """A slot with duration_min=None (a single-entry curve) must fall back to
+    a 60-minute assumption -- not crash, and not silently become zero-width."""
+    slots = [
+        PriceSlot(start=BASE, price=0.05, duration_min=None),
+        PriceSlot(start=BASE + timedelta(hours=1), price=0.05, duration_min=None),
+        PriceSlot(start=BASE + timedelta(hours=2), price=0.05, duration_min=None),
+    ]
+    win = calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.10, force=False)
+    assert win == (BASE, BASE + timedelta(hours=3))
+
+
+def test_charge_h_clamps_when_soc_at_or_above_top():
+    """Without the `max(0.0, ...)` clamp, soc at/above the calibration top
+    would compute a negative charge_h (negative gap_kwh) instead of zero."""
+    assert calibration._charge_h(97.0, CFG) == 0.0
+    assert calibration._charge_h(99.0, CFG) == 0.0
+
+
+def test_insufficient_total_slots_returns_none():
+    """Fewer real minutes available than `need_h` requires, even under
+    `force` -- there simply is no candidate to accept."""
+    slots = _slots(BASE, [0.05], minutes=60)  # only 1 h available; need ~2.18 h
+    assert calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.10, force=True) is None
