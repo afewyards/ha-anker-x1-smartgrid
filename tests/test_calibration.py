@@ -276,3 +276,54 @@ def test_empty_price_history_blocks_percentile_but_not_deadline():
     assert calibration.calibration_action(now, 50.0, slots, just_due, {}, ON) is None
     past_grace = _stale_history(now, ON.calibration_interval_days + const.CALIBRATION_GRACE_DAYS + 1)
     assert calibration.calibration_action(now, 50.0, slots, past_grace, {}, ON) is not None
+
+
+def test_bar_alone_accepts_when_not_yet_forced():
+    """days_since inside [interval, interval+grace) must rely on the price
+    bar -- not `force` -- to accept a window.  Every other passing test in
+    this suite either has `force=True` already (30-day stale histories) or
+    never accepts at all, so a mutant that broke the wiring of the price bar
+    into `calibration_action` (wrong percentile constant, or skipping
+    `price_percentile` entirely) would survive the whole suite without this
+    test."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    mid_grace = _stale_history(now, 6)  # force = 6 >= 5 + 7 = 12 is False
+    act = calibration.calibration_action(now, 50.0, slots, mid_grace, CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "charging"
+
+
+def test_future_window_is_not_acted_on_yet():
+    """`select_window` may accept a future-starting window (today too
+    expensive to clear the bar, tomorrow cheap); `calibration_action` must
+    not act early just because SOME window was accepted.  `force` must be
+    False here (a 30-day-stale history would force today's expensive window
+    through regardless of price), so use a mid-grace history instead."""
+    now = BASE
+    slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
+    due = _stale_history(now, 6)  # force = 6 >= 5 + 7 = 12 is False
+    assert calibration.calibration_action(now, 50.0, slots, due, CHEAP_HISTORY, ON) is None
+
+
+def test_due_at_exact_interval_boundary():
+    """days_since == calibration_interval_days exactly must already count as
+    due (`>=`, not `>`)."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    exact = _stale_history(now, ON.calibration_interval_days)
+    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "charging"
+
+
+def test_force_at_exact_grace_boundary():
+    """days_since == interval + CALIBRATION_GRACE_DAYS exactly must already
+    force (`>=`, not `>`).  Slots are priced above CHEAP_HISTORY's bar so only
+    the force path can accept."""
+    now = BASE
+    slots = _slots(now, [0.90] * 6)
+    exact = _stale_history(now, ON.calibration_interval_days + const.CALIBRATION_GRACE_DAYS)
+    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "charging"

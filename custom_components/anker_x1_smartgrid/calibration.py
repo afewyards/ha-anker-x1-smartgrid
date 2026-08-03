@@ -270,5 +270,8 @@ def calibration_action(
     if not (start <= now < end):
         return None  # accepted a future window; nothing to do yet
 
-    phase = "holding" if soc_pct >= cfg.calibration_top_soc else "charging"
-    return CalibAction(phase=phase, window_start=start, window_end=end)
+    # Always "charging": the hold-through branch above already returned
+    # whenever soc_pct >= cfg.calibration_top_soc, and nothing between here
+    # and there mutates soc_pct or cfg (Config is frozen) -- so this point is
+    # only ever reached with soc_pct < cfg.calibration_top_soc.
+    return CalibAction(phase="charging", window_start=start, window_end=end)
