@@ -38,7 +38,13 @@ def _parse(ts: str) -> datetime:
 
 
 def history_span_days(soc_samples: list[tuple[str, float]]) -> float:
-    """Wall-clock days covered by the sample series (0.0 when < 2 rows)."""
+    """Wall-clock days covered by the sample series (0.0 when < 2 rows).
+
+    Precondition: ``soc_samples`` is ascending by timestamp, as guaranteed by
+    ``recorder.read_soc_samples``'s ``ORDER BY ts ASC``. This computes
+    ``samples[-1] - samples[0]``, so an out-of-order series would silently
+    yield a wrong (even negative) span.
+    """
     if len(soc_samples) < 2:
         return 0.0
     return (_parse(soc_samples[-1][0]) - _parse(soc_samples[0][0])).total_seconds() / 86400.0
@@ -58,6 +64,14 @@ def last_success_end(
     keeps the clock at ~now and the policy goes idle as soon as it qualifies.
 
     Returns None when no block qualifies — including an empty series.
+
+    Precondition: ``soc_samples`` is ascending by timestamp, as guaranteed by
+    ``recorder.read_soc_samples``'s ``ORDER BY ts ASC``. Duplicate timestamps
+    are benign (zero delta, run continues). An out-of-order series is not
+    guarded against here: a ``ts`` preceding the open run's ``run_end`` makes
+    ``ts - run_end`` negative, which is always ``<= max_gap``, so the run
+    would silently keep extending backward and corrupt both the run's
+    duration and the most-recent-wins result.
     """
     best: datetime | None = None
     run_start: datetime | None = None

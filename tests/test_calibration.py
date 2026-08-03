@@ -54,3 +54,18 @@ def test_history_span_days():
     rows = _series(BASE, 60, [50.0] * 25)  # 24 h
     assert calibration.history_span_days(rows) == 1.0
     assert calibration.history_span_days([]) == 0.0
+
+
+def test_run_of_exact_dwell_length_counts():
+    """Boundary: a run of exactly `dwell_h` must qualify (`>=`, not `>`)."""
+    rows = _series(BASE, 15, [98.0] * 9)  # 0, 15, ..., 120 min = exactly 2 h.
+    assert calibration.last_success_end(rows, top_soc=97.0, dwell_h=2.0) == BASE + timedelta(hours=2)
+
+
+def test_duplicate_timestamps_are_benign():
+    """Duplicate ts rows (zero delta) must not corrupt the run's duration or end."""
+    rows = _series(BASE, 15, [98.0] * 13)
+    dup_index = 5
+    rows_with_dup = [*rows[: dup_index + 1], rows[dup_index], *rows[dup_index + 1 :]]
+    got = calibration.last_success_end(rows_with_dup, top_soc=97.0, dwell_h=2.0)
+    assert got == BASE + timedelta(hours=3)
