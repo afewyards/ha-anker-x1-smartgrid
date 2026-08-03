@@ -188,6 +188,79 @@ def test_delivered_lands_only_on_the_in_progress_slot_at_15_min():
     assert [e["grid_charge_w"] for e in out] == [8000.0, 0.0, 0.0, 2000.0]
 
 
+def _partial_slot_case():
+    """One 15-min grid slot, 12 kW rate, 20 kWh pack, ceiling far above.
+
+    Rate-bound by construction (headroom at 40% is 12 kWh, far more than a
+    quarter can take), which is the case where modelling the WHOLE slot is
+    wrong once part of it has already elapsed.
+    """
+    cfg = Config(capacity_kwh=20.0, soc_target=100.0, max_charge_w=12000.0, eta_charge=1.0)
+    return (
+        cfg,
+        [PriceSlot(BASE, 0.30)],
+        [ForecastInterval(BASE, pv_w=0.0, load_w=0.0, dt_h=0.25)],
+        [BASE],
+    )
+
+
+def test_in_progress_slot_is_modelled_over_its_remaining_minutes_only():
+    """``now`` 10 min into a quarter leaves 5 min of modelled charge, not 15.
+
+    The live SoC the walk starts from ALREADY contains the elapsed minutes, so
+    crediting the full slot double-counts them. Live lab 2026-08-03 12:41Z: a
+    live SoC of ~56.5% was published as 71.5% for the in-progress quarter, and
+    the whole forward line carried the offset until it saturated.
+    """
+    cfg, slots, intervals, selected = _partial_slot_case()
+    out = plan.build_plan_horizon(
+        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg,
+        slot_minutes=15,
+        now=BASE + timedelta(minutes=10),
+    )
+    # 12 kW x 5 min = 1.0 kWh (not 3.0), so +5 pp of a 20 kWh pack (not +15).
+    assert out[0]["grid_charge_kwh"] == pytest.approx(1.0)
+    assert out[0]["soc"] == pytest.approx(45.0)
+    # kWh == W x dt_h / 1000 must still hold: the bar is the slot AVERAGE.
+    assert out[0]["grid_charge_w"] == pytest.approx(4000.0)
+
+
+def test_delivered_plus_remaining_reconstructs_the_in_progress_slot_total():
+    """The measured elapsed part and the modelled remainder are now disjoint.
+
+    2.0 kWh delivered in the elapsed 10 min + 1.0 kWh modelled for the last
+    5 min = the 3.0 kWh a quarter can hold at 12 kW, with the clamp never
+    having to bind. The SoC still advances by the REMAINDER alone.
+    """
+    cfg, slots, intervals, selected = _partial_slot_case()
+    out = plan.build_plan_horizon(
+        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg,
+        slot_minutes=15,
+        delivered_by_hour={BASE: {"grid_charge_kwh": 2.0}},
+        now=BASE + timedelta(minutes=10),
+    )
+    assert out[0]["grid_charge_kwh"] == pytest.approx(3.0)
+    assert out[0]["grid_charge_w"] == pytest.approx(12000.0)
+    assert out[0]["soc"] == pytest.approx(45.0)
+
+
+def test_now_at_a_slot_boundary_is_byte_identical_to_no_now():
+    """Parity seam: a slot that has not started yet is modelled in full.
+
+    Guards every non-current row in the horizon, and the whole hourly
+    deployment where ``now`` lands on the slot start after each tick's floor.
+    """
+    cfg, slots, intervals, selected = _partial_slot_case()
+    common = dict(slot_minutes=15, delivered_by_hour={BASE: {"grid_charge_kwh": 0.4}})
+    baseline = plan.build_plan_horizon(
+        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg, **common
+    )
+    with_now = plan.build_plan_horizon(
+        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg, now=BASE, **common
+    )
+    assert with_now == baseline
+
+
 def test_delivered_cannot_push_a_slot_past_its_physical_import_cap():
     """A slot can never import more than the connection allows for its duration.
 
@@ -537,6 +610,43 @@ def test_soc_no_discharge_when_interval_missing():
     out = plan.build_plan_horizon(slots, [], [], 50.0, BASE + timedelta(hours=1), cfg)
     assert out[0]["soc"] == 50.0
     assert out[0]["mode"] == "idle"
+
+
+def test_build_display_horizon_threads_now_into_the_in_progress_slot():
+    """Wiring guard: dropping ``now=now`` at the call site must fail a test.
+
+    Night-time so PV is 0 and the grid bar is rate-bound: 10 min into the 22:00
+    quarter only 5 min are left to model, so 1.0 kWh (not 3.0) and +5 pp of a
+    20 kWh pack (not +15). Nothing else in the suite covers the threading.
+    """
+    cfg = Config(capacity_kwh=20.0, soc_target=100.0, max_charge_w=12000.0, eta_charge=1.0)
+    slot0 = datetime(2026, 6, 20, 22, 0, tzinfo=UTC)
+    now = slot0 + timedelta(minutes=10)
+    slots = [PriceSlot(slot0 + timedelta(minutes=15 * i), 0.30) for i in range(4)]
+    sun_times = (
+        datetime(2026, 6, 20, 20, 0, tzinfo=UTC),  # today_sunset (already past)
+        datetime(2026, 6, 21, 6, 0, tzinfo=UTC),
+        datetime(2026, 6, 21, 20, 0, tzinfo=UTC),
+    )
+    out = plan.build_display_horizon(
+        slots,
+        now,
+        today_arrays=[(1.0, None)],
+        tomorrow_arrays=[(6.0, None)],
+        sun_times=sun_times,
+        predictor=_StubPredictor(),
+        cur_temp=15.0,
+        fallback_w=400.0,
+        soc=40.0,
+        selected=[slot0],
+        horizon_edge=slot0 + timedelta(hours=1),
+        cfg=cfg,
+        slot_minutes=15,
+    )
+    cur = next(r for r in out if r["start"] == slot0.isoformat())
+    assert cur["mode"] == "grid"
+    assert cur["grid_charge_kwh"] == pytest.approx(1.0)
+    assert cur["soc"] == pytest.approx(45.0)
 
 
 def test_build_display_horizon_none_sun_times_returns_empty():

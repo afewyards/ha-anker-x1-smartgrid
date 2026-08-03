@@ -87,6 +87,38 @@ async def test_get_current_delivered_returns_only_the_in_progress_hour():
     assert out[datetime(2026, 7, 29, 11, tzinfo=UTC)]["grid_charge_kwh"] > 0
 
 
+def test_compute_decision_threads_now_on_the_no_sun_times_path(monkeypatch):
+    """Wiring guard for the ``sun_times is None`` fallback branch.
+
+    That branch calls build_plan_horizon directly instead of going through
+    build_display_horizon, so it needs its own ``now=inputs.now`` and its own
+    test — the DP's slot choices are not forceable enough to assert the
+    partial-slot arithmetic end to end here.
+    """
+    from custom_components.anker_x1_smartgrid import plan as plan_mod
+
+    seen = {}
+
+    def _capture(*a, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(plan_mod, "build_plan_horizon", _capture)
+    now = datetime(2026, 7, 29, 11, 20, tzinfo=UTC)  # mid-slot on purpose
+    ctrl.compute_decision(
+        PlanState.initial(now),
+        PlantInputs(soc=49.0, meter_w=0.0, now=now),
+        [_slot(10), _slot(11), _slot(12)],
+        0.0,
+        now,
+        _Pred(),
+        15.0,
+        Config(),
+        sun_times=None,
+    )
+    assert seen["now"] == now
+
+
 @pytest.mark.asyncio
 async def test_get_current_delivered_is_scoped_to_the_in_progress_slot_at_15_min():
     """At 15-min the add-back must carry ONE quarter's energy, not the hour's.

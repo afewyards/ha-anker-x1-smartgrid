@@ -134,6 +134,7 @@ def build_plan_horizon(
     eta_curve=None,
     est_starts: frozenset | None = None,
     terminal_need_kwh: float = 0.0,
+    now: datetime | None = None,
 ) -> list[dict]:
     """Join price/PV/load/charge-plan into an hourly horizon for visualization.
 
@@ -208,6 +209,17 @@ def build_plan_horizon(
     ``selected_set``/``exp_by_hour``/``delivered_by_hour``/``ceil_by_hour`` by
     construction, so charge/export stay 0 and the SoC walk + firmware-floor
     clamp run unmodified.
+
+    ``now`` (optional) marks the wall clock, and only the slot CONTAINING it is
+    affected: that slot is modelled over the minutes it has left rather than its
+    full width, because the live ``soc`` this walk starts from already contains
+    the elapsed ones.  Its battery-action columns are the remainder alone —
+    scaled to the slot average so ``kWh == W * dt_h / 1000`` still holds — while
+    ``pv_kwh``/``load_kwh`` keep describing the whole slot (they are forecasts of
+    the slot, not actions taken in it).  The measured elapsed half arrives
+    separately via ``delivered_by_hour``, so the two are disjoint in time and sum
+    to the slot total.  ``now=None`` models every slot in full (parity-safe), as
+    do all rows once ``now`` has passed their end or not yet reached their start.
 
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
@@ -341,9 +353,26 @@ def build_plan_horizon(
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
         is_grid = slot_key in selected_set
         is_est = hour in est_set
+        # Duration the model may still act for. A slot that has already STARTED
+        # is only modelled over the minutes it has left: the live ``soc`` this
+        # walk begins from already contains the elapsed ones, so crediting the
+        # whole slot books them twice (live lab 2026-08-03 12:41Z — SoC ~56.5%
+        # published as 71.5% for the in-progress quarter, and the offset rode
+        # the whole forward line until it saturated). Equal to dt_h for every
+        # other row, and whenever ``now`` is absent, so both stay parity-safe.
+        model_h = dt_h
+        if now is not None and dt_h > 0:
+            _slot_end = slot.start + timedelta(hours=dt_h)
+            if slot.start <= now < _slot_end:
+                model_h = max(0.0, (_slot_end - now).total_seconds() / 3600.0)
+        # Powers below stay TRUE RATES all the way through the physics (the eta
+        # curve is power-dependent, and the rate caps are rate-domain). Only the
+        # emitted columns are scaled, to the slot AVERAGE, so the published
+        # kWh == W * dt_h / 1000 invariant survives a partial slot.
+        out_scale = model_h / dt_h if dt_h > 0 else 0.0
         solar_surplus = max(0.0, iv.pv_w - iv.load_w) if iv is not None else 0.0
-        if cap_wh > 0:
-            headroom_w = max(0.0, (cfg.soc_target - soc_sim) / 100.0 * cap_wh / (eta * dt_h))
+        if cap_wh > 0 and model_h > 0:
+            headroom_w = max(0.0, (cfg.soc_target - soc_sim) / 100.0 * cap_wh / (eta * model_h))
         else:
             headroom_w = 0.0
         # Solar fills first (free); both bars share the rate + headroom budget.
@@ -356,8 +385,8 @@ def build_plan_horizon(
             # for forecast solar); SOLAR may still fill to soc_target above it.
             # When no ceiling is supplied, fall back to soc_target (prior behaviour).
             ceil_soc = ceil_by_hour.get(slot_key, cfg.soc_target)
-            if cap_wh > 0:
-                ceil_headroom_w = max(0.0, (ceil_soc - soc_sim) / 100.0 * cap_wh / (eta * dt_h))
+            if cap_wh > 0 and model_h > 0:
+                ceil_headroom_w = max(0.0, (ceil_soc - soc_sim) / 100.0 * cap_wh / (eta * model_h))
             else:
                 ceil_headroom_w = 0.0
             # Grid connection cap (grid_import_limit_w) bounds only the GRID portion —
@@ -381,19 +410,19 @@ def build_plan_horizon(
             # eta_curve (measured, power-dependent) overrides the static scalars
             # when supplied; eta_curve=None keeps this byte-identical to before.
             _eta_c = cfg.eta_charge if eta_curve is None else eta_curve.eta_charge(total_w)
-            soc_sim += total_w * _eta_c * dt_h / cap_wh * 100.0
+            soc_sim += total_w * _eta_c * model_h / cap_wh * 100.0
             # max_charge_w is used as an approximate discharge cap by design (no separate max_discharge_w config).
             _eta_d = eta_discharge if eta_curve is None else eta_curve.eta_discharge(self_discharge_w)
-            soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * dt_h / cap_wh * 100.0
+            soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * model_h / cap_wh * 100.0
             if self_discharge_w > 0:
                 # Constant inverter-standby DC drain (cfg.idle_drain_w, ~130 W live) paid
                 # whenever the battery passively discharges to cover a net AC deficit.
                 # DC-side term: NOT divided by eta_discharge. Not paid on charge/export
                 # slots (self_discharge_w is 0 there). idle_drain_w=0.0 default -> no-op.
-                soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * dt_h / 1000.0)
+                soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * model_h / 1000.0)
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
-            soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * dt_h / cap_wh * 100.0
+            soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * model_h / cap_wh * 100.0
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         if hedge_by_hour and cfg.capacity_kwh > 0:
@@ -420,26 +449,33 @@ def build_plan_horizon(
             mode = "solar"
         else:
             mode = "idle"
+        # Rates -> slot averages (a no-op at out_scale == 1.0, i.e. every row but
+        # the one in progress). Done here so the physics above kept true rates.
+        solar_charge_w *= out_scale
+        grid_charge_w *= out_scale
+        grid_export_w *= out_scale
+        self_discharge_w *= out_scale
+        total_w *= out_scale
         # Display-only: fold energy already delivered in this (in-progress) slot
         # back in, so an active grid charge stays on the card instead of decaying
         # to 0 as the live SoC eats the modelled headroom. Applied AFTER soc_sim
         # (which must keep advancing on the modelled remainder alone — the live
         # SoC it started from already contains the delivered energy).
+        #
+        # The two are now disjoint IN TIME: the add-back covers the elapsed
+        # minutes and model_h covers the rest, so they sum to the slot total
+        # instead of overlapping. The clamp below is what is left of finding A4
+        # — a residual guard, no longer the thing keeping the number physical.
         grid_charge_w_disp = grid_charge_w
         if deliv_by_slot and dt_h > 0:
             _deliv_kwh = (deliv_by_slot.get(slot_key) or {}).get("grid_charge_kwh")
             if _deliv_kwh:
                 grid_charge_w_disp += float(_deliv_kwh) * 1000.0 / dt_h
-                # ...but never past what the connection can physically deliver
-                # over one slot. The modelled remainder is a FULL-slot rate: it
-                # is disjoint from the delivered kWh only while the charge is
-                # HEADROOM-bound (what is left shrinks as the live SoC rises).
-                # Rate-bound — deep in a cheap window with the ceiling far above
-                # — both terms cover the minutes already elapsed and the sum runs
-                # past the slot's physical maximum. Live lab 2026-08-03: 12 kW
-                # modelled + 7.56 kWh delivered rendered a 15-min quarter as
-                # 42.2 kW / 10.56 kWh; slot-keying the add-back (above) took that
-                # to 5.3 kWh, and this clamp to the true 3.0.
+                # A slot can never import more than the connection allows for
+                # its own duration. Live lab 2026-08-03: 12 kW modelled + 7.56
+                # kWh delivered rendered a 15-min quarter as 42.2 kW / 10.56
+                # kWh; slot-keying the add-back took that to 5.3, this clamp to
+                # 3.0, and modelling only the remaining minutes to the truth.
                 grid_charge_w_disp = min(grid_charge_w_disp, cfg.max_charge_w, cfg.grid_import_limit_w)
         out.append(
             {
@@ -601,4 +637,5 @@ def build_display_horizon(
         eta_curve=eta_curve,
         est_starts=est_starts,
         terminal_need_kwh=terminal_need_kwh,
+        now=now,
     )

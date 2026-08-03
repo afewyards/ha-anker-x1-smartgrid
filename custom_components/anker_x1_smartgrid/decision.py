@@ -1339,5 +1339,6 @@ def compute_decision(
             hedge_drain_by_hour=hedge_drain_by_hour,
             delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
+            now=inputs.now,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve
