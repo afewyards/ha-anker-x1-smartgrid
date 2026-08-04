@@ -300,10 +300,10 @@ UI options save.
 
 | Option | Default |
 |---|---|
-| `calibration_enabled` | `False` |
+| `calibration_enabled` | `True` |
 | `calibration_interval_days` | `5` |
-| `calibration_top_soc` | `97` |
-| `calibration_dwell_h` | `2` |
+| `calibration_top_soc` | `98` |
+| `calibration_dwell_h` | `1` |
 
 Consts in `const.py`, not user-tunable: `CALIBRATION_PRICE_PERCENTILE = 30`,
 `CALIBRATION_GRACE_DAYS = 7`.

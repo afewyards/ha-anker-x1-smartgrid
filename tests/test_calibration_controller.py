@@ -40,6 +40,7 @@ async def test_disabled_never_consults_the_policy(monkeypatch):
     """calibration_enabled=False => behaviour identical to today."""
     hass = StubHass()
     ctrl, _act = make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=False)
     seed_valid_inputs(hass, soc="50.0")
     called = False
 

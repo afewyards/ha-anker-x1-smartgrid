@@ -5,12 +5,12 @@ from custom_components.anker_x1_smartgrid.config_flow import _TUNABLES
 from custom_components.anker_x1_smartgrid.models import Config
 
 
-def test_defaults_ship_off():
+def test_defaults_ship_on():
     cfg = Config()
-    assert cfg.calibration_enabled is False
+    assert cfg.calibration_enabled is True
     assert cfg.calibration_interval_days == 5
-    assert cfg.calibration_top_soc == 97.0
-    assert cfg.calibration_dwell_h == 2.0
+    assert cfg.calibration_top_soc == 98.0
+    assert cfg.calibration_dwell_h == 1.0
 
 
 def test_tuning_consts():

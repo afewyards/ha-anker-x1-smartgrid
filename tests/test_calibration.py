@@ -1,5 +1,6 @@
 """Pure calibration-policy tests. No HA, no I/O, no clock."""
 
+import dataclasses
 from datetime import datetime, timedelta, UTC
 
 from custom_components.anker_x1_smartgrid import calibration
@@ -218,10 +219,9 @@ def _stale_history(now, days):
 
 def test_disabled_is_always_none():
     now = BASE
+    off = dataclasses.replace(ON, calibration_enabled=False)
     assert (
-        calibration.calibration_action(
-            now, 50.0, _slots(now, [0.01] * 6), _stale_history(now, 30), CHEAP_HISTORY, Config()
-        )
+        calibration.calibration_action(now, 50.0, _slots(now, [0.01] * 6), _stale_history(now, 30), CHEAP_HISTORY, off)
         is None
     )
 

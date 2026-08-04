@@ -121,11 +121,11 @@ DEFAULT_TERMINAL_OVERNIGHT_CREDIT = True
 
 # Periodic full-charge calibration (see
 # docs/superpowers/specs/2026-08-03-battery-calibration-policy-design.md).
-# Ships OFF. 5 days suits summer, where natural full days mostly satisfy it;
+# Ships ON. 5 days suits summer, where natural full days mostly satisfy it;
 # raise in winter, when it will force a grid charge instead.
 DEFAULT_CALIBRATION_ENABLED = True
 DEFAULT_CALIBRATION_INTERVAL_DAYS = 5
-# 97 sits below the observed 99% stall (2026-08-02: reached 99%, then 0 W for
+# 98 sits below the observed 99% stall (2026-08-02: reached 99%, then 0 W for
 # 2.5 h), so the dwell is actually reachable.
 DEFAULT_CALIBRATION_TOP_SOC = 98.0
 DEFAULT_CALIBRATION_DWELL_H = 1.0
