@@ -214,7 +214,12 @@ def test_in_progress_slot_is_modelled_over_its_remaining_minutes_only():
     """
     cfg, slots, intervals, selected = _partial_slot_case()
     out = plan.build_plan_horizon(
-        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg,
+        slots,
+        intervals,
+        selected,
+        40.0,
+        BASE + timedelta(minutes=15),
+        cfg,
         slot_minutes=15,
         now=BASE + timedelta(minutes=10),
     )
@@ -234,7 +239,12 @@ def test_delivered_plus_remaining_reconstructs_the_in_progress_slot_total():
     """
     cfg, slots, intervals, selected = _partial_slot_case()
     out = plan.build_plan_horizon(
-        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg,
+        slots,
+        intervals,
+        selected,
+        40.0,
+        BASE + timedelta(minutes=15),
+        cfg,
         slot_minutes=15,
         delivered_by_hour={BASE: {"grid_charge_kwh": 2.0}},
         now=BASE + timedelta(minutes=10),
@@ -252,9 +262,7 @@ def test_now_at_a_slot_boundary_is_byte_identical_to_no_now():
     """
     cfg, slots, intervals, selected = _partial_slot_case()
     common = dict(slot_minutes=15, delivered_by_hour={BASE: {"grid_charge_kwh": 0.4}})
-    baseline = plan.build_plan_horizon(
-        slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg, **common
-    )
+    baseline = plan.build_plan_horizon(slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg, **common)
     with_now = plan.build_plan_horizon(
         slots, intervals, selected, 40.0, BASE + timedelta(minutes=15), cfg, now=BASE, **common
     )

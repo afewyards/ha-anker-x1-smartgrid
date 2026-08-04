@@ -335,9 +335,7 @@ class TestPublishDailyStats:
                 "estimated": False,
                 "mode": mode,
             }
-            for i, (kwh, mode) in enumerate(
-                [(1.0, "actual"), (1.0, "actual"), (2.5, "grid"), (0.5, "grid")]
-            )
+            for i, (kwh, mode) in enumerate([(1.0, "actual"), (1.0, "actual"), (2.5, "grid"), (0.5, "grid")])
         ]
         ctrl._publish_daily_stats(now, horizon, None, None, 15, delivered)
 
