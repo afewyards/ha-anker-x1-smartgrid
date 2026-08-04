@@ -107,9 +107,15 @@ Consequences, all intended:
 - No new table, no `Store`, no schema migration; restart-safe by
   construction. Sample retention is 90 days against a 5-day interval.
 - A pack that sits at full for the dwell during ordinary operation counts as
-  a success. The clock resets and no charge is bought. On the last 11 days of
-  lab data the pack reached ≥97% on six of them, so in summer the policy will
-  mostly self-satisfy.
+  a success. On the last 11 days of lab data the pack reached ≥97% on six of
+  them, so in summer the policy will mostly self-satisfy in this sense. This
+  is free (no charge bought, no hold forced) only while the cycle is NOT yet
+  due. Once due, the hold-through branch (Execution/Safety bounds) forces
+  FORCING and suppresses export the moment the pack is next observed at
+  `calibration_top_soc` regardless of cause — a natural solar-driven full
+  charge that happens to land after the interval elapsed still costs a forced
+  ≤`calibration_dwell_h` hold and the export it displaces, same as a
+  policy-selected window would have.
 - The dwell needs no timer. During the hold the run is not yet `dwell_h`
   long, so the state stays `holding`; when it crosses, the same query reports
   success and calibration goes idle.
@@ -151,8 +157,11 @@ rules cover the edges:
 
 - A window that has already started is never abandoned, so the 13:00
   publication of tomorrow's prices cannot yank a cycle mid-charge.
-- At most one window per local day, so a failed attempt cannot retry the same
-  afternoon.
+- At most one window per UTC start-date. `select_window` groups candidates by
+  `cand[1].date()` on the UTC-normalised `PriceSlot.start` (parsers.py), and
+  this module never threads a timezone in — so the boundary is 00:00 UTC
+  (02:00 local in CEST), not local midnight. The real bound is up to 2
+  attempts per local day, not 1.
 
 ## Execution
 
@@ -171,9 +180,14 @@ inverter on 2026-07-14.
 
 ## Safety bounds
 
+These bounds cover the `select_window`/"charging" path only. The
+hold-through branch (Execution) is separate and unbounded by any of them —
+see below.
+
 - Active only within `[window_start, window_start + charge_h + dwell_h]`. One
   failed attempt costs at most one window's charge.
-- One window per local day.
+- Up to 2 windows per local day (1 per UTC start-date — see Trigger and
+  window selection).
 - `calibration_top_soc` defaults to 97, below the observed 99% stall, so the
   dwell is reachable. If the pack cannot reach it the attempt lapses at window
   end and retries at the next cheap-enough day — one charge per attempt, never
@@ -181,6 +195,32 @@ inverter on 2026-07-14.
 - Calibration wins over export for its slots. Cheap windows land overnight or
   midday, so overlap with the evening peak is unlikely in practice.
 - Ships off.
+
+**Hold-through has none of the above guards.** Once a cycle is due
+(`days_since >= calibration_interval_days`) and the pack is observed at or
+above `calibration_top_soc` — by any cause, not just a policy-selected
+window, including ordinary solar overproduction — `calibration_action`
+returns `holding` unconditionally: no window check, no price bar, no
+time-of-day guard, and no once-per-day limit. The controller then forces
+`FORCING`, which makes `executor.run_forcing_and_export` take the FORCING
+branch and skip the export executor entirely (mutual exclusion — see
+Execution). So on a summer day where solar crosses 97% at 16:40, the system
+force-charges (a no-op once the BMS is already tapering) and suppresses ALL
+export until the run has held `calibration_dwell_h` — straight across the
+evening peak, whatever that costs that day. Accepted, user-confirmed
+behaviour for this wave; see Success detection for the self-satisfying case's
+real cost.
+
+**`calibration_top_soc: 100` is an unbounded-daily-charge hazard.** The
+config schema permits it, and this pack reaches ≥97% on only ~2 of the last
+11 lab days but almost never a true 100% (inverter/BMS stall observed at
+99%). Past `interval_days + CALIBRATION_GRACE_DAYS`, `force` is set and
+`select_window` accepts each day's cheapest window unconditionally. If the
+pack can never reach `calibration_top_soc`, `last_success_end` never returns,
+`days_since` never resets, and the policy buys one full ≥2h forced-import
+window every day indefinitely — no escalation, no log. Keep
+`calibration_top_soc` at or below the level the pack has been observed to
+actually reach.
 
 **Fail-closed on missing data.** Empty or short SoC history (fresh install)
 means idle, not "never calibrated, charge now". An empty price history
@@ -208,12 +248,21 @@ Consts in `const.py`, not user-tunable: `CALIBRATION_PRICE_PERCENTILE = 30`,
 
 The 5-day interval is chosen for summer, where it mostly self-satisfies, and
 to get evidence quickly. In winter it will force a grid charge roughly every
-5 days; raise it in the UI then.
+5 days; raise it in the UI then. If `calibration_interval_days` is ever
+raised above `retention_days` (90 by default), the never-calibrated fallback
+(history must *span* `calibration_interval_days` to count as overdue) can
+never be satisfied from a cold start — the controller logs this once.
 
 ## Observability
 
 Plan-sensor attributes: `calibration_state`, `days_since_last_success`,
 window start/end, `last_success`.
+
+`calibration_days_since` saturates on the never-calibrated fallback: it
+reports the read window's span, which is capped at
+`calibration_interval_days × 3` (~15 days at defaults) regardless of how much
+longer the pack has actually gone uncalibrated. Deliberate parity with the
+policy's own read window, not a diagnostic of true elapsed time.
 
 ## Files
 

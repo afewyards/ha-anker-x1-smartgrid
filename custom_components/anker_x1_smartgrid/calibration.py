@@ -198,7 +198,10 @@ def select_window(
     if not candidates:
         return None
 
-    # One candidate per local start-date (the cheapest) => one attempt per day.
+    # One candidate per UTC start-date (the cheapest) -- `cand[1]` (PriceSlot.start)
+    # is UTC-normalised by parsers.py, and this module never threads a timezone
+    # in, so the boundary is 00:00 UTC (02:00 local in CEST), not local
+    # midnight: up to 2 attempts per local day, not 1.
     per_day: dict[object, tuple[float, datetime, datetime]] = {}
     for cand in candidates:
         key = cand[1].date()
