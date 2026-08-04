@@ -79,7 +79,9 @@ def test_plan_sensor_surfaces_calibration_state():
 
     attrs = X1PlanSensor(_C(), "e").extra_state_attributes
     assert attrs["calibration_state"] == "holding"
+    assert attrs["calibration_window_start"] == "2026-08-03T02:00:00+00:00"
     assert attrs["calibration_window_end"] == "2026-08-03T04:00:00+00:00"
+    assert attrs["calibration_last_success"] == "2026-07-29T05:00:00+00:00"
     assert attrs["calibration_days_since"] == 5.0
 
 
