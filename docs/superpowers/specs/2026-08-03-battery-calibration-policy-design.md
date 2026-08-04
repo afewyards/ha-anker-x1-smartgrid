@@ -65,8 +65,8 @@ Explicitly out of scope for this wave, decided with the user:
 ## Approach
 
 A pure `calibration.py` module decides whether a calibration cycle is running
-in the current slot. `decision.py` consults it and overrides its output when
-it is. The DP core is untouched.
+in the current slot. `controller.py::_tick_impl` consults it and overrides
+the plan when it is. The DP core is untouched.
 
 The DP-integrated alternative — threading a per-hour SoC floor array through
 `optimize_grid` alongside `reserve_by_hour`/`hedge_drain_kwh` and raising the
@@ -85,11 +85,15 @@ export only (`optimize.py:891`), not load-serving discharge.
 
 ## Module interface
 
-`calibration.py` is pure: no HA imports, no I/O, no clock reads.
+`calibration.py` is pure: no HA imports, no I/O, no clock reads. It keeps no
+state of its own, though — the hold latch (Success detection) needs to know
+whether the *previous* tick was already holding, so the caller threads that
+in as a keyword argument.
 
 ```
 calibration_action(
-    now, soc_pct, price_slots, soc_history, price_history, cfg
+    now, soc_pct, slots, soc_samples, price_history, cfg,
+    *, already_holding=False,
 ) -> CalibAction | None
 ```
 
@@ -116,9 +120,12 @@ Consequences, all intended:
   charge that happens to land after the interval elapsed still costs a forced
   ≤`calibration_dwell_h` hold and the export it displaces, same as a
   policy-selected window would have.
-- The dwell needs no timer. During the hold the run is not yet `dwell_h`
+- The dwell needs no timer, provided every sample in the run stays at or
+  above `calibration_top_soc`: during the hold the run is not yet `dwell_h`
   long, so the state stays `holding`; when it crosses, the same query reports
-  success and calibration goes idle.
+  success and calibration goes idle. A single dip below `calibration_top_soc`
+  resets the run — see Known limitations for what happens when the pack
+  wobbles at the bar instead of holding cleanly above it.
 
 The recorded success condition is observable SoC only. Whether charging was
 *permitted* during the run is not reconstructible from `samples` and is not
@@ -165,9 +172,22 @@ rules cover the edges:
 
 ## Execution
 
-When `calibration_action` returns non-`None`, `decision.py::compute_decision`
-replaces its plan with a `FORCING` decision at max charge rate. Export logic,
-plan publishing and the DP itself are unchanged.
+When `calibration_action` returns non-`None`, `controller.py::_tick_impl`
+overrides the plan in place: `new_plan.state` becomes `FORCING` at max charge
+rate (`state_since` carried over from an already-FORCING plan, or stamped
+`now` on a fresh entry). Export logic, plan publishing and the DP itself are
+unchanged.
+
+Cancellation lives in the same block, via `self._calibration_engaged` (true
+iff `self.plan` was FORCING because of calibration as of the end of the
+previous tick). Once `calibration_action` stops returning non-`None`, a
+calibration-held `FORCING` plan reverts to `PASSIVE` only when ALL four hold:
+the previous tick was calibration-engaged, `new_plan` is the SAME `PlanState`
+object the scheduler returned this tick (identity — the scheduler is
+coasting, not making a fresh decision), that plan is still `FORCING`, and the
+DP does not currently want this hour (`_dp_out["now_selected"]` is falsy). If
+any one fails — most importantly, if the DP itself still wants the hour — the
+plan is left alone.
 
 Both phases map to the same actuation. When the pack is full the BMS accepts
 ~0 and house load falls to the grid — that **is** the hold, so no separate
@@ -189,9 +209,11 @@ see below.
 - Up to 2 windows per local day (1 per UTC start-date — see Trigger and
   window selection).
 - `calibration_top_soc` defaults to 97, below the observed 99% stall, so the
-  dwell is reachable. If the pack cannot reach it the attempt lapses at window
-  end and retries at the next cheap-enough day — one charge per attempt, never
-  a loop.
+  dwell is reachable. If the pack never reaches it at all, the attempt lapses
+  cleanly at window end and retries at the next cheap-enough day. If the pack
+  reaches it but wobbles at the bar, the hold latch can keep renewing the
+  hold without the dwell ever completing — not bounded by window end; see
+  Known limitations.
 - Calibration wins over export for its slots. Cheap windows land overnight or
   midday, so overlap with the evening peak is unlikely in practice.
 - Ships off.
@@ -211,16 +233,28 @@ evening peak, whatever that costs that day. Accepted, user-confirmed
 behaviour for this wave; see Success detection for the self-satisfying case's
 real cost.
 
-**`calibration_top_soc: 100` is an unbounded-daily-charge hazard.** The
-config schema permits it, and this pack reaches ≥97% on only ~2 of the last
-11 lab days but almost never a true 100% (inverter/BMS stall observed at
-99%). Past `interval_days + CALIBRATION_GRACE_DAYS`, `force` is set and
-`select_window` accepts each day's cheapest window unconditionally. If the
-pack can never reach `calibration_top_soc`, `last_success_end` never returns,
-`days_since` never resets, and the policy buys one full ≥2h forced-import
-window every day indefinitely — no escalation, no log. Keep
-`calibration_top_soc` at or below the level the pack has been observed to
-actually reach.
+**`calibration_top_soc: 100` is an unbounded-daily-charge hazard, in two
+distinct ways.** The config schema permits it, and this pack reaches ≥97% on
+only ~2 of the last 11 lab days but almost never a true 100% (inverter/BMS
+stall observed at 99%).
+
+1. *Never reaches the bar.* Past `interval_days + CALIBRATION_GRACE_DAYS`,
+   `force` is set and `select_window` accepts each day's cheapest window
+   unconditionally. If the pack can never reach `calibration_top_soc`,
+   `last_success_end` never returns, `days_since` never resets, and the
+   policy buys one full ≥2h forced-import window every day indefinitely — no
+   escalation, no log.
+2. *Reaches the bar but wobbles at it.* The hold latch softens the RE-ENTRY
+   bar to `calibration_top_soc - 1` once already holding, so the hold
+   survives a one-point dip — but success detection still requires an
+   unbroken run at or above `calibration_top_soc` for the full
+   `calibration_dwell_h` (see Known limitations). A pack oscillating at the
+   bar sustains `holding` — `FORCING`, export suppressed — without ever
+   completing the dwell: the same daily-hazard shape as (1), but as a
+   standing hold rather than a lapsed attempt.
+
+Keep `calibration_top_soc` at or below the level the pack has been observed
+to actually reach AND hold without wobbling.
 
 **Fail-closed on missing data.** Empty or short SoC history (fresh install)
 means idle, not "never calibrated, charge now". An empty price history
@@ -230,6 +264,34 @@ failure returns `None` and logs once. Nothing forces a charge on absent data.
 Cost framing: a full charge on a cheap night is not money burned — the DP
 exports or self-consumes it later. Net cost is the kWh above what the DP would
 have bought anyway, less what comes back.
+
+## Known limitations
+
+The hold latch (`already_holding`, Module interface) softens the *entry*
+bar, not the *success* bar. `calibration_action` re-enters `holding` at
+`calibration_top_soc - 1` once already holding, but `last_success_end` — the
+function that decides a dwell completed — still requires every sample in
+the run to be at or above `calibration_top_soc`, unsoftened. Under sustained
+wobble exactly at the bar, the latch keeps renewing the hold but the
+underlying run keeps resetting, so the dwell can fail to complete: `FORCING`
+stays engaged and export stays suppressed with no time bound (see the
+second `calibration_top_soc: 100` hazard, above).
+
+Two candidate structural fixes, deliberately not taken this wave:
+
+- Give success detection (`last_success_end`) the same softened bar the
+  latch gives re-entry.
+- Latch on elapsed wall-clock time since the run's real start rather than on
+  SoC.
+
+Deferred until the first live cycle shows whether sustained wobble actually
+occurs.
+
+Also: on a latched tick, the reported `calibration_window_start` falls back
+to `now` rather than the run's real start, because `_open_run_start` (the
+run-start helper) also tests strictly at `calibration_top_soc` — a
+wobble-sustained hold whose most recent sample sits at `top_soc - 1` reports
+no open run at all.
 
 ## Configuration
 
@@ -255,8 +317,8 @@ never be satisfied from a cold start — the controller logs this once.
 
 ## Observability
 
-Plan-sensor attributes: `calibration_state`, `days_since_last_success`,
-window start/end, `last_success`.
+Plan-sensor attributes: `calibration_state`, `calibration_window_start`,
+`calibration_window_end`, `calibration_last_success`, `calibration_days_since`.
 
 `calibration_days_since` saturates on the never-calibrated fallback: it
 reports the read window's span, which is capped at
@@ -269,7 +331,7 @@ policy's own read window, not a diagnostic of true elapsed time.
 | File | Change |
 |---|---|
 | `calibration.py` | new, pure |
-| `decision.py` | override hook in `compute_decision` |
+| `controller.py` | override + cancel logic in `_tick_impl` |
 | `recorder.py` | `read_soc_samples`, mirroring `read_load_samples` |
 | `config_flow.py` | four options in `_TUNABLES` |
 | `const.py` | defaults and the two consts |
@@ -286,17 +348,22 @@ Pure unit tests on `calibration.py`:
   `dwell_h` (must not count)
 - percentile gate, accept and reject
 - deadline force past `interval_days + grace`
-- one window per local day
+- at most one window per UTC start-date (up to 2 per local day)
 - a started window is not abandoned when the horizon extends
 - fail-closed: empty SoC history yields `None`; empty price history blocks
   the percentile path but still permits the deadline path
 
-At the `compute_decision` boundary:
+At the controller boundary (`_tick_impl`, `tests/test_calibration_controller.py`):
 
 - isolation: `calibration_enabled=False` ⇒ decision unchanged, per the parity
   convention used throughout this codebase
 - active path: calibration active ⇒ `FORCING` at max rate regardless of what
   the DP wanted
+- cancel path: reverting a calibration-held `FORCING` plan to `PASSIVE`
+  requires all four of previous-tick engagement, plan-object identity,
+  still-`FORCING`, and the DP not wanting the hour
+- hold-through wobble: the latch's softened re-entry bar does not churn
+  engage/release on a one-point SoC dip
 
 No live-fire test.
 
