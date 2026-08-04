@@ -360,6 +360,13 @@ class Controller:
         # restart degrades to treating any in-progress cycle as freshly
         # starting, same as the scheduler's own restart self-heal.
         self._calibration_engaged: bool = False
+        # F2: log the fail-closed except once per failure streak, not every
+        # tick; reset on the next successful evaluation so a later, distinct
+        # failure logs again. Mirrors self._infeasible_at_floor_warned above.
+        self._calibration_fail_logged: bool = False
+        # F5: log once (ever, per instance) if retention_days makes the
+        # never-calibrated fallback permanently unreachable.
+        self._calibration_retention_warned: bool = False
 
     # ── Cash ledger delegating properties (Task C4) ────────────────────────────
     # Preserve the pre-extraction attribute surface (direct get/set, and
@@ -1644,28 +1651,55 @@ class Controller:
         # PREVIOUS tick? Captured before self._calibration_engaged updates
         # below and before self.plan is reassigned further down.
         _calibration_was_engaged = self._calibration_engaged
+        # F1: was the PREVIOUS tick's action already "holding"? Captured before
+        # self._calibration is reset below -- threaded into calibration_action
+        # so its top_soc re-entry bar can soften by 1 point and absorb SoC
+        # wobble at the boundary instead of cancelling/re-engaging every tick.
+        _calibration_was_holding = self._calibration is not None and self._calibration.phase == "holding"
         self._calibration = None
         self._calibration_last_success = None
         self._calibration_days_since = None
         if self.cfg.calibration_enabled and self._recorder is not None:
+            # F5: the never-calibrated fallback (calibration.compute_days_since)
+            # requires history_span_days >= calibration_interval_days, and span
+            # is capped by recorder retention -- so this combo can never become
+            # due from a cold start. Log once; config doesn't change without a
+            # restart, so no re-arm is needed.
+            if not self._calibration_retention_warned and self.cfg.retention_days < self.cfg.calibration_interval_days:
+                self._calibration_retention_warned = True
+                _LOGGER.warning(
+                    "retention_days=%d < calibration_interval_days=%d; a pack that has "
+                    "never completed a calibration dwell can never become due "
+                    "(history can't span the interval) until one of these is changed",
+                    self.cfg.retention_days,
+                    self.cfg.calibration_interval_days,
+                )
             try:
                 _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
                 _price_hist = self._price_store.history if self._price_store is not None else {}
                 self._calibration_last_success, self._calibration, _span_days = await self._hass.async_add_executor_job(
-                    self._calibration_compute_sync, _since_iso, now, inputs.soc, slots, _price_hist
+                    self._calibration_compute_sync,
+                    _since_iso,
+                    now,
+                    inputs.soc,
+                    slots,
+                    _price_hist,
+                    _calibration_was_holding,
                 )
-                if self._calibration_last_success is not None:
-                    self._calibration_days_since = (now - self._calibration_last_success).total_seconds() / 86400.0
-                elif _span_days >= self.cfg.calibration_interval_days:
-                    # Mirrors calibration_action's own fallback (calibration.py):
-                    # no qualifying dwell yet, but the history is long enough to
-                    # call it overdue -- the moment this number is most useful.
-                    self._calibration_days_since = _span_days
-                else:
-                    self._calibration_days_since = None
+                # Shared with calibration_action's own days-since fallback (F3):
+                # both sites call calibration.compute_days_since so they cannot
+                # drift out of sync.
+                self._calibration_days_since = calibration.compute_days_since(
+                    self._calibration_last_success, _span_days, now, self.cfg
+                )
+                self._calibration_fail_logged = False
             except Exception:
-                # Fail-closed: never force a charge on a failed read.
-                _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
+                # Fail-closed: never force a charge on a failed read. F2: log
+                # once per failure streak (not every 60s tick), re-arm on the
+                # next success.
+                if not self._calibration_fail_logged:
+                    self._calibration_fail_logged = True
+                    _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
                 self._calibration = None
                 self._calibration_last_success = None
                 self._calibration_days_since = None
@@ -1864,6 +1898,7 @@ class Controller:
         soc_pct: float,
         slots: list[PriceSlot],
         price_history: dict,
+        already_holding: bool,
     ) -> tuple[datetime | None, calibration.CalibAction | None, float]:
         """Synchronous: recorder read + calibration policy evaluation, together.
 
@@ -1881,7 +1916,9 @@ class Controller:
             top_soc=self.cfg.calibration_top_soc,
             dwell_h=self.cfg.calibration_dwell_h,
         )
-        action = calibration.calibration_action(now, soc_pct, slots, soc_rows, price_history, self.cfg)
+        action = calibration.calibration_action(
+            now, soc_pct, slots, soc_rows, price_history, self.cfg, already_holding=already_holding
+        )
         return last_success, action, calibration.history_span_days(soc_rows)
 
     def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str) -> None:

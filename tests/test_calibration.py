@@ -317,6 +317,50 @@ def test_due_at_exact_interval_boundary():
     assert act.phase == "charging"
 
 
+def test_already_holding_softens_reentry_bar_by_one_point():
+    """F1: once a hold is in progress, a 1-point SoC dip below top_soc must
+    still hold -- absorbing quantisation/load-spike wobble instead of
+    cancelling and re-engaging every tick. Without already_holding, the same
+    soc_pct must NOT hold (no deadband before a hold has begun)."""
+    now = BASE
+    slots = _slots(now, [0.90] * 6)  # too expensive; force is also False below
+    stale = _stale_history(now, 6)  # due (>=5), not yet forced (<12)
+
+    without_latch = calibration.calibration_action(now, 96.0, slots, stale, CHEAP_HISTORY, ON)
+    assert without_latch is None, "no deadband before a hold has begun"
+
+    with_latch = calibration.calibration_action(now, 96.0, slots, stale, CHEAP_HISTORY, ON, already_holding=True)
+    assert with_latch is not None
+    assert with_latch.phase == "holding"
+
+
+def test_holding_reports_the_open_runs_actual_start():
+    """F4: window_start/window_end must reflect the SoC run's real start, not
+    a sliding `now` recomputed every tick."""
+    now = BASE
+    run_start = now - timedelta(hours=1)
+    history = _stale_history(run_start, 6) + _series(run_start, 15, [98.0] * 5)  # 1h run, ends at `now`
+
+    act = calibration.calibration_action(now, 98.0, _slots(now, [0.90] * 6), history, CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "holding"
+    assert act.window_start == run_start
+    assert act.window_end == run_start + timedelta(hours=ON.calibration_dwell_h)
+
+
+def test_holding_falls_back_to_now_when_the_run_is_not_yet_recorded():
+    """First tick of a new hold: soc_pct is already at top but history hasn't
+    recorded a qualifying sample yet -- window_start falls back to `now`,
+    which is exactly right (the run genuinely starts now)."""
+    now = BASE
+    stale = _stale_history(now, 6)  # flat 50%, never reaches top_soc
+    act = calibration.calibration_action(now, 98.0, _slots(now, [0.90] * 6), stale, CHEAP_HISTORY, ON)
+    assert act is not None
+    assert act.phase == "holding"
+    assert act.window_start == now
+    assert act.window_end == now + timedelta(hours=ON.calibration_dwell_h)
+
+
 def test_force_at_exact_grace_boundary():
     """days_since == interval + CALIBRATION_GRACE_DAYS exactly must already
     force (`>=`, not `>`).  Slots are priced above CHEAP_HISTORY's bar so only

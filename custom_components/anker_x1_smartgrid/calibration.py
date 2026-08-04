@@ -100,6 +100,52 @@ def last_success_end(
     return best
 
 
+def _open_run_start(soc_samples: list[tuple[str, float]], *, top_soc: float) -> datetime | None:
+    """Start of the run of samples at/above ``top_soc`` still open at the end
+    of ``soc_samples`` (i.e. containing the LAST row), or None if the last
+    row doesn't qualify (including an empty series).
+
+    Same gap tolerance as ``last_success_end`` but reports the start of the
+    trailing run regardless of whether it has reached ``dwell_h`` yet -- used
+    only to report an in-progress hold's real start (F4), never for success
+    detection.
+    """
+    run_start: datetime | None = None
+    run_end: datetime | None = None
+    max_gap = timedelta(minutes=MAX_SAMPLE_GAP_MIN)
+    for ts_s, soc in soc_samples:
+        ts = _parse(ts_s)
+        if soc >= top_soc and run_end is not None and ts - run_end <= max_gap:
+            run_end = ts
+            continue
+        if soc >= top_soc:
+            run_start, run_end = ts, ts
+        else:
+            run_start, run_end = None, None
+    return run_start
+
+
+def compute_days_since(
+    last_success: datetime | None,
+    span_days: float,
+    now: datetime,
+    cfg: Config,
+) -> float | None:
+    """Days since the last qualifying calibration dwell.
+
+    Falls back to ``span_days`` (the read-window's wall-clock span) when no
+    dwell has ever qualified but the history is long enough to call the
+    policy overdue. None when neither holds (fresh install). Shared by
+    ``calibration_action`` and the controller's own status computation so the
+    two cannot drift out of sync (F3).
+    """
+    if last_success is not None:
+        return (now - last_success).total_seconds() / 86400.0
+    if span_days >= cfg.calibration_interval_days:
+        return span_days
+    return None
+
+
 def price_percentile(price_history: dict[str, dict[str, float]], pct: float) -> float | None:
     """Linear-interpolated percentile of every slot price in the history ring.
 
@@ -227,40 +273,45 @@ def calibration_action(
     soc_samples: list[tuple[str, float]],
     price_history: dict[str, dict[str, float]],
     cfg,
+    *,
+    already_holding: bool = False,
 ) -> CalibAction | None:
     """Whether a calibration cycle is running in the slot containing ``now``.
 
     Fail-closed: absent or too-short history yields None rather than
     "never calibrated, charge now".
+
+    ``already_holding`` -- true iff the PREVIOUS tick's action was already
+    "holding". Softens the top_soc re-entry bar by 1 point (F1) so SoC
+    quantisation/load-spike noise at the boundary (97 -> 96 -> 97) cannot
+    toggle holding/charging/idle every tick and churn the inverter mode. This
+    module is pure and keeps no state of its own, so the caller must supply
+    it.
     """
     if not cfg.calibration_enabled:
         return None
 
     last = last_success_end(soc_samples, top_soc=cfg.calibration_top_soc, dwell_h=cfg.calibration_dwell_h)
-    if last is None:
-        # No qualifying dwell.  Only treat that as "overdue" once the series is
-        # long enough to have shown one — otherwise a fresh install charges.
-        if history_span_days(soc_samples) < cfg.calibration_interval_days:
-            return None
-        days_since = history_span_days(soc_samples)
-    else:
-        days_since = (now - last).total_seconds() / 86400.0
-
-    if days_since < cfg.calibration_interval_days:
+    span = history_span_days(soc_samples)
+    days_since = compute_days_since(last, span, now, cfg)
+    if days_since is None or days_since < cfg.calibration_interval_days:
         return None
 
-    # Hold-through: once the pack is AT the top and a cycle is due, keep
-    # holding until the dwell completes, independent of the window.  The price
-    # curve's back-horizon is not guaranteed deep enough to keep re-selecting a
-    # window that started hours ago (coordinator.read_price_slots passes the
-    # sensor's curve through verbatim), and a stranded half-dwell buys the
-    # charge without the balancing it was for.  Ends by itself: the moment the
-    # run reaches dwell_h, last_success_end returns and days_since drops to ~0.
-    if soc_pct >= cfg.calibration_top_soc:
+    # Hold-through: once the pack is AT (or, mid-hold, within 1 point of) the
+    # top and a cycle is due, keep holding until the dwell completes,
+    # independent of the window.  The price curve's back-horizon is not
+    # guaranteed deep enough to keep re-selecting a window that started hours
+    # ago (coordinator.read_price_slots passes the sensor's curve through
+    # verbatim), and a stranded half-dwell buys the charge without the
+    # balancing it was for.  Ends by itself: the moment the run reaches
+    # dwell_h, last_success_end returns and days_since drops to ~0.
+    hold_bar = cfg.calibration_top_soc - 1.0 if already_holding else cfg.calibration_top_soc
+    if soc_pct >= hold_bar:
+        run_start = _open_run_start(soc_samples, top_soc=cfg.calibration_top_soc) or now
         return CalibAction(
             phase="holding",
-            window_start=now,
-            window_end=now + timedelta(hours=cfg.calibration_dwell_h),
+            window_start=run_start,
+            window_end=run_start + timedelta(hours=cfg.calibration_dwell_h),
         )
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS

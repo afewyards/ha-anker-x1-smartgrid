@@ -1,6 +1,7 @@
 """Calibration override at the controller boundary: isolation + active path."""
 
 import dataclasses
+import logging
 from datetime import timedelta
 
 import pytest
@@ -428,6 +429,105 @@ async def test_calibration_engaging_mid_economic_forcing_preserves_state_since(m
     assert ctrl.plan.state_since == economic_since, (
         "state_since must not re-stamp when calibration engages mid-economic-FORCING"
     )
+
+
+@pytest.mark.asyncio
+async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monkeypatch):
+    """F1: a 97 -> 96 -> 97 SoC wobble around calibration_top_soc must not
+    cancel and re-engage the actuator every tick (inverter mode churn).
+
+    Uses the REAL calibration.calibration_action (only decide_state/
+    now_selected are faked, mirroring the C1(B) cancel scaffold above) so
+    this exercises the actual F1 latch, not a stand-in for it. Without the
+    latch: tick 2's soc=96 falls through to select_window, which returns
+    None (bar=None since _price_store is unset here, and force=False), so
+    calibration_action returns None -> the (B) cancel condition is met
+    (was_engaged, coasting, not now_selected) -> PASSIVE -> release_to_self.
+    """
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_top_soc=97.0)
+
+    # Due (span >= interval_days=5) but not yet forced (span < interval+grace=12):
+    # static seed, so span/days_since stay ~6 across all 3 ticks (StubRecorder's
+    # _soc_samples doesn't grow per-tick).
+    start = BASE - timedelta(days=6)
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0), (BASE.isoformat(), 50.0)]
+
+    now_selected_holder = {"value": False}
+    monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
+    _wrap_compute_decision(monkeypatch, now_selected_holder)
+
+    tick_time = BASE
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
+
+    seed_valid_inputs(hass, soc="97.0")
+    result1 = await ctrl.tick()
+    assert result1["state"] == "forcing"
+
+    tick_time = BASE + timedelta(minutes=1)
+    seed_valid_inputs(hass, soc="96.0")
+    result2 = await ctrl.tick()
+    assert result2["state"] == "forcing", "the latch must absorb a 1-point SoC dip while already holding"
+
+    tick_time = BASE + timedelta(minutes=2)
+    seed_valid_inputs(hass, soc="97.0")
+    result3 = await ctrl.tick()
+    assert result3["state"] == "forcing"
+
+    assert not any(c[0] == "release_to_self" for c in act.calls), (
+        "a SoC wobble at the calibration top must not release/re-engage the actuator"
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_failure_logs_once_per_streak(monkeypatch, caplog):
+    """F2: a sustained calibration read failure must log once, not every 60s
+    tick; a later, distinct failure (after an intervening success) logs
+    again."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("sqlite lock")
+
+    caplog.set_level(logging.WARNING)
+
+    monkeypatch.setattr(calibration, "calibration_action", _boom)
+    await ctrl.tick()
+    await ctrl.tick()
+    await ctrl.tick()
+    warnings = [r for r in caplog.records if "Calibration policy failed" in r.getMessage()]
+    assert len(warnings) == 1, "a sustained failure must log once, not every tick"
+
+    caplog.clear()
+    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: None)  # success: re-arms
+    await ctrl.tick()
+    monkeypatch.setattr(calibration, "calibration_action", _boom)
+    await ctrl.tick()
+    warnings2 = [r for r in caplog.records if "Calibration policy failed" in r.getMessage()]
+    assert len(warnings2) == 1, "a later, distinct failure after a success must log again"
+
+
+@pytest.mark.asyncio
+async def test_calibration_warns_once_when_retention_makes_it_unreachable(monkeypatch, caplog):
+    """F5: retention_days < calibration_interval_days means the
+    never-calibrated fallback (history span >= interval_days) can never be
+    satisfied -- warn once, not every tick."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, retention_days=3, calibration_interval_days=5)
+
+    caplog.set_level(logging.WARNING)
+    await ctrl.tick()
+    await ctrl.tick()
+    await ctrl.tick()
+
+    warnings = [r for r in caplog.records if "retention_days" in r.getMessage()]
+    assert len(warnings) == 1, "must warn once, not every tick"
 
 
 @pytest.mark.asyncio
