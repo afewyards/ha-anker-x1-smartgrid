@@ -324,9 +324,12 @@ card:
           var g = w.globals;
           var x = g.seriesX[seriesIndex][dataPointIndex];
           var barSeries = { 'Grid charge': 1, 'Solar charge': 1, 'Grid export': 1 };
+          // Every series on yaxis_id: soc. The lookup defaults to kWh, so a
+          // SoC-axis series missing here renders as "100.00 kWh".
+          var pctSeries = { 'Projected SoC': 1, 'Calib target': 1, 'Calib hold bar': 1 };
           var unit = function (name) {
             return name === 'Price' ? '€/kWh'
-              : name === 'Projected SoC' ? '%'
+              : pctSeries[name] ? '%'
               : 'kWh';
           };
           var fmt = function (name, v) {

@@ -94,6 +94,20 @@ def test_calibration_series_span_the_full_horizon_x_array():
         assert "null" in gen, f"{series['name']} must null out rows outside the window"
 
 
+def test_every_soc_axis_series_is_formatted_as_a_percentage():
+    """The tooltip's unit lookup is keyed by series NAME and defaults to kWh,
+    so a series added on the SoC axis renders as "100.00 kWh" until it is
+    listed. Pins the axis (what the value MEANS) to the formatter (how it is
+    shown) rather than trusting the two to be kept in step by hand."""
+    card = _card()["card"]
+    tooltip = card["apex_config"]["tooltip"]["custom"]
+    pct = re.search(r"pctSeries = \{([^}]*)\}", tooltip)
+    assert pct, "tooltip must declare a pctSeries lookup"
+    listed = set(re.findall(r"'([^']+)'\s*:", pct.group(1)))
+    on_soc_axis = {s["name"] for s in card["series"] if s.get("yaxis_id") == "soc"}
+    assert on_soc_axis <= listed, f"SoC-axis series formatted as kWh: {sorted(on_soc_axis - listed)}"
+
+
 def test_graph_span_reads_the_filtered_horizon():
     card = _card()
     assert "HR" in card["variables"], card["variables"].keys()
