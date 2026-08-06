@@ -65,12 +65,17 @@ variables:
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
   # YAML plain scalar.
   PRED: "(states['sensor.smartgrid_active_load_model'] && states['sensor.smartgrid_active_load_model'].attributes.ml_status) ? states['sensor.smartgrid_active_load_model'].attributes.ml_status : '—'"
+  # Calibration cycle state (spec 2026-08-03). `state` is one of idle |
+  # scheduled | charging | holding; `scheduled` means a window has been picked
+  # for later and is drawable but is NOT actuating yet. Guarded so a restart
+  # mid-render yields idle rather than throwing on a missing attribute.
+  CAL: "(function () { var e = states['sensor.smartgrid_plan']; var a = (e && e.attributes) || {}; return { state: a.calibration_state || 'idle', s: a.calibration_window_start, e: a.calibration_window_end, target: a.calibration_target_soc, hold: a.calibration_hold_soc }; })()"
 card:
   type: custom:apexcharts-card
   header:
     show: true
     # Single line + double-quoted, same constraint as graph_span below.
-    title: "${ 'SmartGrid plan · next 24h  ·  Predictor: ' + PRED }"
+    title: "${ 'SmartGrid plan · next 24h  ·  Predictor: ' + PRED + (CAL.state !== 'idle' ? '  ·  ⚡ Calibration ' + CAL.state + ' → ' + CAL.target + '% for ' + ((new Date(CAL.e) - new Date(CAL.s)) / 3600000).toFixed(1) + 'h' : '') }"
     show_states: false
   # Dynamic window: span from 2h before the current hour (to show recent history)
   # to one hour past the last horizon slot (so the final hourly column shows in
@@ -190,6 +195,43 @@ card:
         legend_value: false
       data_generator: |
         return (entity.attributes.horizon || []).filter(h => !h.estimated).map(h => [new Date(h.start).getTime(), h.grid_export_kwh > 0.05 ? Math.log10(Math.max(1, h.grid_export_kwh * 1000)) : null]);
+    # ── Calibration band (spec 2026-08-03) ────────────────────────────────
+    # The two edges of the dwell band: charge target on top, continuation bar
+    # below. "In the band while FORCING" is exactly when the dwell clock runs,
+    # so this shows at a glance whether the pack got there and stayed.
+    #
+    # Deliberately NOT drawn from horizon rows: calibration is quarantined
+    # OUTSIDE the DP (it is a post-DP controller override), so no horizon row
+    # knows about it and the Projected SoC line is the DP's real projection,
+    # untouched. Two points — window start and end — draw the flat edge without
+    # depending on horizon density or inventing an SoC curve.
+    #
+    # Both collapse to [] when the state is idle, so the card looks exactly as
+    # it did before whenever no cycle is pending.
+    - entity: sensor.smartgrid_plan
+      name: Calib target
+      type: line
+      yaxis_id: soc
+      stroke_width: 1.5
+      color: "#f59e0b"
+      show:
+        legend_value: false
+      data_generator: |
+        const a = entity.attributes; const v = a.calibration_target_soc;
+        if (!a.calibration_window_start || a.calibration_state === 'idle' || v == null) return [];
+        return [[new Date(a.calibration_window_start).getTime(), v], [new Date(a.calibration_window_end).getTime(), v]];
+    - entity: sensor.smartgrid_plan
+      name: Calib hold bar
+      type: line
+      yaxis_id: soc
+      stroke_width: 1.5
+      color: "#f59e0b"
+      show:
+        legend_value: false
+      data_generator: |
+        const a = entity.attributes; const v = a.calibration_hold_soc;
+        if (!a.calibration_window_start || a.calibration_state === 'idle' || v == null) return [];
+        return [[new Date(a.calibration_window_start).getTime(), v], [new Date(a.calibration_window_end).getTime(), v]];
   apex_config:
     chart:
       height: 380
@@ -197,15 +239,21 @@ card:
       bar:
         columnWidth: "55%"
         borderRadius: 3
+    # NOTE: both arrays below are POSITIONAL — one entry per series, in series
+    # order. The last two entries are the calibration band edges; adding or
+    # reordering series means updating both arrays or every style after the
+    # insertion point silently shifts onto the wrong series.
     fill:
-      type: [solid, gradient, solid, solid, solid, solid, solid]
+      type: [solid, gradient, solid, solid, solid, solid, solid, solid, solid]
       gradient:
         shadeIntensity: 0.3
         opacityFrom: 0.5
         opacityTo: 0.05
         stops: [0, 100]
     stroke:
-      dashArray: [0, 0, 0, 0, 0, 0, 0]
+      # Dashed (6) for the two calibration edges: they are a target, not
+      # measured or projected data, and must not read as either.
+      dashArray: [0, 0, 0, 0, 0, 0, 0, 6, 6]
     subtitle:
       # Today's net only — one number, green/red by sign. Reads "—" until the
       # stats table has published (first tick after a restart).
@@ -237,10 +285,15 @@ card:
       yaxis:
         lines:
           show: true
+    # Shades the calibration window (spec 2026-08-03). There must be exactly
+    # ONE `annotations` key in this mapping — a second one silently wins over
+    # the first under YAML last-key-wins, which is how the first attempt at
+    # this became a no-op.
+    #
+    # The idle branch returns the original [{x: 0, x2: 0}] placeholder rather
+    # than [], so behaviour with no cycle pending is byte-identical to before.
     annotations:
-      xaxis:
-        - x: 0
-          x2: 0
+      xaxis: "${ (CAL.state !== 'idle' && CAL.s) ? [{ x: new Date(CAL.s).getTime(), x2: new Date(CAL.e).getTime(), fillColor: '#f59e0b', opacity: 0.12, label: { text: 'calibration · ' + CAL.state, orientation: 'horizontal', position: 'top', style: { background: '#f59e0b', color: '#fff', fontSize: '10px' } } }] : [{ x: 0, x2: 0 }] }"
     # Hover tooltip: list EVERY series' value at the hovered hour. We render it
     # ourselves (tooltip.custom) instead of relying on ApexCharts' built-in
     # shared tooltip, which collapses to a single series here because all series

@@ -55,6 +55,40 @@ class CalibAction:
     window_end: datetime
 
 
+# Phases that actuate. "scheduled" is deliberately absent: a window may be
+# accepted hours before it starts, and forcing then would charge at whatever
+# price happens to be live rather than the cheap one that was selected.
+_ACTIVE_PHASES = frozenset({"charging", "holding"})
+
+
+@dataclass(frozen=True)
+class CalibPlan:
+    """The cycle's state this tick, for display AND actuation.
+
+    Strictly wider than ``CalibAction``: it also carries ``scheduled`` (a
+    window accepted but not yet started) and ``idle``, neither of which may
+    actuate. ``action`` is the narrowing — the ONLY way to get an actuatable
+    value out — so the plan sensor can draw a coming window without any risk
+    of the controller engaging on it.
+    """
+
+    phase: str  # "idle" | "scheduled" | "charging" | "holding"
+    window_start: datetime | None
+    window_end: datetime | None
+
+    @property
+    def action(self) -> CalibAction | None:
+        if self.phase not in _ACTIVE_PHASES:
+            return None
+        # Both active phases always carry a window (set at every construction
+        # site below), so the asserts are for the type checker, not runtime.
+        assert self.window_start is not None and self.window_end is not None
+        return CalibAction(phase=self.phase, window_start=self.window_start, window_end=self.window_end)
+
+
+_IDLE = CalibPlan(phase="idle", window_start=None, window_end=None)
+
+
 def _parse(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
 
@@ -315,7 +349,7 @@ def select_window(
     return None
 
 
-def calibration_action(
+def calibration_plan(
     now: datetime,
     soc_pct: float,
     slots: list,
@@ -324,21 +358,25 @@ def calibration_action(
     cfg,
     *,
     already_holding: bool = False,
-) -> CalibAction | None:
-    """Whether a calibration cycle is running in the slot containing ``now``.
+) -> CalibPlan:
+    """The cycle's full state this tick, including a window that has been
+    accepted but has not started yet (``scheduled``).
 
-    Fail-closed: absent or too-short history yields None rather than
+    Fail-closed: absent or too-short history yields ``idle`` rather than
     "never calibrated, charge now".
 
     ``already_holding`` -- true iff the PREVIOUS tick's action was already
-    "holding". Softens the hold re-entry bar by 1 point (F1) so SoC
-    quantisation/load-spike noise at the boundary (97 -> 96 -> 97) cannot
-    toggle holding/charging/idle every tick and churn the inverter mode. This
-    module is pure and keeps no state of its own, so the caller must supply
-    it.
+    "holding". Softens the hold re-entry bar to ``continue_soc`` (F1) so SoC
+    quantisation/load-spike noise at the boundary cannot toggle
+    holding/charging/idle every tick and churn the inverter mode. This module
+    is pure and keeps no state of its own, so the caller must supply it.
+
+    ``scheduled`` exists ONLY so the plan sensor and card can draw the coming
+    window; ``CalibPlan.action`` withholds it from actuation. Callers deciding
+    whether to force MUST go through ``calibration_action``.
     """
     if not cfg.calibration_enabled:
-        return None
+        return _IDLE
 
     cont_soc = continue_soc(cfg)
     last = last_success_end(
@@ -350,7 +388,7 @@ def calibration_action(
     span = history_span_days(soc_samples)
     days_since = compute_days_since(last, span, now, cfg)
     if days_since is None or days_since < cfg.calibration_interval_days:
-        return None
+        return _IDLE
 
     # Hold-through: once the pack is AT (or, mid-hold, within 1 point of) the
     # top and a cycle is due, keep holding until the dwell completes,
@@ -363,7 +401,7 @@ def calibration_action(
     hold_bar = cont_soc if already_holding else cfg.calibration_top_soc
     if soc_pct >= hold_bar:
         run_start = _open_run_start(soc_samples, target_soc=cfg.calibration_top_soc, continue_soc=cont_soc) or now
-        return CalibAction(
+        return CalibPlan(
             phase="holding",
             window_start=run_start,
             window_end=run_start + timedelta(hours=cfg.calibration_dwell_h),
@@ -373,14 +411,37 @@ def calibration_action(
     bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)
     win = select_window(now, soc_pct, slots, cfg=cfg, bar=bar, force=force)
     if win is None:
-        return None
+        return _IDLE
 
     start, end = win
     if not (start <= now < end):
-        return None  # accepted a future window; nothing to do yet
+        # Accepted a future window: report it so the plan can draw it, but
+        # `.action` withholds it so nothing actuates early.
+        return CalibPlan(phase="scheduled", window_start=start, window_end=end)
 
     # Always "charging": the hold-through branch above already returned
-    # whenever soc_pct >= hold_soc, and nothing between here and there mutates
+    # whenever soc_pct >= hold_bar, and nothing between here and there mutates
     # soc_pct or cfg (Config is frozen) -- so this point is only ever reached
-    # with soc_pct < hold_soc, i.e. genuinely still climbing.
-    return CalibAction(phase="charging", window_start=start, window_end=end)
+    # with soc_pct < hold_bar, i.e. genuinely still climbing.
+    return CalibPlan(phase="charging", window_start=start, window_end=end)
+
+
+def calibration_action(
+    now: datetime,
+    soc_pct: float,
+    slots: list,
+    soc_samples: list[tuple[str, float, str | None]],
+    price_history: dict[str, dict[str, float]],
+    cfg,
+    *,
+    already_holding: bool = False,
+) -> CalibAction | None:
+    """Whether a calibration cycle is ACTUATING in the slot containing ``now``.
+
+    Derived from ``calibration_plan`` rather than computed separately, so the
+    displayed state and the actuated one cannot drift apart -- the same
+    single-source-of-truth reason ``compute_days_since`` is shared (F3).
+    """
+    return calibration_plan(
+        now, soc_pct, slots, soc_samples, price_history, cfg, already_holding=already_holding
+    ).action

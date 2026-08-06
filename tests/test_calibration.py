@@ -395,6 +395,52 @@ def test_future_window_is_not_acted_on_yet():
     assert calibration.calibration_action(now, 50.0, slots, due, CHEAP_HISTORY, ON) is None
 
 
+def test_future_window_reports_scheduled_with_its_window():
+    """Display needs the accepted-but-not-yet-started window; actuation must
+    still refuse it. Same inputs as the test above."""
+    now = BASE
+    slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
+    due = _stale_history(now, 6)
+    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON)
+    assert plan.phase == "scheduled"
+    assert plan.window_start is not None and plan.window_end is not None
+    assert plan.window_start > now, "a scheduled window starts in the future"
+
+
+def test_scheduled_never_produces_an_action():
+    """Safety pin: `scheduled` is display-only. If it ever yielded an action
+    the controller would flip to FORCING the moment a window is merely
+    accepted -- hours early, at whatever price is live right then."""
+    now = BASE
+    slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
+    due = _stale_history(now, 6)
+    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON)
+    assert plan.phase == "scheduled"
+    assert plan.action is None
+
+
+def test_plan_and_action_agree_on_active_phases():
+    """calibration_action is derived from calibration_plan, so the two cannot
+    drift: whenever the plan is active the action mirrors it exactly."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    stale = _stale_history(now, 30)
+    for soc in (50.0, ON.calibration_top_soc):
+        plan = calibration.calibration_plan(now, soc, slots, stale, CHEAP_HISTORY, ON)
+        act = calibration.calibration_action(now, soc, slots, stale, CHEAP_HISTORY, ON)
+        assert plan.phase in ("charging", "holding")
+        assert act is not None
+        assert (act.phase, act.window_start, act.window_end) == (plan.phase, plan.window_start, plan.window_end)
+
+
+def test_idle_plan_carries_no_window():
+    now = BASE
+    plan = calibration.calibration_plan(now, 50.0, _slots(now, [0.01] * 6), [], CHEAP_HISTORY, ON)
+    assert plan.phase == "idle"
+    assert plan.window_start is None and plan.window_end is None
+    assert plan.action is None
+
+
 def test_due_at_exact_interval_boundary():
     """days_since == calibration_interval_days exactly must already count as
     due (`>=`, not `>`)."""

@@ -10,6 +10,11 @@ from custom_components.anker_x1_smartgrid import calibration, controller, schedu
 from custom_components.anker_x1_smartgrid.models import ControllerState, PlanState
 from tests.helpers import BASE, StubHass, make_controller, seed_valid_inputs
 
+# The policy's "nothing doing" answer. calibration_plan never returns None —
+# None would crash the controller's `.action` narrowing, so fakes must return
+# a real idle plan just as the module does.
+_IDLE_PLAN = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
+
 
 def _wrap_compute_decision(monkeypatch, now_selected_holder):
     """Patch controller.compute_decision to force _out["now_selected"] to a
@@ -47,9 +52,9 @@ async def test_disabled_never_consults_the_policy(monkeypatch):
     def _spy(*a, **k):
         nonlocal called
         called = True
-        return None
+        return _IDLE_PLAN
 
-    monkeypatch.setattr(calibration, "calibration_action", _spy)
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
     result = await ctrl.tick()
     assert called is False, "policy must not even be consulted when disabled"
     assert result["state"] == "passive"
@@ -67,12 +72,12 @@ async def test_active_calibration_forces_charge(monkeypatch):
     ctrl, act = make_controller(hass)
     seed_valid_inputs(hass, soc="98.0")
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="holding",
         window_start=BASE - timedelta(hours=1),
         window_end=BASE + timedelta(hours=2),
     )
-    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: action)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: action)
 
     result = await ctrl.tick()
 
@@ -98,12 +103,12 @@ async def test_calibration_state_since_stable_across_continuing_ticks(monkeypatc
     seed_valid_inputs(hass, soc="50.0")
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
-    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: action)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: action)
 
     def _always_bail(plan, *, now, **kwargs):
         # Mirrors scheduler.decide_state's `... return PlanState(PASSIVE, now,
@@ -156,16 +161,16 @@ async def test_calibration_stop_cancels_coasting_forcing(monkeypatch):
 
     calibration_active = True
     now_selected_holder = {"value": False}
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
 
     def _fake_action(*a, **k):
-        return action if calibration_active else None
+        return action if calibration_active else _IDLE_PLAN
 
-    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(calibration, "calibration_plan", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
     _wrap_compute_decision(monkeypatch, now_selected_holder)
 
@@ -220,14 +225,14 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
 
     calibration_active = True
     now_selected_holder = {"value": False}
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
 
     def _fake_action(*a, **k):
-        return action if calibration_active else None
+        return action if calibration_active else _IDLE_PLAN
 
     def _fake_decide_state(plan, *, now, cfg, **kwargs):
         # Simplified stand-in for scheduler.decide_state -- real enough about
@@ -242,7 +247,7 @@ async def test_calibration_cancel_does_not_dwell_lock_economic_reentry(monkeypat
             return PlanState(ControllerState.FORCING, now, ())
         return plan
 
-    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(calibration, "calibration_plan", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", _fake_decide_state)
     _wrap_compute_decision(monkeypatch, now_selected_holder)
 
@@ -295,14 +300,14 @@ async def test_calibration_disengage_does_not_cancel_dp_wanted_forcing(monkeypat
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
     calibration_active = True
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
 
     def _fake_action(*a, **k):
-        return action if calibration_active else None
+        return action if calibration_active else _IDLE_PLAN
 
     def _fake_decide_state(plan, *, now, **kwargs):
         # Tick 1: genuine PASSIVE->FORCING entry (mirrors scheduler.py:249),
@@ -314,7 +319,7 @@ async def test_calibration_disengage_does_not_cancel_dp_wanted_forcing(monkeypat
         return PlanState(ControllerState.FORCING, now, ())
 
     now_selected_holder = {"value": True}
-    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(calibration, "calibration_plan", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", _fake_decide_state)
     _wrap_compute_decision(monkeypatch, now_selected_holder)
 
@@ -354,17 +359,17 @@ async def test_calibration_stop_still_cancels_when_dp_does_not_want_the_hour(mon
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
     calibration_active = True
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
 
     def _fake_action(*a, **k):
-        return action if calibration_active else None
+        return action if calibration_active else _IDLE_PLAN
 
     now_selected_holder = {"value": False}
-    monkeypatch.setattr(calibration, "calibration_action", _fake_action)
+    monkeypatch.setattr(calibration, "calibration_plan", _fake_action)
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
     _wrap_compute_decision(monkeypatch, now_selected_holder)
 
@@ -404,12 +409,12 @@ async def test_calibration_engaging_mid_economic_forcing_preserves_state_since(m
     economic_since = BASE - timedelta(hours=1)
     ctrl.plan = PlanState(ControllerState.FORCING, economic_since, ())
 
-    action = calibration.CalibAction(
+    action = calibration.CalibPlan(
         phase="charging",
         window_start=BASE,
         window_end=BASE + timedelta(hours=3),
     )
-    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: action)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: action)
 
     def _always_bail(plan, *, now, **kwargs):
         # Mirrors scheduler.py's dwell-elapsed-but-not-selected bail -- the
@@ -437,12 +442,12 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     """F1: a 97 -> 96 -> 97 SoC wobble around calibration_top_soc must not
     cancel and re-engage the actuator every tick (inverter mode churn).
 
-    Uses the REAL calibration.calibration_action (only decide_state/
+    Uses the REAL calibration.calibration_plan (only decide_state/
     now_selected are faked, mirroring the C1(B) cancel scaffold above) so
     this exercises the actual F1 latch, not a stand-in for it. Without the
     latch: tick 2's soc=96 falls through to select_window, which returns
     None (bar=None since _price_store is unset here, and force=False), so
-    calibration_action returns None -> the (B) cancel condition is met
+    calibration_plan returns idle -> the (B) cancel condition is met
     (was_engaged, coasting, not now_selected) -> PASSIVE -> release_to_self.
     """
     hass = StubHass()
@@ -501,7 +506,7 @@ async def test_calibration_failure_logs_once_per_streak(monkeypatch, caplog):
 
     caplog.set_level(logging.WARNING)
 
-    monkeypatch.setattr(calibration, "calibration_action", _boom)
+    monkeypatch.setattr(calibration, "calibration_plan", _boom)
     await ctrl.tick()
     await ctrl.tick()
     await ctrl.tick()
@@ -509,9 +514,9 @@ async def test_calibration_failure_logs_once_per_streak(monkeypatch, caplog):
     assert len(warnings) == 1, "a sustained failure must log once, not every tick"
 
     caplog.clear()
-    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: None)  # success: re-arms
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: _IDLE_PLAN)  # success: re-arms
     await ctrl.tick()
-    monkeypatch.setattr(calibration, "calibration_action", _boom)
+    monkeypatch.setattr(calibration, "calibration_plan", _boom)
     await ctrl.tick()
     warnings2 = [r for r in caplog.records if "Calibration policy failed" in r.getMessage()]
     assert len(warnings2) == 1, "a later, distinct failure after a success must log again"
@@ -534,6 +539,50 @@ async def test_calibration_warns_once_when_retention_makes_it_unreachable(monkey
 
     warnings = [r for r in caplog.records if "retention_days" in r.getMessage()]
     assert len(warnings) == 1, "must warn once, not every tick"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_window_is_published_but_does_not_force(monkeypatch):
+    """A window accepted for later today must reach the plan sensor so the
+    card can draw it -- while leaving the controller PASSIVE. If `scheduled`
+    ever actuated, the pack would charge hours early at whatever price is
+    live rather than the cheap window that was selected."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    win_start = BASE + timedelta(hours=4)
+    win_end = win_start + timedelta(hours=3)
+    monkeypatch.setattr(
+        calibration,
+        "calibration_plan",
+        lambda *a, **k: calibration.CalibPlan(phase="scheduled", window_start=win_start, window_end=win_end),
+    )
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    result = await ctrl.tick()
+
+    assert result["state"] == "passive", "a scheduled window must not engage the actuator"
+    assert ctrl.last_status["calibration_state"] == "scheduled"
+    assert ctrl.last_status["calibration_window_start"] == win_start.isoformat()
+    assert ctrl.last_status["calibration_window_end"] == win_end.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_plan_publishes_the_target_and_continuation_bars(monkeypatch):
+    """The card draws the band from these two numbers; without them it would
+    have to hardcode 100/99 and drift from const on the next tune."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_top_soc=100.0)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+
+    assert ctrl.last_status["calibration_target_soc"] == 100.0
+    assert ctrl.last_status["calibration_hold_soc"] == calibration.continue_soc(ctrl.cfg)
 
 
 @pytest.mark.asyncio
@@ -577,7 +626,7 @@ async def test_calibration_days_since_falls_back_to_history_span_when_never_cali
     ctrl, _act = make_controller(hass)
     seed_valid_inputs(hass, soc="50.0")
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_interval_days=90)
-    monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: None)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: _IDLE_PLAN)
 
     start = BASE - timedelta(days=120)
     ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]

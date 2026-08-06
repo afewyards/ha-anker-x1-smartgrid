@@ -349,6 +349,11 @@ class Controller:
         # Published as plan-sensor attrs; not persisted — recomputed each tick
         # from SoC + price history, which is what makes it restart-safe.
         self._calibration: calibration.CalibAction | None = None
+        # The full policy state incl. "scheduled" (display); self._calibration
+        # is its narrowing to what may actuate.
+        self._calibration_plan: calibration.CalibPlan = calibration.CalibPlan(
+            phase="idle", window_start=None, window_end=None
+        )
         self._calibration_last_success: datetime | None = None
         self._calibration_days_since: float | None = None
         # True iff self.plan is currently FORCING BECAUSE of calibration (as
@@ -1661,6 +1666,7 @@ class Controller:
         # wobble at the boundary instead of cancelling/re-engaging every tick.
         _calibration_was_holding = self._calibration is not None and self._calibration.phase == "holding"
         self._calibration = None
+        self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
         self._calibration_last_success = None
         self._calibration_days_since = None
         if self.cfg.calibration_enabled and self._recorder is not None:
@@ -1681,7 +1687,11 @@ class Controller:
             try:
                 _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
                 _price_hist = self._price_store.history if self._price_store is not None else {}
-                self._calibration_last_success, self._calibration, _span_days = await self._hass.async_add_executor_job(
+                (
+                    self._calibration_last_success,
+                    self._calibration_plan,
+                    _span_days,
+                ) = await self._hass.async_add_executor_job(
                     self._calibration_compute_sync,
                     _since_iso,
                     now,
@@ -1690,6 +1700,9 @@ class Controller:
                     _price_hist,
                     _calibration_was_holding,
                 )
+                # Narrowing: `scheduled` and `idle` yield None, so nothing
+                # below can actuate on a window that has not started.
+                self._calibration = self._calibration_plan.action
                 # Shared with calibration_action's own days-since fallback (F3):
                 # both sites call calibration.compute_days_since so they cannot
                 # drift out of sync.
@@ -1727,6 +1740,7 @@ class Controller:
                     self._calibration_fail_logged = True
                     _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
                 self._calibration = None
+                self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
                 self._calibration_last_success = None
                 self._calibration_days_since = None
 
@@ -1879,17 +1893,26 @@ class Controller:
         self.last_status["export_curve_covered"] = _dp_out.get("export_curve_covered")
         self.last_status["export_curve_slots"] = _dp_out.get("export_curve_slots")
         # Periodic full-charge calibration (spec 2026-08-03): observability only.
-        self.last_status["calibration_state"] = self._calibration.phase if self._calibration is not None else "idle"
+        # Published from the PLAN, not the action, so a window accepted for
+        # later today is drawable ("scheduled") rather than indistinguishable
+        # from idle. The action stays the sole actuation path.
+        _cal = self._calibration_plan
+        self.last_status["calibration_state"] = _cal.phase
         self.last_status["calibration_window_start"] = (
-            self._calibration.window_start.isoformat() if self._calibration is not None else None
+            _cal.window_start.isoformat() if _cal.window_start is not None else None
         )
         self.last_status["calibration_window_end"] = (
-            self._calibration.window_end.isoformat() if self._calibration is not None else None
+            _cal.window_end.isoformat() if _cal.window_end is not None else None
         )
         self.last_status["calibration_last_success"] = (
             self._calibration_last_success.isoformat() if self._calibration_last_success is not None else None
         )
         self.last_status["calibration_days_since"] = self._calibration_days_since
+        # The band the card draws: charge target on top, continuation bar
+        # below. Published rather than hardcoded in the card so tuning either
+        # const cannot leave the chart lying about where the dwell counts.
+        self.last_status["calibration_target_soc"] = self.cfg.calibration_top_soc
+        self.last_status["calibration_hold_soc"] = calibration.continue_soc(self.cfg)
         # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
         # over-report under the "planned_grid_hours" name. Scale by the slot
         # width so the value stays true hours; a no-op at the legacy 60-min
@@ -1925,7 +1948,7 @@ class Controller:
         slots: list[PriceSlot],
         price_history: dict,
         already_holding: bool,
-    ) -> tuple[datetime | None, calibration.CalibAction | None, float]:
+    ) -> tuple[datetime | None, calibration.CalibPlan, float]:
         """Synchronous: recorder read + calibration policy evaluation, together.
 
         ``calibration.py`` is pure (no HA, no I/O) but its inputs are the full
@@ -1943,10 +1966,10 @@ class Controller:
             continue_soc=calibration.continue_soc(self.cfg),
             dwell_h=self.cfg.calibration_dwell_h,
         )
-        action = calibration.calibration_action(
+        plan = calibration.calibration_plan(
             now, soc_pct, slots, soc_rows, price_history, self.cfg, already_holding=already_holding
         )
-        return last_success, action, calibration.history_span_days(soc_rows)
+        return last_success, plan, calibration.history_span_days(soc_rows)
 
     def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str) -> None:
         """Synchronous: roll up completed clock-hours into samples_hourly and purge old rows.
