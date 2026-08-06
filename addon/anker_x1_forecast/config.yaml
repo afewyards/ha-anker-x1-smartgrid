@@ -14,6 +14,8 @@ map:
 options:
   db_path: "/config/anker_x1_smartgrid.db"
   retrain_hour: 3
+  train_since: ""
 schema:
   db_path: "str"
   retrain_hour: "int(0,23)"
+  train_since: "str?"

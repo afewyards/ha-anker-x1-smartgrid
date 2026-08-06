@@ -23,6 +23,7 @@ _log = logging.getLogger(__name__)
 _DEFAULTS: dict = {
     "db_path": "/config/anker_x1_smartgrid.db",
     "retrain_hour": 3,
+    "train_since": "",
 }
 
 DEFAULT_PORT = 8099
@@ -82,7 +83,31 @@ def read_options(path: str = "/data/options.json") -> dict:
             _DEFAULTS["retrain_hour"],
         )
         opts["retrain_hour"] = _DEFAULTS["retrain_hour"]
+    train_since = opts.get("train_since", _DEFAULTS["train_since"])
+    if not isinstance(train_since, str):
+        train_since = _DEFAULTS["train_since"]
+    train_since = train_since.strip()
+    if train_since:
+        try:
+            datetime.fromisoformat(train_since)
+        except ValueError:
+            _log.warning(
+                "read_options: invalid train_since %r (expected ISO date/datetime), ignoring floor",
+                train_since,
+            )
+            train_since = _DEFAULTS["train_since"]
+    opts["train_since"] = train_since
     return opts
+
+
+def train_kwargs_from_options(opts: dict) -> dict:
+    """Build the train_once() training-data-floor kwargs from add-on options.
+
+    Returns {} (no floor, train on full history) when train_since is empty or
+    missing; otherwise {"since_iso": <value>}.
+    """
+    since = opts.get("train_since", "")
+    return {"since_iso": since} if since else {}
 
 
 def build_health_payload(

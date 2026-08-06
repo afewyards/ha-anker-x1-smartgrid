@@ -20,6 +20,7 @@ from health import (
     seconds_until_next_run,
     service_port,
     service_url,
+    train_kwargs_from_options,
 )
 from trainer import TrainState
 
@@ -259,6 +260,92 @@ def test_read_options_defaults_retrain_hour_on_nonint():
     opts = read_options(path=tmp)
     assert opts["retrain_hour"] == 3  # falls back to default, never raises
     Path(tmp).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# read_options — train_since (training-data floor)
+# ---------------------------------------------------------------------------
+
+
+def test_read_options_train_since_defaults_empty():
+    opts = read_options(path="/nonexistent/path/options.json")
+    assert opts["train_since"] == ""
+
+
+def test_read_options_train_since_passthrough():
+    custom = {"train_since": "2026-07-10"}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(custom, f)
+        tmp_path = f.name
+
+    opts = read_options(path=tmp_path)
+    assert opts["train_since"] == "2026-07-10"
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_read_options_train_since_nonstring_defaults_empty():
+    custom = {"train_since": 12345}
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(custom, f)
+        tmp_path = f.name
+
+    opts = read_options(path=tmp_path)
+    assert opts["train_since"] == ""
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def _read_options_with_train_since(train_since):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({"train_since": train_since}, f)
+        tmp_path = f.name
+    try:
+        return read_options(path=tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_read_options_train_since_european_date_format_defaults_empty(caplog):
+    """A European DD-MM-YYYY typo must not pass through unvalidated — it is
+    valid-looking but wrong, and SQLite's lexicographic hour_ts comparison
+    would otherwise silently apply no floor at all."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        opts = _read_options_with_train_since("10-07-2026")
+    assert opts["train_since"] == ""
+    assert "train_since" in caplog.text
+
+
+def test_read_options_train_since_slash_date_format_defaults_empty():
+    opts = _read_options_with_train_since("2026/07/10")
+    assert opts["train_since"] == ""
+
+
+def test_read_options_train_since_strips_whitespace():
+    opts = _read_options_with_train_since("  2026-07-10  ")
+    assert opts["train_since"] == "2026-07-10"
+
+
+def test_read_options_train_since_date_only_is_valid():
+    """Date-only (no time component) is a valid ISO date and must pass through."""
+    opts = _read_options_with_train_since("2026-07-10")
+    assert opts["train_since"] == "2026-07-10"
+
+
+# ---------------------------------------------------------------------------
+# train_kwargs_from_options
+# ---------------------------------------------------------------------------
+
+
+def test_train_kwargs_from_options_empty_when_train_since_blank():
+    assert train_kwargs_from_options({"train_since": ""}) == {}
+    assert train_kwargs_from_options({}) == {}
+
+
+def test_train_kwargs_from_options_returns_since_iso_when_set():
+    assert train_kwargs_from_options({"train_since": "2026-07-10"}) == {"since_iso": "2026-07-10"}
 
 
 def test_service_port_default_env_and_garbage(monkeypatch):

@@ -14,7 +14,14 @@ import sklearn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from health import build_health_payload, read_options, run_retrain_loop, service_port, service_url
+from health import (
+    build_health_payload,
+    read_options,
+    run_retrain_loop,
+    service_port,
+    service_url,
+    train_kwargs_from_options,
+)
 import predictor
 import trainer
 from trainer import TrainState, train_once
@@ -49,14 +56,14 @@ STATE: TrainState = TrainState(
 _PREDICT_LOCK = threading.Lock()
 
 
-async def _scheduler(db_path: str, retrain_hour: int) -> None:
+async def _scheduler(db_path: str, retrain_hour: int, train_kwargs: dict | None = None) -> None:
     """Background task: train once at startup, then retrain daily at retrain_hour."""
     loop = asyncio.get_running_loop()
 
     async def _run_train() -> None:
         global STATE
         try:
-            fn = functools.partial(train_once, db_path)
+            fn = functools.partial(train_once, db_path, **(train_kwargs or {}))
             result = await loop.run_in_executor(None, fn)
             STATE = result
             _log.info(
@@ -85,6 +92,7 @@ async def startup_event() -> None:
     opts = read_options()
     db_path: str = opts["db_path"]
     retrain_hour: int = int(opts["retrain_hour"])
+    train_kwargs = train_kwargs_from_options(opts)
     _log.info("startup: db_path=%r retrain_hour=%s", db_path, retrain_hour)
     url = service_url()
     _log.info("-" * 64)
@@ -94,7 +102,7 @@ async def startup_event() -> None:
     _log.info("-" * 64)
     global _scheduler_task, _DB_PATH
     _DB_PATH = db_path
-    _scheduler_task = asyncio.create_task(_scheduler(db_path, retrain_hour))
+    _scheduler_task = asyncio.create_task(_scheduler(db_path, retrain_hour, train_kwargs))
 
 
 class HourIn(BaseModel):

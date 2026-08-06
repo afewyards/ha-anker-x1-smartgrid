@@ -145,7 +145,7 @@ def test_startup_logs_addon_url(caplog, monkeypatch):
     monkeypatch.setattr(server, "read_options", lambda: {"db_path": "/nonexistent.db", "retrain_hour": 3})
     monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
 
-    async def _noop_scheduler(db_path, retrain_hour):
+    async def _noop_scheduler(db_path, retrain_hour, train_kwargs=None):
         return None
 
     monkeypatch.setattr(server, "_scheduler", _noop_scheduler)
@@ -159,6 +159,76 @@ def test_startup_logs_addon_url(caplog, monkeypatch):
     asyncio.run(_run())
     assert "http://2b933eb0-anker-x1-forecast:8099" in caplog.text
     assert "Add-on URL" in caplog.text
+
+
+def test_startup_always_calls_scheduler_with_three_args(monkeypatch):
+    """M4: startup_event must call _scheduler unconditionally with train_kwargs
+    as the third argument, even when it is empty — no conditional fork shaped
+    around a stub's arity. A stub requiring all three positional args (no
+    default for train_kwargs) proves the call site itself always supplies
+    three: under the old conditional fork, the empty-train_kwargs path called
+    _scheduler with only 2 args and this stub would raise TypeError."""
+    import asyncio
+    import server
+
+    monkeypatch.setattr(
+        server,
+        "read_options",
+        lambda: {"db_path": "/nonexistent.db", "retrain_hour": 3, "train_since": ""},
+    )
+    monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
+
+    received = {}
+
+    async def _strict_scheduler(db_path, retrain_hour, train_kwargs):
+        received["train_kwargs"] = train_kwargs
+        return None
+
+    monkeypatch.setattr(server, "_scheduler", _strict_scheduler)
+
+    async def _run():
+        await server.startup_event()
+        if server._scheduler_task is not None:
+            await server._scheduler_task
+
+    asyncio.run(_run())
+    assert received["train_kwargs"] == {}
+
+
+def test_startup_threads_train_since_to_scheduler(monkeypatch):
+    """M4: startup_event must always call _scheduler unconditionally with
+    train_kwargs — when options carry a train_since floor, _scheduler must
+    receive it as {"since_iso": <value>}. Before the fix, this path (options
+    -> train_kwargs -> train_once partial) had zero end-to-end coverage: the
+    3-arg call was only reachable via a conditional fork shaped around a
+    stale 2-arg test stub."""
+    import asyncio
+    import server
+
+    monkeypatch.setattr(
+        server,
+        "read_options",
+        lambda: {"db_path": "/nonexistent.db", "retrain_hour": 3, "train_since": "2026-07-10"},
+    )
+    monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
+
+    received = {}
+
+    async def _capturing_scheduler(db_path, retrain_hour, train_kwargs=None):
+        received["db_path"] = db_path
+        received["retrain_hour"] = retrain_hour
+        received["train_kwargs"] = train_kwargs
+        return None
+
+    monkeypatch.setattr(server, "_scheduler", _capturing_scheduler)
+
+    async def _run():
+        await server.startup_event()
+        if server._scheduler_task is not None:
+            await server._scheduler_task
+
+    asyncio.run(_run())
+    assert received["train_kwargs"] == {"since_iso": "2026-07-10"}
 
 
 def test_health_and_predict_smoke():
