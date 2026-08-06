@@ -453,7 +453,12 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     # static seed, so span/days_since stay ~6 across all 3 ticks (StubRecorder's
     # _soc_samples doesn't grow per-tick).
     start = BASE - timedelta(days=6)
-    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0), (BASE.isoformat(), 50.0)]
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
+
+    # The wobble has to straddle the HOLD BAR, which sits below the charge
+    # target -- that boundary, not the target, is what the F1 latch guards.
+    at_bar = calibration.hold_soc_bar(ctrl.cfg)
+    dipped = at_bar - 1.0
 
     now_selected_holder = {"value": False}
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
@@ -462,17 +467,17 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     tick_time = BASE
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: tick_time)
 
-    seed_valid_inputs(hass, soc="97.0")
+    seed_valid_inputs(hass, soc=str(at_bar))
     result1 = await ctrl.tick()
     assert result1["state"] == "forcing"
 
     tick_time = BASE + timedelta(minutes=1)
-    seed_valid_inputs(hass, soc="96.0")
+    seed_valid_inputs(hass, soc=str(dipped))
     result2 = await ctrl.tick()
     assert result2["state"] == "forcing", "the latch must absorb a 1-point SoC dip while already holding"
 
     tick_time = BASE + timedelta(minutes=2)
-    seed_valid_inputs(hass, soc="97.0")
+    seed_valid_inputs(hass, soc=str(at_bar))
     result3 = await ctrl.tick()
     assert result3["state"] == "forcing"
 
@@ -547,7 +552,7 @@ async def test_calibration_days_since_falls_back_to_history_span_when_never_cali
     monkeypatch.setattr(calibration, "calibration_action", lambda *a, **k: None)
 
     start = BASE - timedelta(days=120)
-    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0), (BASE.isoformat(), 50.0)]
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
 
     await ctrl.tick()

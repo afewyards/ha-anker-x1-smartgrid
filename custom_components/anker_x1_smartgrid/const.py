@@ -125,12 +125,23 @@ DEFAULT_TERMINAL_OVERNIGHT_CREDIT = True
 # raise in winter, when it will force a grid charge instead.
 DEFAULT_CALIBRATION_ENABLED = True
 DEFAULT_CALIBRATION_INTERVAL_DAYS = 5
-# 98 sits below the observed 99% stall (2026-08-02: reached 99%, then 0 W for
-# 2.5 h), so the dwell is actually reachable.
-DEFAULT_CALIBRATION_TOP_SOC = 98.0
+# The CHARGE TARGET, at the firmware cap. The balancing region is the taper,
+# and the taper only starts around 99%: measured 2026-07-30, the pack was
+# still taking 3.9 kW at 98% (bulk) and 5.1 kW at 99%, dropping to 540 W only
+# at the very top. A target of 98 therefore ends the charge before the BMS
+# ever reaches balancing voltage -- which is why the pack kept stranding
+# ~3.6 kWh at the bottom despite "successful" cycles.
+DEFAULT_CALIBRATION_TOP_SOC = 100.0
 DEFAULT_CALIBRATION_DWELL_H = 1.0
 
 # Tuning consts, deliberately not user-facing.
+# How far BELOW the charge target the hold/success bar sits. Must be > 0: the
+# reported SoC routinely plateaus short of the cap (13 of 43 observed days
+# topped out at exactly 99%), so gating hold-through and success on an exact
+# 100% would strand the dwell on most days and, because days_since would then
+# never reset, leave the policy permanently past grace and force-charging
+# every night. See calibration.hold_soc_bar.
+CALIBRATION_HOLD_TOLERANCE = 2.0
 # A window is cheap enough when its mean slot price is at or below this
 # percentile of all slot prices in PriceHistoryStore.history.
 CALIBRATION_PRICE_PERCENTILE = 30.0

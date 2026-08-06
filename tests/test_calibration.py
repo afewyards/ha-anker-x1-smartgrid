@@ -7,49 +7,80 @@ from custom_components.anker_x1_smartgrid import calibration
 from custom_components.anker_x1_smartgrid.models import Config, PriceSlot
 
 
-def _series(start, minutes, soc_values):
-    """(ts, soc) rows at fixed `minutes` spacing."""
-    return [((start + timedelta(minutes=minutes * i)).isoformat(), v) for i, v in enumerate(soc_values)]
+def _series(start, minutes, soc_values, state="forcing"):
+    """(ts, soc, state) rows at fixed `minutes` spacing.
+
+    Defaults to "forcing" because most callers here exercise the run-scan
+    mechanics and want their run to qualify; the passive/disabled cases pass
+    `state` explicitly.
+    """
+    return [((start + timedelta(minutes=minutes * i)).isoformat(), v, state) for i, v in enumerate(soc_values)]
 
 
 BASE = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
 
+def test_passive_run_does_not_count():
+    """A solar plateau at the top with the controller PASSIVE is not a
+    calibration dwell: no charge current, so no top-balancing. Observed live
+    2026-08-05 15:36->17:16 (101 samples, all state=passive, setpoint 0 W)
+    being credited as a completed cycle."""
+    rows = _series(BASE, 15, [98.0] * 13, state="passive")
+    assert calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0) is None
+
+
+def test_disabled_run_does_not_count():
+    rows = _series(BASE, 15, [98.0] * 13, state="disabled")
+    assert calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0) is None
+
+
+def test_passive_tick_breaks_the_run():
+    """Forcing must be continuous: a passive stretch means the current stopped,
+    so the two forced halves may not be summed into one qualifying dwell."""
+    # Unbroken 15-min spacing throughout (0..165 min) so the ONLY thing that
+    # can split the run is the state -- a timestamp gap would make this pass
+    # for the wrong reason. Spanning 2h45m, it would qualify if merged.
+    first = _series(BASE, 15, [98.0] * 5)  # 0..60 min forcing
+    lull = _series(BASE + timedelta(minutes=75), 15, [98.0] * 2, state="passive")  # 75, 90
+    second = _series(BASE + timedelta(minutes=105), 15, [98.0] * 5)  # 105..165 forcing
+    assert calibration.last_success_end(first + lull + second, hold_soc=97.0, dwell_h=2.0) is None
+
+
 def test_qualifying_run_returns_its_last_timestamp():
     # 3 h at 98% on 15-min spacing = 13 samples.
     rows = _series(BASE, 15, [98.0] * 13)
-    got = calibration.last_success_end(rows, top_soc=97.0, dwell_h=2.0)
+    got = calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0)
     assert got == BASE + timedelta(hours=3)
 
 
 def test_run_just_under_dwell_does_not_count():
     # 1 h 45 min < 2 h dwell.
     rows = _series(BASE, 15, [98.0] * 8)
-    assert calibration.last_success_end(rows, top_soc=97.0, dwell_h=2.0) is None
+    assert calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0) is None
 
 
 def test_run_below_top_soc_does_not_count():
     rows = _series(BASE, 15, [96.9] * 13)
-    assert calibration.last_success_end(rows, top_soc=97.0, dwell_h=2.0) is None
+    assert calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0) is None
 
 
 def test_gap_breaks_the_run():
     """An HA outage must not fake a long hold."""
     first = _series(BASE, 15, [98.0] * 4)  # 45 min
     later = _series(BASE + timedelta(hours=6), 15, [98.0] * 4)  # 45 min
-    assert calibration.last_success_end(first + later, top_soc=97.0, dwell_h=2.0) is None
+    assert calibration.last_success_end(first + later, hold_soc=97.0, dwell_h=2.0) is None
 
 
 def test_most_recent_qualifying_run_wins():
     old = _series(BASE, 15, [98.0] * 13)
     dip = _series(BASE + timedelta(hours=4), 15, [50.0] * 4)
     new = _series(BASE + timedelta(hours=24), 15, [99.0] * 13)
-    got = calibration.last_success_end(old + dip + new, top_soc=97.0, dwell_h=2.0)
+    got = calibration.last_success_end(old + dip + new, hold_soc=97.0, dwell_h=2.0)
     assert got == BASE + timedelta(hours=27)
 
 
 def test_empty_history_is_none():
-    assert calibration.last_success_end([], top_soc=97.0, dwell_h=2.0) is None
+    assert calibration.last_success_end([], hold_soc=97.0, dwell_h=2.0) is None
 
 
 def test_history_span_days():
@@ -61,7 +92,7 @@ def test_history_span_days():
 def test_run_of_exact_dwell_length_counts():
     """Boundary: a run of exactly `dwell_h` must qualify (`>=`, not `>`)."""
     rows = _series(BASE, 15, [98.0] * 9)  # 0, 15, ..., 120 min = exactly 2 h.
-    assert calibration.last_success_end(rows, top_soc=97.0, dwell_h=2.0) == BASE + timedelta(hours=2)
+    assert calibration.last_success_end(rows, hold_soc=97.0, dwell_h=2.0) == BASE + timedelta(hours=2)
 
 
 def test_duplicate_timestamps_are_benign():
@@ -69,7 +100,7 @@ def test_duplicate_timestamps_are_benign():
     rows = _series(BASE, 15, [98.0] * 13)
     dup_index = 5
     rows_with_dup = [*rows[: dup_index + 1], rows[dup_index], *rows[dup_index + 1 :]]
-    got = calibration.last_success_end(rows_with_dup, top_soc=97.0, dwell_h=2.0)
+    got = calibration.last_success_end(rows_with_dup, hold_soc=97.0, dwell_h=2.0)
     assert got == BASE + timedelta(hours=3)
 
 
@@ -249,6 +280,36 @@ def test_at_top_soc_reports_holding():
     assert act.phase == "holding"
 
 
+def test_hold_bar_sits_strictly_below_the_charge_target():
+    """The charge target and the hold/success bar are two different numbers.
+    Collapsing them back into one reintroduces both failure modes at once:
+    at 98 the charge ends before the taper (no balancing), at 100 the hold
+    can never engage on the ~30% of days the pack plateaus at 99."""
+    assert calibration.hold_soc_bar(ON) < ON.calibration_top_soc
+
+
+def test_hold_engages_at_the_tolerance_below_the_charge_target():
+    """98% is the live case: with the target at the 100% firmware cap, a pack
+    that plateaus 2 points short must still dwell rather than restart a
+    charge. The 98.0 is written out rather than derived from hold_soc_bar so
+    that collapsing the tolerance to 0 fails this test instead of sliding it.
+    """
+    now = BASE
+    cfg = dataclasses.replace(ON, calibration_top_soc=100.0)
+    act = calibration.calibration_action(
+        now, 98.0, _slots(now, [0.90] * 6), _stale_history(now, 30), CHEAP_HISTORY, cfg
+    )
+    assert act is not None
+    assert act.phase == "holding", "a pack parked below the cap must still dwell, not restart a charge"
+
+
+def test_charge_need_is_measured_to_the_target_not_the_hold_bar():
+    """Sizing the window to the bar would end the charge exactly where the
+    taper -- and therefore the balancing -- begins."""
+    cfg = dataclasses.replace(ON, calibration_top_soc=100.0)
+    assert calibration._charge_h(calibration.hold_soc_bar(cfg), cfg) > 0.0
+
+
 def test_holds_through_even_without_a_cheap_window():
     """A dwell in progress must complete regardless of the price curve."""
     now = BASE
@@ -318,18 +379,19 @@ def test_due_at_exact_interval_boundary():
 
 
 def test_already_holding_softens_reentry_bar_by_one_point():
-    """F1: once a hold is in progress, a 1-point SoC dip below top_soc must
-    still hold -- absorbing quantisation/load-spike wobble instead of
+    """F1: once a hold is in progress, a 1-point SoC dip below the hold bar
+    must still hold -- absorbing quantisation/load-spike wobble instead of
     cancelling and re-engaging every tick. Without already_holding, the same
     soc_pct must NOT hold (no deadband before a hold has begun)."""
     now = BASE
     slots = _slots(now, [0.90] * 6)  # too expensive; force is also False below
     stale = _stale_history(now, 6)  # due (>=5), not yet forced (<12)
+    just_under = calibration.hold_soc_bar(ON) - 1.0
 
-    without_latch = calibration.calibration_action(now, 96.0, slots, stale, CHEAP_HISTORY, ON)
+    without_latch = calibration.calibration_action(now, just_under, slots, stale, CHEAP_HISTORY, ON)
     assert without_latch is None, "no deadband before a hold has begun"
 
-    with_latch = calibration.calibration_action(now, 96.0, slots, stale, CHEAP_HISTORY, ON, already_holding=True)
+    with_latch = calibration.calibration_action(now, just_under, slots, stale, CHEAP_HISTORY, ON, already_holding=True)
     assert with_latch is not None
     assert with_latch.phase == "holding"
 

@@ -102,34 +102,47 @@ window. `None` means calibration is not running this slot.
 
 ## Success detection
 
-A completed cycle is a contiguous run in `samples` where
-`soc >= calibration_top_soc` lasting at least `calibration_dwell_h`. Read back
-from history; never stored.
+A completed cycle is a contiguous run in `samples` where **both**
+`soc >= hold_soc_bar(cfg)` **and** `state == FORCING`, lasting at least
+`calibration_dwell_h`. Read back from history; never stored.
 
-Consequences, all intended:
+Both halves are load-bearing. An earlier revision of this spec asserted that
+"whether charging was *permitted* during the run is not reconstructible from
+`samples` and is not checked — the outcome is what matters". That was wrong
+on both counts: `samples.state` records it exactly, and the outcome is not
+what matters, because a high SoC reached passively is not the same physical
+event as a commanded hold. Shipping the SoC-only rule made the policy
+self-suppressing, verified on 42 days of lab history (2026-08-06):
+
+- 19 runs cleared the SoC bar for ≥1 h. **All 19 were `state=passive` with
+  `setpoint_w=0.0`** — sunny-afternoon plateaus where the controller
+  commanded nothing. Sampled across two of them, `batt_w` averaged +237 W and
+  −202 W: the pack was idling and even net-discharging, delivering no taper
+  current and balancing nothing.
+- Gaps between those phantom successes ran 0.6–7.9 days, so `days_since`
+  almost never reached the 5-day interval. The override never fired once.
+- Meanwhile the pack kept stranding ~3.6 kWh at the bottom — on 2026-08-06 it
+  fell 20%→5% in 79 minutes — which is the symptom the policy exists to fix.
+
+With the `state` half in place the run-membership rule is uniform: a
+non-FORCING sample breaks the run exactly as a below-bar one does, since in
+both cases the current stopped and the halves either side are separate
+dwells. A NULL `state` (rows predating the column being populated) is simply
+not FORCING, which is the fail-closed answer.
+
+Remaining consequences, all intended:
 
 - No new table, no `Store`, no schema migration; restart-safe by
   construction. Sample retention is 90 days against a 5-day interval.
-- A pack that sits at full for the dwell during ordinary operation counts as
-  a success. On the last 11 days of lab data the pack reached ≥97% on six of
-  them, so in summer the policy will mostly self-satisfy in this sense. This
-  is free (no charge bought, no hold forced) only while the cycle is NOT yet
-  due. Once due, the hold-through branch (Execution/Safety bounds) forces
-  FORCING and suppresses export the moment the pack is next observed at
-  `calibration_top_soc` regardless of cause — a natural solar-driven full
-  charge that happens to land after the interval elapsed still costs a forced
-  ≤`calibration_dwell_h` hold and the export it displaces, same as a
-  policy-selected window would have.
-- The dwell needs no timer, provided every sample in the run stays at or
-  above `calibration_top_soc`: during the hold the run is not yet `dwell_h`
+- A naturally-full pack no longer counts as a success, so summer no longer
+  suppresses the policy. Once due, the hold-through branch (Execution/Safety
+  bounds) still forces FORCING and suppresses export the moment the pack is
+  next observed at the hold bar regardless of cause — a solar-driven full
+  charge landing after the interval elapsed converts into a forced
+  ≤`calibration_dwell_h` hold, which is the cheap way to satisfy the cycle.
+- The dwell needs no timer: during the hold the run is not yet `dwell_h`
   long, so the state stays `holding`; when it crosses, the same query reports
-  success and calibration goes idle. A single dip below `calibration_top_soc`
-  resets the run — see Known limitations for what happens when the pack
-  wobbles at the bar instead of holding cleanly above it.
-
-The recorded success condition is observable SoC only. Whether charging was
-*permitted* during the run is not reconstructible from `samples` and is not
-checked — the outcome is what matters.
+  success and calibration goes idle.
 
 ## Trigger and window selection
 
@@ -208,8 +221,10 @@ see below.
   failed attempt costs at most one window's charge.
 - Up to 2 windows per local day (1 per UTC start-date — see Trigger and
   window selection).
-- `calibration_top_soc` defaults to 97, below the observed 99% stall, so the
-  dwell is reachable. If the pack never reaches it at all, the attempt lapses
+- `calibration_top_soc` defaults to 100 (the firmware cap) but is the *charge
+  target* only; the reachability question is about `hold_soc_bar(cfg)` =
+  target − `CALIBRATION_HOLD_TOLERANCE` = 98, which the pack cleared on 23 of
+  43 observed days. If the pack never reaches the bar, the attempt lapses
   cleanly at window end and retries at the next cheap-enough day. If the pack
   reaches it but wobbles at the bar, the hold latch can keep renewing the
   hold without the dwell ever completing — not bounded by window end; see
@@ -233,28 +248,36 @@ evening peak, whatever that costs that day. Accepted, user-confirmed
 behaviour for this wave; see Success detection for the self-satisfying case's
 real cost.
 
-**`calibration_top_soc: 100` is an unbounded-daily-charge hazard, in two
-distinct ways.** The config schema permits it, and this pack reaches ≥97% on
-only ~2 of the last 11 lab days but almost never a true 100% (inverter/BMS
-stall observed at 99%).
+**Why the charge target and the hold/success bar are two numbers.** Collapsing
+them reintroduces one of two failure modes, and which one depends purely on
+the value chosen — there is no single number that avoids both:
 
-1. *Never reaches the bar.* Past `interval_days + CALIBRATION_GRACE_DAYS`,
-   `force` is set and `select_window` accepts each day's cheapest window
-   unconditionally. If the pack can never reach `calibration_top_soc`,
-   `last_success_end` never returns, `days_since` never resets, and the
-   policy buys one full ≥2h forced-import window every day indefinitely — no
-   escalation, no log.
-2. *Reaches the bar but wobbles at it.* The hold latch softens the RE-ENTRY
-   bar to `calibration_top_soc - 1` once already holding, so the hold
-   survives a one-point dip — but success detection still requires an
-   unbroken run at or above `calibration_top_soc` for the full
-   `calibration_dwell_h` (see Known limitations). A pack oscillating at the
-   bar sustains `holding` — `FORCING`, export suppressed — without ever
-   completing the dwell: the same daily-hazard shape as (1), but as a
-   standing hold rather than a lapsed attempt.
+- *Too low (the shipped-98 case).* Measured on the pack 2026-07-30, charge
+  current was still −3.9 kW at 98% and −5.1 kW at 99%, dropping to −540 W only
+  at the very top before cutting out at 100%. 98% is therefore still bulk
+  charge; the taper — the region where cells reach balancing voltage — is
+  99→100. A target of 98 ends the cycle before any balancing can occur, which
+  is why "successful" cycles kept leaving ~3.6 kWh stranded at the bottom.
+- *Too high (a bare 100).* Past `interval_days + CALIBRATION_GRACE_DAYS`,
+  `force` is set and `select_window` accepts each day's cheapest window
+  unconditionally. The reported SoC routinely plateaus short of the cap — 13
+  of 43 observed days topped out at exactly 99%, against only 6 reaching 100
+  — so a bar at exactly 100 would leave `last_success_end` never returning,
+  `days_since` never resetting, and the policy buying one full forced-import
+  window every day indefinitely, with no escalation and no log. Gating on an
+  exact reading from the SoC estimator is also circular: the pack that most
+  needs balancing is precisely the one whose estimate will not reach 100.
 
-Keep `calibration_top_soc` at or below the level the pack has been observed
-to actually reach AND hold without wobbling.
+So `calibration_top_soc` is the charge target and sits at the 100 firmware
+cap, while `hold_soc_bar(cfg)` = target − `CALIBRATION_HOLD_TOLERANCE` (2.0)
+is what hold-through entry, `_open_run_start` and `last_success_end` all
+test. The span between them is the taper the dwell exists to sit in.
+
+A residual form of the second hazard survives: if the pack cannot reach the
+*bar* either (plausible in winter, when solar cannot carry it there and the
+forced charge must do all the work), the daily-window loop returns. Raise
+`calibration_interval_days` in winter, and watch `calibration_days_since`
+climbing without bound as the signal.
 
 **Fail-closed on missing data.** Empty or short SoC history (fresh install)
 means idle, not "never calibrated, charge now". An empty price history
@@ -267,31 +290,37 @@ have bought anyway, less what comes back.
 
 ## Known limitations
 
-The hold latch (`already_holding`, Module interface) softens the *entry*
-bar, not the *success* bar. `calibration_action` re-enters `holding` at
-`calibration_top_soc - 1` once already holding, but `last_success_end` — the
-function that decides a dwell completed — still requires every sample in
-the run to be at or above `calibration_top_soc`, unsoftened. Under sustained
-wobble exactly at the bar, the latch keeps renewing the hold but the
-underlying run keeps resetting, so the dwell can fail to complete: `FORCING`
-stays engaged and export stays suppressed with no time bound (see the
-second `calibration_top_soc: 100` hazard, above).
+**The latch softening is still not applied to success detection.** Success
+detection and hold entry now share `hold_soc_bar(cfg)`, so the two are no
+longer 2 points apart — but `calibration_action` re-enters `holding` at
+`hold_soc_bar - 1` once already holding, and `last_success_end` does not
+soften by that extra point. A pack oscillating exactly across the bar
+(98↔97) therefore sustains `holding` while the underlying run keeps
+resetting: `FORCING` stays engaged and export stays suppressed with no time
+bound. Much less likely than before — the bar now sits 1–2 points below where
+the pack actually plateaus rather than on top of it — but not structurally
+excluded.
 
-Two candidate structural fixes, deliberately not taken this wave:
+Two candidate structural fixes, still deliberately not taken:
 
-- Give success detection (`last_success_end`) the same softened bar the
-  latch gives re-entry.
+- Give success detection the same softened bar the latch gives re-entry.
 - Latch on elapsed wall-clock time since the run's real start rather than on
   SoC.
 
 Deferred until the first live cycle shows whether sustained wobble actually
-occurs.
+occurs. The same tick also reports `calibration_window_start` as `now`
+rather than the run's real start, because `_open_run_start` tests at the
+unsoftened bar too.
 
-Also: on a latched tick, the reported `calibration_window_start` falls back
-to `now` rather than the run's real start, because `_open_run_start` (the
-run-start helper) also tests strictly at `calibration_top_soc` — a
-wobble-sustained hold whose most recent sample sits at `top_soc - 1` reports
-no open run at all.
+**Whether a commanded hold at the top actually passes current is unverified.**
+The policy has never completed a real forced dwell, so there is no
+observation of `FORCING` at ≥98% SoC. The one full charge on record
+(2026-07-30, driven by the Anker app rather than this controller) shows the
+inverter cutting charge dead at 100% and the pack drifting back down at
++270 W. If a commanded hold behaves the same way, the dwell is a rest at
+open circuit and delivers no balancing regardless of these knobs — that would
+be a firmware/actuation problem, not a policy one. Check `batt_w` during the
+first live `holding` phase before trusting the cycle.
 
 ## Configuration
 
@@ -302,15 +331,21 @@ UI options save.
 |---|---|
 | `calibration_enabled` | `True` |
 | `calibration_interval_days` | `5` |
-| `calibration_top_soc` | `98` |
+| `calibration_top_soc` | `100` (charge target — see below) |
 | `calibration_dwell_h` | `1` |
 
 Consts in `const.py`, not user-tunable: `CALIBRATION_PRICE_PERCENTILE = 30`,
-`CALIBRATION_GRACE_DAYS = 7`.
+`CALIBRATION_GRACE_DAYS = 7`, `CALIBRATION_HOLD_TOLERANCE = 2.0`.
 
-The 5-day interval is chosen for summer, where it mostly self-satisfies, and
-to get evidence quickly. In winter it will force a grid charge roughly every
-5 days; raise it in the UI then. If `calibration_interval_days` is ever
+`calibration_top_soc` is the CHARGE TARGET, not the bar anything is compared
+against. Hold entry and success both test `hold_soc_bar(cfg)` = target −
+`CALIBRATION_HOLD_TOLERANCE`. Lowering the target lowers the bar with it, so
+setting it back to 98 restores the pre-fix behaviour of ending the charge
+before the taper.
+
+The 5-day interval no longer self-satisfies in summer, because passive
+plateaus stopped counting: expect a genuine forced cycle every 5 days
+year-round. Raise it in the UI if that is too often. If `calibration_interval_days` is ever
 raised above `retention_days` (90 by default), the never-calibrated fallback
 (history must *span* `calibration_interval_days` to count as overdue) can
 never be satisfied from a cold start — the controller logs this once.

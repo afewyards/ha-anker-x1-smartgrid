@@ -165,7 +165,7 @@ class StubRecorder:
         rows = sorted(self._soc_samples, key=lambda r: r[0])
         if since_iso is None:
             return rows
-        return [(ts, soc) for ts, soc in rows if ts >= since_iso]
+        return [row for row in rows if row[0] >= since_iso]
 
     def read_persons_home_samples(self, since_iso=None):
         return []

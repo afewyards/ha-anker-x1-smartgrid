@@ -18,11 +18,31 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from . import const
-from .models import Config, PriceSlot
+from .models import Config, ControllerState, PriceSlot
 
 # Two adjacent samples further apart than this do not belong to the same run —
 # otherwise an HA outage spanning a high-SoC period fakes a completed dwell.
 MAX_SAMPLE_GAP_MIN: float = 15.0
+
+
+def hold_soc_bar(cfg: Config) -> float:
+    """SoC at/above which the pack counts as "at the top" for hold and success.
+
+    Deliberately BELOW ``calibration_top_soc`` (the charge target) by
+    ``const.CALIBRATION_HOLD_TOLERANCE``. The two must not be the same number:
+    the target has to sit at the firmware cap so the charge is driven through
+    the taper region where the BMS actually balances (measured 2026-07-30:
+    -3.9 kW still flowing at 98%, taper only from 99%, charge cut at 100%),
+    while the bar has to sit below it because the reported SoC frequently
+    plateaus a point or two short — 13 of 43 observed days topped out at
+    exactly 99%. Gating on an exact 100% would strand the dwell on the
+    majority of days and, since ``days_since`` would then never reset, leave
+    the policy permanently past its grace window and force-charging nightly.
+
+    It is also circular to trust an exact reading from the SoC estimator that
+    calibration exists to correct.
+    """
+    return cfg.calibration_top_soc - const.CALIBRATION_HOLD_TOLERANCE
 
 
 @dataclass(frozen=True)
@@ -40,7 +60,7 @@ def _parse(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
 
 
-def history_span_days(soc_samples: list[tuple[str, float]]) -> float:
+def history_span_days(soc_samples: list[tuple[str, float, str | None]]) -> float:
     """Wall-clock days covered by the sample series (0.0 when < 2 rows).
 
     Precondition: ``soc_samples`` is ascending by timestamp, as guaranteed by
@@ -53,18 +73,39 @@ def history_span_days(soc_samples: list[tuple[str, float]]) -> float:
     return (_parse(soc_samples[-1][0]) - _parse(soc_samples[0][0])).total_seconds() / 86400.0
 
 
+def _dwelling(soc: float, state: str | None, hold_soc: float) -> bool:
+    """Is this sample part of a calibration dwell?
+
+    Requires BOTH that the pack is at the top AND that the controller was
+    FORCING — i.e. that we were the ones commanding the charge. Without the
+    state half, any incidental plateau counts: a sunny afternoon parks the
+    pack at the top for hours with the controller passive and 0 W commanded,
+    which delivers no taper current and balances nothing, yet would close the
+    cycle and reset the clock. Measured on the live pack, that made the policy
+    self-suppressing — 19 "successes" over 42 days, all passive, so the 5-day
+    interval never once elapsed and the override never fired.
+    """
+    return soc >= hold_soc and state == ControllerState.FORCING
+
+
 def last_success_end(
-    soc_samples: list[tuple[str, float]],
+    soc_samples: list[tuple[str, float, str | None]],
     *,
-    top_soc: float,
+    hold_soc: float,
     dwell_h: float,
 ) -> datetime | None:
     """End timestamp of the most recent completed calibration dwell.
 
-    A dwell is a maximal block of consecutive samples at/above ``top_soc``
-    with no adjacent gap over ``MAX_SAMPLE_GAP_MIN``, spanning at least
-    ``dwell_h``.  Returns the block's LAST timestamp, so an in-progress hold
-    keeps the clock at ~now and the policy goes idle as soon as it qualifies.
+    A dwell is a maximal block of consecutive samples that are at/above
+    ``hold_soc`` AND were recorded while the controller was FORCING (see
+    ``_dwelling``), with no adjacent gap over ``MAX_SAMPLE_GAP_MIN``, spanning
+    at least ``dwell_h``.  Returns the block's LAST timestamp, so an
+    in-progress hold keeps the clock at ~now and the policy goes idle as soon
+    as it qualifies.
+
+    A non-forcing sample breaks the run exactly as a below-``hold_soc`` one
+    does: the current stopped, so the halves either side are separate dwells
+    and may not be summed.
 
     Returns None when no block qualifies — including an empty series.
 
@@ -82,15 +123,16 @@ def last_success_end(
     max_gap = timedelta(minutes=MAX_SAMPLE_GAP_MIN)
     need = timedelta(hours=dwell_h)
 
-    for ts_s, soc in soc_samples:
+    for ts_s, soc, state in soc_samples:
         ts = _parse(ts_s)
-        if soc >= top_soc and run_end is not None and ts - run_end <= max_gap:
+        holding = _dwelling(soc, state, hold_soc)
+        if holding and run_end is not None and ts - run_end <= max_gap:
             run_end = ts
             continue
         # Close the open run (if any) before starting a new one.
         if run_start is not None and run_end is not None and run_end - run_start >= need:
             best = run_end
-        if soc >= top_soc:
+        if holding:
             run_start, run_end = ts, ts
         else:
             run_start, run_end = None, None
@@ -100,25 +142,26 @@ def last_success_end(
     return best
 
 
-def _open_run_start(soc_samples: list[tuple[str, float]], *, top_soc: float) -> datetime | None:
-    """Start of the run of samples at/above ``top_soc`` still open at the end
-    of ``soc_samples`` (i.e. containing the LAST row), or None if the last
-    row doesn't qualify (including an empty series).
+def _open_run_start(soc_samples: list[tuple[str, float, str | None]], *, hold_soc: float) -> datetime | None:
+    """Start of the dwell run still open at the end of ``soc_samples`` (i.e.
+    containing the LAST row), or None if the last row doesn't qualify
+    (including an empty series).
 
-    Same gap tolerance as ``last_success_end`` but reports the start of the
-    trailing run regardless of whether it has reached ``dwell_h`` yet -- used
-    only to report an in-progress hold's real start (F4), never for success
-    detection.
+    Same membership rule (``_dwelling``) and gap tolerance as
+    ``last_success_end`` but reports the start of the trailing run regardless
+    of whether it has reached ``dwell_h`` yet -- used only to report an
+    in-progress hold's real start (F4), never for success detection.
     """
     run_start: datetime | None = None
     run_end: datetime | None = None
     max_gap = timedelta(minutes=MAX_SAMPLE_GAP_MIN)
-    for ts_s, soc in soc_samples:
+    for ts_s, soc, state in soc_samples:
         ts = _parse(ts_s)
-        if soc >= top_soc and run_end is not None and ts - run_end <= max_gap:
+        holding = _dwelling(soc, state, hold_soc)
+        if holding and run_end is not None and ts - run_end <= max_gap:
             run_end = ts
             continue
-        if soc >= top_soc:
+        if holding:
             run_start, run_end = ts, ts
         else:
             run_start, run_end = None, None
@@ -270,7 +313,7 @@ def calibration_action(
     now: datetime,
     soc_pct: float,
     slots: list,
-    soc_samples: list[tuple[str, float]],
+    soc_samples: list[tuple[str, float, str | None]],
     price_history: dict[str, dict[str, float]],
     cfg,
     *,
@@ -282,7 +325,7 @@ def calibration_action(
     "never calibrated, charge now".
 
     ``already_holding`` -- true iff the PREVIOUS tick's action was already
-    "holding". Softens the top_soc re-entry bar by 1 point (F1) so SoC
+    "holding". Softens the hold re-entry bar by 1 point (F1) so SoC
     quantisation/load-spike noise at the boundary (97 -> 96 -> 97) cannot
     toggle holding/charging/idle every tick and churn the inverter mode. This
     module is pure and keeps no state of its own, so the caller must supply
@@ -291,7 +334,8 @@ def calibration_action(
     if not cfg.calibration_enabled:
         return None
 
-    last = last_success_end(soc_samples, top_soc=cfg.calibration_top_soc, dwell_h=cfg.calibration_dwell_h)
+    hold_soc = hold_soc_bar(cfg)
+    last = last_success_end(soc_samples, hold_soc=hold_soc, dwell_h=cfg.calibration_dwell_h)
     span = history_span_days(soc_samples)
     days_since = compute_days_since(last, span, now, cfg)
     if days_since is None or days_since < cfg.calibration_interval_days:
@@ -305,9 +349,9 @@ def calibration_action(
     # verbatim), and a stranded half-dwell buys the charge without the
     # balancing it was for.  Ends by itself: the moment the run reaches
     # dwell_h, last_success_end returns and days_since drops to ~0.
-    hold_bar = cfg.calibration_top_soc - 1.0 if already_holding else cfg.calibration_top_soc
+    hold_bar = hold_soc - 1.0 if already_holding else hold_soc
     if soc_pct >= hold_bar:
-        run_start = _open_run_start(soc_samples, top_soc=cfg.calibration_top_soc) or now
+        run_start = _open_run_start(soc_samples, hold_soc=hold_soc) or now
         return CalibAction(
             phase="holding",
             window_start=run_start,
@@ -325,7 +369,7 @@ def calibration_action(
         return None  # accepted a future window; nothing to do yet
 
     # Always "charging": the hold-through branch above already returned
-    # whenever soc_pct >= cfg.calibration_top_soc, and nothing between here
-    # and there mutates soc_pct or cfg (Config is frozen) -- so this point is
-    # only ever reached with soc_pct < cfg.calibration_top_soc.
+    # whenever soc_pct >= hold_soc, and nothing between here and there mutates
+    # soc_pct or cfg (Config is frozen) -- so this point is only ever reached
+    # with soc_pct < hold_soc, i.e. genuinely still climbing.
     return CalibAction(phase="charging", window_start=start, window_end=end)

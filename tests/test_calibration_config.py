@@ -9,13 +9,21 @@ def test_defaults_ship_on():
     cfg = Config()
     assert cfg.calibration_enabled is True
     assert cfg.calibration_interval_days == 5
-    assert cfg.calibration_top_soc == 98.0
+    assert cfg.calibration_top_soc == 100.0
     assert cfg.calibration_dwell_h == 1.0
 
 
 def test_tuning_consts():
     assert const.CALIBRATION_PRICE_PERCENTILE == 30.0
     assert const.CALIBRATION_GRACE_DAYS == 7
+    assert const.CALIBRATION_HOLD_TOLERANCE == 2.0
+
+
+def test_top_soc_schema_admits_the_firmware_cap():
+    """The default is the 100% cap, so a validator that stopped short of it
+    would reject the shipped value on the first options save."""
+    validator = next(v for name, _d, v in _TUNABLES if name == const.CONF_CALIBRATION_TOP_SOC)
+    assert validator(100.0) == 100.0
 
 
 def test_all_four_options_are_tunable():

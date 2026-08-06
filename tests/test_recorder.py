@@ -93,23 +93,33 @@ def test_read_persons_home_samples_empty_when_no_data(tmp_path):
 
 def test_read_soc_samples_orders_and_skips_nulls(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0})
-    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0})
-    rec.append({"ts": "2026-08-02T03:00:00+00:00", "soc": None})
+    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0, "state": "forcing"})
+    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0, "state": "passive"})
+    rec.append({"ts": "2026-08-02T03:00:00+00:00", "soc": None, "state": "forcing"})
     rows = rec.read_soc_samples()
     assert rows == [
-        ("2026-08-02T01:00:00+00:00", 30.0),
-        ("2026-08-02T02:00:00+00:00", 40.0),
+        ("2026-08-02T01:00:00+00:00", 30.0, "passive"),
+        ("2026-08-02T02:00:00+00:00", 40.0, "forcing"),
     ]
+    rec.close()
+
+
+def test_read_soc_samples_carries_null_state(tmp_path):
+    """A row written before the state column was populated must survive the
+    read as None -- calibration treats "not forcing" as the fail-closed
+    answer, but only if the row arrives at all."""
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0})
+    assert rec.read_soc_samples() == [("2026-08-02T01:00:00+00:00", 30.0, None)]
     rec.close()
 
 
 def test_read_soc_samples_since_filter(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
-    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0})
-    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0})
+    rec.append({"ts": "2026-08-02T01:00:00+00:00", "soc": 30.0, "state": "passive"})
+    rec.append({"ts": "2026-08-02T02:00:00+00:00", "soc": 40.0, "state": "forcing"})
     rows = rec.read_soc_samples("2026-08-02T02:00:00+00:00")
-    assert rows == [("2026-08-02T02:00:00+00:00", 40.0)]
+    assert rows == [("2026-08-02T02:00:00+00:00", 40.0, "forcing")]
     rec.close()
 
 

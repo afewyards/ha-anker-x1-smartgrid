@@ -1913,7 +1913,7 @@ class Controller:
         soc_rows = self._recorder.read_soc_samples(since_iso)
         last_success = calibration.last_success_end(
             soc_rows,
-            top_soc=self.cfg.calibration_top_soc,
+            hold_soc=calibration.hold_soc_bar(self.cfg),
             dwell_h=self.cfg.calibration_dwell_h,
         )
         action = calibration.calibration_action(
