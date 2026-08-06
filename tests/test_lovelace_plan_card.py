@@ -68,15 +68,30 @@ def test_every_horizon_series_filters_estimated_rows():
         assert "!h.estimated" in gen, series["name"]
 
 
-def test_calibration_series_are_attribute_driven_not_horizon_driven():
-    """Calibration is quarantined outside the DP, so no horizon row knows
-    about it. If these ever started reading the horizon it would mean the
-    override had leaked into the plan the DP produces."""
+def test_calibration_series_take_values_from_attributes_not_horizon_fields():
+    """Calibration is quarantined outside the DP, so no horizon row carries
+    it. The band's VALUES must come from the calibration_* attributes; if one
+    ever read an h.<field> value it would mean the override had leaked into
+    the plan the DP produces."""
     cal = [s for s in _card()["card"]["series"] if s["name"].startswith("Calib")]
     assert len(cal) == 2, [s["name"] for s in _card()["card"]["series"]]
     for series in cal:
-        assert "attributes.horizon" not in series["data_generator"], series["name"]
-        assert "calibration_window_start" in series["data_generator"], series["name"]
+        gen = series["data_generator"]
+        assert "calibration_window_start" in gen, series["name"]
+        assert "a.calibration_target_soc" in gen or "a.calibration_hold_soc" in gen, series["name"]
+
+
+def test_calibration_series_span_the_full_horizon_x_array():
+    """They must map the whole (non-estimated) horizon and null out the rows
+    outside the window, NOT emit two points at the window edges. This is a
+    mixed column+line chart: a series whose x-array differs from the others
+    does not render against its own timestamps — the two-point version drew
+    the band stretching past the window to the right edge of the chart."""
+    for series in [s for s in _card()["card"]["series"] if s["name"].startswith("Calib")]:
+        gen = series["data_generator"]
+        assert "attributes.horizon" in gen or "a.horizon" in gen, series["name"]
+        assert ".map(" in gen, series["name"]
+        assert "null" in gen, f"{series['name']} must null out rows outside the window"
 
 
 def test_graph_span_reads_the_filtered_horizon():

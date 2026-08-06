@@ -200,14 +200,21 @@ card:
     # below. "In the band while FORCING" is exactly when the dwell clock runs,
     # so this shows at a glance whether the pack got there and stayed.
     #
-    # Deliberately NOT drawn from horizon rows: calibration is quarantined
-    # OUTSIDE the DP (it is a post-DP controller override), so no horizon row
-    # knows about it and the Projected SoC line is the DP's real projection,
-    # untouched. Two points — window start and end — draw the flat edge without
-    # depending on horizon density or inventing an SoC curve.
+    # These map the FULL horizon and emit null outside the window rather than
+    # emitting two points at the window edges. The values are constants, so the
+    # short form is tempting — but this is a mixed column+line chart, and a
+    # series whose x-array differs from every other series does not reliably
+    # render against its own timestamps: the first attempt used two points and
+    # the lines stretched past the window to the right edge of the chart.
+    # Sharing the horizon's x-array makes them align exactly like every other
+    # series. Keep the filter and the null padding.
     #
-    # Both collapse to [] when the state is idle, so the card looks exactly as
-    # it did before whenever no cycle is pending.
+    # The VALUES still come from the calibration attributes, never from a
+    # horizon field: calibration is quarantined outside the DP, so no horizon
+    # row knows about it and Projected SoC stays the DP's real projection.
+    #
+    # Both go all-null when the state is idle, so nothing is drawn whenever no
+    # cycle is pending.
     - entity: sensor.smartgrid_plan
       name: Calib target
       type: line
@@ -218,8 +225,10 @@ card:
         legend_value: false
       data_generator: |
         const a = entity.attributes; const v = a.calibration_target_soc;
-        if (!a.calibration_window_start || a.calibration_state === 'idle' || v == null) return [];
-        return [[new Date(a.calibration_window_start).getTime(), v], [new Date(a.calibration_window_end).getTime(), v]];
+        const on = a.calibration_state !== 'idle' && a.calibration_window_start && v != null;
+        const s = on ? new Date(a.calibration_window_start).getTime() : 0;
+        const e = on ? new Date(a.calibration_window_end).getTime() : 0;
+        return (a.horizon || []).filter(h => !h.estimated).map(h => { const t = new Date(h.start).getTime(); return [t, (on && t >= s && t <= e) ? v : null]; });
     - entity: sensor.smartgrid_plan
       name: Calib hold bar
       type: line
@@ -230,8 +239,10 @@ card:
         legend_value: false
       data_generator: |
         const a = entity.attributes; const v = a.calibration_hold_soc;
-        if (!a.calibration_window_start || a.calibration_state === 'idle' || v == null) return [];
-        return [[new Date(a.calibration_window_start).getTime(), v], [new Date(a.calibration_window_end).getTime(), v]];
+        const on = a.calibration_state !== 'idle' && a.calibration_window_start && v != null;
+        const s = on ? new Date(a.calibration_window_start).getTime() : 0;
+        const e = on ? new Date(a.calibration_window_end).getTime() : 0;
+        return (a.horizon || []).filter(h => !h.estimated).map(h => { const t = new Date(h.start).getTime(); return [t, (on && t >= s && t <= e) ? v : null]; });
   apex_config:
     chart:
       height: 380
