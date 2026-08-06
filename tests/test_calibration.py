@@ -226,6 +226,85 @@ def test_insufficient_total_slots_returns_none():
     assert calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.10, force=True) is None
 
 
+# --- Window placement against the projected SoC trajectory -------------------
+#
+# Live lab 2026-08-06: pack at 5%, cheap block 12:00-15:00 at 0.127 EUR/kWh,
+# and the DP's own plan riding solar to 99.3% at 16:15 for free. Sizing every
+# candidate from the LIVE SoC and ranking by MEAN PRICE picked the cheap block,
+# which force-bought 8.56 kWh (~1.10 EUR) at 12:15 and left 5.32 kWh of planned
+# solar with nowhere to go. The same cycle at the natural top needs 0.15 kWh.
+
+
+def _forecast(start, socs, minutes=60):
+    return [(start + timedelta(minutes=minutes * i), s) for i, s in enumerate(socs)]
+
+
+def test_window_is_sized_from_projected_soc_at_its_own_start():
+    """A candidate starting hours out must be sized from the SoC it will have
+    THEN, not the SoC now. Live soc 50 needs ~2.85 h (0.85 charge + 2 dwell);
+    at the projected 96.5 it needs ~2.01 h."""
+    slots = _slots(BASE, [0.30] * 8)
+    fc = _forecast(BASE, [50.0, 60.0, 75.0, 88.0, 96.5, 96.5, 96.5, 96.5])
+    win = calibration.select_window(
+        BASE + timedelta(hours=4), 50.0, slots, cfg=CFG, bar=0.40, force=False, soc_forecast=fc
+    )
+    assert win is not None
+    # 2.01 h of need is covered by slots 4 and 5 plus a sliver of 6 -> 3 slots.
+    assert win == (BASE + timedelta(hours=4), BASE + timedelta(hours=7))
+
+
+def test_ranks_windows_by_total_grid_cost_not_mean_price():
+    """The cheap block is cheaper per kWh but needs 9.4 kWh from the grid; the
+    expensive window at the solar top needs 0.1 kWh. 9.4*0.10=0.94 EUR beats
+    0.1*0.30=0.03 EUR only if you rank by price instead of by cost."""
+    slots = _slots(BASE, [0.10, 0.10, 0.10, 0.10, 0.30, 0.30, 0.30])
+    fc = _forecast(BASE, [50.0, 60.0, 75.0, 88.0, 96.5, 96.5, 96.5])
+    win = calibration.select_window(BASE, 50.0, slots, cfg=CFG, bar=0.40, force=False, soc_forecast=fc)
+    assert win is not None
+    assert win[0] == BASE + timedelta(hours=4), "cheap-per-kWh block won on price despite costing 30x more"
+
+
+def test_cheap_block_still_wins_when_solar_will_not_reach_the_top():
+    """The cost ranking must not become 'always calibrate late'. With the pack
+    projected to stay at 50%, the late window needs the same 9.4 kWh as the
+    early one, so the cheap block is genuinely cheaper and must win."""
+    slots = _slots(BASE, [0.10, 0.10, 0.10, 0.10, 0.30, 0.30, 0.30])
+    fc = _forecast(BASE, [50.0] * 7)
+    win = calibration.select_window(BASE, 50.0, slots, cfg=CFG, bar=0.40, force=False, soc_forecast=fc)
+    assert win is not None
+    assert win[0] == BASE
+
+
+def test_absent_forecast_falls_back_to_live_soc():
+    """No plan horizon (startup, DP failure) must leave placement exactly as it
+    was rather than silently sizing every candidate as a free top-up."""
+    slots = _slots(BASE, [0.50, 0.05, 0.05, 0.05, 0.01, 0.01, 0.01, 0.50])
+    assert calibration.select_window(
+        BASE, 87.0, slots, cfg=CFG, bar=0.30, force=False, soc_forecast=None
+    ) == calibration.select_window(BASE, 87.0, slots, cfg=CFG, bar=0.30, force=False)
+
+
+def test_forecast_before_its_first_row_falls_back_to_live_soc():
+    """A candidate starting before the horizon begins has no projection to read;
+    it must fall back to live SoC rather than borrow the first row's value."""
+    fc = _forecast(BASE + timedelta(hours=3), [96.5, 96.5, 96.5])
+    assert calibration._soc_at(BASE, 42.0, fc) == 42.0
+    assert calibration._soc_at(BASE + timedelta(hours=3), 42.0, fc) == 96.5
+    assert calibration._soc_at(BASE + timedelta(hours=9), 42.0, fc) == 96.5
+
+
+def test_near_full_window_bypasses_the_price_bar():
+    """The bar exists to stop calibrating at expensive times. A window needing
+    almost no grid energy has no expensive time to speak of -- rejecting it on
+    price alone would leave the cycle waiting for the deadline `force`."""
+    slots = _slots(BASE, [0.10, 0.10, 0.10, 0.10, 0.30, 0.30, 0.30])
+    fc = _forecast(BASE, [50.0, 60.0, 75.0, 88.0, 96.5, 96.5, 96.5])
+    # bar below every price in the late window; the 0.1 kWh need must carry it.
+    win = calibration.select_window(BASE, 50.0, slots, cfg=CFG, bar=0.12, force=False, soc_forecast=fc)
+    assert win is not None
+    assert win[0] == BASE + timedelta(hours=4)
+
+
 from custom_components.anker_x1_smartgrid import const
 
 ON = Config(
@@ -459,12 +538,18 @@ def test_already_holding_softens_reentry_bar_by_one_point():
     soc_pct must NOT hold (entry is at the target, no deadband before a hold
     has begun)."""
     now = BASE
-    slots = _slots(now, [0.90] * 6)  # too expensive; force is also False below
+    slots = _slots(now, [0.90] * 6)
     stale = _stale_history(now, 6)  # due (>=5), not yet forced (<12)
     just_under = calibration.continue_soc(ON)
 
+    # Asserted on PHASE, not on None. One point below the top the window needs
+    # 0.2 kWh, so select_window's near-full rule bypasses the price bar and a
+    # window is (correctly) accepted however expensive the slots are. What must
+    # still hold is that the phase is "charging" -- the pack is below the target
+    # and the dwell has not begun, so there is no deadband to soften yet.
     without_latch = calibration.calibration_action(now, just_under, slots, stale, CHEAP_HISTORY, ON)
-    assert without_latch is None, "no deadband before a hold has begun"
+    assert without_latch is not None
+    assert without_latch.phase == "charging", "no deadband before a hold has begun"
 
     with_latch = calibration.calibration_action(now, just_under, slots, stale, CHEAP_HISTORY, ON, already_holding=True)
     assert with_latch is not None

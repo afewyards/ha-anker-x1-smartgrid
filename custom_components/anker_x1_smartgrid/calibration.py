@@ -246,13 +246,43 @@ def price_percentile(price_history: dict[str, dict[str, float]], pct: float) -> 
     return values[lo] + (values[hi] - values[lo]) * (pos - lo)
 
 
+def _charge_kwh(soc_pct: float, cfg: Config) -> float:
+    """Grid energy needed to lift SoC from ``soc_pct`` to the calibration top."""
+    return max(0.0, (cfg.calibration_top_soc - soc_pct) / 100.0 * cfg.capacity_kwh)
+
+
 def _charge_h(soc_pct: float, cfg: Config) -> float:
     """Hours to lift SoC from ``soc_pct`` to the calibration top, at max rate."""
-    gap_kwh = max(0.0, (cfg.calibration_top_soc - soc_pct) / 100.0 * cfg.capacity_kwh)
     rate_kw = cfg.max_charge_w / 1000.0 * cfg.eta_charge_safe()
     if rate_kw <= 0.0:
         return 0.0
-    return gap_kwh / rate_kw
+    return _charge_kwh(soc_pct, cfg) / rate_kw
+
+
+def _soc_at(
+    when: datetime,
+    live_soc: float,
+    soc_forecast: list[tuple[datetime, float]] | None,
+) -> float:
+    """Projected SoC at ``when`` from the DP's own plan horizon.
+
+    Falls back to ``live_soc`` when there is no projection covering ``when`` —
+    an absent horizon (startup, a failed DP run) or a candidate starting before
+    the horizon does. Borrowing the first row's value instead would read a
+    future solar peak back onto the present and size the window as a free
+    top-up that the pack cannot actually do.
+
+    Precondition: ``soc_forecast`` is ascending by timestamp (as built from
+    ``plan.build_plan_horizon``, which emits slots in order).
+    """
+    if not soc_forecast:
+        return live_soc
+    found = live_soc
+    for ts, soc in soc_forecast:
+        if ts > when:
+            break
+        found = soc
+    return found
 
 
 # Tolerance for treating two chronologically-adjacent slots as truly
@@ -282,16 +312,31 @@ def select_window(
     cfg: Config,
     bar: float | None,
     force: bool,
+    soc_forecast: list[tuple[datetime, float]] | None = None,
 ) -> tuple[datetime, datetime] | None:
-    """Cheapest acceptable contiguous window, or None.
+    """Least-cost acceptable contiguous window, or None.
 
-    Deterministic in (now, slots, soc, cfg, bar, force): published prices do
-    not change within a day, so re-running each tick yields the same answer
-    and no commitment needs storing.
+    Two things make "least cost" different from "cheapest per kWh":
+
+    Each candidate is sized from the SoC the pack is PROJECTED to have when
+    that candidate starts, not the SoC it has now. Sizing every candidate from
+    the live SoC costs a window opening at the solar peak as though it still
+    had to charge from this morning's empty pack.
+
+    Candidates are then ranked by what they actually cost -- grid kWh times
+    mean price -- not by mean price alone. Live lab 2026-08-06: a 0.127 EUR/kWh
+    midday block needing 8.56 kWh (1.10 EUR, and 5.32 kWh of planned solar
+    displaced with nowhere to go) beat a 0.24 EUR/kWh window at the natural
+    solar top needing 0.15 kWh (0.04 EUR). Ranking on price alone cannot see
+    that the expensive window is 30x cheaper, because the whole point is that
+    solar has already done the climb for free.
+
+    Deterministic in (now, slots, soc, cfg, bar, force, soc_forecast):
+    published prices do not change within a day, so re-running each tick yields
+    the same answer and no commitment needs storing.
     """
     if not slots:
         return None
-    need_min = (_charge_h(soc_pct, cfg) + cfg.calibration_dwell_h) * 60.0
     ordered = sorted(slots, key=lambda s: s.start)
 
     # Build candidates: variable-length runs of REAL, chronologically-adjacent
@@ -301,8 +346,11 @@ def select_window(
     # spanning it (see _CONTIGUITY_TOLERANCE above): the price curve can mix
     # cadences (e.g. hourly slots followed by 15-min slots, or a genuine
     # missing-data hole), and neither may be papered over with arithmetic.
-    candidates: list[tuple[float, datetime, datetime]] = []
+    candidates: list[tuple[float, float, float, datetime, datetime]] = []
     for i in range(len(ordered)):
+        # Sized per candidate, from the SoC projected at ITS OWN start.
+        need_kwh = _charge_kwh(_soc_at(ordered[i].start, soc_pct, soc_forecast), cfg)
+        need_min = (_charge_h(_soc_at(ordered[i].start, soc_pct, soc_forecast), cfg) + cfg.calibration_dwell_h) * 60.0
         acc_min = 0.0
         weighted_price = 0.0
         prev_end: datetime | None = None
@@ -323,7 +371,7 @@ def select_window(
         if end <= now:
             continue
         mean_price = weighted_price / acc_min
-        candidates.append((mean_price, start, end))
+        candidates.append((need_kwh * mean_price, mean_price, need_kwh, start, end))
     if not candidates:
         return None
 
@@ -331,9 +379,11 @@ def select_window(
     # is UTC-normalised by parsers.py, and this module never threads a timezone
     # in, so the boundary is 00:00 UTC (02:00 local in CEST), not local
     # midnight: up to 2 attempts per local day, not 1.
-    per_day: dict[object, tuple[float, datetime, datetime]] = {}
+    per_day: dict[object, tuple[float, float, float, datetime, datetime]] = {}
     for cand in candidates:
-        key = cand[1].date()
+        key = cand[3].date()
+        # Strict `<` keeps the EARLIEST of equally-costed candidates, which is
+        # what a pack already at the top produces (every need_kwh is 0.0).
         if key not in per_day or cand[0] < per_day[key][0]:
             per_day[key] = cand
 
@@ -343,8 +393,13 @@ def select_window(
     # qualified — the "never abandon a started window" rule, expressed without
     # storing any commitment.
     for key in sorted(per_day):
-        mean_price, start, end = per_day[key]
-        if force or (bar is not None and mean_price <= bar):
+        mean_price, need_kwh, start, end = per_day[key][1:]
+        # The bar exists to stop calibrating at an expensive TIME. A window that
+        # barely needs the grid has no expensive time to speak of, and gating it
+        # on price would strand the cycle at exactly the placement the cost
+        # ranking just picked as best — waiting out the grace period only to
+        # deadline-force a worse one.
+        if force or need_kwh <= const.CALIBRATION_FREE_TOPUP_KWH or (bar is not None and mean_price <= bar):
             return (start, end)
     return None
 
@@ -358,6 +413,7 @@ def calibration_plan(
     cfg,
     *,
     already_holding: bool = False,
+    soc_forecast: list[tuple[datetime, float]] | None = None,
 ) -> CalibPlan:
     """The cycle's full state this tick, including a window that has been
     accepted but has not started yet (``scheduled``).
@@ -370,6 +426,11 @@ def calibration_plan(
     quantisation/load-spike noise at the boundary cannot toggle
     holding/charging/idle every tick and churn the inverter mode. This module
     is pure and keeps no state of its own, so the caller must supply it.
+
+    ``soc_forecast`` -- (slot start, projected SoC) from the DP's own plan
+    horizon, ascending. Placement only; the DP never sees calibration back, so
+    the quarantine still holds in the direction that matters. Absent, window
+    sizing falls back to the live SoC (see ``_soc_at``).
 
     ``scheduled`` exists ONLY so the plan sensor and card can draw the coming
     window; ``CalibPlan.action`` withholds it from actuation. Callers deciding
@@ -409,7 +470,7 @@ def calibration_plan(
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
     bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)
-    win = select_window(now, soc_pct, slots, cfg=cfg, bar=bar, force=force)
+    win = select_window(now, soc_pct, slots, cfg=cfg, bar=bar, force=force, soc_forecast=soc_forecast)
     if win is None:
         return _IDLE
 
@@ -435,6 +496,7 @@ def calibration_action(
     cfg,
     *,
     already_holding: bool = False,
+    soc_forecast: list[tuple[datetime, float]] | None = None,
 ) -> CalibAction | None:
     """Whether a calibration cycle is ACTUATING in the slot containing ``now``.
 
@@ -443,5 +505,12 @@ def calibration_action(
     single-source-of-truth reason ``compute_days_since`` is shared (F3).
     """
     return calibration_plan(
-        now, soc_pct, slots, soc_samples, price_history, cfg, already_holding=already_holding
+        now,
+        soc_pct,
+        slots,
+        soc_samples,
+        price_history,
+        cfg,
+        already_holding=already_holding,
+        soc_forecast=soc_forecast,
     ).action

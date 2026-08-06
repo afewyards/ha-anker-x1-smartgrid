@@ -1687,6 +1687,18 @@ class Controller:
             try:
                 _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
                 _price_hist = self._price_store.history if self._price_store is not None else {}
+                # Window PLACEMENT reads the DP's own projected SoC so a window
+                # at the solar top is not costed as though it still had to
+                # charge from this morning's empty pack. One-directional: the
+                # DP never sees calibration back. Estimated rows are excluded —
+                # that tail is display-only synthesis, and sizing a real charge
+                # against a fabricated SoC would place tomorrow's window on
+                # numbers no optimiser produced.
+                _cal_soc_fc: list[tuple[datetime, float]] = [
+                    (datetime.fromisoformat(e["start"]), float(e["soc"]))
+                    for e in horizon
+                    if not e.get("estimated") and e.get("soc") is not None
+                ]
                 (
                     self._calibration_last_success,
                     self._calibration_plan,
@@ -1699,6 +1711,7 @@ class Controller:
                     slots,
                     _price_hist,
                     _calibration_was_holding,
+                    _cal_soc_fc,
                 )
                 # Narrowing: `scheduled` and `idle` yield None, so nothing
                 # below can actuate on a window that has not started.
@@ -1948,6 +1961,7 @@ class Controller:
         slots: list[PriceSlot],
         price_history: dict,
         already_holding: bool,
+        soc_forecast: list[tuple[datetime, float]] | None = None,
     ) -> tuple[datetime | None, calibration.CalibPlan, float]:
         """Synchronous: recorder read + calibration policy evaluation, together.
 
@@ -1967,7 +1981,14 @@ class Controller:
             dwell_h=self.cfg.calibration_dwell_h,
         )
         plan = calibration.calibration_plan(
-            now, soc_pct, slots, soc_rows, price_history, self.cfg, already_holding=already_holding
+            now,
+            soc_pct,
+            slots,
+            soc_rows,
+            price_history,
+            self.cfg,
+            already_holding=already_holding,
+            soc_forecast=soc_forecast,
         )
         return last_success, plan, calibration.history_span_days(soc_rows)
 

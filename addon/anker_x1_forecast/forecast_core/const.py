@@ -150,6 +150,11 @@ CALIBRATION_HOLD_TOLERANCE = 1.0
 CALIBRATION_PRICE_PERCENTILE = 30.0
 # Past interval + grace days, take the cheapest visible window regardless.
 CALIBRATION_GRACE_DAYS = 7
+# Grid energy at or below which a window's PRICE stops mattering: the pack is
+# already at the top on solar and the cycle is only paying for the last sliver
+# plus the hold. Worst case at a 0.40 EUR/kWh peak that is 0.40 EUR every
+# calibration_interval_days. Above it, the price bar applies as before.
+CALIBRATION_FREE_TOPUP_KWH = 1.0
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
