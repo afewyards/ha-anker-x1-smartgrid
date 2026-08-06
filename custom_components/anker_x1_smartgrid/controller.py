@@ -367,6 +367,10 @@ class Controller:
         # F5: log once (ever, per instance) if retention_days makes the
         # never-calibrated fallback permanently unreachable.
         self._calibration_retention_warned: bool = False
+        # Warn once per streak while stuck past interval+grace (where the
+        # price bar is bypassed and a window is bought every day). Re-arms
+        # once a dwell completes and days_since drops back inside the interval.
+        self._calibration_overdue_warned: bool = False
 
     # ── Cash ledger delegating properties (Task C4) ────────────────────────────
     # Preserve the pre-extraction attribute surface (direct get/set, and
@@ -1693,6 +1697,28 @@ class Controller:
                     self._calibration_last_success, _span_days, now, self.cfg
                 )
                 self._calibration_fail_logged = False
+
+                # Past interval+grace `force` is set unconditionally, so the
+                # cheapest window is bought every day regardless of price. That
+                # is correct while converging on a cycle, but a pack that can
+                # never reach calibration_top_soc would sit here indefinitely
+                # with nothing in the log. Warn once, re-arm on success.
+                _overdue_at = self.cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
+                _since = self._calibration_days_since
+                if _since is not None and _since >= _overdue_at:
+                    if not self._calibration_overdue_warned:
+                        self._calibration_overdue_warned = True
+                        _LOGGER.warning(
+                            "Calibration overdue by %.1f days (past interval %d + grace %d): forcing the "
+                            "cheapest window daily with the price bar bypassed. If this persists, the pack "
+                            "is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
+                            _since,
+                            self.cfg.calibration_interval_days,
+                            const.CALIBRATION_GRACE_DAYS,
+                            self.cfg.calibration_top_soc,
+                        )
+                elif _since is not None and _since < self.cfg.calibration_interval_days:
+                    self._calibration_overdue_warned = False
             except Exception:
                 # Fail-closed: never force a charge on a failed read. F2: log
                 # once per failure streak (not every 60s tick), re-arm on the
@@ -1913,7 +1939,8 @@ class Controller:
         soc_rows = self._recorder.read_soc_samples(since_iso)
         last_success = calibration.last_success_end(
             soc_rows,
-            hold_soc=calibration.hold_soc_bar(self.cfg),
+            target_soc=self.cfg.calibration_top_soc,
+            continue_soc=calibration.continue_soc(self.cfg),
             dwell_h=self.cfg.calibration_dwell_h,
         )
         action = calibration.calibration_action(

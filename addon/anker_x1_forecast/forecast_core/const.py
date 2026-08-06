@@ -135,13 +135,16 @@ DEFAULT_CALIBRATION_TOP_SOC = 100.0
 DEFAULT_CALIBRATION_DWELL_H = 1.0
 
 # Tuning consts, deliberately not user-facing.
-# How far BELOW the charge target the hold/success bar sits. Must be > 0: the
-# reported SoC routinely plateaus short of the cap (13 of 43 observed days
-# topped out at exactly 99%), so gating hold-through and success on an exact
-# 100% would strand the dwell on most days and, because days_since would then
-# never reset, leave the policy permanently past grace and force-charging
-# every night. See calibration.hold_soc_bar.
-CALIBRATION_HOLD_TOLERANCE = 2.0
+# CONTINUATION allowance only — never an entry discount. A dwell starts at
+# calibration_top_soc itself and keeps counting while SoC stays within this
+# many points of it. Needed because at a true 100% the inverter cuts charge
+# and the pack self-discharges into house load (+270 W measured 2026-07-30),
+# so a real dwell would otherwise break on drift alone while FORCING is still
+# commanded. Do NOT repurpose this as an entry bar: entering at 98 or 99 buys
+# an hour of bulk charging (-3.9 kW and -5.1 kW respectively on the same run)
+# instead of an hour in the taper, which is the only place cells balance.
+# See calibration.continue_soc.
+CALIBRATION_HOLD_TOLERANCE = 1.0
 # A window is cheap enough when its mean slot price is at or below this
 # percentile of all slot prices in PriceHistoryStore.history.
 CALIBRATION_PRICE_PERCENTILE = 30.0

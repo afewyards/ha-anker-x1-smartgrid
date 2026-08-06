@@ -455,10 +455,10 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     start = BASE - timedelta(days=6)
     ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
 
-    # The wobble has to straddle the HOLD BAR, which sits below the charge
-    # target -- that boundary, not the target, is what the F1 latch guards.
-    at_bar = calibration.hold_soc_bar(ctrl.cfg)
-    dipped = at_bar - 1.0
+    # Entry is at the charge target; the latch guards the drift BELOW it down
+    # to the continuation bar. That is the boundary the wobble must straddle.
+    at_bar = ctrl.cfg.calibration_top_soc
+    dipped = calibration.continue_soc(ctrl.cfg)
 
     now_selected_holder = {"value": False}
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
@@ -534,6 +534,34 @@ async def test_calibration_warns_once_when_retention_makes_it_unreachable(monkey
 
     warnings = [r for r in caplog.records if "retention_days" in r.getMessage()]
     assert len(warnings) == 1, "must warn once, not every tick"
+
+
+@pytest.mark.asyncio
+async def test_calibration_warns_once_when_stuck_past_grace(monkeypatch, caplog):
+    """Past interval+grace the policy takes the cheapest window EVERY day with
+    the price bar bypassed. That is correct while it is converging, but a pack
+    that can never reach the target would sit there indefinitely buying a
+    forced import nightly with nothing in the log. Warn once per streak."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_interval_days=5, retention_days=90)
+
+    # Span past interval + CALIBRATION_GRACE_DAYS (5 + 7 = 12) but INSIDE the
+    # controller's own read window (interval_days * 3 = 15 days) -- a seed
+    # older than that is filtered out before the policy ever sees it, leaving
+    # a 1-row history whose span is 0. Never at the top, so no dwell qualifies.
+    start = BASE - timedelta(days=14)
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    caplog.set_level(logging.WARNING)
+    await ctrl.tick()
+    await ctrl.tick()
+    await ctrl.tick()
+
+    warnings = [r for r in caplog.records if "calibration" in r.getMessage().lower() and "grace" in r.getMessage()]
+    assert len(warnings) == 1, "must warn once per streak, not every tick"
 
 
 @pytest.mark.asyncio

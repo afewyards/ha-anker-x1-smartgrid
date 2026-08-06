@@ -16,7 +16,7 @@ def test_defaults_ship_on():
 def test_tuning_consts():
     assert const.CALIBRATION_PRICE_PERCENTILE == 30.0
     assert const.CALIBRATION_GRACE_DAYS == 7
-    assert const.CALIBRATION_HOLD_TOLERANCE == 2.0
+    assert const.CALIBRATION_HOLD_TOLERANCE == 1.0
 
 
 def test_top_soc_schema_admits_the_firmware_cap():
