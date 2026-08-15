@@ -305,12 +305,22 @@ class RemoteForecastPredictor:
 
     Duck-types ``LoadPredictor.predict`` so it can be passed directly to
     ``build_intervals`` and ``plan.py`` without any changes to those callers.
-    On a map-miss (hour not in the forecast) it transparently returns *fallback_w*,
-    preserving the same safety contract as the profile/bucketed tiers.
+
+    The map only reaches as far as the weather entity's hourly forecast (24 h
+    on the live box) while the DP optimizes the full price horizon (~36 h), so
+    map misses are the norm, not the exception.  A *secondary* predictor — the
+    local hour-of-day tier (HGBR/bucketed/profile) — serves those hours: ML
+    where the ML has coverage, the local model beyond it.  Without a secondary
+    (or when it fails) the miss returns *fallback_w*, the original contract.
     """
 
-    def __init__(self, forecast_map: dict[datetime, tuple[float, float]]) -> None:
+    def __init__(
+        self,
+        forecast_map: dict[datetime, tuple[float, float]],
+        secondary=None,
+    ) -> None:
         self._map = forecast_map
+        self._secondary = secondary
 
     def predict(
         self,
@@ -329,11 +339,12 @@ class RemoteForecastPredictor:
             by hour-truncated UTC datetime, matching how ``build_intervals``
             iterates the PV curve).
         temp:
-            Ambient temperature — accepted for interface compatibility but
-            unused (the add-on has already baked temperature into its
-            predictions).
+            Ambient temperature — unused on a map hit (the add-on has already
+            baked temperature into its predictions), forwarded verbatim to the
+            secondary on a miss (the local tiers are temperature-bucketed).
         fallback_w:
-            Returned as-is when *when* is not present in the forecast map.
+            Last resort when *when* is not in the forecast map AND no secondary
+            predictor can serve it.
         quantile:
             ``> 0.5`` → return ``p80_w`` (upper-bound quantile);
             ``<= 0.5`` → return ``p50_w`` (central forecast for display).
@@ -346,7 +357,31 @@ class RemoteForecastPredictor:
 
         entry = self._map.get(hour_key)
         if entry is None:
-            return fallback_w
+            return self._delegate(when, temp, fallback_w, quantile)
 
         p50_w, p80_w = entry
         return p80_w if quantile > 0.5 else p50_w
+
+    def _delegate(
+        self,
+        when: datetime,
+        temp: float | None,
+        fallback_w: float,
+        quantile: float,
+    ) -> float:
+        """Serve a map-miss hour from the secondary tier; never raise.
+
+        The unrounded *when* is forwarded: the secondary is an hour-of-day
+        model that does its own bucketing, and hour-flooring here would be a
+        silent behaviour change at sub-hourly slot resolutions.  A secondary
+        that raises or returns a non-finite value degrades to *fallback_w* —
+        a NaN reaching ``build_intervals`` would poison the whole DP.
+        """
+        if self._secondary is None:
+            return fallback_w
+        try:
+            value = float(self._secondary.predict(when, temp, fallback_w, quantile=quantile))
+        except Exception:
+            _LOGGER.debug("remote_forecast: secondary predictor failed at %s", when, exc_info=True)
+            return fallback_w
+        return value if math.isfinite(value) else fallback_w

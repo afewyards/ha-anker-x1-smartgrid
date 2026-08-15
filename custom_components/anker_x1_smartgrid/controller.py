@@ -737,9 +737,10 @@ class Controller:
         Four-tier fallback chain:
 
         0. **Remote** (Tier-0) — when ``addon_enabled`` is True and a non-empty
-           forecast map has been fetched this clock-hour, use it and return
-           immediately.  The existing HGBR/bucketed/profile chain is skipped
-           entirely.
+           forecast map has been fetched this clock-hour, the add-on's ML
+           forecast wins.  It does NOT short-circuit the local chain any more
+           (see below): the local tier is fitted first and handed to
+           ``RemoteForecastPredictor`` as its *secondary*.
         1. **HGBR** — tried first when the coverage gate (``is_ready``) and
            quality gate (``should_promote``) both pass.  Falls through on any
            failure so the next tier always gets a chance.
@@ -747,10 +748,31 @@ class Controller:
            rollups (``samples_hourly`` → ``clean_hourly_rows``) instead of
            per-tick W samples; gated on ``DEFAULT_MIN_TRAIN_HOURS``.
         3. **Profile** — rolling profile fallback when all else fails.
+
+        Why the local chain runs even when remote wins
+        ----------------------------------------------
+        The add-on's forecast map reaches only as far as the weather entity's
+        hourly forecast — 24 entries on the live box — while the DP optimizes
+        the FULL price horizon (~36 h).  Tier-0 used to return here, so every
+        hour past the map fell to ``DEFAULT_FALLBACK_LOAD_W``: measured live
+        2026-08-15, 46 of 143 forward real-tariff slots pinned at exactly
+        400.0 W, tomorrow evening included — the hours that size the overnight
+        charge.  Promoting remote had traded a better 24 h forecast for a flat
+        constant beyond it.  Fitting the local tier underneath costs one extra
+        fit per retrain (cadenced at ``retrain_hours``, 24 h live — the same
+        work the bucketed tier did before remote was promoted) and gives the
+        tail a real hour-of-day shape again.
+
+        A local-tier failure is survivable on the remote path (the map still
+        serves the covered hours), so it is logged rather than propagated; on
+        the non-remote path it propagates exactly as before, into ``retrain``'s
+        own catch, which keeps the previous predictor.
+        ``backtest_result`` stays untouched whenever remote wins, so the
+        ml-status sensor's metrics keep their pre-existing meaning.
         """
         # ------------------------------------------------------------------
-        # Coverage counter (observability only) — MUST stay above the Tier-0
-        # early return, otherwise the ETA freezes the moment remote activates.
+        # Coverage counter (observability only) — MUST stay above everything
+        # else, otherwise the ETA freezes the moment remote activates.
         # ------------------------------------------------------------------
         if self._recorder is not None:
             try:
@@ -758,14 +780,38 @@ class Controller:
             except Exception:
                 self.coverage_lag_complete_days = None
 
+        remote_map = self._remote_forecast_map if self.cfg.addon_enabled else None
+        prev_backtest = self.backtest_result
+        local_ok = True
+        try:
+            self._retrain_local_sync(since_iso)
+        except Exception:
+            if not remote_map:
+                raise
+            local_ok = False
+            _LOGGER.warning(
+                "local predictor tier failed; the remote tail falls back to a flat load",
+                exc_info=True,
+            )
+
         # ------------------------------------------------------------------
         # Tier 0: Remote ML add-on (when add-on is enabled + map available)
         # ------------------------------------------------------------------
-        if self.cfg.addon_enabled and self._remote_forecast_map:
-            self.predictor = RemoteForecastPredictor(self._remote_forecast_map)
+        if remote_map:
+            # secondary=None on a local-tier failure: self.predictor is then the
+            # PREVIOUS tick's predictor, which may itself be a
+            # RemoteForecastPredictor holding a stale map — never nest one.
+            self.predictor = RemoteForecastPredictor(
+                remote_map,
+                secondary=self.predictor if local_ok else None,
+            )
             self.active_model_name = "remote"
-            return
+            self.backtest_result = prev_backtest
 
+    def _retrain_local_sync(self, since_iso: str) -> None:
+        """Tiers 1-3 (HGBR → bucketed → profile).  Sets ``predictor``,
+        ``active_model_name`` and ``backtest_result``; may raise (see
+        ``_retrain_sync``)."""
         hourly_rows = self._recorder.read_hourly_rows(since_iso=since_iso)
         clean_h = clean_hourly_rows(hourly_rows)
         if self.cfg.use_learned_model:
