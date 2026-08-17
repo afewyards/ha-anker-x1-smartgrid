@@ -211,6 +211,10 @@ class Controller:
             )
         self.plan = PlanState.initial(dt_util.utcnow())
         self.enabled = True
+        # Hard-floor rescue latch (executor.floor_rescue_needed): True while SoC
+        # sits below const.FIRMWARE_SOC_FLOOR. Deliberately NOT persisted — a
+        # restart re-derives it from live SoC on the first tick.
+        self._floor_rescue_active: bool = False
         self.profile: dict = {}
         self._profile_predictor: LoadPredictor = LoadPredictor.from_profile(self.profile)
         self.last_status: dict = {}
@@ -1349,37 +1353,56 @@ class Controller:
                 _LOGGER.debug("remote_forecast: health retry raised unexpectedly", exc_info=True)
 
         if not self.enabled:
-            # Hand control back to the X1 ONCE if we were actively engaged, then stay
-            # hands-off — re-asserting self-consumption every tick would clobber a
-            # user-set manual/modbus mode while disabled.
-            # Derive "was engaged" from PERSISTED state on the first tick after a
-            # (re)start — actuator.engaged is in-memory only and resets to False on
-            # restart, so a crash while exporting/FORCING would otherwise leave the
-            # inverter executing its last VPP command forever. Fire ONE release; on
-            # every later disabled tick fall back to the live actuator flag so we do
-            # not clobber a user-set manual/modbus mode.
-            _was_engaged = self._actuator.engaged or (
-                _first_tick and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
-            )
-            # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
-            await executor.safe_release(
-                self,
-                now,
-                "Actuator release_to_self failed (disabled path)",
-                release=_was_engaged,
-            )
-            # Save the previous plan for state-machine continuity in the shadow compute,
-            # then reset to PASSIVE so no committed slots are carried forward.
-            _prev_plan = self.plan
-            self.plan = PlanState(ControllerState.PASSIVE, now, ())
-            # Persist the disengaged/PASSIVE state: the disabled branch otherwise
-            # never writes the store, so a mid-disable restart would re-derive
-            # "was engaged" from stale persisted export_state and re-release,
-            # clobbering a user-set manual mode. Guarded on _first_tick so we do it
-            # once per (re)start, not every disabled tick.
-            if _first_tick:
-                await self._persist()
             inputs = coordinator.read_plant_inputs(self._hass, self._data)
+            # The hard-floor rescue outranks the master switch: below
+            # const.FIRMWARE_SOC_FLOOR the pack is protected unconditionally.
+            # This branch never reaches run_forcing_and_export, so it actuates
+            # directly. On success we must NOT take the hands-off release below.
+            _disabled_setpoint = 0.0
+            if executor.floor_rescue_needed(self, inputs.soc if inputs is not None else None):
+                _disabled_setpoint = await executor.run_floor_rescue(self, now) or 0.0
+            if _disabled_setpoint != 0.0:
+                # Save the previous plan for shadow-compute continuity, then record
+                # FORCING so a restart mid-rescue still derives "was engaged" from
+                # the store and releases the inverter once SoC has recovered.
+                _prev_plan = self.plan
+                _since = self.plan.state_since if self.plan.state is ControllerState.FORCING else now
+                self.plan = PlanState(ControllerState.FORCING, _since, ())
+                if _prev_plan.state is not ControllerState.FORCING:
+                    await self._persist()
+            else:
+                # Hand control back to the X1 ONCE if we were actively engaged, then stay
+                # hands-off — re-asserting self-consumption every tick would clobber a
+                # user-set manual/modbus mode while disabled.
+                # Derive "was engaged" from PERSISTED state on the first tick after a
+                # (re)start — actuator.engaged is in-memory only and resets to False on
+                # restart, so a crash while exporting/FORCING would otherwise leave the
+                # inverter executing its last VPP command forever. Fire ONE release; on
+                # every later disabled tick fall back to the live actuator flag so we do
+                # not clobber a user-set manual/modbus mode.
+                _was_engaged = self._actuator.engaged or (
+                    _first_tick and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
+                )
+                # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
+                await executor.safe_release(
+                    self,
+                    now,
+                    "Actuator release_to_self failed (disabled path)",
+                    release=_was_engaged,
+                )
+                # Save the previous plan for state-machine continuity in the shadow compute,
+                # then reset to PASSIVE so no committed slots are carried forward.
+                _prev_plan = self.plan
+                self.plan = PlanState(ControllerState.PASSIVE, now, ())
+                # Persist the disengaged/PASSIVE state: the disabled branch otherwise
+                # never writes the store, so a mid-disable restart would re-derive
+                # "was engaged" from stale persisted export_state and re-release,
+                # clobbering a user-set manual mode. Guarded on _first_tick so we do it
+                # once per (re)start, not every disabled tick.
+                # A rescue that just ended leaves the actuator engaged, so _was_engaged
+                # above already fired the release that returns it to firmware control.
+                if _first_tick or _prev_plan.state is ControllerState.FORCING:
+                    await self._persist()
 
             # Read all forecast/schedule data needed for shadow compute and display horizon.
             slots = coordinator.read_price_slots(self._hass, self._data)
@@ -1477,9 +1500,10 @@ class Controller:
             await self._backfill_regret(now)
 
             # Shadow decision is recorded to samples + decision log for learning,
-            # but live sensors stay 0 while disabled.
+            # but live sensors stay 0 while disabled — except a floor rescue, which
+            # really is actuating and must publish the setpoint it wrote.
             # Build status AFTER the daily regret job so regret keys are fresh.
-            status = self._status(now, 0.0, None, "disabled")
+            status = self._status(now, _disabled_setpoint, None, "disabled")
             # R1: mirror the enabled path below — surface the DP's export-curve
             # engagement for observability even while shadow/disabled. _status()
             # rebuilds self.last_status wholesale every tick, so these keys must
@@ -1653,8 +1677,8 @@ class Controller:
             _LOGGER.warning(
                 "Battery drained to firmware floor (soc=%.1f%% <= floor %.1f%%): "
                 "short on carryover charge from yesterday. Holding the reserve; "
-                "will recharge at the next price-worthy slot "
-                "(economic-only, no force-charge).",
+                "will recharge at the next price-worthy slot (economic-only). "
+                "Only a sag BELOW the firmware floor force-charges (safety rescue).",
                 inputs.soc,
                 self.cfg.soc_floor,
             )
@@ -1841,6 +1865,30 @@ class Controller:
                 new_plan = dataclasses.replace(
                     new_plan, state=ControllerState.PASSIVE, state_since=self.plan.state_since
                 )
+
+        # ── Hard-floor rescue (safety; hardcoded, no config option) ───────────
+        # A pack that has sagged BELOW const.FIRMWARE_SOC_FLOOR is protected,
+        # not optimized: override the plan to FORCING so the executor below
+        # grid-charges it (and, by the same branch, cannot export). Placed
+        # after the calibration block so it outranks every economic decision
+        # made above. Shape mirrors that block: state_since is preserved on an
+        # already-FORCING plan so a scheduler bail doesn't corrupt the dwell.
+        _rescue_was_active = self._floor_rescue_active
+        if executor.floor_rescue_needed(self, inputs.soc):
+            if new_plan.state is not ControllerState.FORCING:
+                _since = self.plan.state_since if self.plan.state is ControllerState.FORCING else now
+                new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=_since)
+        elif (
+            _rescue_was_active
+            and new_plan.state is ControllerState.FORCING
+            and not self._calibration_engaged
+            and not _dp_out.get("now_selected", False)
+        ):
+            # Rescue just cleared at exactly the floor. decide_state would coast
+            # on the dwell timer (or on committed slots) and overshoot, so cancel
+            # explicitly — but only when neither calibration nor the DP itself
+            # wants this hour, either of which is a real mandate of its own.
+            new_plan = dataclasses.replace(new_plan, state=ControllerState.PASSIVE, state_since=self.plan.state_since)
 
         # FORCING charge actuation + C3 live export executor (Task E2: moved
         # verbatim to executor.py — mutually-exclusive branches, self ->

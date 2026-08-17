@@ -73,6 +73,72 @@ async def safe_release(
         controller.export_state = ExportState(engaged=False, state_since=now)
 
 
+def floor_rescue_needed(controller: Controller, soc: float | None) -> bool:
+    """Is the pack BELOW the firmware discharge floor and in need of rescue?
+
+    The planner is economic-only: it models ``const.FIRMWARE_SOC_FLOOR`` as
+    physics (the wall the pack sags to) and never force-charges to hold it.
+    This is the single exception — below that wall the pack is protected, not
+    optimized, so the answer here overrides the DP, the price gate and the
+    master switch alike.
+
+    The threshold is deliberately hardcoded to ``const.FIRMWARE_SOC_FLOOR``
+    with no config option and no recovery margin: charging stops the moment
+    SoC reads back AT the floor. ``cfg.soc_floor`` is a soft decision margin
+    and is intentionally NOT consulted.
+
+    Owns the edge-triggered WARNING latch (``controller._floor_rescue_active``)
+    so one episode logs once and recovery re-arms it — both tick paths call
+    this exactly once per tick, never both.
+
+    ``soc`` is ``None`` when plant inputs are unreadable: fail closed (no
+    rescue), matching every other actuation path's treatment of missing data.
+    """
+    if soc is None or soc >= const.FIRMWARE_SOC_FLOOR:
+        controller._floor_rescue_active = False
+        return False
+    if not controller._floor_rescue_active:
+        controller._floor_rescue_active = True
+        _LOGGER.warning(
+            "Battery below the firmware floor (soc=%.1f%% < %.1f%%): overriding the "
+            "economic plan and grid-charging back to the floor",
+            soc,
+            const.FIRMWARE_SOC_FLOOR,
+        )
+    return True
+
+
+async def run_floor_rescue(controller: Controller, now: datetime) -> float | None:
+    """Engage the grid-charge rescue directly; return the setpoint written.
+
+    Used only by the DISABLED tick path, which never reaches
+    :func:`run_forcing_and_export` — the enabled path expresses the same
+    rescue by overriding its plan to FORCING, reusing that function's
+    actuation (and its mutual exclusion with the export executor) verbatim.
+
+    Returns ``None`` when the engage failed, having released the inverter
+    back to firmware control so it is not left half-engaged — same
+    best-effort recovery as the FORCING path.
+    """
+    setpoint = guard.command_setpoint(
+        min(controller.cfg.max_charge_w, controller.cfg.grid_import_limit_w),
+        controller._actuator.last_setpoint_w,
+        controller.cfg,
+    )
+    try:
+        await controller._actuator.engage_and_charge(setpoint)
+    except Exception:
+        _LOGGER.error("Actuator engage_and_charge failed (floor-rescue path)", exc_info=True)
+        await safe_release(
+            controller,
+            now,
+            "Actuator release_to_self failed (floor-rescue engage-failure recovery)",
+            reset_export=False,
+        )
+        return None
+    return controller._actuator.last_setpoint_w
+
+
 async def run_forcing_and_export(
     controller: Controller,
     now: datetime,
