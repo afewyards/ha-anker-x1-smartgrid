@@ -285,6 +285,24 @@ def _soc_at(
     return found
 
 
+def plan_peak_soc(soc_pct: float, soc_forecast: list[tuple[datetime, float]] | None) -> float:
+    """Highest SoC the pack is expected to see: the plan's peak, or live SoC.
+
+    Public because the controller reports on the same number the policy gates
+    on, so display and decision cannot drift -- the same single-source-of-truth
+    reason ``compute_days_since`` is shared (F3).
+
+    The live SoC is folded in so an absent or failed horizon (startup, a DP
+    exception) degrades to "is the pack already near the top right now". That
+    is the fail-closed direction on both sides: missing data can never fake a
+    climb the plan is not making, yet a pack that genuinely IS near the top is
+    not stranded by the gate for want of a projection.
+    """
+    if not soc_forecast:
+        return soc_pct
+    return max(soc_pct, max(soc for _ts, soc in soc_forecast))
+
+
 # Tolerance for treating two chronologically-adjacent slots as truly
 # contiguous. Guards against float/second rounding in stored timestamps
 # without letting a REAL price-curve gap be silently spanned as if it were
@@ -428,9 +446,16 @@ def calibration_plan(
     is pure and keeps no state of its own, so the caller must supply it.
 
     ``soc_forecast`` -- (slot start, projected SoC) from the DP's own plan
-    horizon, ascending. Placement only; the DP never sees calibration back, so
-    the quarantine still holds in the direction that matters. Absent, window
-    sizing falls back to the live SoC (see ``_soc_at``).
+    horizon, ascending. Placement AND the plan-peak gate; the DP never sees
+    calibration back, so the quarantine still holds in the direction that
+    matters. Absent, window sizing falls back to the live SoC (see ``_soc_at``)
+    and the gate to the live SoC alone (see ``plan_peak_soc``).
+
+    Gated on that projection: unless the plan itself reaches
+    ``const.CALIBRATION_MIN_PLAN_SOC``, no window is placed at all, however
+    overdue the cycle is -- there is no climb to ride, so the grid would buy
+    the entire charge to the top. A dwell already in progress is never cut by
+    it.
 
     ``scheduled`` exists ONLY so the plan sensor and card can draw the coming
     window; ``CalibPlan.action`` withholds it from actuation. Callers deciding
@@ -467,6 +492,20 @@ def calibration_plan(
             window_start=run_start,
             window_end=run_start + timedelta(hours=cfg.calibration_dwell_h),
         )
+
+    # A cycle is only worth placing off a climb the plan already makes: it then
+    # pays for the last sliver plus the hold. Below this bar the plan makes no
+    # such climb and the grid buys the whole way to the top.
+    #
+    # Placed here deliberately, on both sides. AFTER hold-through, so a dwell
+    # already in progress always finishes -- with `calibration_top_soc` set
+    # below ~81 the hold bar sits UNDER this gate, and an earlier placement
+    # would abandon the dwell halfway, buying the charge without the balancing
+    # it was for. BEFORE `force`, so this is a HARD gate: the overdue deadline
+    # bypasses the price bar but not this one. An overdue pack waits for a day
+    # the plan actually climbs, and days_since simply keeps growing.
+    if plan_peak_soc(soc_pct, soc_forecast) < const.CALIBRATION_MIN_PLAN_SOC:
+        return _IDLE
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
     bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)

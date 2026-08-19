@@ -603,6 +603,9 @@ async def test_calibration_warns_once_when_stuck_past_grace(monkeypatch, caplog)
     start = BASE - timedelta(days=14)
     ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    # Pin the plan peak above the gate: this test is about the forcing message,
+    # and below the gate the warning correctly reports a different reason.
+    monkeypatch.setattr(calibration, "plan_peak_soc", lambda *a, **k: 99.0)
 
     caplog.set_level(logging.WARNING)
     await ctrl.tick()
@@ -611,6 +614,34 @@ async def test_calibration_warns_once_when_stuck_past_grace(monkeypatch, caplog)
 
     warnings = [r for r in caplog.records if "calibration" in r.getMessage().lower() and "grace" in r.getMessage()]
     assert len(warnings) == 1, "must warn once per streak, not every tick"
+
+
+@pytest.mark.asyncio
+async def test_overdue_warning_reports_the_gate_when_the_plan_never_climbs(monkeypatch, caplog):
+    """Past interval+grace the pack is overdue, but below CALIBRATION_MIN_PLAN_SOC
+    no window is planned at all -- so the "forcing the cheapest window daily"
+    message would be simply false. Report the real reason instead, still once
+    per streak."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True, calibration_interval_days=5, retention_days=90)
+
+    start = BASE - timedelta(days=14)
+    ctrl._recorder._soc_samples = [(start.isoformat(), 50.0, "passive"), (BASE.isoformat(), 50.0, "passive")]
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    monkeypatch.setattr(calibration, "plan_peak_soc", lambda *a, **k: 42.0)
+
+    caplog.set_level(logging.WARNING)
+    await ctrl.tick()
+    await ctrl.tick()
+
+    gate = [r for r in caplog.records if "peaks at" in r.getMessage()]
+    assert len(gate) == 1, "must warn once per streak, not every tick"
+    assert "42" in gate[0].getMessage()
+    assert not [r for r in caplog.records if "price bar bypassed" in r.getMessage()], (
+        "the forcing message is false while the gate suppresses every window"
+    )
 
 
 @pytest.mark.asyncio

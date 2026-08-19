@@ -1804,15 +1804,34 @@ class Controller:
                 if _since is not None and _since >= _overdue_at:
                     if not self._calibration_overdue_warned:
                         self._calibration_overdue_warned = True
-                        _LOGGER.warning(
-                            "Calibration overdue by %.1f days (past interval %d + grace %d): forcing the "
-                            "cheapest window daily with the price bar bypassed. If this persists, the pack "
-                            "is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
-                            _since,
-                            self.cfg.calibration_interval_days,
-                            const.CALIBRATION_GRACE_DAYS,
-                            self.cfg.calibration_top_soc,
-                        )
+                        # The plan-peak gate is HARD: past interval+grace it
+                        # still suppresses every window, so the forcing message
+                        # below would be false. Same helper the policy gates on
+                        # (F3) rather than a second reading of the horizon.
+                        _peak = calibration.plan_peak_soc(inputs.soc, _cal_soc_fc)
+                        if _peak < const.CALIBRATION_MIN_PLAN_SOC:
+                            _LOGGER.warning(
+                                "Calibration overdue by %.1f days (past interval %d + grace %d) but the plan "
+                                "peaks at %.0f%% (< %.0f%%): no window will be planned until the plan climbs, "
+                                "since the grid would otherwise buy the whole charge to "
+                                "calibration_top_soc=%.0f%%",
+                                _since,
+                                self.cfg.calibration_interval_days,
+                                const.CALIBRATION_GRACE_DAYS,
+                                _peak,
+                                const.CALIBRATION_MIN_PLAN_SOC,
+                                self.cfg.calibration_top_soc,
+                            )
+                        else:
+                            _LOGGER.warning(
+                                "Calibration overdue by %.1f days (past interval %d + grace %d): forcing the "
+                                "cheapest window daily with the price bar bypassed. If this persists, the pack "
+                                "is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
+                                _since,
+                                self.cfg.calibration_interval_days,
+                                const.CALIBRATION_GRACE_DAYS,
+                                self.cfg.calibration_top_soc,
+                            )
                 elif _since is not None and _since < self.cfg.calibration_interval_days:
                     self._calibration_overdue_warned = False
             except Exception:

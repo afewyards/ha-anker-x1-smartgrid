@@ -319,6 +319,16 @@ ON = Config(
 CHEAP_HISTORY = {"2026-07-30": {str(h): 0.30 for h in range(24)}}
 
 
+def _climbing_fc(now):
+    """A projected climb that clears the plan-peak gate without touching window
+    PLACEMENT: the row sits past every candidate start, so `_soc_at` still falls
+    back to the live SoC exactly as it did before the gate existed (pinned by
+    test_forecast_before_its_first_row_falls_back_to_live_soc). Tests below that
+    are about window selection, not about the gate, thread this in so the gate
+    cannot silently turn them into idle-for-the-wrong-reason."""
+    return [(now + timedelta(days=7), 99.0)]
+
+
 def _stale_history(now, days):
     """SoC series spanning exactly `days`, never reaching top_soc.
 
@@ -347,7 +357,9 @@ def test_not_due_inside_the_interval():
 def test_due_and_cheap_returns_charging():
     now = BASE
     slots = _slots(now, [0.01] * 6)
-    act = calibration.calibration_action(now, 50.0, slots, _stale_history(now, 30), CHEAP_HISTORY, ON)
+    act = calibration.calibration_action(
+        now, 50.0, slots, _stale_history(now, 30), CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now)
+    )
     assert act is not None
     assert act.phase == "charging"
     assert act.window_start <= now < act.window_end
@@ -440,10 +452,11 @@ def test_empty_soc_history_is_idle():
 def test_empty_price_history_blocks_percentile_but_not_deadline():
     now = BASE
     slots = _slots(now, [0.90] * 6)
+    fc = _climbing_fc(now)
     just_due = _stale_history(now, ON.calibration_interval_days + 1)
-    assert calibration.calibration_action(now, 50.0, slots, just_due, {}, ON) is None
+    assert calibration.calibration_action(now, 50.0, slots, just_due, {}, ON, soc_forecast=fc) is None
     past_grace = _stale_history(now, ON.calibration_interval_days + const.CALIBRATION_GRACE_DAYS + 1)
-    assert calibration.calibration_action(now, 50.0, slots, past_grace, {}, ON) is not None
+    assert calibration.calibration_action(now, 50.0, slots, past_grace, {}, ON, soc_forecast=fc) is not None
 
 
 def test_bar_alone_accepts_when_not_yet_forced():
@@ -457,7 +470,7 @@ def test_bar_alone_accepts_when_not_yet_forced():
     now = BASE
     slots = _slots(now, [0.01] * 6)
     mid_grace = _stale_history(now, 6)  # force = 6 >= 5 + 7 = 12 is False
-    act = calibration.calibration_action(now, 50.0, slots, mid_grace, CHEAP_HISTORY, ON)
+    act = calibration.calibration_action(now, 50.0, slots, mid_grace, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now))
     assert act is not None
     assert act.phase == "charging"
 
@@ -471,7 +484,9 @@ def test_future_window_is_not_acted_on_yet():
     now = BASE
     slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
     due = _stale_history(now, 6)  # force = 6 >= 5 + 7 = 12 is False
-    assert calibration.calibration_action(now, 50.0, slots, due, CHEAP_HISTORY, ON) is None
+    assert (
+        calibration.calibration_action(now, 50.0, slots, due, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now)) is None
+    )
 
 
 def test_future_window_reports_scheduled_with_its_window():
@@ -480,7 +495,7 @@ def test_future_window_reports_scheduled_with_its_window():
     now = BASE
     slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
     due = _stale_history(now, 6)
-    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON)
+    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now))
     assert plan.phase == "scheduled"
     assert plan.window_start is not None and plan.window_end is not None
     assert plan.window_start > now, "a scheduled window starts in the future"
@@ -493,7 +508,7 @@ def test_scheduled_never_produces_an_action():
     now = BASE
     slots = _slots(now, [0.90] * 3) + _slots(now + timedelta(days=1), [0.01] * 3)
     due = _stale_history(now, 6)
-    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON)
+    plan = calibration.calibration_plan(now, 50.0, slots, due, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now))
     assert plan.phase == "scheduled"
     assert plan.action is None
 
@@ -504,9 +519,10 @@ def test_plan_and_action_agree_on_active_phases():
     now = BASE
     slots = _slots(now, [0.01] * 6)
     stale = _stale_history(now, 30)
+    fc = _climbing_fc(now)
     for soc in (50.0, ON.calibration_top_soc):
-        plan = calibration.calibration_plan(now, soc, slots, stale, CHEAP_HISTORY, ON)
-        act = calibration.calibration_action(now, soc, slots, stale, CHEAP_HISTORY, ON)
+        plan = calibration.calibration_plan(now, soc, slots, stale, CHEAP_HISTORY, ON, soc_forecast=fc)
+        act = calibration.calibration_action(now, soc, slots, stale, CHEAP_HISTORY, ON, soc_forecast=fc)
         assert plan.phase in ("charging", "holding")
         assert act is not None
         assert (act.phase, act.window_start, act.window_end) == (plan.phase, plan.window_start, plan.window_end)
@@ -526,7 +542,7 @@ def test_due_at_exact_interval_boundary():
     now = BASE
     slots = _slots(now, [0.01] * 6)
     exact = _stale_history(now, ON.calibration_interval_days)
-    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON)
+    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now))
     assert act is not None
     assert act.phase == "charging"
 
@@ -590,6 +606,100 @@ def test_force_at_exact_grace_boundary():
     now = BASE
     slots = _slots(now, [0.90] * 6)
     exact = _stale_history(now, ON.calibration_interval_days + const.CALIBRATION_GRACE_DAYS)
-    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON)
+    act = calibration.calibration_action(now, 50.0, slots, exact, CHEAP_HISTORY, ON, soc_forecast=_climbing_fc(now))
     assert act is not None
     assert act.phase == "charging"
+
+
+# --- The plan-peak gate ------------------------------------------------------
+#
+# A calibration is only worth planning off a climb the plan already makes.
+# Below CALIBRATION_MIN_PLAN_SOC the grid has to buy the WHOLE climb to the
+# calibration top, which is the cost this gate exists to refuse.
+
+
+def test_plan_peak_soc_folds_in_the_live_soc():
+    """No horizon (startup, a failed DP run) degrades to 'is the pack already
+    near the top right now' rather than to a fabricated climb."""
+    assert calibration.plan_peak_soc(42.0, None) == 42.0
+    assert calibration.plan_peak_soc(42.0, []) == 42.0
+    assert calibration.plan_peak_soc(42.0, _forecast(BASE, [10.0, 20.0])) == 42.0
+    assert calibration.plan_peak_soc(42.0, _forecast(BASE, [10.0, 91.0, 20.0])) == 91.0
+
+
+def test_gate_blocks_when_the_plan_never_climbs():
+    """Cheap window, due, but the plan peaks at 40% -- every kWh of the climb
+    to the top would be bought."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    fc = _forecast(now, [40.0] * 6)
+    plan = calibration.calibration_plan(now, 40.0, slots, _stale_history(now, 6), CHEAP_HISTORY, ON, soc_forecast=fc)
+    assert plan.phase == "idle"
+
+
+def test_gate_is_hard_and_survives_the_deadline_force():
+    """Past interval+grace the price bar is bypassed, but the gate is not: an
+    overdue pack waits for a day the plan actually climbs, and days_since just
+    keeps growing."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    fc = _forecast(now, [40.0] * 6)
+    plan = calibration.calibration_plan(now, 40.0, slots, _stale_history(now, 30), CHEAP_HISTORY, ON, soc_forecast=fc)
+    assert plan.phase == "idle"
+
+
+def test_gate_passes_on_a_projected_climb_from_a_low_live_soc():
+    """The whole point: the pack is at 50 now, but the plan rides solar to the
+    top later today, so the cycle is worth placing -- and placement is exactly
+    what it was before the gate existed."""
+    now = BASE
+    slots = _slots(now, [0.01] * 7)
+    fc = _forecast(now, [50.0, 60.0, 75.0, 88.0, 96.5, 96.5, 96.5])
+    plan = calibration.calibration_plan(now, 50.0, slots, _stale_history(now, 6), CHEAP_HISTORY, ON, soc_forecast=fc)
+    assert plan.phase != "idle"
+    win = calibration.select_window(now, 50.0, slots, cfg=ON, bar=0.30, force=False, soc_forecast=fc)
+    assert win is not None
+    assert (plan.window_start, plan.window_end) == win
+
+
+def test_gate_passes_on_live_soc_alone_without_a_forecast():
+    """An absent horizon must not strand a pack that genuinely is near the
+    top -- plan_peak_soc folds the live SoC in."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    plan = calibration.calibration_plan(now, 85.0, slots, _stale_history(now, 6), CHEAP_HISTORY, ON, soc_forecast=None)
+    assert plan.phase == "charging"
+
+
+def test_gate_blocks_on_live_soc_alone_without_a_forecast():
+    """The fail-closed direction of the same fold-in: no horizon and a low
+    pack cannot buy a whole climb off missing data."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    plan = calibration.calibration_plan(now, 50.0, slots, _stale_history(now, 6), CHEAP_HISTORY, ON, soc_forecast=None)
+    assert plan.phase == "idle"
+
+
+def test_gate_cannot_cut_a_dwell_already_in_progress():
+    """Ordering pin: the gate sits AFTER hold-through. With the target
+    configured below the gate the hold bar sits under it, so a gate placed
+    earlier would abandon a live dwell halfway -- buying the charge without
+    the balancing it was for."""
+    now = BASE
+    cfg = dataclasses.replace(ON, calibration_top_soc=75.0)
+    fc = _forecast(now, [70.0] * 6)
+    plan = calibration.calibration_plan(
+        now, 76.0, _slots(now, [0.90] * 6), _stale_history(now, 6), CHEAP_HISTORY, cfg, soc_forecast=fc
+    )
+    assert plan.phase == "holding"
+
+
+def test_gate_boundary_is_inclusive():
+    """Exactly CALIBRATION_MIN_PLAN_SOC passes (`>=`, not `>`)."""
+    now = BASE
+    slots = _slots(now, [0.01] * 6)
+    at_bar = _forecast(now, [50.0] + [const.CALIBRATION_MIN_PLAN_SOC] * 5)
+    below = _forecast(now, [50.0] + [const.CALIBRATION_MIN_PLAN_SOC - 0.1] * 5)
+    stale = _stale_history(now, 6)
+    assert calibration.calibration_plan(now, 50.0, slots, stale, CHEAP_HISTORY, ON, soc_forecast=at_bar).phase != "idle"
+    assert calibration.calibration_plan(now, 50.0, slots, stale, CHEAP_HISTORY, ON, soc_forecast=below).phase == "idle"

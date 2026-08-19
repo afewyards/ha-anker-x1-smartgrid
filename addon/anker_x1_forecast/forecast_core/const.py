@@ -155,6 +155,12 @@ CALIBRATION_GRACE_DAYS = 7
 # plus the hold. Worst case at a 0.40 EUR/kWh peak that is 0.40 EUR every
 # calibration_interval_days. Above it, the price bar applies as before.
 CALIBRATION_FREE_TOPUP_KWH = 1.0
+# Minimum SoC the DP's OWN (non-calibration) plan must project before a cycle
+# is worth placing. A calibration rides a climb the plan already makes and
+# pays only for the last sliver; below this bar there is no climb to ride and
+# the grid buys the whole way to calibration_top_soc. See
+# calibration.plan_peak_soc.
+CALIBRATION_MIN_PLAN_SOC = 80.0
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
