@@ -526,7 +526,7 @@ async def read_hourly_weather_forecast(hass: HomeAssistant, data: dict) -> list[
         return []
 
     raw_items = resp[entity_id].get("forecast")
-    if not raw_items:
+    if not isinstance(raw_items, list):
         return []
 
     result: list[dict] = []
