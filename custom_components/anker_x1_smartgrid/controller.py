@@ -310,6 +310,9 @@ class Controller:
         # is aggregated once per local day (see _refresh_daily_actuals) rather
         # than re-querying ~20k sample rows every 60s tick.
         self._daily_actuals: dict[date, dict] = {}
+        # One-shot upgrade guard for the whole-house ledger legs; see
+        # _seed_house_ledger_if_cold.
+        self._house_ledger_seeded = False
         self._daily_actuals_day: str | None = None
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
@@ -2325,6 +2328,54 @@ class Controller:
         except Exception:
             _LOGGER.warning("daily stats: actuals backfill failed; keeping previous cache", exc_info=True)
             return
+        self._seed_house_ledger_if_cold(dt_util.as_local(now).date())
+
+    def _seed_house_ledger_if_cold(self, today: date) -> None:
+        """One-shot: fill today's WHOLE-HOUSE ledger legs from recorded samples.
+
+        The house accumulators were added after the battery ones, so on the
+        first start of an upgraded install the store has nothing to restore
+        into them.  They would then book only the part of TODAY after the
+        restart, and the card's today figure — measured-so-far PLUS planned
+        remainder — would read as planned-only until midnight.  Closed days are
+        unaffected (they come from the samples replay, which is complete); this
+        closes the current day.
+
+        Safe because the caller runs BEFORE ``_accumulate_cash_ledger`` in the
+        same tick, so the legs still hold exactly what ``restore`` put there.
+
+        Two guards keep it from double-counting.  It runs once per process, so
+        the day rollover — which legitimately zeroes the legs at 00:00 — cannot
+        re-seed them from what is by then a fresh, near-empty sample set.  And
+        it only fires while EVERY leg is still zero, so an ordinary mid-day
+        restart keeps its persisted running totals instead of adding the
+        pre-restart hours a second time.
+        """
+        if self._house_ledger_seeded:
+            return
+        self._house_ledger_seeded = True
+        _led = self._ledger
+        if any(
+            (
+                _led.today_house_import_kwh,
+                _led.today_house_export_kwh,
+                _led.today_house_cost_eur,
+                _led.today_house_revenue_eur,
+            )
+        ):
+            return
+        _rec = self._daily_actuals.get(today)
+        if not _rec:
+            return
+        _led.today_house_import_kwh = float(_rec["house_import_kwh"])
+        _led.today_house_export_kwh = float(_rec["house_export_kwh"])
+        _led.today_house_cost_eur = float(_rec["house_cost_eur"])
+        _led.today_house_revenue_eur = float(_rec["house_revenue_eur"])
+        _LOGGER.info(
+            "daily stats: seeded today's house ledger from samples (%.3f kWh in, %.3f kWh out)",
+            _led.today_house_import_kwh,
+            _led.today_house_export_kwh,
+        )
 
     def _publish_daily_stats(
         self,

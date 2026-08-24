@@ -371,3 +371,82 @@ class TestStatusCarriesTheTable:
         ctrl, _act = make_controller()
         status = ctrl._status(datetime(2026, 8, 1, 10, 0, tzinfo=UTC), 0.0, None, "failsafe")
         assert "daily_stats" not in status
+
+
+class TestHouseLedgerSeed:
+    """Upgrade migration: the house legs arrived after the battery ones.
+
+    On the first start of an upgraded install nothing restores them, so they
+    would book only the part of TODAY after the restart and the card's today
+    figure would read as planned-only.
+    """
+
+    def _rows(self, day: date):
+        # Two ticks earlier today: 4 kWh imported at 0.25, 1 kWh exported at 0.10.
+        # Midday UTC on purpose: the HA test harness runs in US/Pacific, so an
+        # early-morning UTC tick would fall on the PREVIOUS local day and the
+        # rows would straddle the midnight the aggregation buckets on.
+        base = datetime(day.year, day.month, day.day, 12, 0, tzinfo=UTC)
+        return [
+            {
+                "ts": base.isoformat(),
+                "grid_import_kwh": 4.0,
+                "grid_export_kwh": 0.0,
+                "batt_charge_kwh": 0.0,
+                "batt_discharge_kwh": 0.0,
+                "import_price": 0.25,
+                "export_price": 0.10,
+            },
+            {
+                "ts": (base + timedelta(hours=1)).isoformat(),
+                "grid_import_kwh": 0.0,
+                "grid_export_kwh": 1.0,
+                "batt_charge_kwh": 0.0,
+                "batt_discharge_kwh": 0.0,
+                "import_price": 0.25,
+                "export_price": 0.10,
+            },
+        ]
+
+    async def test_cold_house_legs_are_seeded_from_recorded_samples(self):
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        now = datetime(2026, 8, 1, 14, 0, tzinfo=UTC)
+        ctrl._recorder.read_feature_rows = lambda since_iso: self._rows(date(2026, 8, 1))
+        assert ctrl.today_house_import_kwh == 0.0
+
+        await ctrl._refresh_daily_actuals(now)
+
+        assert ctrl.today_house_import_kwh == pytest.approx(4.0)
+        assert ctrl.today_house_export_kwh == pytest.approx(1.0)
+        assert ctrl.today_house_cost_eur == pytest.approx(1.0)
+        assert ctrl.today_house_revenue_eur == pytest.approx(1.0 * (0.10 - ctrl.cfg.export_fee_eur_per_kwh))
+
+    async def test_restored_house_legs_are_never_overwritten(self):
+        # A normal mid-day restart HAS persisted values; re-seeding them from
+        # samples would double-count the pre-restart part of the day.
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl.today_house_import_kwh = 9.0
+        ctrl._recorder.read_feature_rows = lambda since_iso: self._rows(date(2026, 8, 1))
+
+        await ctrl._refresh_daily_actuals(datetime(2026, 8, 1, 14, 0, tzinfo=UTC))
+
+        assert ctrl.today_house_import_kwh == pytest.approx(9.0)
+
+    async def test_seed_runs_only_once_per_process(self):
+        from tests.helpers import make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._recorder.read_feature_rows = lambda since_iso: self._rows(date(2026, 8, 1))
+
+        await ctrl._refresh_daily_actuals(datetime(2026, 8, 1, 14, 0, tzinfo=UTC))
+        # Day rolls over: the legs legitimately reset to zero, and the seed
+        # must NOT fire again and re-book yesterday's tail onto the new day.
+        ctrl.today_house_import_kwh = 0.0
+        ctrl._recorder.read_feature_rows = lambda since_iso: self._rows(date(2026, 8, 2))
+        await ctrl._refresh_daily_actuals(datetime(2026, 8, 2, 14, 0, tzinfo=UTC))
+
+        assert ctrl.today_house_import_kwh == 0.0
