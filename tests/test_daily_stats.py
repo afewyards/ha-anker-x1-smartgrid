@@ -496,3 +496,31 @@ class TestHouseLegsPlanned:
         day = daily_stats.aggregate_planned_days(h, lambda s, p: 0.10, CEST)[date(2026, 7, 20)]
         assert day["house_export_kwh"] == pytest.approx(2.5)
         assert day["house_revenue_eur"] == pytest.approx(2.5 * 0.10)
+
+
+def test_merge_carries_house_keys_and_nets_them():
+    actual = daily_stats.new_day_totals()
+    actual.update(
+        {"house_import_kwh": 10.0, "house_export_kwh": 4.0, "house_cost_eur": 3.0, "house_revenue_eur": 1.0}
+    )
+    rows = daily_stats.merge_days({}, {}, actual, date(2026, 7, 20))
+    row = rows[0]
+    assert row["house_import_kwh"] == pytest.approx(10.0)
+    assert row["house_export_kwh"] == pytest.approx(4.0)
+    assert row["house_net_eur"] == pytest.approx(-2.0)
+    assert row["actual_house_net_eur"] == pytest.approx(-2.0)
+    assert row["planned_house_net_eur"] is None
+
+
+def test_merge_sums_actual_and_planned_house_halves_on_today():
+    actual = daily_stats.new_day_totals()
+    actual.update({"house_import_kwh": 10.0, "house_cost_eur": 3.0})
+    planned = daily_stats.new_day_totals()
+    planned.update({"house_import_kwh": 2.0, "house_export_kwh": 1.0, "house_cost_eur": 0.5, "house_revenue_eur": 0.25})
+    rows = daily_stats.merge_days({}, {date(2026, 7, 20): planned}, actual, date(2026, 7, 20))
+    row = rows[0]
+    assert row["source"] == "mixed"
+    assert row["house_import_kwh"] == pytest.approx(12.0)
+    assert row["house_net_eur"] == pytest.approx(-3.25)
+    assert row["actual_house_net_eur"] == pytest.approx(-3.0)
+    assert row["planned_house_net_eur"] == pytest.approx(-0.25)

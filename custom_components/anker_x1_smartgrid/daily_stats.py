@@ -279,6 +279,10 @@ def merge_days(
         a_rev = a["revenue_eur"] if a else 0.0
         p_cost = p["cost_eur"] if p else 0.0
         p_rev = p["revenue_eur"] if p else 0.0
+        a_hc = a["house_cost_eur"] if a else 0.0
+        a_hr = a["house_revenue_eur"] if a else 0.0
+        p_hc = p["house_cost_eur"] if p else 0.0
+        p_hr = p["house_revenue_eur"] if p else 0.0
         rows.append(
             {
                 "date": day.isoformat(),
@@ -294,6 +298,17 @@ def merge_days(
                 "source": "mixed" if (a is not None and p is not None) else ("actual" if a is not None else "plan"),
                 "actual_net_eur": round(a_rev - a_cost, 3) if a is not None else None,
                 "planned_net_eur": round(p_rev - p_cost, 3) if p is not None else None,
+                "house_import_kwh": round(
+                    (a["house_import_kwh"] if a else 0.0) + (p["house_import_kwh"] if p else 0.0), 3
+                ),
+                "house_export_kwh": round(
+                    (a["house_export_kwh"] if a else 0.0) + (p["house_export_kwh"] if p else 0.0), 3
+                ),
+                "house_cost_eur": round(a_hc + p_hc, 3),
+                "house_revenue_eur": round(a_hr + p_hr, 3),
+                "house_net_eur": round((a_hr - a_hc) + (p_hr - p_hc), 3),
+                "actual_house_net_eur": round(a_hr - a_hc, 3) if a is not None else None,
+                "planned_house_net_eur": round(p_hr - p_hc, 3) if p is not None else None,
             }
         )
     return rows
