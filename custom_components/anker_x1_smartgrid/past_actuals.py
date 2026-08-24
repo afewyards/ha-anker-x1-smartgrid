@@ -22,10 +22,20 @@ energy from the mean power. Pre-v9 rows (and the first tick after a restart)
 have NULL deltas; for those, energy falls back to mean-W-derived, scaled by
 the observed tick coverage of the hour (mean power x 1h x rows/60, capped at
 1.0) so a partial hour right after a restart isn't over-stated as if it had
-run the full hour. The W keys (``pv_w``, ``load_w``, ``soc``,
-``solar_charge_w``, ``grid_charge_w``, ``grid_export_w``) remain unchanged
-naive means — they are still consumed by ``load_adapt`` and must not be
-altered by this change.
+run the full hour. ``pv_w``, ``load_w`` and ``soc`` remain naive means —
+``load_adapt`` reads ``load_kwh`` (falling back to ``load_w``) and must not be
+altered.
+
+The battery split (``grid_charge_*``, ``grid_export_*``, ``solar_charge_*``)
+uses the ledger's per-tick ``min()`` attribution — ``min(grid_import,
+batt_charge)`` and ``min(grid_export, batt_discharge)``, i.e.
+``optimize.cash_energy_kwh`` — so the card's measured past bars are the same
+quantity as its planned bars and as the cash ledger. It replaced a PV-surplus
+split (``charge - max(0, pv - load)``) that leaned on the COMPUTED ``load_w``
+and counted PV spilling straight to the grid as battery export; whole-house
+flow is reported separately by ``daily_stats``'s house columns. ``solar_*`` is
+taken as the complement of the total charge, preserving ``solar + grid ==
+batt_charge``.
 
 Note: a bucket with fewer ticks than its full width (e.g. the current,
 still-in-progress bucket, or a fallback-derived one right after a restart)
@@ -101,7 +111,16 @@ def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60) -> dict[dat
         load_vals = [v for v in (house_load_w(r) for r in group) if v is not None]
         soc_vals = [float(r["soc"]) for r in group if r.get("soc") is not None]
         charge_vals = [max(0.0, -float(r["batt_w"])) for r in group if r.get("batt_w") is not None]
-        export_vals = [max(0.0, -float(r["p1_w"])) for r in group if r.get("p1_w") is not None]
+        # Attribution matches optimize.cash_energy_kwh (the live ledger) and the
+        # DP's own grid_charge/grid_export, so past and planned bars are the
+        # same quantity. The min() is per TICK — it does not commute with a
+        # bucket-wide mean, and the PV-surplus split it replaces additionally
+        # leaned on the COMPUTED load_w rather than on what the meter measured.
+        # PV spill therefore stays out of the battery export bar; the house
+        # columns in daily_stats report it.
+        _metered = [r for r in group if r.get("p1_w") is not None and r.get("batt_w") is not None]
+        charge_attr_vals = [min(max(0.0, float(r["p1_w"])), max(0.0, -float(r["batt_w"]))) for r in _metered]
+        export_vals = [min(max(0.0, -float(r["p1_w"])), max(0.0, float(r["batt_w"]))) for r in _metered]
 
         pv_w = _mean(pv_vals) or 0.0
         load_w = _mean(load_vals)
@@ -109,9 +128,8 @@ def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60) -> dict[dat
         charge_w = _mean(charge_vals) or 0.0
         grid_export_w = _mean(export_vals) or 0.0
 
-        surplus = max(0.0, pv_w - (load_w or 0.0))
-        solar_charge_w = min(charge_w, surplus)
-        grid_charge_w = max(0.0, charge_w - solar_charge_w)
+        grid_charge_w = _mean(charge_attr_vals) or 0.0
+        solar_charge_w = max(0.0, charge_w - grid_charge_w)
 
         # Energy (kWh): sum the v9 per-tick deltas (true integral of power over
         # time) with a mean-W x slot_h x coverage fallback for pre-v9 rows /
@@ -132,12 +150,27 @@ def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60) -> dict[dat
             load_kwh = load_w / 1000.0 * slot_h * coverage
         charge_kwh = _kwh_sum(group, "batt_charge_kwh")
         charge_kwh = charge_kwh if charge_kwh is not None else charge_w / 1000.0 * slot_h * coverage
-        export_kwh = _kwh_sum(group, "grid_export_kwh")
-        export_kwh = export_kwh if export_kwh is not None else grid_export_w / 1000.0 * slot_h * coverage
-
-        surplus_kwh = max(0.0, pv_kwh - (load_kwh or 0.0))
-        solar_charge_kwh = min(charge_kwh, surplus_kwh)
-        grid_charge_kwh = max(0.0, charge_kwh - solar_charge_kwh)
+        # Same per-tick min() in the energy domain. _kwh_sum cannot serve here:
+        # min() of two column SUMS is not the sum of the per-tick min()s.
+        _paired = [
+            r
+            for r in group
+            if r.get("grid_import_kwh") is not None
+            and r.get("grid_export_kwh") is not None
+            and r.get("batt_charge_kwh") is not None
+            and r.get("batt_discharge_kwh") is not None
+        ]
+        if _paired:
+            grid_charge_kwh = sum(
+                min(float(r["grid_import_kwh"]), float(r["batt_charge_kwh"])) for r in _paired
+            )
+            export_kwh = sum(
+                min(float(r["grid_export_kwh"]), float(r["batt_discharge_kwh"])) for r in _paired
+            )
+        else:
+            grid_charge_kwh = grid_charge_w / 1000.0 * slot_h * coverage
+            export_kwh = grid_export_w / 1000.0 * slot_h * coverage
+        solar_charge_kwh = max(0.0, charge_kwh - grid_charge_kwh)
 
         out[hour] = {
             "pv_w": round(pv_w, 1),

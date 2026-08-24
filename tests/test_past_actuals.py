@@ -7,14 +7,16 @@ def _ts(h, m=0):
     return datetime(2026, 6, 29, h, m, tzinfo=UTC).isoformat()
 
 
-def test_solar_first_split_when_pv_surplus_covers_charge():
-    # PV 2000, load 200 -> surplus 1800; charging 1000 (batt_w -1000) -> all solar.
+def test_split_follows_the_meter_not_the_pv_surplus():
+    # PV 2000, load 200: the old PV-surplus split called all 1000 W of charge
+    # solar. The meter showed 50 W of import, so 50 W of that charge came from
+    # the grid and only 950 from PV.
     rows = [{"ts": _ts(10), "pv_w": 2000.0, "load_w": 200.0, "batt_w": -1000.0, "p1_w": 50.0, "soc": 40.0}]
     out = aggregate_past_actuals(rows)
     hour = datetime(2026, 6, 29, 10, tzinfo=UTC)
     rec = out[hour]
-    assert rec["solar_charge_w"] == 1000.0
-    assert rec["grid_charge_w"] == 0.0
+    assert rec["grid_charge_w"] == 50.0
+    assert rec["solar_charge_w"] == 950.0
     assert rec["pv_w"] == 2000.0
     assert rec["load_w"] == 200.0
     assert rec["soc"] == 40.0
@@ -86,8 +88,11 @@ def test_kwh_keys_sum_deltas():
     rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 10, tzinfo=UTC)]
     assert rec["pv_kwh"] == 0.06
     assert rec["load_kwh"] == 0.03
-    assert rec["grid_export_kwh"] == 0.015
-    # energy-level solar-first split: surplus = pv_kwh - load_kwh = 0.03
+    # The battery CHARGED all hour (batt_w -600), so it cannot have exported:
+    # the metered 0.005/tick is PV spilling past a full house, which the
+    # battery bars must not claim. daily_stats' house columns report it.
+    assert rec["grid_export_kwh"] == 0.0
+    # Meter never imported, so none of the charge came from the grid.
     assert rec["solar_charge_kwh"] == 0.03
     assert rec["grid_charge_kwh"] == 0.0
 
@@ -143,9 +148,9 @@ def test_kwh_delta_sum_not_scaled_by_coverage():
     assert rec["load_kwh"] == 0.03
 
 
-def test_w_keys_unchanged():
-    # Same rows as test_kwh_keys_sum_deltas: mean-W outputs must be byte-identical
-    # to pre-change behaviour (naive means over pv_w/load_w/soc/batt_w/p1_w).
+def test_w_keys_are_naive_means_with_a_metered_battery_split():
+    # Same rows as test_kwh_keys_sum_deltas. pv_w/load_w/soc stay naive means
+    # (load_adapt reads them); the battery split follows the meter.
     row = {
         "pv_w": 1000.0,
         "pv_kwh": 0.02,
@@ -162,11 +167,13 @@ def test_w_keys_unchanged():
     assert rec["pv_w"] == 1000.0
     assert rec["load_w"] == 500.0
     assert rec["soc"] == 50.0
-    # charge_w = mean(max(0, -batt_w)) = 600; surplus = max(0, pv_w - load_w) = 500
-    assert rec["solar_charge_w"] == 500.0
-    assert rec["grid_charge_w"] == 100.0
-    # grid_export_w = mean(max(0, -p1_w)) = 200
-    assert rec["grid_export_w"] == 200.0
+    # charge_w = mean(max(0, -batt_w)) = 600. The meter exported all hour, so
+    # no grid energy reached the battery: the whole 600 is solar.
+    assert rec["grid_charge_w"] == 0.0
+    assert rec["solar_charge_w"] == 600.0
+    # The battery was charging, so the metered 200 W export is PV spill, not
+    # battery discharge.
+    assert rec["grid_export_w"] == 0.0
 
 
 # --- Slot-grid bucketing (2026-08-03 history-gap fix) -----------------------
@@ -243,3 +250,16 @@ def test_mean_w_fallback_partial_slot_still_scaled_down():
     ]
     rec = aggregate_past_actuals(rows, slot_minutes=15)[datetime(2026, 6, 29, 10, tzinfo=UTC)]
     assert rec["pv_kwh"] == round(1.0 * 0.25 * 5 / 15, 3)
+
+
+def test_pv_spill_export_is_not_battery_export():
+    # Exporting 800 W with the battery idle: PV spill, not battery discharge.
+    rows = [{"ts": _ts(12), "pv_w": 1500.0, "load_w": 700.0, "batt_w": 0.0, "p1_w": -800.0, "soc": 90.0}]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 12, tzinfo=UTC)]
+    assert rec["grid_export_w"] == 0.0
+
+
+def test_split_still_sums_to_total_battery_charge():
+    rows = [{"ts": _ts(9), "pv_w": 500.0, "load_w": 200.0, "batt_w": -1000.0, "p1_w": 700.0, "soc": 20.0}]
+    rec = aggregate_past_actuals(rows)[datetime(2026, 6, 29, 9, tzinfo=UTC)]
+    assert rec["solar_charge_w"] + rec["grid_charge_w"] == 1000.0
