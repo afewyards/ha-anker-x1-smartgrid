@@ -149,6 +149,10 @@ _PERSIST_GROUPS = [
         ("total_net_eur", "total_net_eur", lambda v: v, float, False),
         ("today_grid_charge_kwh", "today_grid_charge_kwh", lambda v: v, float, False),
         ("today_export_kwh", "today_export_kwh", lambda v: v, float, False),
+        ("today_house_import_kwh", "today_house_import_kwh", lambda v: v, float, False),
+        ("today_house_export_kwh", "today_house_export_kwh", lambda v: v, float, False),
+        ("today_house_cost_eur", "today_house_cost_eur", lambda v: v, float, False),
+        ("today_house_revenue_eur", "today_house_revenue_eur", lambda v: v, float, False),
     ],
     # SoC drift-hedge accumulator: a restart must resume from the same
     # closed-loop state rather than re-accumulating from scratch; all six
@@ -440,6 +444,38 @@ class Controller:
     @today_export_kwh.setter
     def today_export_kwh(self, value: float) -> None:
         self._ledger.today_export_kwh = value
+
+    @property
+    def today_house_import_kwh(self) -> float:
+        return self._ledger.today_house_import_kwh
+
+    @today_house_import_kwh.setter
+    def today_house_import_kwh(self, value: float) -> None:
+        self._ledger.today_house_import_kwh = value
+
+    @property
+    def today_house_export_kwh(self) -> float:
+        return self._ledger.today_house_export_kwh
+
+    @today_house_export_kwh.setter
+    def today_house_export_kwh(self, value: float) -> None:
+        self._ledger.today_house_export_kwh = value
+
+    @property
+    def today_house_cost_eur(self) -> float:
+        return self._ledger.today_house_cost_eur
+
+    @today_house_cost_eur.setter
+    def today_house_cost_eur(self, value: float) -> None:
+        self._ledger.today_house_cost_eur = value
+
+    @property
+    def today_house_revenue_eur(self) -> float:
+        return self._ledger.today_house_revenue_eur
+
+    @today_house_revenue_eur.setter
+    def today_house_revenue_eur(self, value: float) -> None:
+        self._ledger.today_house_revenue_eur = value
 
     async def _refresh_efficiency_curve(self, now: datetime) -> None:
         """Rebuild the measured efficiency curve from recent recorder samples.
@@ -2368,6 +2404,10 @@ class Controller:
                 "grid_export_kwh": self._ledger.today_export_kwh,
                 "cost_eur": self._ledger.today_charge_cost_eur,
                 "revenue_eur": self._ledger.today_export_revenue_eur,
+                "house_import_kwh": self._ledger.today_house_import_kwh,
+                "house_export_kwh": self._ledger.today_house_export_kwh,
+                "house_cost_eur": self._ledger.today_house_cost_eur,
+                "house_revenue_eur": self._ledger.today_house_revenue_eur,
             }
         )
         self.last_status["daily_stats"] = daily_stats.merge_days(

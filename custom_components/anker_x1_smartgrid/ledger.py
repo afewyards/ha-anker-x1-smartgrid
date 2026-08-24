@@ -40,6 +40,13 @@ class CashLedger:
     # today's row from these rather than re-querying samples.
     today_grid_charge_kwh: float = 0.0
     today_export_kwh: float = 0.0
+    # Whole-house meter legs (optimize.house_energy_kwh). Independent of
+    # batt_w: these are what the HOUSE drew from / pushed to the grid, so
+    # daily_stats can report today's row on the same basis as closed days.
+    today_house_import_kwh: float = 0.0
+    today_house_export_kwh: float = 0.0
+    today_house_cost_eur: float = 0.0
+    today_house_revenue_eur: float = 0.0
     # Local-date string of the day the daily fields cover (YYYY-MM-DD).
     # None on first tick so the day-rollover logic fires immediately to initialise.
     day: str | None = None
@@ -61,6 +68,10 @@ class CashLedger:
             self.today_export_revenue_eur = 0.0
             self.today_grid_charge_kwh = 0.0
             self.today_export_kwh = 0.0
+            self.today_house_import_kwh = 0.0
+            self.today_house_export_kwh = 0.0
+            self.today_house_cost_eur = 0.0
+            self.today_house_revenue_eur = 0.0
             self.day = _today
 
     def accumulate(
@@ -76,8 +87,8 @@ class CashLedger:
     ) -> None:
         """Accumulate realized battery cash flows for this tick (cash basis).
 
-        Two independent legs; each is skipped when its own price is missing,
-        and a missing battery reading skips both:
+        Two BATTERY legs; each is skipped when its own price is missing, and a
+        missing battery reading skips both:
 
         - cost leg   — grid import feeding the battery × current import-slot
           price.  Price comes from the DP's ``slots`` list via
@@ -90,14 +101,32 @@ class CashLedger:
         Attribution mirrors the C3 battery-sourced-export rule (PV covers the
         house first; PV-spill export out of scope).  See
         optimize.cash_flows_eur for the math.
+
+        Four WHOLE-HOUSE legs accumulate alongside them from the meter alone
+        (optimize.house_energy_kwh), and therefore run BEFORE the battery
+        guard: grid energy the house consumed directly and PV that spilled
+        straight to the grid are real flows the min() attribution cannot see,
+        and a missing battery reading is no reason to lose them.
         """
-        batt_w = coordinator.read_float(hass, data.get(const.CONF_ENT_BATTERY_POWER, ""))
-        if batt_w is None:
-            return
         import_price = resolution.price_at(slots, now, slot_minutes)
         export_price_eff = (
             optimize_mod.effective_export_price(raw_export_price, cfg) if raw_export_price is not None else None
         )
+        # House legs run BEFORE the battery guard below: they read the meter
+        # alone, so a missing battery reading must not drop them.
+        house_import_kwh, house_export_kwh = optimize_mod.house_energy_kwh(
+            inputs.meter_w,
+            const.TICK_SECONDS / 3600.0,
+        )
+        self.today_house_import_kwh += house_import_kwh
+        self.today_house_export_kwh += house_export_kwh
+        if import_price is not None:
+            self.today_house_cost_eur += house_import_kwh * import_price
+        if export_price_eff is not None:
+            self.today_house_revenue_eur += house_export_kwh * export_price_eff
+        batt_w = coordinator.read_float(hass, data.get(const.CONF_ENT_BATTERY_POWER, ""))
+        if batt_w is None:
+            return
         cost, credit = optimize_mod.cash_flows_eur(
             inputs.meter_w,
             batt_w,

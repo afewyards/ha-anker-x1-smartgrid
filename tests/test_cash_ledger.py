@@ -424,3 +424,60 @@ class TestLedgerEnergyPersistence:
         assert fresh.today_export_kwh == pytest.approx(1.25)
         assert fresh._ledger.today_grid_charge_kwh == pytest.approx(3.5)
         assert fresh._ledger.today_export_kwh == pytest.approx(1.25)
+
+
+class TestLedgerHouseAccumulators:
+    def test_house_import_accumulates_at_the_import_price(self):
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "-2000.0")  # charging
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)  # importing 1500 W
+        ctrl._accumulate_cash_ledger(BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, None)
+        # One 60 s tick at 1500 W = 0.025 kWh.
+        assert ctrl.today_house_import_kwh == pytest.approx(0.025)
+        assert ctrl.today_house_cost_eur == pytest.approx(0.025 * 0.30)
+
+    def test_pv_spill_export_counts_for_the_house_but_not_the_battery(self):
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "0.0")  # battery idle
+        inputs = PlantInputs(soc=90.0, meter_w=-1800.0, now=BASE)  # exporting PV
+        ctrl._accumulate_cash_ledger(BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, 0.20)
+        assert ctrl.today_house_export_kwh == pytest.approx(0.03)
+        assert ctrl.today_house_revenue_eur == pytest.approx(0.03 * 0.20)
+        assert ctrl.today_export_kwh == 0.0  # battery contributed nothing
+
+    def test_house_legs_accumulate_when_the_battery_reading_is_missing(self):
+        # batt_w unavailable: the battery legs cannot be attributed, but the
+        # meter still measured real grid flow and must not be dropped.
+        ctrl, hass = _ledger_ctrl()
+        hass.set_state("sensor.battery_power", "unavailable")
+        inputs = PlantInputs(soc=50.0, meter_w=1500.0, now=BASE)
+        ctrl._accumulate_cash_ledger(BASE, inputs, [PriceSlot(start=BASE, price=0.30)], 60, None)
+        assert ctrl.today_house_import_kwh == pytest.approx(0.025)
+        assert ctrl.today_grid_charge_kwh == 0.0
+
+    def test_rollover_resets_the_house_accumulators(self):
+        from custom_components.anker_x1_smartgrid.ledger import CashLedger
+
+        led = CashLedger()
+        led.day = "2026-07-19"
+        led.today_house_import_kwh = 5.0
+        led.today_house_export_kwh = 2.0
+        led.today_house_cost_eur = 1.0
+        led.today_house_revenue_eur = 0.5
+        led.rollover(datetime(2026, 7, 20, 12, 0, tzinfo=UTC))
+        assert led.today_house_import_kwh == 0.0
+        assert led.today_house_export_kwh == 0.0
+        assert led.today_house_cost_eur == 0.0
+        assert led.today_house_revenue_eur == 0.0
+
+
+def test_restore_without_house_keys_keeps_the_other_cash_ledger_fields():
+    # Stores written before the house legs existed have no such keys; a missing
+    # key must be skipped, not abort the rest of the cash-ledger group.
+    ctrl, _hass = _ledger_ctrl()
+    ctrl.restore({"today_charge_cost_eur": 1.5, "total_net_eur": 9.0, "today_export_kwh": 3.0})
+    assert ctrl.today_charge_cost_eur == pytest.approx(1.5)
+    assert ctrl.total_net_eur == pytest.approx(9.0)
+    assert ctrl.today_export_kwh == pytest.approx(3.0)
+    assert ctrl.today_house_import_kwh == 0.0
+    assert ctrl.today_house_revenue_eur == 0.0
