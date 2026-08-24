@@ -1,6 +1,6 @@
 # Anker X1 SmartGrid — per-day grid charge / export / € table
 #
-# Spec: docs/superpowers/specs/2026-08-01-card-crop-daily-stats-design.md
+# Spec: docs/superpowers/specs/2026-08-24-house-wide-energy-accounting-design.md
 #
 # No HACS dependency — `markdown` is a core Lovelace card. Paste this below
 # the apexcharts plan card.
@@ -10,24 +10,38 @@
 # are PLAN only. Future/mixed rows are marked so plan is never mistaken for
 # measurement.
 #
-# € is the battery cash basis: export revenue − grid-charge cost. No
-# cycle-cost or opportunity deductions (that is the separate economic PnL).
+# Two bases, side by side:
+#   Chg / Exp / Batt €  — the BATTERY cash basis: grid energy that reached the
+#     battery and battery energy that reached the grid (min() attribution), and
+#     export revenue − grid-charge cost. This is what the DP maximises.
+#   Imp / Exp / House € — the WHOLE HOUSE at the meter: every kWh imported or
+#     exported, including grid the house consumed directly and PV that spilled
+#     straight to the grid. This is the figure that reconciles against the
+#     utility meter and the HA Energy dashboard.
+#
+# Both € figures are NET of `export_fee_eur_per_kwh`. A utility that reports
+# feed-in gross (e.g. Zonneplan's "production costs today") will therefore read
+# higher than House € by fee × exported kWh.
+#
 # Where no export-price entity is configured (e.g. the France instance) the
-# revenue leg reads 0 by design — kWh is still measured.
+# revenue legs read 0 by design — kWh is still measured.
 type: markdown
 content: >-
   {% set days = state_attr('sensor.smartgrid_daily_stats', 'days') or [] %}
 
-  | Day | Charge | Export | Net |
+  | Day | Chg | Exp | Batt € | Imp | Exp | House € |
 
-  |---|--:|--:|--:|
+  |---|--:|--:|--:|--:|--:|--:|
 
   {% for d in days -%}
   | {{ d.date[5:] }}{% if d.source != 'actual' %} *{% endif %} |
-  {{ '%.1f' | format(d.grid_charge_kwh) }} kWh |
-  {{ '%.1f' | format(d.grid_export_kwh) }} kWh |
-  {{ '%+.2f' | format(d.net_eur) }} € |
+  {{ '%.1f' | format(d.grid_charge_kwh) }} |
+  {{ '%.1f' | format(d.grid_export_kwh) }} |
+  {{ '%+.2f' | format(d.net_eur) }} |
+  {{ '%.1f' | format(d.house_import_kwh) }} |
+  {{ '%.1f' | format(d.house_export_kwh) }} |
+  {{ '%+.2f' | format(d.house_net_eur) }} |
 
   {% endfor %}
 
-  {% if days %}<sub>* includes planned (not yet measured)</sub>{% else %}<sub>No data yet.</sub>{% endif %}
+  {% if days %}<sub>kWh. * includes planned (not yet measured). Chg/Exp/Batt € = battery; Imp/Exp/House € = whole house at the meter.</sub>{% else %}<sub>No data yet.</sub>{% endif %}

@@ -112,7 +112,11 @@ The `sensor.smartgrid_plan` entity exposes the full schedule as attributes:
 
 The `sensor.smartgrid_daily_stats` entity exposes the per-day table as attributes:
 
-- **`days`** — ordered list of per-day dicts, each with `date` (ISO `YYYY-MM-DD`), `grid_charge_kwh`, `grid_export_kwh`, `cost_eur`, `revenue_eur`, `net_eur`, `source` (`actual` / `mixed` / `plan`), `actual_net_eur`, `planned_net_eur`. Past days are measured, today is measured-so-far plus planned-remainder, future days are plan-only
+- **`days`** — ordered list of per-day dicts, each with `date` (ISO `YYYY-MM-DD`) and `source` (`actual` / `mixed` / `plan`), plus two accounting bases:
+  - **battery** — `grid_charge_kwh`, `grid_export_kwh`, `cost_eur`, `revenue_eur`, `net_eur`, `actual_net_eur`, `planned_net_eur`. Grid energy that reached the battery and battery energy that reached the grid (`min()` attribution); this is what the optimiser maximises
+  - **whole house** — `house_import_kwh`, `house_export_kwh`, `house_cost_eur`, `house_revenue_eur`, `house_net_eur`, `actual_house_net_eur`, `planned_house_net_eur`. Every kWh across the meter, including grid the house consumed directly and PV that spilled straight to the grid; this is the figure that reconciles against the utility meter
+
+  Past days are measured, today is measured-so-far plus planned-remainder, future days are plan-only. Both € bases are net of `export_fee_eur_per_kwh`, so a utility reporting feed-in gross will read higher by fee × exported kWh
 - **`window_days`** — rolling history depth of the table, in days back from today
 
 ## Dashboard
