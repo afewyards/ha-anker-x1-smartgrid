@@ -133,3 +133,12 @@ def test_fixture_filter_predicate_crops_thirteen_hours():
     assert real[-1]["start"] == "2026-08-02T21:45:00+00:00"
     assert horizon[-1]["start"] == "2026-08-03T10:00:00+00:00"
     assert len(horizon) - len(real) == 13
+
+
+def test_subtitle_net_reads_the_whole_house_basis():
+    # The subtitle's NET must be the WHOLE-HOUSE net, not the narrower battery
+    # cash basis — the two differ by several euro on the same day, and the
+    # house figure is the one that reconciles against the utility meter.
+    net = _card()["variables"]["NET"]
+    assert "house_net_eur" in net
+    assert "rows[i].net_eur" not in net

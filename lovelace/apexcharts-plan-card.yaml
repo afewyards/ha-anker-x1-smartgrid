@@ -46,7 +46,7 @@ variables:
   # Zonneplan/Frank tariff ends. The plan sensor still EMITS the tail —
   # the DP needs it for terminal value — this only stops drawing it.
   HR: (states['sensor.smartgrid_plan'].attributes.horizon || []).filter(function (h) { return !h.estimated; })
-  # Today's battery cash net: measured so far PLUS the plan's remainder for the
+  # Today's whole-house net: measured so far PLUS the plan's remainder for the
   # rest of the LOCAL day — the same figure the daily-stats table's today row
   # carries. Deliberately NOT the plan sensor's arbitrage_pnl, which spans the
   # whole ~42h horizon and so answered a different question than the subtitle
@@ -59,7 +59,12 @@ variables:
   #
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
   # YAML plain scalar ("mapping values are not allowed here").
-  NET: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].net_eur))) return Number(rows[i].net_eur); } return null; })()"
+  # Reads house_net_eur, NOT net_eur: the WHOLE-HOUSE basis (every kWh across
+  # the meter, including grid the house consumed directly and PV that spilled
+  # straight to the grid), which is the figure that reconciles against the
+  # utility meter. net_eur next to it is the narrower battery cash basis and
+  # can differ by several euro on the same day.
+  NET: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].house_net_eur))) return Number(rows[i].house_net_eur); } return null; })()"
   # Predictor tier status (spec 2026-07-21). Guarded on both the entity and the
   # attribute so a restart mid-render shows "—" rather than "undefined".
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
