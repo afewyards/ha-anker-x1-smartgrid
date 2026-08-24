@@ -2344,26 +2344,25 @@ class Controller:
         Safe because the caller runs BEFORE ``_accumulate_cash_ledger`` in the
         same tick, so the legs still hold exactly what ``restore`` put there.
 
-        Two guards keep it from double-counting.  It runs once per process, so
-        the day rollover — which legitimately zeroes the legs at 00:00 — cannot
-        re-seed them from what is by then a fresh, near-empty sample set.  And
-        it only fires while EVERY leg is still zero, so an ordinary mid-day
-        restart keeps its persisted running totals instead of adding the
-        pre-restart hours a second time.
+        The samples OVERWRITE the restored values rather than only filling in
+        zeros.  A "seed only while every leg is zero" guard looks safer but
+        fails the exact case this exists for: the first upgraded start books a
+        few ticks before the next restart, so the store then holds a tiny
+        non-zero total (live lab 2026-08-24: 0.0045 kWh / EUR 0.0012) that
+        reads as "already populated" and suppresses the seed forever.  There is
+        nothing to double-count either way — ``samples`` records every tick of
+        the day, so its total already covers whatever the restored running
+        total covered, and the ledger only has to carry the day forward from
+        this tick.
+
+        Runs once per process, so the day rollover — which legitimately zeroes
+        the legs at 00:00 — cannot re-seed them from what is by then a fresh,
+        near-empty sample set.
         """
         if self._house_ledger_seeded:
             return
         self._house_ledger_seeded = True
         _led = self._ledger
-        if any(
-            (
-                _led.today_house_import_kwh,
-                _led.today_house_export_kwh,
-                _led.today_house_cost_eur,
-                _led.today_house_revenue_eur,
-            )
-        ):
-            return
         _rec = self._daily_actuals.get(today)
         if not _rec:
             return

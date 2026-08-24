@@ -423,18 +423,22 @@ class TestHouseLedgerSeed:
         assert ctrl.today_house_cost_eur == pytest.approx(1.0)
         assert ctrl.today_house_revenue_eur == pytest.approx(1.0 * (0.10 - ctrl.cfg.export_fee_eur_per_kwh))
 
-    async def test_restored_house_legs_are_never_overwritten(self):
-        # A normal mid-day restart HAS persisted values; re-seeding them from
-        # samples would double-count the pre-restart part of the day.
+    async def test_samples_win_over_a_partially_accumulated_ledger(self):
+        # The case the seed exists for: a first upgraded start booked a few
+        # ticks before the next restart, so the store holds a tiny non-zero
+        # total. Treating that as "already populated" would suppress the seed
+        # forever and the day would stay short by its pre-upgrade hours.
         from tests.helpers import make_controller
 
         ctrl, _act = make_controller()
-        ctrl.today_house_import_kwh = 9.0
+        ctrl.today_house_import_kwh = 0.0045
+        ctrl.today_house_cost_eur = 0.0012
         ctrl._recorder.read_feature_rows = lambda since_iso: self._rows(date(2026, 8, 1))
 
         await ctrl._refresh_daily_actuals(datetime(2026, 8, 1, 14, 0, tzinfo=UTC))
 
-        assert ctrl.today_house_import_kwh == pytest.approx(9.0)
+        assert ctrl.today_house_import_kwh == pytest.approx(4.0)
+        assert ctrl.today_house_cost_eur == pytest.approx(1.0)
 
     async def test_seed_runs_only_once_per_process(self):
         from tests.helpers import make_controller
