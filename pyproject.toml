@@ -102,6 +102,11 @@ reportIndexIssue = false
 reportCallIssue = false
 reportReturnType = false
 reportAssignmentType = false
+# HA's Entity metaclass declares native_value/is_on/extra_state_attributes as
+# cached_property and explicitly supports subclasses overriding them with a plain
+# @property; pyright does not model that metaclass, so every integration entity
+# trips this rule.
+reportIncompatibleVariableOverride = false
 # Intentional guards
 reportUnnecessaryComparison = false
 reportUnnecessaryIsInstance = false
