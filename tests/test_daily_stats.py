@@ -500,9 +500,7 @@ class TestHouseLegsPlanned:
 
 def test_merge_carries_house_keys_and_nets_them():
     actual = daily_stats.new_day_totals()
-    actual.update(
-        {"house_import_kwh": 10.0, "house_export_kwh": 4.0, "house_cost_eur": 3.0, "house_revenue_eur": 1.0}
-    )
+    actual.update({"house_import_kwh": 10.0, "house_export_kwh": 4.0, "house_cost_eur": 3.0, "house_revenue_eur": 1.0})
     rows = daily_stats.merge_days({}, {}, actual, date(2026, 7, 20))
     row = rows[0]
     assert row["house_import_kwh"] == pytest.approx(10.0)

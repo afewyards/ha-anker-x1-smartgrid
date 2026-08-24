@@ -220,12 +220,8 @@ def test_retrain_sync_remote_tail_hour_uses_the_local_model_not_flat_400():
     assert ctl.predictor.predict(_HOUR_A, 12.0, const.DEFAULT_FALLBACK_LOAD_W) == 400.0
 
     # Past the map → the local hour-of-day shape, and it must actually be shaped.
-    night = ctl.predictor.predict(
-        datetime(2026, 6, 23, 3, 0, tzinfo=UTC), 12.0, const.DEFAULT_FALLBACK_LOAD_W
-    )
-    evening = ctl.predictor.predict(
-        datetime(2026, 6, 23, 19, 0, tzinfo=UTC), 12.0, const.DEFAULT_FALLBACK_LOAD_W
-    )
+    night = ctl.predictor.predict(datetime(2026, 6, 23, 3, 0, tzinfo=UTC), 12.0, const.DEFAULT_FALLBACK_LOAD_W)
+    evening = ctl.predictor.predict(datetime(2026, 6, 23, 19, 0, tzinfo=UTC), 12.0, const.DEFAULT_FALLBACK_LOAD_W)
     assert night != const.DEFAULT_FALLBACK_LOAD_W
     assert evening != const.DEFAULT_FALLBACK_LOAD_W
     assert evening > night * 2, f"tail must keep the night/evening shape, got {night=} {evening=}"

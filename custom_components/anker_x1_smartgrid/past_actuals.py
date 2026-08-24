@@ -161,12 +161,8 @@ def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60) -> dict[dat
             and r.get("batt_discharge_kwh") is not None
         ]
         if _paired:
-            grid_charge_kwh = sum(
-                min(float(r["grid_import_kwh"]), float(r["batt_charge_kwh"])) for r in _paired
-            )
-            export_kwh = sum(
-                min(float(r["grid_export_kwh"]), float(r["batt_discharge_kwh"])) for r in _paired
-            )
+            grid_charge_kwh = sum(min(float(r["grid_import_kwh"]), float(r["batt_charge_kwh"])) for r in _paired)
+            export_kwh = sum(min(float(r["grid_export_kwh"]), float(r["batt_discharge_kwh"])) for r in _paired)
         else:
             grid_charge_kwh = grid_charge_w / 1000.0 * slot_h * coverage
             export_kwh = grid_export_w / 1000.0 * slot_h * coverage
