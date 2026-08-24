@@ -1797,3 +1797,19 @@ def test_past_slot_kwh_unscaled_at_default_slot_minutes():
     )
     assert out[0]["pv_kwh"] == 0.837
     assert out[0]["load_kwh"] == 0.412
+
+
+def test_row_emits_self_discharge_kwh_matching_its_power():
+    # No sun and 400 W of load: the battery covers the deficit, so
+    # self_discharge_w == 400. The published kWh must equal W * dt_h / 1000,
+    # the invariant every other energy column on the row already holds.
+    cfg = Config(capacity_kwh=10.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+    intervals = [
+        ForecastInterval(BASE, pv_w=0.0, load_w=400.0, dt_h=1.0),
+        ForecastInterval(BASE + timedelta(hours=1), pv_w=0.0, load_w=400.0, dt_h=1.0),
+    ]
+    out = plan.build_plan_horizon(_slots(2), intervals, [], 50.0, BASE + timedelta(hours=2), cfg)
+    assert out[0]["self_discharge_w"] == 400.0
+    assert out[0]["self_discharge_kwh"] == pytest.approx(0.4)
+    for r in out:
+        assert r["self_discharge_kwh"] == pytest.approx(round(r["self_discharge_w"] * 1.0 / 1000.0, 3))

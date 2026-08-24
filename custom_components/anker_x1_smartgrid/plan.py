@@ -498,6 +498,7 @@ def build_plan_horizon(
                 "solar_charge_kwh": round(solar_charge_w * dt_h / 1000.0, 3),
                 "grid_charge_kwh": round(grid_charge_w_disp * dt_h / 1000.0, 3),
                 "grid_export_kwh": round(grid_export_w * dt_h / 1000.0, 3),
+                "self_discharge_kwh": round(self_discharge_w * dt_h / 1000.0, 3),
             }
         )
     return out
