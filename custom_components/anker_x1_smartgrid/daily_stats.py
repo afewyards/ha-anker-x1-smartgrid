@@ -31,11 +31,21 @@ _ZERO: dict = {
     "revenue_eur": 0.0,
     "coverage_ticks": 0,
     "null_ticks": 0,
+    "house_import_kwh": 0.0,
+    "house_export_kwh": 0.0,
+    "house_cost_eur": 0.0,
+    "house_revenue_eur": 0.0,
+    "house_null_ticks": 0,
 }
 
 # The four v9 per-tick delta columns the attribution needs. A row missing any
 # one of them cannot be attributed at all (see aggregate_actual_days).
 _DELTA_COLUMNS = ("grid_import_kwh", "grid_export_kwh", "batt_charge_kwh", "batt_discharge_kwh")
+
+# The two meter columns the WHOLE-HOUSE legs need. Deliberately a smaller set
+# than _DELTA_COLUMNS: a row that lost its battery readings can still be
+# attributed to the house, and suppressing it would under-report the meter.
+_METER_COLUMNS = ("grid_import_kwh", "grid_export_kwh")
 
 
 def new_day_totals() -> dict:
@@ -64,10 +74,21 @@ def aggregate_actual_days(
     the RAW feed-in tariff, so the fee is subtracted here (mirrors
     ``optimize.effective_export_price``).
 
-    A row missing any of the four v9 delta columns cannot be attributed; it
-    increments ``null_ticks`` and contributes nothing, so a gappy day reads as
-    gappy rather than silently small.  A NULL price zeroes only its own €
-    leg — the kWh is still counted (France runs with no export-price entity).
+    Two attributions come out of the same pass:
+
+    - the BATTERY legs (``grid_charge_kwh`` / ``grid_export_kwh``), the
+      ``min()`` rule of ``optimize.cash_energy_kwh``;
+    - the WHOLE-HOUSE legs (``house_import_kwh`` / ``house_export_kwh``), the
+      raw meter integrals, which additionally hold grid energy the house
+      consumed directly and PV that spilled straight to the grid.
+
+    A row missing any of the four v9 delta columns cannot be attributed to the
+    battery; it increments ``null_ticks`` and contributes nothing to those
+    legs, so a gappy day reads as gappy rather than silently small.  The house
+    legs need only the two meter columns and have their own
+    ``house_null_ticks`` — a row with a live meter but no battery reading still
+    counts for the house.  A NULL price zeroes only its own € leg — the kWh is
+    still counted (France runs with no export-price entity).
     """
     out: dict[date, dict] = {}
     for row in rows:
@@ -75,6 +96,22 @@ def aggregate_actual_days(
         if ts is None:
             continue
         rec = out.setdefault(ts.astimezone(tz).date(), new_day_totals())
+        import_price = row.get("import_price")
+        export_price = row.get("export_price")
+        # House legs first: they need only the two meter columns, so a row that
+        # lost its battery readings still counts here. The two coverage
+        # counters therefore move independently.
+        if any(row.get(col) is None for col in _METER_COLUMNS):
+            rec["house_null_ticks"] += 1
+        else:
+            house_import_kwh = float(row["grid_import_kwh"])
+            house_export_kwh = float(row["grid_export_kwh"])
+            rec["house_import_kwh"] += house_import_kwh
+            rec["house_export_kwh"] += house_export_kwh
+            if import_price is not None:
+                rec["house_cost_eur"] += house_import_kwh * float(import_price)
+            if export_price is not None:
+                rec["house_revenue_eur"] += house_export_kwh * (float(export_price) - export_fee_eur_per_kwh)
         if any(row.get(col) is None for col in _DELTA_COLUMNS):
             rec["null_ticks"] += 1
             continue
@@ -83,10 +120,8 @@ def aggregate_actual_days(
         batt_export_kwh = min(float(row["grid_export_kwh"]), float(row["batt_discharge_kwh"]))
         rec["grid_charge_kwh"] += grid_charge_kwh
         rec["grid_export_kwh"] += batt_export_kwh
-        import_price = row.get("import_price")
         if import_price is not None:
             rec["cost_eur"] += grid_charge_kwh * float(import_price)
-        export_price = row.get("export_price")
         if export_price is not None:
             rec["revenue_eur"] += batt_export_kwh * (float(export_price) - export_fee_eur_per_kwh)
     return out

@@ -419,3 +419,36 @@ class TestHouseEnergyKwh:
 
     def test_zero_meter_is_both_legs_zero(self):
         assert optimize.house_energy_kwh(0.0, 1.0) == (0.0, 0.0)
+
+
+class TestHouseLegsActual:
+    def test_house_legs_count_all_grid_flow_not_just_the_battery_share(self):
+        # Imported 0.05 while the battery took 0.02: battery leg 0.02, house 0.05.
+        rows = [_row(datetime(2026, 7, 20, 10, 0, tzinfo=UTC), grid_import_kwh=0.05, batt_charge_kwh=0.02)]
+        day = daily_stats.aggregate_actual_days(rows, 0.0, CEST)[date(2026, 7, 20)]
+        assert day["grid_charge_kwh"] == pytest.approx(0.02)
+        assert day["house_import_kwh"] == pytest.approx(0.05)
+        assert day["house_cost_eur"] == pytest.approx(0.05 * 0.30)
+
+    def test_pv_spill_export_counts_for_the_house_but_not_the_battery(self):
+        # Exported 0.04 with the battery idle: pure PV spill.
+        rows = [_row(datetime(2026, 7, 20, 12, 0, tzinfo=UTC), grid_export_kwh=0.04, batt_discharge_kwh=0.0)]
+        day = daily_stats.aggregate_actual_days(rows, 0.05, CEST)[date(2026, 7, 20)]
+        assert day["grid_export_kwh"] == pytest.approx(0.0)
+        assert day["house_export_kwh"] == pytest.approx(0.04)
+        assert day["house_revenue_eur"] == pytest.approx(0.04 * (0.25 - 0.05))
+
+    def test_null_battery_columns_still_yield_house_totals(self):
+        # The house legs need only the two meter columns.
+        rows = [_row(datetime(2026, 7, 20, 3, 0, tzinfo=UTC), grid_import_kwh=0.07, batt_charge_kwh=None)]
+        day = daily_stats.aggregate_actual_days(rows, 0.0, CEST)[date(2026, 7, 20)]
+        assert day["null_ticks"] == 1
+        assert day["coverage_ticks"] == 0
+        assert day["house_null_ticks"] == 0
+        assert day["house_import_kwh"] == pytest.approx(0.07)
+
+    def test_null_meter_columns_increment_house_null_ticks_only(self):
+        rows = [_row(datetime(2026, 7, 20, 4, 0, tzinfo=UTC), grid_import_kwh=None, grid_export_kwh=None)]
+        day = daily_stats.aggregate_actual_days(rows, 0.0, CEST)[date(2026, 7, 20)]
+        assert day["house_null_ticks"] == 1
+        assert day["house_import_kwh"] == 0.0
