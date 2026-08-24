@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone, UTC
 
 import pytest
 
-from custom_components.anker_x1_smartgrid import daily_stats
+from custom_components.anker_x1_smartgrid import daily_stats, optimize
 
 # UTC+2 — the lab/France local zone in August. Chosen so that a 22:00Z tick
 # lands on the NEXT local day, which is what makes the tz parameter matter.
@@ -408,3 +408,14 @@ class TestMergeDays:
     def test_date_is_an_iso_string_not_a_date_object(self):
         rows = daily_stats.merge_days({}, {}, _totals(), TODAY)
         assert isinstance(rows[0]["date"], str)
+
+
+class TestHouseEnergyKwh:
+    def test_import_leg_only_when_meter_positive(self):
+        assert optimize.house_energy_kwh(1000.0, 1.0) == pytest.approx((1.0, 0.0))
+
+    def test_export_leg_only_when_meter_negative(self):
+        assert optimize.house_energy_kwh(-1000.0, 0.5) == pytest.approx((0.0, 0.5))
+
+    def test_zero_meter_is_both_legs_zero(self):
+        assert optimize.house_energy_kwh(0.0, 1.0) == (0.0, 0.0)

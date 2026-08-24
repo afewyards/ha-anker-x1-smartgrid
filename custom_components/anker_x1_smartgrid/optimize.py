@@ -317,6 +317,22 @@ def cash_energy_kwh(meter_w: float, batt_w: float, tick_h: float) -> tuple[float
     return grid_charge_w / 1000.0 * tick_h, batt_export_w / 1000.0 * tick_h
 
 
+def house_energy_kwh(meter_w: float, tick_h: float) -> tuple[float, float]:
+    """``(house_import_kwh, house_export_kwh)`` at the meter for one tick.
+
+    Deliberately beside :func:`cash_energy_kwh`: that one attributes the
+    BATTERY's share of the meter, this one the WHOLE HOUSE.  So it keeps grid
+    energy the house consumed directly and PV that spilled straight to the
+    grid — the two flows the ``min()`` attribution above cannot see.
+
+    ``meter_w`` positive = grid import, negative = export.  Identical to what
+    ``recorder.append`` writes into the ``grid_import_kwh`` /
+    ``grid_export_kwh`` columns, so the live ledger and the recorded-sample
+    replay in ``daily_stats`` cannot drift.
+    """
+    return max(0.0, meter_w) / 1000.0 * tick_h, max(0.0, -meter_w) / 1000.0 * tick_h
+
+
 def cash_flows_eur(
     meter_w: float,
     batt_w: float,
