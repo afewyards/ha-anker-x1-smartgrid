@@ -192,13 +192,31 @@ def aggregate_planned_days(
         export_kwh = float(row.get("grid_export_kwh") or 0.0)
         rec["grid_charge_kwh"] += charge_kwh
         rec["grid_export_kwh"] += export_kwh
+        # Whole-house flows follow by balance from the plan's own AC model
+        # (plan.build_plan_horizon): PV serves load first, the surplus charges,
+        # self-discharge covers any remaining deficit, and grid_export is
+        # net-of-house. The max(0, -net) term is PV spill — the leg the
+        # battery-basis columns above cannot see.
+        net_kwh = (
+            float(row.get("load_kwh") or 0.0)
+            + float(row.get("solar_charge_kwh") or 0.0)
+            + charge_kwh
+            - float(row.get("pv_kwh") or 0.0)
+            - float(row.get("self_discharge_kwh") or 0.0)
+        )
+        house_import_kwh = max(0.0, net_kwh)
+        house_export_kwh = max(0.0, -net_kwh) + export_kwh
+        rec["house_import_kwh"] += house_import_kwh
+        rec["house_export_kwh"] += house_export_kwh
         price = row.get("price")
         import_price = None if price is None else float(price)
         if import_price is not None:
             rec["cost_eur"] += charge_kwh * import_price
+            rec["house_cost_eur"] += house_import_kwh * import_price
         export_price = export_price_at(start, import_price)
         if export_price is not None:
             rec["revenue_eur"] += export_kwh * float(export_price)
+            rec["house_revenue_eur"] += house_export_kwh * float(export_price)
     return out
 
 

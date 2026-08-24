@@ -452,3 +452,47 @@ class TestHouseLegsActual:
         day = daily_stats.aggregate_actual_days(rows, 0.0, CEST)[date(2026, 7, 20)]
         assert day["house_null_ticks"] == 1
         assert day["house_import_kwh"] == 0.0
+
+
+class TestHouseLegsPlanned:
+    def _horizon(self, **cols):
+        base = {
+            "start": datetime(2026, 7, 20, 10, 0, tzinfo=UTC).isoformat(),
+            "price": 0.20,
+            "pv_kwh": 0.0,
+            "load_kwh": 0.0,
+            "solar_charge_kwh": 0.0,
+            "grid_charge_kwh": 0.0,
+            "grid_export_kwh": 0.0,
+            "self_discharge_kwh": 0.0,
+        }
+        base.update(cols)
+        return [base]
+
+    def test_grid_charge_slot_imports_exactly_the_charge(self):
+        # pv 0.202 covers load 0.151; surplus 0.051 charges; grid adds 2.148.
+        h = self._horizon(pv_kwh=0.202, load_kwh=0.151, solar_charge_kwh=0.051, grid_charge_kwh=2.148)
+        day = daily_stats.aggregate_planned_days(h, lambda s, p: 0.10, CEST)[date(2026, 7, 20)]
+        assert day["house_import_kwh"] == pytest.approx(2.148)
+        assert day["house_export_kwh"] == pytest.approx(0.0)
+        assert day["house_cost_eur"] == pytest.approx(2.148 * 0.20)
+
+    def test_export_slot_exports_and_battery_covers_the_house(self):
+        h = self._horizon(pv_kwh=0.048, load_kwh=0.182, self_discharge_kwh=0.134, grid_export_kwh=2.955)
+        day = daily_stats.aggregate_planned_days(h, lambda s, p: 0.10, CEST)[date(2026, 7, 20)]
+        assert day["house_import_kwh"] == pytest.approx(0.0)
+        assert day["house_export_kwh"] == pytest.approx(2.955)
+        assert day["house_revenue_eur"] == pytest.approx(2.955 * 0.10)
+
+    def test_idle_slot_draws_nothing_from_the_grid(self):
+        h = self._horizon(pv_kwh=0.03, load_kwh=0.103, self_discharge_kwh=0.073)
+        day = daily_stats.aggregate_planned_days(h, lambda s, p: 0.10, CEST)[date(2026, 7, 20)]
+        assert day["house_import_kwh"] == pytest.approx(0.0)
+        assert day["house_export_kwh"] == pytest.approx(0.0)
+
+    def test_pv_spill_exports_when_the_battery_cannot_absorb_it(self):
+        # Full pack: pv 3.0 over load 0.5, nothing charges -> 2.5 spills to grid.
+        h = self._horizon(pv_kwh=3.0, load_kwh=0.5)
+        day = daily_stats.aggregate_planned_days(h, lambda s, p: 0.10, CEST)[date(2026, 7, 20)]
+        assert day["house_export_kwh"] == pytest.approx(2.5)
+        assert day["house_revenue_eur"] == pytest.approx(2.5 * 0.10)
