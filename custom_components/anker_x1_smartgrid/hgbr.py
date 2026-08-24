@@ -61,6 +61,10 @@ from . import featureset
 _TZ_AMS = ZoneInfo("Europe/Amsterdam")
 _NAN: float = float("nan")
 
+# Longest hole predict_series will carry the last measured load across before
+# the first horizon hour (see _bridge_seam).
+_MAX_SEAM_CARRY_H = 3
+
 
 def _coerce_serve(x: float | None) -> float:
     """Coerce a serve-time signal to float, mapping None/NaN/uncoercible → NaN."""
@@ -251,6 +255,8 @@ class HGBRQuantileModel:
         humidity: float | None = None,
         wind_speed: float | None = None,
         persons_home: float | None = None,
+        utc_lookup: dict | None = None,
+        local_date_kwh: dict | None = None,
     ) -> float:
         """Predict house load (W) for the target hour.
 
@@ -267,6 +273,11 @@ class HGBRQuantileModel:
         quantile:
             Which trained quantile to use.  Must be a key in ``_models``.
             Default: ``0.5`` (median).
+        utc_lookup, local_date_kwh:
+            Lag history to resolve the lag features against; defaults to the
+            model's own (train-time / ``refresh_lookups``) lookups.
+            ``predict_series`` passes a working copy carrying its own
+            predictions so a multi-hour horizon keeps real-valued lags.
 
         Returns
         -------
@@ -295,6 +306,8 @@ class HGBRQuantileModel:
             humidity=humidity,
             wind_speed=wind_speed,
             persons_home=persons_home,
+            utc_lookup=utc_lookup,
+            local_date_kwh=local_date_kwh,
         )
         if vec is None:
             return fallback_w
@@ -308,6 +321,81 @@ class HGBRQuantileModel:
             return max(0.0, raw)
         except Exception:  # pragma: no cover — defensive catch for unexpected errors
             return fallback_w
+
+    def predict_series(
+        self,
+        hours: Sequence[dict],
+        fallback_w: float,
+        *,
+        quantiles: Sequence[float] = (0.5,),
+    ) -> list[dict[float, float]]:
+        """Predict a whole horizon at once, feeding each hour's lags forward.
+
+        Why this exists
+        ---------------
+        ``load_lag_1h`` is present on every training row but resolvable for at
+        most the FIRST horizon hour at serve time — the rollup for the hour
+        before any later one does not exist yet.  Handing the model NaN there
+        puts the feature vector where training never went, and its output
+        collapses to a near constant: the diurnal shape the DP plans against
+        disappears (live 2026-08-24: a flat ~1.7 kW against a 471 W daily
+        mean).  Predicting the horizon as a SERIES fixes that at the source —
+        each hour's own prediction becomes the next hour's ``load_lag_1h``,
+        and rolls into ``rolling_mean_24h`` / ``load_lag_24h`` /
+        ``prev_day_total_kwh`` the same way a measured hour would.
+
+        Parameters
+        ----------
+        hours:
+            Hour dicts, any order (predicted chronologically, returned in
+            request order).  ``when`` is a UTC-aware datetime; ``temp``,
+            ``cloud_cover``, ``humidity``, ``wind_speed`` and ``persons_home``
+            are optional and forwarded per hour.
+        fallback_w:
+            Per-hour fallback, as in :meth:`predict_load_w`.
+        quantiles:
+            Which trained quantiles to return per hour.  The chain is fed the
+            median when it is requested, else the first quantile asked for —
+            never a high quantile, whose bias would compound down the horizon.
+
+        Returns
+        -------
+        One ``{quantile: watts}`` dict per requested hour, in request order.
+        Measured hours are never overwritten, and the model's own lookups are
+        left untouched, so nothing leaks into the next request.
+        """
+        qs = [float(q) for q in quantiles]
+        results: list[dict[float, float]] = [dict.fromkeys(qs, fallback_w) for _ in hours]
+        if not self._fitted or not hours:
+            return results
+
+        lookup = dict(self._utc_lookup)
+        date_kwh = dict(self._local_date_kwh)
+        chain_q = 0.5 if 0.5 in qs else qs[0]
+
+        for idx in sorted(range(len(hours)), key=lambda i: hours[i]["when"]):
+            hour = hours[idx]
+            when = hour["when"]
+            self._bridge_seam(lookup, date_kwh, when)
+            preds = {
+                q: self.predict_load_w(
+                    when,
+                    hour.get("temp"),
+                    fallback_w,
+                    quantile=q,
+                    cloud_cover=hour.get("cloud_cover"),
+                    humidity=hour.get("humidity"),
+                    wind_speed=hour.get("wind_speed"),
+                    persons_home=hour.get("persons_home"),
+                    utc_lookup=lookup,
+                    local_date_kwh=date_kwh,
+                )
+                for q in qs
+            }
+            results[idx] = preds
+            if lookup.get(when) is None:
+                self._record_chain_hour(lookup, date_kwh, when, preds[chain_q])
+        return results
 
     def is_ready(
         self,
@@ -390,6 +478,41 @@ class HGBRQuantileModel:
         self._utc_lookup = utc_lookup
         self._local_date_kwh = local_date_kwh
 
+    @staticmethod
+    def _record_chain_hour(
+        lookup: dict,
+        date_kwh: dict,
+        when: datetime,
+        load_w: float,
+    ) -> None:
+        """Book a chain value into the working lag history, mirroring a rollup row."""
+        lookup[when] = load_w
+        local_d = when.astimezone(_TZ_AMS).date()
+        date_kwh[local_d] = date_kwh.get(local_d, 0.0) + load_w / 1000.0
+
+    def _bridge_seam(self, lookup: dict, date_kwh: dict, when: datetime) -> None:
+        """Carry the last known load forward across a short hole before *when*.
+
+        The rollup for the hour in progress is not written until it closes, so
+        a horizon that starts a couple of hours past the newest row would hand
+        the FIRST hour a NaN ``load_lag_1h`` — and that hour then seeds every
+        later one.  Persisting the last measured value across the hole keeps
+        the chain's entry point in-distribution.  Bounded by
+        ``_MAX_SEAM_CARRY_H``: past that the history is too stale to bridge
+        honestly, and NaN (fallback territory) is the truthful answer.
+        """
+        if lookup.get(when - timedelta(hours=1)) is not None:
+            return
+        for back in range(2, _MAX_SEAM_CARRY_H + 2):
+            known = lookup.get(when - timedelta(hours=back))
+            if known is None:
+                continue
+            for fill in range(1, back):
+                gap_hour = when - timedelta(hours=fill)
+                if lookup.get(gap_hour) is None:
+                    self._record_chain_hour(lookup, date_kwh, gap_hour, float(known))
+            return
+
     def _assemble_feature_vector(
         self,
         when: datetime,
@@ -398,6 +521,8 @@ class HGBRQuantileModel:
         humidity: float | None = None,
         wind_speed: float | None = None,
         persons_home: float | None = None,
+        utc_lookup: dict | None = None,
+        local_date_kwh: dict | None = None,
     ) -> list[float] | None:
         """Assemble one 18-float feature vector for the target hour.
 
@@ -431,7 +556,11 @@ class HGBRQuantileModel:
 
             # --- Lag features (5) --- shared helper ensures train/predict consistency
             t = when
-            lags = featureset.encode_lag_features_from_lookups(self._utc_lookup, self._local_date_kwh, t)
+            lags = featureset.encode_lag_features_from_lookups(
+                self._utc_lookup if utc_lookup is None else utc_lookup,
+                self._local_date_kwh if local_date_kwh is None else local_date_kwh,
+                t,
+            )
 
             # --- Weather features (7) --- only temp is available at serve time
             if temp is None or (isinstance(temp, float) and math.isnan(temp)):

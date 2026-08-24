@@ -78,8 +78,17 @@ def predict_hours(
     quantiles, ``p80`` is clamped to ``max(p50, p80)``.  Biasing upward
     is safe: P80 is the deficit-cushion quantile, so a larger value is
     conservative rather than aggressive.
+
+    Multi-step
+    ----------
+    The accepted hours are predicted as ONE chain
+    (``HGBRQuantileModel.predict_series``), not independently.  Only the
+    first horizon hour can resolve ``load_lag_1h`` from a completed rollup
+    row; predicting hour by hour hands every later one NaN — a region the
+    training rows never occupy — and the forecast collapses to a near
+    constant (live 2026-08-24: a flat ~1.7 kW against a 471 W daily mean).
     """
-    results: list[dict] = []
+    accepted: list[tuple[str, dict]] = []
 
     for hour in future_hours:
         try:
@@ -98,57 +107,63 @@ def predict_hours(
                 _log.warning("predict_hours: naive ts %r (no tzinfo), skipping", ts_raw)
                 continue
 
-            temp: float | None = hour.get("temp_forecast")
-            cloud_cover: float | None = hour.get("cloud_cover")
-            humidity: float | None = hour.get("humidity")
-            wind_speed: float | None = hour.get("wind_speed")
-            persons_home: float | None = hour.get("persons_home")
-
-            p50 = model.predict_load_w(
-                ts_dt,
-                temp,
-                DEFAULT_FALLBACK_LOAD_W,
-                quantile=0.5,
-                cloud_cover=cloud_cover,
-                humidity=humidity,
-                wind_speed=wind_speed,
-                persons_home=persons_home,
-            )
-            p80 = model.predict_load_w(
-                ts_dt,
-                temp,
-                DEFAULT_FALLBACK_LOAD_W,
-                quantile=0.8,
-                cloud_cover=cloud_cover,
-                humidity=humidity,
-                wind_speed=wind_speed,
-                persons_home=persons_home,
-            )
-
-            # Drop non-finite values before they reach the control loop.
-            if not math.isfinite(p50) or not math.isfinite(p80):
-                _log.warning(
-                    "predict_hours: non-finite prediction for ts=%r (p50=%s p80=%s), skipping",
+            accepted.append(
+                (
                     ts_raw,
-                    p50,
-                    p80,
+                    {
+                        "when": ts_dt,
+                        "temp": hour.get("temp_forecast"),
+                        "cloud_cover": hour.get("cloud_cover"),
+                        "humidity": hour.get("humidity"),
+                        "wind_speed": hour.get("wind_speed"),
+                        "persons_home": hour.get("persons_home"),
+                    },
                 )
-                continue
-
-            # Clamp monotonicity: independent quantile estimators can cross.
-            # Biasing P80 upward is safe — it is the conservative cushion value.
-            p80 = max(p50, p80)
-
-            results.append(
-                {
-                    "ts": ts_raw,
-                    "p50_w": round(p50, 1),
-                    "p80_w": round(p80, 1),
-                }
             )
-
         except Exception:
             _log.exception("predict_hours: unexpected error for hour %r, skipping", hour)
+
+    if not accepted:
+        return []
+
+    try:
+        series = model.predict_series(
+            [entry for _, entry in accepted],
+            DEFAULT_FALLBACK_LOAD_W,
+            quantiles=(0.5, 0.8),
+        )
+    except Exception:
+        # Never raise: an empty body reads as "no forecast" and the caller
+        # falls back to its local tier.
+        _log.exception("predict_hours: multi-step prediction failed, returning no hours")
+        return []
+
+    results: list[dict] = []
+    for (ts_raw, _), preds in zip(accepted, series, strict=True):
+        p50 = float(preds.get(0.5, DEFAULT_FALLBACK_LOAD_W))
+        p80 = float(preds.get(0.8, p50))
+
+        # Drop non-finite values before they reach the control loop.
+        if not math.isfinite(p50) or not math.isfinite(p80):
+            _log.warning(
+                "predict_hours: non-finite prediction for ts=%r (p50=%s p80=%s), skipping",
+                ts_raw,
+                p50,
+                p80,
+            )
+            continue
+
+        # Clamp monotonicity: independent quantile estimators can cross.
+        # Biasing P80 upward is safe — it is the conservative cushion value.
+        p80 = max(p50, p80)
+
+        results.append(
+            {
+                "ts": ts_raw,
+                "p50_w": round(p50, 1),
+                "p80_w": round(p80, 1),
+            }
+        )
 
     return results
 

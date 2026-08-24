@@ -636,3 +636,32 @@ async def test_rollup_skips_when_recorder_none(monkeypatch):
     result = await ctrl.tick()
 
     assert result["reason"] == "disabled"
+
+
+def test_retrain_hgbr_gate_grades_the_regime_the_tier_serves(monkeypatch):
+    """The in-process tier is asked for one hour at a time and cannot chain a
+    horizon, so its promotion gate must score that same per-hour regime —
+    grading a chained horizon would promote a model this tier cannot serve."""
+    from custom_components.anker_x1_smartgrid import hgbr as hgbr_mod
+    from custom_components.anker_x1_smartgrid import backtest as bt_mod
+
+    captured: dict = {}
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return _fake_promote_metrics()
+
+    monkeypatch.setattr(hgbr_mod.HGBRQuantileModel, "is_ready", lambda self, rows, **kw: True)
+    monkeypatch.setattr(bt_mod, "walk_forward_hgbr", _capture)
+    monkeypatch.setattr(bt_mod, "should_promote", lambda m: True)
+
+    def _fake_fit(self, rows, **kw):
+        self._fitted = True
+        return self
+
+    monkeypatch.setattr(hgbr_mod.HGBRQuantileModel, "fit", _fake_fit)
+
+    rec = _HGBRRec(hourly_rows=[{"hour_ts": "2025-01-01T00:00:00+00:00", "house_load_mean": 800.0}])
+    _make_retrain_ctl(rec)._retrain_sync("2025-01-01T00:00:00+00:00")
+
+    assert captured.get("chained") is False

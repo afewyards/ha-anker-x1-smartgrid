@@ -252,6 +252,7 @@ def walk_forward_hgbr(
     test_days: int,
     fallback_w: float,
     quantiles: tuple[float, ...] = (0.5, 0.8),
+    chained: bool = True,
 ) -> dict:
     """Rolling-origin evaluation of :class:`HGBRQuantileModel` on hourly rollup data.
 
@@ -275,6 +276,14 @@ def walk_forward_hgbr(
     quantiles:
         Quantiles for pinball-loss computation.  ``pinball_p50`` maps to
         ``q=0.5`` and ``pinball_p80`` to ``q=0.8``.
+    chained:
+        Which serving regime to score — a gate is only meaningful when it
+        grades the model the way its consumer will run it.  ``True`` (the
+        add-on) predicts each test window as one multi-step chain, the way
+        ``predictor.predict_hours`` serves a horizon.  ``False`` predicts every
+        hour independently, with temperature as the only weather signal — what
+        an in-process ``LoadPredictor`` tier does, since it is called one hour
+        at a time and cannot chain.
 
     Returns
     -------
@@ -342,34 +351,60 @@ def walk_forward_hgbr(
                 if model._fitted:  # False when sklearn absent or too few rows
                     base = _baseline_fit_hourly(train_rows)
 
-                    for ts, row in test_entries:
+                    # The test window is predicted as ONE chain, exactly as the
+                    # add-on serves a horizon: hour-by-hour calls would leave
+                    # load_lag_1h NaN from the second hour on, grading a regime
+                    # production does not run.  Weather comes from the row for
+                    # the same reason — serve time has it.
+                    _qs = tuple(dict.fromkeys((0.5, *quantiles)))
+                    if chained:
+                        series = model.predict_series(
+                            [
+                                {
+                                    "when": ts,
+                                    "temp": row.get("temp_forecast_mean"),
+                                    "cloud_cover": row.get("cloud_cover_mean"),
+                                    "humidity": row.get("humidity_mean"),
+                                    "wind_speed": row.get("wind_speed_mean"),
+                                    "persons_home": row.get("persons_home_mean"),
+                                }
+                                for ts, row in test_entries
+                            ],
+                            fallback_w,
+                            quantiles=_qs,
+                        )
+                    else:
+                        series = [
+                            {
+                                q: model.predict_load_w(
+                                    ts,
+                                    row.get("temp_forecast_mean"),
+                                    fallback_w,
+                                    quantile=q,
+                                )
+                                for q in _qs
+                            }
+                            for ts, row in test_entries
+                        ]
+
+                    for (ts, row), preds in zip(test_entries, series, strict=True):
                         actual = featureset.hourly_load_w(row)
-                        temp = row.get("temp_forecast_mean")
 
                         # Median prediction drives the primary error metrics.
-                        pred_p50 = model.predict_load_w(ts, temp, fallback_w, quantile=0.5)
+                        pred_p50 = preds[0.5]
                         model_pairs.append((pred_p50, actual))
 
                         base_key = (ts.astimezone(_TZ_AMS).weekday() >= 5, ts.astimezone(_TZ_AMS).hour)
                         base_pairs.append((base.get(base_key, fallback_w), actual))
 
-                        # Pinball losses — reuse the q=0.5 result already computed above
-                        # to avoid a redundant predict call when 0.5 is in quantiles.
                         for q in quantiles:
-                            pred_q = pred_p50 if q == 0.5 else model.predict_load_w(ts, temp, fallback_w, quantile=q)
-                            pinball_pairs[q].append((pred_q, actual))
+                            pinball_pairs[q].append((preds[float(q)], actual))
 
                     # Horizon energy (reuses the same accumulation pattern as walk_forward).
                     for h in _horizon_hours:
                         window = test_entries[:h]
                         if len(window) >= h:
-                            pred_kwh = (
-                                sum(
-                                    model.predict_load_w(ts, row.get("temp_forecast_mean"), fallback_w)
-                                    for ts, row in window
-                                )
-                                / 1000.0
-                            )
+                            pred_kwh = sum(preds[0.5] for preds in series[:h]) / 1000.0
                             act_kwh = sum(featureset.hourly_load_w(row) for _, row in window) / 1000.0
                             base_kwh = (
                                 sum(

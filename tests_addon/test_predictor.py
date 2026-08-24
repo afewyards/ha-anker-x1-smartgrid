@@ -111,7 +111,17 @@ def test_monotonicity_clamp_via_mock(fitted_model):
     call_count = 0
 
     def _mock_predict(
-        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+        when,
+        temp,
+        fallback_w,
+        *,
+        quantile=0.5,
+        cloud_cover=None,
+        humidity=None,
+        wind_speed=None,
+        persons_home=None,
+        utc_lookup=None,
+        local_date_kwh=None,
     ):
         nonlocal call_count
         call_count += 1
@@ -217,7 +227,17 @@ def test_predict_hours_forwards_weather(fitted_model):
     captured = []
 
     def _cap(
-        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+        when,
+        temp,
+        fallback_w,
+        *,
+        quantile=0.5,
+        cloud_cover=None,
+        humidity=None,
+        wind_speed=None,
+        persons_home=None,
+        utc_lookup=None,
+        local_date_kwh=None,
     ):
         captured.append((cloud_cover, humidity, wind_speed))
         return 500.0
@@ -243,7 +263,17 @@ def test_predict_hours_forwards_persons_home(fitted_model):
     captured = []
 
     def _cap(
-        when, temp, fallback_w, *, quantile=0.5, cloud_cover=None, humidity=None, wind_speed=None, persons_home=None
+        when,
+        temp,
+        fallback_w,
+        *,
+        quantile=0.5,
+        cloud_cover=None,
+        humidity=None,
+        wind_speed=None,
+        persons_home=None,
+        utc_lookup=None,
+        local_date_kwh=None,
     ):
         captured.append(persons_home)
         return 500.0

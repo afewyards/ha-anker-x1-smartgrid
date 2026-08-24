@@ -531,3 +531,92 @@ def test_walk_forward_hgbr_baseline_mae_hand_computed():
     res = backtest.walk_forward_hgbr(rows, train_days=10, test_days=10, fallback_w=500.0)
     assert res["baseline_mae"] is not None
     assert abs(res["baseline_mae"] - 500.0) < 1.0  # allow tiny float rounding
+
+
+def test_walk_forward_hgbr_scores_the_multi_step_serving_regime():
+    """The promotion gate must score what production serves: one chained horizon.
+
+    Predicting each test hour independently leaves ``load_lag_1h`` NaN from the
+    second hour on — a regime production no longer runs (predict_series chains
+    its own forecasts forward), so a gate measuring it grades the wrong model.
+    """
+    from datetime import datetime, timedelta
+
+    import pytest
+
+    from custom_components.anker_x1_smartgrid import featureset
+    from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
+
+    rows = _make_hourly_rows(22)  # exactly one rolling origin at 21/1
+    res = backtest.walk_forward_hgbr(rows, train_days=21, test_days=1, fallback_w=500.0)
+
+    origin = datetime.fromisoformat(rows[0]["hour_ts"]) + timedelta(days=21)
+    train = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) < origin]
+    test = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= origin]
+    assert len(test) == 24, "fixture must yield a single 24 h test window"
+
+    preds = (
+        HGBRQuantileModel()
+        .fit(train, quantiles=(0.5, 0.8))
+        .predict_series(
+            [
+                {
+                    "when": datetime.fromisoformat(r["hour_ts"]),
+                    "temp": r.get("temp_forecast_mean"),
+                    "cloud_cover": r.get("cloud_cover_mean"),
+                    "humidity": r.get("humidity_mean"),
+                    "wind_speed": r.get("wind_speed_mean"),
+                    "persons_home": r.get("persons_home_mean"),
+                }
+                for r in test
+            ],
+            500.0,
+            quantiles=(0.5, 0.8),
+        )
+    )
+    actual = [featureset.hourly_load_w(r) for r in test]
+
+    expected_mae = sum(abs(p[0.5] - a) for p, a in zip(preds, actual)) / len(actual)
+    expected_h24 = abs(sum(p[0.5] for p in preds) / 1000.0 - sum(actual) / 1000.0)
+
+    assert res["model_mae"] == pytest.approx(expected_mae, rel=1e-9)
+    assert res["horizon_energy_mae_24h"] == pytest.approx(expected_h24, rel=1e-9)
+
+
+def test_walk_forward_hgbr_per_hour_regime_is_opt_in():
+    """``chained=False`` grades hours independently — what an in-process
+    ``LoadPredictor`` tier serves, since it has no way to chain a horizon."""
+    from datetime import datetime, timedelta
+
+    import pytest
+
+    from custom_components.anker_x1_smartgrid import featureset
+    from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
+
+    rows = _make_hourly_rows(22)
+    res = backtest.walk_forward_hgbr(
+        rows,
+        train_days=21,
+        test_days=1,
+        fallback_w=500.0,
+        chained=False,
+    )
+
+    origin = datetime.fromisoformat(rows[0]["hour_ts"]) + timedelta(days=21)
+    train = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) < origin]
+    test = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= origin]
+    model = HGBRQuantileModel().fit(train, quantiles=(0.5, 0.8))
+    expected = [
+        (
+            model.predict_load_w(
+                datetime.fromisoformat(r["hour_ts"]),
+                r.get("temp_forecast_mean"),
+                500.0,
+                quantile=0.5,
+            ),
+            featureset.hourly_load_w(r),
+        )
+        for r in test
+    ]
+
+    assert res["model_mae"] == pytest.approx(backtest.mae(expected), rel=1e-9)

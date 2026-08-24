@@ -870,6 +870,12 @@ class Controller:
                         train_days=self.cfg.train_days,
                         test_days=self.cfg.backtest_test_days,
                         fallback_w=const.DEFAULT_FALLBACK_LOAD_W,
+                        # This tier is served through LoadPredictor, one hour per
+                        # call, so it cannot chain a horizon the way the add-on
+                        # does — grade it the way it runs (see the `chained`
+                        # parameter).  Lifting this needs predict_series threaded
+                        # through the predictor wrapper stack first.
+                        chained=False,
                     )
                     if bt.should_promote(metrics):
                         # Live control consumes only P50 (review: P80 scaffolding);
