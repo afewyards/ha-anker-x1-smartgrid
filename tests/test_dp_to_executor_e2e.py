@@ -250,9 +250,14 @@ class TestExportHour:
         # SETPOINT_MAX_W; now that the rail is a backstop above any real
         # hardware (limits are device-derived per install), a cfg at the old
         # default would bind first and the clamp would go unexercised.
+        # The pack is widened for the same reason: the executor exports at the
+        # DP's committed rate, so at the 10 kWh default the DP's own commitment
+        # (~3 kW) would bind long before the rail.  60 kWh above the reserve
+        # lets the DP commit past 20 kW in the peak hour.
         ctrl, act = _make_controller(
             hass,
             cfg_overrides={
+                "capacity_kwh": 60.0,
                 "max_export_w": const.SETPOINT_MAX_W + 5000.0,
                 "grid_export_limit_w": const.SETPOINT_MAX_W + 5000.0,
             },
@@ -288,6 +293,43 @@ class TestExportHour:
         assert not any(c[0] == "engage_and_charge" for c in act.calls), (
             "export tick must not also call engage_and_charge"
         )
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_export_setpoint_follows_committed_rate(self, monkeypatch):
+        """Same scenario at the default 10 kWh pack: the executor exports at the
+        rate the real DP committed, not at the cap.
+
+        The DP commits ~3 kW for the peak hour here (the rest of the pack is
+        held for the trough at +8h).  Before the rate clamp the executor read
+        that commitment as a bare on/off gate and drained at the export cap
+        instead — emptying the pack to the ride-out reserve on a plan that
+        asked for 3 kWh.  Gross = committed net + house load (300 W seeded).
+        """
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: self.BASE)
+
+        hass = StubHass()
+        ctrl, act = _make_controller(
+            hass,
+            cfg_overrides={
+                "max_export_w": const.SETPOINT_MAX_W + 5000.0,
+                "grid_export_limit_w": const.SETPOINT_MAX_W + 5000.0,
+            },
+        )
+        _seed_common(hass, self.BASE, soc="85.0", export_price="0.55", sunset_h=6.0)
+        prices = [0.60] + [0.25] * 7 + [0.07] + [0.25] * 8
+        _seed_price_forecast(hass, self.BASE, prices)
+        ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+
+        await ctrl.tick()
+
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert len(export_calls) == 1, f"expected exactly one engage_export call; calls={act.calls}"
+        setpoint = export_calls[0][1]
+        assert setpoint == pytest.approx(3300.0), (
+            f"executor must follow the DP's committed rate (3000 net + 300 load comp); got {setpoint}"
+        )
+        assert setpoint < const.SETPOINT_MAX_W, "the cap must not be the binding term in this scenario"
 
 
 # ---------------------------------------------------------------------------

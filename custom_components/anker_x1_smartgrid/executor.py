@@ -301,16 +301,31 @@ async def run_forcing_and_export(
             )
 
             if _new_export_state.engaged:
-                # NET target: drain the live surplus-above-reserve decisively
-                # over cfg.export_drain_window_h (default 0.0 → one tick → at the
-                # export cap, stopping at the live reserve on the final tick).
-                # _hurdle gates WHETHER to export (DP plan membership); committed
-                # rate no longer throttles HOW FAST.
+                # NET target: drain the live surplus-above-reserve over
+                # cfg.export_drain_window_h (default 0.0 → one tick → at the
+                # export cap, stopping at the live reserve on the final tick),
+                # then bound that by the rate the DP committed for THIS slot.
+                #
+                # The committed rate is both the gate and the ceiling. Reading
+                # it as a gate alone let the surplus target collapse to the
+                # export cap, so a plan that asked to shed a few hundred watts
+                # emptied the pack to the ride-out reserve at full rate — and
+                # the next DP solve bought it all back, a charge/export limit
+                # cycle at the inverter's full rating. The surplus/reserve
+                # clamp still wins whenever it is the tighter of the two, so
+                # the live SoC (not the forecast) remains the safety bound.
+                #
+                # An uncommitted slot yields 0 → the zero-rate branch below
+                # releases: an export the plan has abandoned must not coast on
+                # the dwell window. `export_request` values are net AC watts
+                # averaged over the slot (decision.py builds them as
+                # kWh/dt_h × 1000), the same basis as export_net_target_w.
                 _net_target_w = energy.export_net_target_w(
                     _surplus,
                     controller.cfg,
                     eta_curve=controller._planner_curve(),
                 )
+                _net_target_w = min(_net_target_w, _committed_export.get(_cur_h, 0.0))
                 # GROSS setpoint must cover house load (firmware serves house
                 # first, exports the remainder).  Bounded only by SETPOINT_MAX_W
                 # via discharge_cap_w (max_export_w already capped net_target).
@@ -322,7 +337,10 @@ async def run_forcing_and_export(
                 _load_comp_w = (
                     controller.cfg.export_load_comp_factor * _house_load_now_w if controller._house_load_fresh else 0.0
                 )
-                _gross_w = _net_target_w + _load_comp_w
+                # A zero net target must stay zero: the load-comp term serves the
+                # house out of the pack, so adding it to a zeroed target would
+                # discharge on a slot the plan never committed.
+                _gross_w = _net_target_w + _load_comp_w if _net_target_w > 0.0 else 0.0
                 _export_sp = guard.command_setpoint(
                     -_gross_w,
                     controller._actuator.last_setpoint_w,

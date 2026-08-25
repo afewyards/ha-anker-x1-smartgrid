@@ -864,23 +864,25 @@ class TestStandaloneFallbackNearPeak:
 class TestCommittedPlanExecutor:
     """Executor reads the committed export VALUE from the DP plan, not near_peak.
 
-    New contract (Task 7):
-    - committed rate present → GATE only; engage decisively at
-      min(max_export_w, grid_export_limit_w), stopping at the live reserve
+    Contract:
+    - committed rate present → gate AND rate cap; the drain runs at the smaller
+      of the committed rate and the live surplus/reserve target
     - no committed rate → never export (strictly safer than standalone gate)
     """
 
     @pytest.mark.asyncio
-    async def test_committed_is_gate_not_rate_cap(self, monkeypatch):
-        """Committed plan present (gate ON) + ample surplus → engage DECISIVELY at
-        the export cap, NOT throttled to the committed magnitude.
+    async def test_committed_rate_caps_the_drain(self, monkeypatch):
+        """Committed plan present + ample surplus → export at the COMMITTED rate.
 
-        committed = 1000 W but caps = 3000 W (defaults). New contract: committed is
-        an on/off GATE; the decisive drain runs at min(max_export_w, grid_export_limit_w).
+        committed = 1000 W while the caps allow 3000 W and the surplus target
+        (export_drain_window_h = 0 → one tick) would otherwise saturate at the
+        cap.  The plan decides how fast, not just whether: a plan that asked to
+        shed 1000 W must not empty the pack at 3000 W.
         """
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
-        ctrl, act, _ = _make_controller(hass)  # max/grid default 3000 in _make_export_cfg
+        # load-comp off so the assertion reads the NET target directly.
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"export_load_comp_factor": 0.0})
         _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
@@ -892,9 +894,60 @@ class TestCommittedPlanExecutor:
         await ctrl.tick()
         export_calls = [c for c in act.calls if c[0] == "engage_export"]
         assert export_calls, f"expected engage_export; calls={act.calls}"
-        assert export_calls[-1][1] >= 3000.0 - 1e-6, (
-            f"committed must be a GATE not a rate cap; expected decisive >=3000, got {export_calls[-1][1]}"
+        assert export_calls[-1][1] == pytest.approx(1000.0), (
+            f"committed rate must cap the drain; expected 1000, got {export_calls[-1][1]}"
         )
+
+    @pytest.mark.asyncio
+    async def test_live_reserve_still_bounds_below_committed_rate(self, monkeypatch):
+        """The surplus/reserve clamp still wins when it is TIGHTER than the plan.
+
+        Committed 3000 W but only ~0.5 kWh sits above the reserve, so the live
+        target quantizes below the committed rate — the executor takes the
+        smaller of the two, not the plan's rate.
+        """
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(
+            hass,
+            cfg_overrides={"export_load_comp_factor": 0.0, "export_drain_window_h": 1.0},
+        )
+        # capacity 10 kWh, soc_floor 10% → 1 kWh floor; 15% SoC → 0.5 kWh surplus.
+        _seed_passive_inputs(hass, soc="15.0", export_price="0.40")
+        cur_h = BASE.replace(minute=0, second=0, microsecond=0)
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision(export_request={cur_h: 3000.0}),
+        )
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE - timedelta(hours=1))
+        await ctrl.tick()
+        export_calls = [c for c in act.calls if c[0] == "engage_export"]
+        assert export_calls, f"expected engage_export; calls={act.calls}"
+        assert export_calls[-1][1] == pytest.approx(500.0), (
+            f"live reserve must still bound the drain; got {export_calls[-1][1]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_uncommitted_slot_mid_dwell_releases(self, monkeypatch):
+        """Engaged inside the dwell window but the plan dropped this slot → release.
+
+        The dwell must not let an export the plan has abandoned coast at the
+        export cap; with no committed rate for the current slot the target is 0
+        and the executor disengages.
+        """
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"export_dwell_min": 30})
+        _seed_passive_inputs(hass, soc="90.0", export_price="0.40")
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={}))
+        # state_since = now → dwell NOT elapsed → decide_export_state holds `engaged`.
+        ctrl.export_state = ExportState(engaged=True, state_since=BASE)
+        await ctrl.tick()
+        assert not [c for c in act.calls if c[0] == "engage_export"], (
+            f"uncommitted slot must not export even mid-dwell; calls={act.calls}"
+        )
+        assert not ctrl.export_state.engaged
 
     @pytest.mark.asyncio
     async def test_no_committed_rate_never_exports(self, monkeypatch):
