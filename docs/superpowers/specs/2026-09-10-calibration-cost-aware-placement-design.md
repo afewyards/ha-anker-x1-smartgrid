@@ -148,10 +148,12 @@ uses the clamped dwell, and older ≥ 1 h successes still count.
 
 ## Observability
 
-New plan attribute `calibration_cost_eur`: the cost of the cheapest candidate
-evaluated this tick, accepted or not. `None` when the cycle is not due or no
-candidate exists. Read it together with `calibration_state` to see why a due
-cycle is idle.
+New plan attribute `calibration_cost_eur`: the cost of the window the policy
+reports. That is the accepted window while `scheduled` / `charging` /
+`holding` (carried unchanged while a cycle is committed), or the cheapest
+rejected candidate while a due cycle sits `idle`. `None` when the cycle is not
+due or nothing could be costed. Read it together with `calibration_state` to
+see why a due cycle is idle.
 
 ## Files
 
