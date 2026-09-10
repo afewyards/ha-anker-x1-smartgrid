@@ -814,6 +814,49 @@ async def test_prev_resets_to_idle_across_a_failsafe_tick(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prev_resets_to_idle_after_a_tick_that_raised(monkeypatch):
+    """A tick that raises before the calibration block lands in tick()'s own
+    failsafe. It must still hand `idle` to the next tick as `prev`, or a
+    committed cycle would resume uncosted once ticks recover, however long
+    the failure streak lasted."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    committed = calibration.CalibPlan("charging", BASE, BASE + timedelta(hours=1), 0.2)
+    calls: list[dict] = []
+
+    def _spy(*a, **k):
+        calls.append(k)
+        return _IDLE_PLAN
+
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: committed)
+    await ctrl.tick()  # tick 1: commits a charging plan
+    assert ctrl.last_status["calibration_state"] == "charging"
+
+    real_get_past_actuals = ctrl._get_past_actuals
+    raised: list[bool] = []
+
+    async def _raise_once(*a, **k):
+        if not raised:
+            raised.append(True)
+            raise RuntimeError("recorder locked")
+        return await real_get_past_actuals(*a, **k)
+
+    monkeypatch.setattr(ctrl, "_get_past_actuals", _raise_once)
+    result = await ctrl.tick()  # tick 2: raises ahead of the calibration block
+    assert raised and result["state"] == "failsafe"
+
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    await ctrl.tick()  # tick 3: prev must be idle, not the tick-1 commit
+
+    assert len(calls) == 1
+    assert calls[0]["prev"].phase == "idle"
+
+
+@pytest.mark.asyncio
 async def test_water_value_reaches_the_policy(monkeypatch):
     """The DP's own water value (`_dp_out["water_value"]`, DP path only) is
     threaded into the policy so it can credit calibration's parked energy at

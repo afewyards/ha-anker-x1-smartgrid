@@ -1257,6 +1257,14 @@ class Controller:
 
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
+        # The previous tick's calibration plan, threaded into calibration_plan
+        # as `prev` so a running cycle is not re-costed or re-gated mid-way and
+        # a hold absorbs SoC wobble at the top. Reset before anything can end
+        # this tick early (disabled, failsafe, or an exception tick() catches),
+        # so the next tick only ever sees a cycle this one re-evaluated.
+        _calibration_prev = self._calibration_plan
+        self._calibration = None
+        self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
         _first_tick = self._first_tick_after_start
         self._first_tick_after_start = False
         # RACE 1: retry device-derived capacity/limit resolution while it
@@ -1557,12 +1565,6 @@ class Controller:
             # values forever (they are never otherwise copied across).
             self.last_status["export_curve_covered"] = _shadow_dp_out.get("export_curve_covered")
             self.last_status["export_curve_slots"] = _shadow_dp_out.get("export_curve_slots")
-            # This tick never reached the calibration block below, so the
-            # policy was not re-evaluated this tick -- a committed
-            # charging/holding plan must not resume uncosted on the next
-            # enabled tick that does reach it.
-            self._calibration = None
-            self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
 
             # Publish a self-consumption display horizon (no grid charging) so the
             # card still renders PV + load + projected SoC while disabled.
@@ -1616,12 +1618,6 @@ class Controller:
         if inputs is None or not slots or sunset is None or pv_remaining is None:
             await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
-            # This tick never reached the calibration block below, so the
-            # policy was not re-evaluated this tick -- a committed
-            # charging/holding plan must not resume uncosted on the next
-            # tick that does reach it.
-            self._calibration = None
-            self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
             return self._status(now, 0.0, None, "failsafe")
 
         _slot_minutes = self._resolve_slot_minutes(slots)
@@ -1788,15 +1784,6 @@ class Controller:
         # PREVIOUS tick? Captured before self._calibration_engaged updates
         # below and before self.plan is reassigned further down.
         _calibration_was_engaged = self._calibration_engaged
-        # The PREVIOUS tick's full plan (phase + window). Captured before
-        # self._calibration_plan is reset below -- threaded into
-        # calibration_plan as `prev` so a committed cycle (charging/holding)
-        # is not re-costed or re-gated mid-way, and F1's top_soc re-entry bar
-        # can soften by 1 point to absorb SoC wobble at the boundary instead
-        # of cancelling/re-engaging every tick.
-        _calibration_prev = self._calibration_plan
-        self._calibration = None
-        self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
         self._calibration_last_success = None
         self._calibration_days_since = None
         if self.cfg.calibration_enabled and self._recorder is not None:
