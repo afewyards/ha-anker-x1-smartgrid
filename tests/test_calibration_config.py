@@ -26,9 +26,9 @@ def test_new_cost_placement_consts():
     assert const.CALIBRATION_MAX_DWELL_H == 0.5
 
 
-def test_from_dict_clamps_a_ui_saved_dwell_above_the_new_max():
-    """Live boxes may still carry a UI-saved 1.0 or 2.0 from before the cap
-    dropped to 0.5; from_dict must clamp it rather than propagate it."""
+def test_from_dict_clamps_a_stored_dwell_above_the_max():
+    """Stored options are not re-validated: a dwell above
+    CALIBRATION_MAX_DWELL_H is clamped to it, one at or below passes through."""
     assert Config.from_dict({"calibration_dwell_h": 2.0}).calibration_dwell_h == 0.5
     assert Config.from_dict({"calibration_dwell_h": 0.5}).calibration_dwell_h == 0.5
     assert Config.from_dict({"calibration_dwell_h": 0.25}).calibration_dwell_h == 0.25

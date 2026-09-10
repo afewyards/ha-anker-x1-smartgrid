@@ -256,7 +256,7 @@ def price_percentile(price_history: dict[str, dict[str, float]], pct: float) -> 
 
 
 def _charge_kwh(soc_pct: float, cfg: Config) -> float:
-    """Grid energy needed to lift SoC from ``soc_pct`` to the calibration top."""
+    """Pack (DC) energy needed to lift SoC from ``soc_pct`` to the calibration top."""
     return max(0.0, (cfg.calibration_top_soc - soc_pct) / 100.0 * cfg.capacity_kwh)
 
 

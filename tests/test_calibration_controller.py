@@ -469,8 +469,8 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     at_bar = ctrl.cfg.calibration_top_soc
     dipped = calibration.continue_soc(ctrl.cfg)
 
-    # A fresh top-out is now costed before it is held; make the hold free so
-    # this test still exercises the F1 latch rather than the cost gate.
+    # A fresh top-out is costed before it is held; make the hold free so this
+    # test exercises the latch rather than the cost gate.
     monkeypatch.setattr(calibration, "window_cost", lambda *a, **k: 0.0)
 
     now_selected_holder = {"value": False}
@@ -685,9 +685,8 @@ async def test_calibration_days_since_falls_back_to_history_span_when_never_cali
 
 @pytest.mark.asyncio
 async def test_prev_plan_is_threaded(monkeypatch):
-    """The controller's own previous-tick CalibPlan is threaded into the
-    policy as `prev`, unbroken across ticks -- the `prev`-kwarg replacement
-    for the old `_calibration_was_holding` bool."""
+    """The controller threads its own previous-tick CalibPlan into the policy
+    as `prev`, unbroken across ticks -- the whole plan, not just its phase."""
     hass = StubHass()
     ctrl, _act = make_controller(hass)
     seed_valid_inputs(hass, soc="50.0")
@@ -713,7 +712,7 @@ async def test_prev_plan_is_threaded(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_prev_resets_to_idle_after_a_failed_tick(monkeypatch, caplog):
-    """A tick whose policy read raised (fail-closed, F2) must hand `idle` to
+    """A tick whose policy read raised (fail-closed) must hand `idle` to
     the NEXT tick as `prev`, even when a cycle was committed just before the
     failure -- otherwise a transient read error could silently resume a
     stale charging/holding window, uncosted, once the read succeeds again."""

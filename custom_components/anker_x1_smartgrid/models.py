@@ -122,8 +122,8 @@ class Config:
     def from_dict(cls, d: dict) -> Config:
         fields = {f for f in cls.__dataclass_fields__}
         cfg = cls(**{k: v for k, v in d.items() if k in fields})
-        # Clamps a UI-saved dwell from before the cap dropped to
-        # const.CALIBRATION_MAX_DWELL_H.
+        # Stored options are not re-validated, so a dwell above
+        # const.CALIBRATION_MAX_DWELL_H is clamped here.
         if cfg.calibration_dwell_h > const.CALIBRATION_MAX_DWELL_H:
             cfg = dataclasses.replace(cfg, calibration_dwell_h=const.CALIBRATION_MAX_DWELL_H)
         return cfg
