@@ -132,7 +132,7 @@ DEFAULT_CALIBRATION_INTERVAL_DAYS = 5
 # ever reaches balancing voltage -- which is why the pack kept stranding
 # ~3.6 kWh at the bottom despite "successful" cycles.
 DEFAULT_CALIBRATION_TOP_SOC = 100.0
-DEFAULT_CALIBRATION_DWELL_H = 1.0
+DEFAULT_CALIBRATION_DWELL_H = 0.5
 
 # Tuning consts, deliberately not user-facing.
 # CONTINUATION allowance only — never an entry discount. A dwell starts at
@@ -145,22 +145,21 @@ DEFAULT_CALIBRATION_DWELL_H = 1.0
 # instead of an hour in the taper, which is the only place cells balance.
 # See calibration.continue_soc.
 CALIBRATION_HOLD_TOLERANCE = 1.0
-# A window is cheap enough when its mean slot price is at or below this
-# percentile of all slot prices in PriceHistoryStore.history.
+# The price bar: a window may cost its top-up kWh at this percentile of all
+# slot prices in PriceHistoryStore.history, plus CALIBRATION_COST_ALLOWANCE_EUR.
 CALIBRATION_PRICE_PERCENTILE = 30.0
-# Past interval + grace days, take the cheapest visible window regardless.
+# Past interval + grace days the price bar gives way to
+# CALIBRATION_OVERDUE_COST_CAP_EUR.
 CALIBRATION_GRACE_DAYS = 7
-# Grid energy at or below which a window's PRICE stops mattering: the pack is
-# already at the top on solar and the cycle is only paying for the last sliver
-# plus the hold. Worst case at a 0.40 EUR/kWh peak that is 0.40 EUR every
-# calibration_interval_days. Above it, the price bar applies as before.
-CALIBRATION_FREE_TOPUP_KWH = 1.0
-# Minimum SoC the DP's OWN (non-calibration) plan must project before a cycle
-# is worth placing. A calibration rides a climb the plan already makes and
-# pays only for the last sliver; below this bar there is no climb to ride and
-# the grid buys the whole way to calibration_top_soc. See
-# calibration.plan_peak_soc.
-CALIBRATION_MIN_PLAN_SOC = 80.0
+# A cycle may only start this close to calibration_top_soc: caps the top-up
+# a placed cycle pays for at roughly 5% of the pack.
+CALIBRATION_MIN_START_SOC = 95.0
+# Below this window cost (EUR) a calibration is cheap enough to place outright.
+CALIBRATION_COST_ALLOWANCE_EUR = 0.50
+# Above this window cost (EUR) even an overdue calibration is too expensive to force.
+CALIBRATION_OVERDUE_COST_CAP_EUR = 1.00
+# Upper bound on calibration_dwell_h: the hold blocks export, so it must stay short.
+CALIBRATION_MAX_DWELL_H = 0.5
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730

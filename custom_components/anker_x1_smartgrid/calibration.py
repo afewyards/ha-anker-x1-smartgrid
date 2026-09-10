@@ -1,6 +1,7 @@
 """Periodic full-charge calibration policy — pure decision logic.
 
-Design: docs/superpowers/specs/2026-08-03-battery-calibration-policy-design.md
+Design: docs/superpowers/specs/2026-08-03-battery-calibration-policy-design.md, amended by
+docs/superpowers/specs/2026-09-10-calibration-cost-aware-placement-design.md
 
 The pack strands ~3.6 kWh below ~21% SoC (measured 2026-08-03) and has had no
 opportunity to top-balance: on 2026-08-02 it reached 99% and then held 0 W for
@@ -20,7 +21,7 @@ from datetime import datetime, timedelta
 from itertools import pairwise
 
 from . import const, daily_stats
-from .models import Config, ControllerState, PriceSlot
+from .models import Config, ControllerState
 
 # Two adjacent samples further apart than this do not belong to the same run —
 # otherwise an HA outage spanning a high-SoC period fakes a completed dwell.
@@ -72,11 +73,17 @@ class CalibPlan:
     actuate. ``action`` is the narrowing — the ONLY way to get an actuatable
     value out — so the plan sensor can draw a coming window without any risk
     of the controller engaging on it.
+
+    ``cost_eur`` is what the window this tick settled on costs against the
+    plan (see ``window_cost``) -- the accepted window, else the cheapest
+    rejected candidate -- carried unchanged while a cycle is committed. None
+    when nothing was costed.
     """
 
     phase: str  # "idle" | "scheduled" | "charging" | "holding"
     window_start: datetime | None
     window_end: datetime | None
+    cost_eur: float | None = None
 
     @property
     def action(self) -> CalibAction | None:
@@ -261,48 +268,18 @@ def _charge_h(soc_pct: float, cfg: Config) -> float:
     return _charge_kwh(soc_pct, cfg) / rate_kw
 
 
-def _soc_at(
-    when: datetime,
-    live_soc: float,
-    soc_forecast: list[tuple[datetime, float]] | None,
-) -> float:
-    """Projected SoC at ``when`` from the DP's own plan horizon.
-
-    Falls back to ``live_soc`` when there is no projection covering ``when`` —
-    an absent horizon (startup, a failed DP run) or a candidate starting before
-    the horizon does. Borrowing the first row's value instead would read a
-    future solar peak back onto the present and size the window as a free
-    top-up that the pack cannot actually do.
-
-    Precondition: ``soc_forecast`` is ascending by timestamp (as built from
-    ``plan.build_plan_horizon``, which emits slots in order).
-    """
-    if not soc_forecast:
-        return live_soc
-    found = live_soc
-    for ts, soc in soc_forecast:
-        if ts > when:
-            break
-        found = soc
-    return found
-
-
-def plan_peak_soc(soc_pct: float, soc_forecast: list[tuple[datetime, float]] | None) -> float:
+def plan_peak_soc(soc_pct: float, cal_slots: list[CalibSlot]) -> float:
     """Highest SoC the pack is expected to see: the plan's peak, or live SoC.
 
-    Public because the controller reports on the same number the policy gates
-    on, so display and decision cannot drift -- the same single-source-of-truth
-    reason ``compute_days_since`` is shared (F3).
+    No window may start below ``const.CALIBRATION_MIN_START_SOC``, so a plan
+    peaking under it is why an overdue cycle places nothing -- public so the
+    controller's overdue warning can say so.
 
-    The live SoC is folded in so an absent or failed horizon (startup, a DP
-    exception) degrades to "is the pack already near the top right now". That
-    is the fail-closed direction on both sides: missing data can never fake a
-    climb the plan is not making, yet a pack that genuinely IS near the top is
-    not stranded by the gate for want of a projection.
+    The live SoC is folded in so an absent plan (startup, a DP exception)
+    degrades to "is the pack near the top right now" rather than to a
+    fabricated climb.
     """
-    if not soc_forecast:
-        return soc_pct
-    return max(soc_pct, max(soc for _ts, soc in soc_forecast))
+    return max([soc_pct, *(s.soc_end for s in cal_slots)])
 
 
 # Tolerance for treating two chronologically-adjacent slots as truly
@@ -311,17 +288,6 @@ def plan_peak_soc(soc_pct: float, soc_forecast: list[tuple[datetime, float]] | N
 # elapsed time — mirrors the gap-awareness MAX_SAMPLE_GAP_MIN already gives
 # the SoC-history path above, just for the price-slot path.
 _CONTIGUITY_TOLERANCE = timedelta(minutes=1.0)
-
-
-def _slot_duration_min(slot: PriceSlot) -> float:
-    """This slot's own duration in minutes.
-
-    Falls back to 60.0 for a missing (``None``), zero, or invalid (negative)
-    duration — ``duration_min or 60.0`` alone would NOT catch a negative
-    value (a negative number is truthy), so the sign is checked explicitly.
-    """
-    dur = slot.duration_min
-    return dur if dur and dur > 0.0 else 60.0
 
 
 @dataclass(frozen=True)
@@ -436,116 +402,89 @@ def window_cost(
     return delta - (water_value or 0.0) * max(0.0, e - cfg.pct_to_kwh(soc1))
 
 
+@dataclass(frozen=True)
+class WindowPick:
+    """``select_window``'s answer. Unaccepted, it is the cheapest candidate, so
+    a due cycle left idle can still report what calibrating would cost."""
+
+    start: datetime
+    end: datetime
+    cost_eur: float
+    accepted: bool
+
+
+def _acceptable(cost: float, need_kwh: float, *, bar: float | None, force: bool) -> bool:
+    """Normal: the top-up bought at the price bar, plus an allowance for what
+    the window displaces (no bar: the allowance alone). Overdue: a flat cap."""
+    if force:
+        return cost <= const.CALIBRATION_OVERDUE_COST_CAP_EUR
+    return cost <= need_kwh * (bar or 0.0) + const.CALIBRATION_COST_ALLOWANCE_EUR
+
+
 def select_window(
     now: datetime,
-    soc_pct: float,
-    slots: list[PriceSlot],
+    cal_slots: list[CalibSlot],
     *,
     cfg: Config,
     bar: float | None,
     force: bool,
-    soc_forecast: list[tuple[datetime, float]] | None = None,
-) -> tuple[datetime, datetime] | None:
-    """Least-cost acceptable contiguous window, or None.
+    water_value: float | None,
+) -> WindowPick | None:
+    """Where to calibrate, priced against the DP's own plan; None when no
+    candidate exists.
 
-    Two things make "least cost" different from "cheapest per kWh":
+    One candidate per unfinished plan slot whose projected SoC at its start
+    clears ``const.CALIBRATION_MIN_START_SOC``, sized from that SoC: the
+    top-up at max rate, then the hold. ``window_cost`` prices what the window
+    displaces -- planned export, battery-served load -- so the pre-peak slot
+    the DP fills only to export it is dear and a midday PV spill is free. A
+    window the plan does not cover contiguously has no cost and is no
+    candidate.
 
-    Each candidate is sized from the SoC the pack is PROJECTED to have when
-    that candidate starts, not the SoC it has now. Sizing every candidate from
-    the live SoC costs a window opening at the solar peak as though it still
-    had to charge from this morning's empty pack.
+    The earliest UTC day with an acceptable candidate wins, and within it the
+    cheapest acceptable one. Taking the EARLIEST rather than the globally
+    cheapest is what stops the 13:00 publication of tomorrow's prices from
+    pulling a cycle off a today window that already qualified. With nothing
+    acceptable, the cheapest candidate comes back unaccepted.
 
-    Candidates are then ranked by what they actually cost -- grid kWh times
-    mean price -- not by mean price alone. Live lab 2026-08-06: a 0.127 EUR/kWh
-    midday block needing 8.56 kWh (1.10 EUR, and 5.32 kWh of planned solar
-    displaced with nowhere to go) beat a 0.24 EUR/kWh window at the natural
-    solar top needing 0.15 kWh (0.04 EUR). Ranking on price alone cannot see
-    that the expensive window is 30x cheaper, because the whole point is that
-    solar has already done the climb for free.
-
-    Deterministic in (now, slots, soc, cfg, bar, force, soc_forecast):
-    published prices do not change within a day, so re-running each tick yields
-    the same answer and no commitment needs storing.
+    Re-run every tick against the latest plan, so a scheduled window can
+    still move; only a running cycle is committed (see ``calibration_plan``).
     """
-    if not slots:
-        return None
-    ordered = sorted(slots, key=lambda s: s.start)
-
-    # Build candidates: variable-length runs of REAL, chronologically-adjacent
-    # slots — each contributing its OWN duration_min, never a single width
-    # sampled once and extrapolated — whose summed duration covers `need_min`
-    # and that have not fully elapsed. A real gap between two slots forecloses
-    # spanning it (see _CONTIGUITY_TOLERANCE above): the price curve can mix
-    # cadences (e.g. hourly slots followed by 15-min slots, or a genuine
-    # missing-data hole), and neither may be papered over with arithmetic.
-    candidates: list[tuple[float, float, float, datetime, datetime]] = []
-    for i in range(len(ordered)):
-        # Sized per candidate, from the SoC projected at ITS OWN start.
-        need_kwh = _charge_kwh(_soc_at(ordered[i].start, soc_pct, soc_forecast), cfg)
-        need_min = (_charge_h(_soc_at(ordered[i].start, soc_pct, soc_forecast), cfg) + cfg.calibration_dwell_h) * 60.0
-        acc_min = 0.0
-        weighted_price = 0.0
-        prev_end: datetime | None = None
-        end: datetime | None = None
-        for slot in ordered[i:]:
-            if prev_end is not None and abs(slot.start - prev_end) > _CONTIGUITY_TOLERANCE:
-                break  # real discontinuity in the price curve — do not span it
-            dur_min = _slot_duration_min(slot)
-            acc_min += dur_min
-            weighted_price += slot.price * dur_min
-            prev_end = slot.start + timedelta(minutes=dur_min)
-            if acc_min >= need_min:
-                end = prev_end
-                break
-        if end is None:
-            continue  # ran out of slots, or hit a gap, before covering need_min
-        start = ordered[i].start
-        if end <= now:
+    cands: list[tuple[float, float, datetime, datetime]] = []
+    for s in cal_slots:
+        if s.t1 <= now or s.soc_start < const.CALIBRATION_MIN_START_SOC:
             continue
-        mean_price = weighted_price / acc_min
-        candidates.append((need_kwh * mean_price, mean_price, need_kwh, start, end))
-    if not candidates:
+        end = s.t0 + timedelta(hours=_charge_h(s.soc_start, cfg) + cfg.calibration_dwell_h)
+        cost = window_cost(cal_slots, s.t0, end, cfg=cfg, water_value=water_value)
+        if cost is not None:
+            cands.append((cost, _charge_kwh(s.soc_start, cfg), s.t0, end))
+    if not cands:
         return None
-
-    # One candidate per UTC start-date (the cheapest) -- `cand[1]` (PriceSlot.start)
-    # is UTC-normalised by parsers.py, and this module never threads a timezone
-    # in, so the boundary is 00:00 UTC (02:00 local in CEST), not local
-    # midnight: up to 2 attempts per local day, not 1.
-    per_day: dict[object, tuple[float, float, float, datetime, datetime]] = {}
-    for cand in candidates:
-        key = cand[3].date()
-        # Strict `<` keeps the EARLIEST of equally-costed candidates, which is
-        # what a pack already at the top produces (every need_kwh is 0.0).
-        if key not in per_day or cand[0] < per_day[key][0]:
-            per_day[key] = cand
-
-    # Earliest date with an acceptable window wins.  Taking the EARLIEST rather
-    # than the globally cheapest is what stops the 13:00 publication of
-    # tomorrow's prices from pulling a cycle off a today window that already
-    # qualified — the "never abandon a started window" rule, expressed without
-    # storing any commitment.
-    for key in sorted(per_day):
-        mean_price, need_kwh, start, end = per_day[key][1:]
-        # The bar exists to stop calibrating at an expensive TIME. A window that
-        # barely needs the grid has no expensive time to speak of, and gating it
-        # on price would strand the cycle at exactly the placement the cost
-        # ranking just picked as best — waiting out the grace period only to
-        # deadline-force a worse one.
-        if force or need_kwh <= const.CALIBRATION_FREE_TOPUP_KWH or (bar is not None and mean_price <= bar):
-            return (start, end)
-    return None
+    # Filter BEFORE taking each day's cheapest: the normal bar scales with
+    # need_kwh, so a day's cheapest candidate can fail while a dearer one passes.
+    per_day: dict[object, tuple[float, float, datetime, datetime]] = {}
+    for c in cands:
+        if _acceptable(c[0], c[1], bar=bar, force=force):
+            key = c[2].date()  # UTC date; see the 2026-08-03 spec
+            if key not in per_day or c[0] < per_day[key][0]:
+                per_day[key] = c
+    if per_day:
+        cost, _need, start, end = per_day[min(per_day)]  # earliest acceptable day wins
+        return WindowPick(start, end, cost, True)
+    cost, _need, start, end = min(cands, key=lambda c: (c[0], c[2]))
+    return WindowPick(start, end, cost, False)
 
 
 def calibration_plan(
     now: datetime,
     soc_pct: float,
-    slots: list,
+    cal_slots: list[CalibSlot],
     soc_samples: list[tuple[str, float, str | None]],
     price_history: dict[str, dict[str, float]],
-    cfg,
+    cfg: Config,
     *,
-    already_holding: bool = False,
-    soc_forecast: list[tuple[datetime, float]] | None = None,
+    prev: CalibPlan | None = None,
+    water_value: float | None = None,
 ) -> CalibPlan:
     """The cycle's full state this tick, including a window that has been
     accepted but has not started yet (``scheduled``).
@@ -553,23 +492,24 @@ def calibration_plan(
     Fail-closed: absent or too-short history yields ``idle`` rather than
     "never calibrated, charge now".
 
-    ``already_holding`` -- true iff the PREVIOUS tick's action was already
-    "holding". Softens the hold re-entry bar to ``continue_soc`` (F1) so SoC
-    quantisation/load-spike noise at the boundary cannot toggle
-    holding/charging/idle every tick and churn the inverter mode. This module
-    is pure and keeps no state of its own, so the caller must supply it.
+    ``prev`` -- the PREVIOUS tick's plan; this module is pure and keeps no
+    state of its own, so the caller must supply it. A cycle it shows running
+    is committed: ``charging`` keeps its window until the window ends (or the
+    pack tops out, which starts the hold), and ``holding`` continues down to
+    ``continue_soc`` -- a deadband so SoC quantisation/load-spike noise at the
+    boundary cannot toggle holding/charging/idle every tick and churn the
+    inverter mode (F1).
 
-    ``soc_forecast`` -- (slot start, projected SoC) from the DP's own plan
-    horizon, ascending. Placement AND the plan-peak gate; the DP never sees
-    calibration back, so the quarantine still holds in the direction that
-    matters. Absent, window sizing falls back to the live SoC (see ``_soc_at``)
-    and the gate to the live SoC alone (see ``plan_peak_soc``).
+    ``water_value`` -- the DP's own EUR/kWh refill value, crediting energy a
+    window leaves in the pack (see ``window_cost``); None credits nothing,
+    which overstates cost and so fails closed.
 
-    Gated on that projection: unless the plan itself reaches
-    ``const.CALIBRATION_MIN_PLAN_SOC``, no window is placed at all, however
-    overdue the cycle is -- there is no climb to ride, so the grid would buy
-    the entire charge to the top. A dwell already in progress is never cut by
-    it.
+    With nothing committed, a top-out the pack reached on its own is held only
+    if the hold is itself acceptable; otherwise ``select_window`` places a
+    window, and one containing ``now`` starts ``charging`` only once the LIVE
+    pack clears ``const.CALIBRATION_MIN_START_SOC`` -- until then it is
+    ``scheduled``. With no plan (startup, a DP failure) nothing new is placed
+    or held.
 
     ``scheduled`` exists ONLY so the plan sensor and card can draw the coming
     window; ``CalibPlan.action`` withholds it from actuation. Callers deciding
@@ -590,66 +530,53 @@ def calibration_plan(
     if days_since is None or days_since < cfg.calibration_interval_days:
         return _IDLE
 
-    # Hold-through: once the pack is AT (or, mid-hold, within 1 point of) the
-    # top and a cycle is due, keep holding until the dwell completes,
-    # independent of the window.  The price curve's back-horizon is not
-    # guaranteed deep enough to keep re-selecting a window that started hours
-    # ago (coordinator.read_price_slots passes the sensor's curve through
-    # verbatim), and a stranded half-dwell buys the charge without the
-    # balancing it was for.  Ends by itself: the moment the run reaches
-    # dwell_h, last_success_end returns and days_since drops to ~0.
-    hold_bar = cont_soc if already_holding else cfg.calibration_top_soc
-    if soc_pct >= hold_bar:
-        run_start = _open_run_start(soc_samples, target_soc=cfg.calibration_top_soc, continue_soc=cont_soc) or now
-        return CalibPlan(
-            phase="holding",
-            window_start=run_start,
-            window_end=run_start + timedelta(hours=cfg.calibration_dwell_h),
-        )
+    dwell = timedelta(hours=cfg.calibration_dwell_h)
 
-    # A cycle is only worth placing off a climb the plan already makes: it then
-    # pays for the last sliver plus the hold. Below this bar the plan makes no
-    # such climb and the grid buys the whole way to the top.
-    #
-    # Placed here deliberately, on both sides. AFTER hold-through, so a dwell
-    # already in progress always finishes -- with `calibration_top_soc` set
-    # below ~81 the hold bar sits UNDER this gate, and an earlier placement
-    # would abandon the dwell halfway, buying the charge without the balancing
-    # it was for. BEFORE `force`, so this is a HARD gate: the overdue deadline
-    # bypasses the price bar but not this one. An overdue pack waits for a day
-    # the plan actually climbs, and days_since simply keeps growing.
-    if plan_peak_soc(soc_pct, soc_forecast) < const.CALIBRATION_MIN_PLAN_SOC:
-        return _IDLE
+    def _hold(cost: float | None) -> CalibPlan:
+        run_start = _open_run_start(soc_samples, target_soc=cfg.calibration_top_soc, continue_soc=cont_soc) or now
+        return CalibPlan("holding", run_start, run_start + dwell, cost)
+
+    # A running cycle is never re-costed or re-gated: abandoning it mid-way
+    # buys the charge without the balancing it was for. The hold still ends by
+    # itself: once the run reaches dwell_h, last_success_end finds it and the
+    # not-due check above goes idle.
+    if prev is not None and prev.phase == "holding" and soc_pct >= cont_soc:
+        return _hold(prev.cost_eur)
+    if prev is not None and prev.phase == "charging" and prev.window_end is not None and now < prev.window_end:
+        if soc_pct >= cfg.calibration_top_soc:
+            return _hold(prev.cost_eur)
+        return CalibPlan("charging", prev.window_start, prev.window_end, prev.cost_eur)
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
     bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)
-    win = select_window(now, soc_pct, slots, cfg=cfg, bar=bar, force=force, soc_forecast=soc_forecast)
-    if win is None:
+
+    # A self top-out (solar, or the DP's own charge) is held only if the hold
+    # itself is cheap -- the DP often fills the pack precisely to export it.
+    if soc_pct >= cfg.calibration_top_soc:
+        hold_cost = window_cost(cal_slots, now, now + dwell, cfg=cfg, water_value=water_value)
+        if hold_cost is not None and _acceptable(hold_cost, 0.0, bar=bar, force=force):
+            return _hold(hold_cost)
+
+    pick = select_window(now, cal_slots, cfg=cfg, bar=bar, force=force, water_value=water_value)
+    if pick is None:
         return _IDLE
-
-    start, end = win
-    if not (start <= now < end):
-        # Accepted a future window: report it so the plan can draw it, but
-        # `.action` withholds it so nothing actuates early.
-        return CalibPlan(phase="scheduled", window_start=start, window_end=end)
-
-    # Always "charging": the hold-through branch above already returned
-    # whenever soc_pct >= hold_bar, and nothing between here and there mutates
-    # soc_pct or cfg (Config is frozen) -- so this point is only ever reached
-    # with soc_pct < hold_bar, i.e. genuinely still climbing.
-    return CalibPlan(phase="charging", window_start=start, window_end=end)
+    if not pick.accepted:
+        return CalibPlan("idle", None, None, pick.cost_eur)
+    if pick.start <= now < pick.end and soc_pct >= const.CALIBRATION_MIN_START_SOC:
+        return CalibPlan("charging", pick.start, pick.end, pick.cost_eur)
+    return CalibPlan("scheduled", pick.start, pick.end, pick.cost_eur)
 
 
 def calibration_action(
     now: datetime,
     soc_pct: float,
-    slots: list,
+    cal_slots: list[CalibSlot],
     soc_samples: list[tuple[str, float, str | None]],
     price_history: dict[str, dict[str, float]],
-    cfg,
+    cfg: Config,
     *,
-    already_holding: bool = False,
-    soc_forecast: list[tuple[datetime, float]] | None = None,
+    prev: CalibPlan | None = None,
+    water_value: float | None = None,
 ) -> CalibAction | None:
     """Whether a calibration cycle is ACTUATING in the slot containing ``now``.
 
@@ -660,10 +587,10 @@ def calibration_action(
     return calibration_plan(
         now,
         soc_pct,
-        slots,
+        cal_slots,
         soc_samples,
         price_history,
         cfg,
-        already_holding=already_holding,
-        soc_forecast=soc_forecast,
+        prev=prev,
+        water_value=water_value,
     ).action
