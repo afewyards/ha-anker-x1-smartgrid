@@ -531,7 +531,12 @@ def _options_fields(defaults: dict, services=None) -> dict:
         ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
     }
     for key, default, validator in _TUNABLES:
-        fields[vol.Optional(key, default=defaults.get(key, default))] = validator
+        value = defaults.get(key, default)
+        if key == const.CONF_CALIBRATION_DWELL_H:
+            # The form validates its own pre-fill, so a stored dwell above the
+            # cap would otherwise reject every save, even an unchanged one.
+            value = min(float(value), const.CALIBRATION_MAX_DWELL_H)
+        fields[vol.Optional(key, default=value)] = validator
     for key, domain in _ENTITY_LIST_PICKERS:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key, [])})] = EntitySelector(
             EntitySelectorConfig(domain=domain, multiple=True)

@@ -30,6 +30,7 @@ def test_from_dict_clamps_a_ui_saved_dwell_above_the_new_max():
     """Live boxes may still carry a UI-saved 1.0 or 2.0 from before the cap
     dropped to 0.5; from_dict must clamp it rather than propagate it."""
     assert Config.from_dict({"calibration_dwell_h": 2.0}).calibration_dwell_h == 0.5
+    assert Config.from_dict({"calibration_dwell_h": 0.5}).calibration_dwell_h == 0.5
     assert Config.from_dict({"calibration_dwell_h": 0.25}).calibration_dwell_h == 0.25
 
 

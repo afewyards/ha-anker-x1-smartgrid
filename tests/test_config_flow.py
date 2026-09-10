@@ -1439,6 +1439,16 @@ def test_options_schema_range_bounds_on_calibration_fields():
     assert ok[const.CONF_CALIBRATION_DWELL_H] == 0.5
 
 
+def test_options_schema_clamps_a_stored_dwell_above_the_cap():
+    """The form validates its own pre-filled defaults, so a stored dwell above
+    CALIBRATION_MAX_DWELL_H would reject every save, even one that changes
+    nothing, unless the pre-fill is clamped to the cap."""
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
+
+    schema_obj = _options_schema({const.CONF_CALIBRATION_DWELL_H: 2.0})
+    assert _validate_flat(schema_obj, {})[const.CONF_CALIBRATION_DWELL_H] == 0.5
+
+
 async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog):
     """A soc_floor above the firmware 5% floor logs an INFO about the new
     semantics: soc_floor is export margin only, passive drain modeled to
