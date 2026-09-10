@@ -1,9 +1,11 @@
 # tests/test_controller_water_value.py
 from datetime import datetime, timedelta, timezone, UTC
 
+import pytest
 
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid import decision as dec_mod
+from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     PlanState,
@@ -206,6 +208,22 @@ def test_terminal_water_value_anchored_to_horizon_min(monkeypatch):
         f"terminal water value must be anchored to the horizon minimum (0.15), "
         f"got {captured['price']} (0.29 would mean the stale next-local-trough anchor is still live)"
     )
+
+
+def test_out_exposes_water_value_at_horizon_min():
+    """The DP path must publish the terminal water value in ``_out`` so
+    downstream consumers (calibration cost model) can credit retained
+    energy at the DP's own refill value, without recomputing it.
+    """
+    now = datetime(2026, 6, 23, 18, 0, tzinfo=UTC)
+    prices = [0.34] * 6 + [0.29] + [0.34] * 10 + [0.15] + [0.34] * 6
+    slots = _price_slots(now, prices)
+    cfg = Config(enable_export=True)
+    out: dict = {}
+
+    ctrl.compute_decision(**_flat_export_kwargs(now, slots, cfg), _out=out)
+
+    assert out["water_value"] == pytest.approx(optimize.compute_water_value(0.15, cfg))
 
 
 def test_export_scheduled_at_peak_when_horizon_min_beats_local_trough():

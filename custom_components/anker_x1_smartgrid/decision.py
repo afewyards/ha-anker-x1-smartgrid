@@ -1204,6 +1204,7 @@ def compute_decision(
             _out["export_revenue_eur"] = _dp_export_rev
             _out["terminal_v_hi"] = v_hi_mean
             _out["terminal_need_kwh"] = need_kwh
+            _out["water_value"] = water_value
             _out["terminal_segments"] = terminal_segments
     except Exception:
         _LOGGER.warning(
