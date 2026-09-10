@@ -693,18 +693,72 @@ def test_committed_charging_is_re_evaluated_past_its_window(monkeypatch):
     assert plan.cost_eur == 99.0
 
 
-def test_committed_charging_topping_out_at_its_window_end_still_holds(monkeypatch):
-    """The pack can reach the top on the first tick at or past window_end. The
-    window was already priced, so the hold is not re-costed: rejecting it near
-    a peak would buy the charge without the balancing it was for."""
+def test_committed_top_out_holds_uncosted_only_inside_its_window(monkeypatch):
+    """The window is sized at max charge rate, but the pack tapers near the
+    top, so a top-out often lands late. Only a hold that fits inside the
+    priced window goes uncosted; one that would run past it is priced like a
+    fresh top-out."""
     now = BASE
-    _pin_costs(monkeypatch, 99.0)
+    dwell = timedelta(hours=ON.calibration_dwell_h)
     cal, due = _cal(now, [97.0] * 2), _stale_history(now, 6)
-    for end in (now, now - timedelta(minutes=1)):
-        prev = calibration.CalibPlan("charging", end - timedelta(minutes=30), end, 0.1)
-        plan = calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON, prev=prev)
+
+    def _top_out(end):
+        prev = calibration.CalibPlan("charging", end - timedelta(minutes=35), end, 0.1)
+        return calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON, prev=prev)
+
+    _pin_costs(monkeypatch, 99.0)
+    for end in (now + dwell + timedelta(minutes=10), now + dwell):
+        plan = _top_out(end)
         assert (plan.phase, plan.cost_eur) == ("holding", 0.1)
-    assert calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON).phase == "idle"
+    late = (now + dwell - timedelta(minutes=1), now, now - timedelta(minutes=1))
+    for end in late:
+        plan = _top_out(end)
+        assert plan.phase == "idle"
+        assert plan.action is None
+    _pin_costs(monkeypatch, 0.0)
+    for end in late:
+        plan = _top_out(end)
+        assert (plan.phase, plan.cost_eur) == ("holding", 0.0)
+
+
+def test_committed_hold_is_bounded_by_its_window(monkeypatch):
+    """A committed hold continues only until its window ends, plus the sample
+    gap tolerance. Past that it is re-evaluated like a fresh top-out, so a
+    hold whose samples stopped qualifying cannot block export indefinitely."""
+    now = BASE
+    due, cal = _stale_history(now, 6), _cal(now, [100.0] * 2)
+    gap = timedelta(minutes=calibration.MAX_SAMPLE_GAP_MIN)
+
+    def _ended(ago):
+        return calibration.CalibPlan("holding", now - ago - timedelta(minutes=30), now - ago, 0.2)
+
+    _pin_costs(monkeypatch, 99.0)
+    plan = calibration.calibration_plan(now, 99.5, cal, due, CHEAP_HISTORY, ON, prev=_ended(gap))
+    assert plan.phase == "holding"
+    for ago in (gap + timedelta(minutes=1), timedelta(hours=3)):
+        plan = calibration.calibration_plan(now, 99.5, cal, due, CHEAP_HISTORY, ON, prev=_ended(ago))
+        assert plan.phase == "idle"
+        assert plan.action is None
+    _pin_costs(monkeypatch, 0.0)
+    plan = calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON, prev=_ended(timedelta(hours=3)))
+    assert (plan.phase, plan.window_start, plan.cost_eur) == ("holding", now, 0.0)
+
+
+def test_committed_hold_keeps_its_start_while_no_run_is_recorded():
+    """With no qualifying run in the samples (e.g. an engage failure records
+    the tick as passive), the hold keeps its own start instead of restarting
+    at ``now``, so its window, and the bound on it, cannot slide forward."""
+    now = BASE
+    prev = _held(now, 0.2)
+    plan = calibration.calibration_plan(
+        now, 100.0, _cal(now, [100.0] * 2), _stale_history(now, 6), CHEAP_HISTORY, ON, prev=prev
+    )
+    assert (plan.phase, plan.window_start, plan.window_end, plan.cost_eur) == (
+        "holding",
+        prev.window_start,
+        prev.window_end,
+        0.2,
+    )
 
 
 def test_fresh_top_out_holds_only_when_the_hold_is_cheap():

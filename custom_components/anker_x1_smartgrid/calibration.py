@@ -494,11 +494,13 @@ def calibration_plan(
 
     ``prev`` -- the PREVIOUS tick's plan; this module is pure and keeps no
     state of its own, so the caller must supply it. A cycle it shows running
-    is committed: ``charging`` keeps its window until the window ends, a top-out
-    straight after a ``charging`` tick starts the hold uncosted even at or past
-    that end, and ``holding`` continues down to ``continue_soc`` -- a deadband
-    so SoC quantisation/load-spike noise at the boundary cannot toggle
-    holding/charging/idle every tick and churn the inverter mode (F1).
+    is committed, but only within what was priced: ``charging`` keeps its
+    window until the window ends; a top-out after a ``charging`` tick holds
+    uncosted only if the whole dwell fits inside that window; ``holding``
+    continues down to ``continue_soc`` -- a deadband so SoC quantisation/
+    load-spike noise at the boundary cannot toggle holding/charging/idle every
+    tick and churn the inverter mode -- until ``MAX_SAMPLE_GAP_MIN`` past its
+    window's end. Beyond those bounds a top-out is costed like a fresh one.
 
     ``water_value`` -- the DP's own EUR/kWh refill value, crediting energy a
     window leaves in the pack (see ``window_cost``); None credits nothing,
@@ -532,22 +534,36 @@ def calibration_plan(
 
     dwell = timedelta(hours=cfg.calibration_dwell_h)
 
-    def _hold(cost: float | None) -> CalibPlan:
-        run_start = _open_run_start(soc_samples, target_soc=cfg.calibration_top_soc, continue_soc=cont_soc) or now
+    def _hold(cost: float | None, fallback_start: datetime | None = None) -> CalibPlan:
+        run_start = (
+            _open_run_start(soc_samples, target_soc=cfg.calibration_top_soc, continue_soc=cont_soc)
+            or fallback_start
+            or now
+        )
         return CalibPlan("holding", run_start, run_start + dwell, cost)
 
-    # A running cycle is never re-costed or re-gated: abandoning it mid-way
-    # buys the charge without the balancing it was for. The hold still ends by
-    # itself: once the run reaches dwell_h, last_success_end finds it and the
-    # not-due check above goes idle.
-    if prev is not None and prev.phase == "holding" and soc_pct >= cont_soc:
-        return _hold(prev.cost_eur)
-    if prev is not None and prev.phase == "charging":
-        # Ahead of the window guard: the pack can top out on the first tick
-        # at or past window_end, and that hold was priced with the window.
+    # A running cycle is not re-costed or re-gated within what was priced:
+    # abandoning it mid-way buys the charge without the balancing it was for.
+    # The hold still ends by itself: once the run reaches dwell_h,
+    # last_success_end finds it and the not-due check above goes idle.
+    if (
+        prev is not None
+        and prev.phase == "holding"
+        and prev.window_end is not None
+        and soc_pct >= cont_soc
+        and now <= prev.window_end + timedelta(minutes=MAX_SAMPLE_GAP_MIN)
+    ):
+        # Keeping the hold's own start while no qualifying run is recorded
+        # stops this bound from sliding forward tick by tick.
+        return _hold(prev.cost_eur, prev.window_start)
+    if prev is not None and prev.phase == "charging" and prev.window_end is not None:
         if soc_pct >= cfg.calibration_top_soc:
-            return _hold(prev.cost_eur)
-        if prev.window_end is not None and now < prev.window_end:
+            # The window is sized at max charge rate, but the pack tapers near
+            # the top, so a top-out often lands late. A hold that would run
+            # past the priced window is costed as a fresh top-out below.
+            if now + dwell <= prev.window_end:
+                return _hold(prev.cost_eur)
+        elif now < prev.window_end:
             return CalibPlan("charging", prev.window_start, prev.window_end, prev.cost_eur)
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
