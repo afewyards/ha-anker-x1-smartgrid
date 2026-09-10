@@ -41,12 +41,24 @@ controller's overdue log line, compared against the new const.
 - **Actuation**: a selected window containing `now` enters `charging` only if
   **live** SoC ≥ 95; otherwise it reports `scheduled` and is re-evaluated next
   tick (it starts the moment the live pack reaches 95 inside the window).
-- **Committed**: once running, a cycle is not re-costed or re-gated.
+- **Committed**: once running, a cycle is not re-costed or re-gated, but
+  only within what was actually priced.
   - previous tick `charging` and `now < window_end` → `charging`
+  - previous tick `charging` and the pack tops out → `holding` without a cost
+    check ONLY if the whole hold `[now, now + dwell]` fits inside the priced
+    window. Otherwise the hold is priced like a fresh top-out. The window is
+    sized at max charge rate, but the pack tapers near the top, so a top-out
+    typically lands late and the overrun would otherwise run unpriced into
+    whatever follows the window.
   - previous tick `holding` and `soc ≥ continue_soc` → `holding` (today's
-    `already_holding` softening, unchanged)
-  - a fresh top-out right after a committed `charging` tick → `holding`
-    without a cost check (the window was already priced).
+    `already_holding` softening), bounded in time: only while
+    `now ≤ window_end + MAX_SAMPLE_GAP_MIN`, and the hold keeps its original
+    start when the recorder shows no qualifying run yet, so the bound cannot
+    slide. Past it, the hold is re-evaluated like a fresh top-out.
+  - The controller captures the previous tick's plan and resets its own copy
+    to idle at the top of every tick. Any tick that ends before the
+    calibration block (disabled, failsafe, exception) therefore hands the
+    next tick an idle `prev`.
   The `already_holding: bool` kwarg becomes `prev: CalibPlan | None` (phase +
   window), threaded by the controller exactly as `_calibration_was_holding` is
   today.
