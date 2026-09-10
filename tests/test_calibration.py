@@ -576,9 +576,9 @@ def test_plan_peak_soc_folds_in_the_live_soc():
 
 # --- Start gate, committed cycles, cost acceptance ---------------------------
 #
-# Live 45a: a cycle held the pack at 100% across the evening export peak and
-# cancelled ~10 EUR of planned export. Windows now start only near the top,
-# are priced against the DP's own plan, and once running are never re-costed.
+# A window starts only where the plan projects >= 95%, is accepted on what it
+# costs against the DP's own plan -- a hold across a planned export forfeits
+# that export -- and once running is never re-costed.
 
 
 def test_start_gate_places_nothing_below_the_bar():
@@ -693,6 +693,20 @@ def test_committed_charging_is_re_evaluated_past_its_window(monkeypatch):
     assert plan.cost_eur == 99.0
 
 
+def test_committed_charging_topping_out_at_its_window_end_still_holds(monkeypatch):
+    """The pack can reach the top on the first tick at or past window_end. The
+    window was already priced, so the hold is not re-costed: rejecting it near
+    a peak would buy the charge without the balancing it was for."""
+    now = BASE
+    _pin_costs(monkeypatch, 99.0)
+    cal, due = _cal(now, [97.0] * 2), _stale_history(now, 6)
+    for end in (now, now - timedelta(minutes=1)):
+        prev = calibration.CalibPlan("charging", end - timedelta(minutes=30), end, 0.1)
+        plan = calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON, prev=prev)
+        assert (plan.phase, plan.cost_eur) == ("holding", 0.1)
+    assert calibration.calibration_plan(now, 100.0, cal, due, CHEAP_HISTORY, ON).phase == "idle"
+
+
 def test_fresh_top_out_holds_only_when_the_hold_is_cheap():
     """A top-out the DP made in order to export is not held; a midday PV top-out
     is. Overdue, the cap admits the dearer hold too."""
@@ -701,7 +715,8 @@ def test_fresh_top_out_holds_only_when_the_hold_is_cheap():
     pre_peak = calibration.calibration_plan(
         now, 100.0, [peak_export_slot(now)], due, CHEAP_HISTORY, ON, water_value=0.21
     )
-    assert pre_peak.phase != "holding"
+    assert pre_peak.phase == "idle"
+    assert pre_peak.action is None
     assert pre_peak.cost_eur == pytest.approx(0.6175)
     midday = calibration.calibration_plan(
         now, 100.0, [midday_spill_slot(now)], due, CHEAP_HISTORY, ON, water_value=0.21
@@ -712,6 +727,24 @@ def test_fresh_top_out_holds_only_when_the_hold_is_cheap():
         now, 100.0, [peak_export_slot(now)], overdue, CHEAP_HISTORY, ON, water_value=0.21
     )
     assert forced.phase == "holding"  # 0.6175 <= the 1.00 overdue cap
+
+
+def test_rejected_fresh_hold_reports_its_cost(monkeypatch):
+    """A costed, rejected fresh hold is a candidate like any other: idle
+    reports the cheaper of it and the best rejected window."""
+    now = BASE
+    due = _stale_history(now, 6)
+    # Plan drift: the pack is at the top but the plan sits at 94, so no window
+    # clears the start gate and only the hold is costed.
+    drifted = _cal(now, [(94.0, 94.0), (94.0, 94.0)])
+    _pin_costs(monkeypatch, 0.70)
+    plan = calibration.calibration_plan(now, 100.0, drifted, due, CHEAP_HISTORY, ON)
+    assert (plan.phase, plan.cost_eur) == ("idle", 0.70)
+    climbs = _cal(now, [(94.0, 100.0), (100.0, 100.0)])  # the second slot is a candidate
+    for hold, window in ((0.70, 0.90), (0.90, 0.70)):
+        _pin_costs(monkeypatch, {now: hold, now + timedelta(hours=1): window})
+        plan = calibration.calibration_plan(now, 100.0, climbs, due, CHEAP_HISTORY, ON)
+        assert (plan.phase, plan.cost_eur) == ("idle", 0.70)
 
 
 def test_no_plan_places_nothing_but_a_committed_hold_finishes():

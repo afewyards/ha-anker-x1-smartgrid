@@ -74,10 +74,10 @@ class CalibPlan:
     value out — so the plan sensor can draw a coming window without any risk
     of the controller engaging on it.
 
-    ``cost_eur`` is what the window this tick settled on costs against the
-    plan (see ``window_cost``) -- the accepted window, else the cheapest
-    rejected candidate -- carried unchanged while a cycle is committed. None
-    when nothing was costed.
+    ``cost_eur`` is what this tick's calibration costs against the plan (see
+    ``window_cost``): the accepted window or hold, else the cheapest rejected
+    one, a costed fresh hold included. Carried unchanged while a cycle is
+    committed; None when nothing was costed.
     """
 
     phase: str  # "idle" | "scheduled" | "charging" | "holding"
@@ -494,11 +494,11 @@ def calibration_plan(
 
     ``prev`` -- the PREVIOUS tick's plan; this module is pure and keeps no
     state of its own, so the caller must supply it. A cycle it shows running
-    is committed: ``charging`` keeps its window until the window ends (or the
-    pack tops out, which starts the hold), and ``holding`` continues down to
-    ``continue_soc`` -- a deadband so SoC quantisation/load-spike noise at the
-    boundary cannot toggle holding/charging/idle every tick and churn the
-    inverter mode (F1).
+    is committed: ``charging`` keeps its window until the window ends, a top-out
+    straight after a ``charging`` tick starts the hold uncosted even at or past
+    that end, and ``holding`` continues down to ``continue_soc`` -- a deadband
+    so SoC quantisation/load-spike noise at the boundary cannot toggle
+    holding/charging/idle every tick and churn the inverter mode (F1).
 
     ``water_value`` -- the DP's own EUR/kWh refill value, crediting energy a
     window leaves in the pack (see ``window_cost``); None credits nothing,
@@ -542,16 +542,20 @@ def calibration_plan(
     # not-due check above goes idle.
     if prev is not None and prev.phase == "holding" and soc_pct >= cont_soc:
         return _hold(prev.cost_eur)
-    if prev is not None and prev.phase == "charging" and prev.window_end is not None and now < prev.window_end:
+    if prev is not None and prev.phase == "charging":
+        # Ahead of the window guard: the pack can top out on the first tick
+        # at or past window_end, and that hold was priced with the window.
         if soc_pct >= cfg.calibration_top_soc:
             return _hold(prev.cost_eur)
-        return CalibPlan("charging", prev.window_start, prev.window_end, prev.cost_eur)
+        if prev.window_end is not None and now < prev.window_end:
+            return CalibPlan("charging", prev.window_start, prev.window_end, prev.cost_eur)
 
     force = days_since >= cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
     bar = price_percentile(price_history, const.CALIBRATION_PRICE_PERCENTILE)
 
     # A self top-out (solar, or the DP's own charge) is held only if the hold
     # itself is cheap -- the DP often fills the pack precisely to export it.
+    hold_cost: float | None = None
     if soc_pct >= cfg.calibration_top_soc:
         hold_cost = window_cost(cal_slots, now, now + dwell, cfg=cfg, water_value=water_value)
         if hold_cost is not None and _acceptable(hold_cost, 0.0, bar=bar, force=force):
@@ -559,9 +563,9 @@ def calibration_plan(
 
     pick = select_window(now, cal_slots, cfg=cfg, bar=bar, force=force, water_value=water_value)
     if pick is None:
-        return _IDLE
+        return CalibPlan("idle", None, None, hold_cost)
     if not pick.accepted:
-        return CalibPlan("idle", None, None, pick.cost_eur)
+        return CalibPlan("idle", None, None, pick.cost_eur if hold_cost is None else min(hold_cost, pick.cost_eur))
     if pick.start <= now < pick.end and soc_pct >= const.CALIBRATION_MIN_START_SOC:
         return CalibPlan("charging", pick.start, pick.end, pick.cost_eur)
     return CalibPlan("scheduled", pick.start, pick.end, pick.cost_eur)
