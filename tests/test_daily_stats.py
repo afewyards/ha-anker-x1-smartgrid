@@ -522,3 +522,19 @@ def test_merge_sums_actual_and_planned_house_halves_on_today():
     assert row["house_net_eur"] == pytest.approx(-3.25)
     assert row["actual_house_net_eur"] == pytest.approx(-3.0)
     assert row["planned_house_net_eur"] == pytest.approx(-0.25)
+
+
+def test_planned_house_flows_balance():
+    from custom_components.anker_x1_smartgrid.daily_stats import planned_house_flows
+
+    row = {
+        "load_kwh": 0.5,
+        "solar_charge_kwh": 1.0,
+        "grid_charge_kwh": 0.2,
+        "pv_kwh": 2.0,
+        "self_discharge_kwh": 0.0,
+        "grid_export_kwh": 0.3,
+    }
+    assert planned_house_flows(row) == pytest.approx((0.0, 0.6))
+    # charge override (caller's delivered add-back reversal) replaces grid_charge_kwh
+    assert planned_house_flows(row, charge_kwh=1.0) == pytest.approx((0.5, 0.3))

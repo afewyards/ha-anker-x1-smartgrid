@@ -127,6 +127,27 @@ def aggregate_actual_days(
     return out
 
 
+def planned_house_flows(row: dict, charge_kwh: float | None = None) -> tuple[float, float]:
+    """(house_import_kwh, house_export_kwh) for one forward plan row.
+
+    Whole-house flows follow by balance from the plan's own AC model
+    (plan.build_plan_horizon): PV serves load first, the surplus charges,
+    self-discharge covers any remaining deficit, and grid_export is
+    net-of-house. The max(0, -net) term is PV spill. ``charge_kwh`` overrides
+    the row's grid_charge_kwh.
+    """
+    if charge_kwh is None:
+        charge_kwh = float(row.get("grid_charge_kwh") or 0.0)
+    net_kwh = (
+        float(row.get("load_kwh") or 0.0)
+        + float(row.get("solar_charge_kwh") or 0.0)
+        + charge_kwh
+        - float(row.get("pv_kwh") or 0.0)
+        - float(row.get("self_discharge_kwh") or 0.0)
+    )
+    return max(0.0, net_kwh), max(0.0, -net_kwh) + float(row.get("grid_export_kwh") or 0.0)
+
+
 def aggregate_planned_days(
     horizon: list[dict] | None,
     export_price_at,
@@ -192,20 +213,7 @@ def aggregate_planned_days(
         export_kwh = float(row.get("grid_export_kwh") or 0.0)
         rec["grid_charge_kwh"] += charge_kwh
         rec["grid_export_kwh"] += export_kwh
-        # Whole-house flows follow by balance from the plan's own AC model
-        # (plan.build_plan_horizon): PV serves load first, the surplus charges,
-        # self-discharge covers any remaining deficit, and grid_export is
-        # net-of-house. The max(0, -net) term is PV spill — the leg the
-        # battery-basis columns above cannot see.
-        net_kwh = (
-            float(row.get("load_kwh") or 0.0)
-            + float(row.get("solar_charge_kwh") or 0.0)
-            + charge_kwh
-            - float(row.get("pv_kwh") or 0.0)
-            - float(row.get("self_discharge_kwh") or 0.0)
-        )
-        house_import_kwh = max(0.0, net_kwh)
-        house_export_kwh = max(0.0, -net_kwh) + export_kwh
+        house_import_kwh, house_export_kwh = planned_house_flows(row, charge_kwh)
         rec["house_import_kwh"] += house_import_kwh
         rec["house_export_kwh"] += house_export_kwh
         price = row.get("price")
