@@ -445,10 +445,14 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     Uses the REAL calibration.calibration_plan (only decide_state/
     now_selected are faked, mirroring the C1(B) cancel scaffold above) so
     this exercises the actual F1 latch, not a stand-in for it. Without the
-    latch: tick 2's soc=96 falls through to select_window, which returns
-    None (bar=None since _price_store is unset here, and force=False), so
-    calibration_plan returns idle -> the (B) cancel condition is met
-    (was_engaged, coasting, not now_selected) -> PASSIVE -> release_to_self.
+    latch (`prev` not threaded, or the committed-holding branch removed):
+    tick 2's LIVE soc=96 already clears CALIBRATION_MIN_START_SOC=95, so
+    calibration_plan falls through to select_window instead of re-entering
+    the hold, finds the candidate covering `now` acceptable (window_cost is
+    stubbed to 0.0 below), and returns `charging` instead of `holding`. Both
+    phases actuate identically (state == "forcing"), so the state-only
+    assertions below cannot see that -- the calibration_state=="holding"
+    assertions are what actually pin the latch.
     """
     hass = StubHass()
     ctrl, act = make_controller(hass)
@@ -479,16 +483,22 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     seed_valid_inputs(hass, soc=str(at_bar))
     result1 = await ctrl.tick()
     assert result1["state"] == "forcing"
+    assert ctrl.last_status["calibration_state"] == "holding"
 
     tick_time = BASE + timedelta(minutes=1)
     seed_valid_inputs(hass, soc=str(dipped))
     result2 = await ctrl.tick()
     assert result2["state"] == "forcing", "the latch must absorb a 1-point SoC dip while already holding"
+    assert ctrl.last_status["calibration_state"] == "holding", (
+        "without the latch, live soc >= CALIBRATION_MIN_START_SOC lets select_window re-place a "
+        "fresh `charging` window here instead of continuing the hold"
+    )
 
     tick_time = BASE + timedelta(minutes=2)
     seed_valid_inputs(hass, soc=str(at_bar))
     result3 = await ctrl.tick()
     assert result3["state"] == "forcing"
+    assert ctrl.last_status["calibration_state"] == "holding"
 
     assert not any(c[0] == "release_to_self" for c in act.calls), (
         "a SoC wobble at the calibration top must not release/re-engage the actuator"
@@ -697,7 +707,110 @@ async def test_prev_plan_is_threaded(monkeypatch):
     await ctrl.tick()
 
     assert len(calls) == 2
-    assert calls[1]["prev"].phase == "charging"
+    assert calls[0]["prev"].phase == "idle", "the first tick has nothing committed yet"
+    assert calls[1]["prev"] == plan, "the whole previous CalibPlan (not just its phase) must be threaded through"
+
+
+@pytest.mark.asyncio
+async def test_prev_resets_to_idle_after_a_failed_tick(monkeypatch, caplog):
+    """A tick whose policy read raised (fail-closed, F2) must hand `idle` to
+    the NEXT tick as `prev`, even when a cycle was committed just before the
+    failure -- otherwise a transient read error could silently resume a
+    stale charging/holding window, uncosted, once the read succeeds again."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    committed = calibration.CalibPlan("charging", BASE, BASE + timedelta(hours=1), 0.2)
+    calls: list[dict] = []
+
+    def _boom(*a, **k):
+        raise RuntimeError("sqlite lock")
+
+    def _spy(*a, **k):
+        calls.append(k)
+        return _IDLE_PLAN
+
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: committed)
+    await ctrl.tick()  # tick 1: commits a charging plan
+
+    monkeypatch.setattr(calibration, "calibration_plan", _boom)
+    await ctrl.tick()  # tick 2: policy read fails, fails closed to idle
+
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    await ctrl.tick()  # tick 3: prev must be idle, not the tick-1 committed plan
+
+    assert len(calls) == 1
+    assert calls[0]["prev"].phase == "idle"
+
+
+@pytest.mark.asyncio
+async def test_prev_resets_to_idle_across_a_disabled_tick(monkeypatch):
+    """A tick where the controller is disabled never reaches the calibration
+    block, so it must not leave a stale committed plan for the next enabled
+    tick to resume uncosted -- the disabled path's own early `return status`
+    bypasses the calibration block entirely."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    committed = calibration.CalibPlan("charging", BASE, BASE + timedelta(hours=1), 0.2)
+    calls: list[dict] = []
+
+    def _spy(*a, **k):
+        calls.append(k)
+        return _IDLE_PLAN
+
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: committed)
+    await ctrl.tick()  # tick 1: commits a charging plan
+
+    ctrl.enabled = False
+    await ctrl.tick()  # tick 2: disabled -- never reaches the calibration block
+
+    ctrl.enabled = True
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    await ctrl.tick()  # tick 3: re-enabled; prev must be idle, not the tick-1 commit
+
+    assert len(calls) == 1
+    assert calls[0]["prev"].phase == "idle"
+
+
+@pytest.mark.asyncio
+async def test_prev_resets_to_idle_across_a_failsafe_tick(monkeypatch):
+    """Same as the disabled case, for the failsafe early return (missing
+    inputs/slots/sunset/pv_remaining) -- it also never reaches the
+    calibration block."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    committed = calibration.CalibPlan("charging", BASE, BASE + timedelta(hours=1), 0.2)
+    calls: list[dict] = []
+
+    def _spy(*a, **k):
+        calls.append(k)
+        return _IDLE_PLAN
+
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: committed)
+    await ctrl.tick()  # tick 1: commits a charging plan
+
+    hass.set_state("sensor.soc", "unknown")  # read_plant_inputs now fails -> failsafe path
+    await ctrl.tick()  # tick 2: failsafe -- never reaches the calibration block
+
+    seed_valid_inputs(hass, soc="50.0")
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    await ctrl.tick()  # tick 3: inputs valid again; prev must be idle, not the tick-1 commit
+
+    assert len(calls) == 1
+    assert calls[0]["prev"].phase == "idle"
 
 
 @pytest.mark.asyncio
@@ -735,33 +848,49 @@ async def test_cal_slots_exclude_past_and_estimated_rows(monkeypatch):
     """CalibSlots are built only from future, real (non-estimated,
     non-actual) plan rows -- closes the "yesterday's actuals open the gate"
     bug. Ticking partway through the seeded forecast puts several horizon
-    rows in the past, so the exclusion is exercised, not just declared."""
+    rows in the past (exercising the elapsed-slot exclusion); an injected
+    `estimated` row and an injected `mode="actual"` row -- both otherwise
+    ordinary FUTURE rows, so they cannot be excluded merely for being past --
+    exercise the other two exclusions. Without the injection this assertion
+    would be vacuously true: the seeded fixture never produces either row
+    kind on its own.
+    """
     hass = StubHass()
     ctrl, _act = make_controller(hass)
     seed_valid_inputs(hass, soc="50.0")
     ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
 
     now = BASE + timedelta(hours=3, minutes=30)
+    est_start = (now + timedelta(hours=100)).isoformat()
+    actual_start = (now + timedelta(hours=101)).isoformat()
     captured: dict = {}
+    real_build_calib_slots = calibration.build_calib_slots
 
-    def _spy(now_arg, soc_pct, cal_slots, *rest, **k):
-        captured["cal_slots"] = cal_slots
-        return _IDLE_PLAN
+    def _spy_build(horizon, *args, **kwargs):
+        # Both injected rows clone a real, priced row so only the
+        # estimated/actual flag (not a missing soc/price) can explain their
+        # absence from the result.
+        injected_horizon = [
+            *horizon,
+            {**horizon[0], "start": est_start, "estimated": True},
+            {**horizon[0], "start": actual_start, "mode": "actual", "estimated": False},
+        ]
+        slots = real_build_calib_slots(injected_horizon, *args, **kwargs)
+        captured["cal_slots"] = slots
+        return slots
 
-    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    monkeypatch.setattr(calibration, "build_calib_slots", _spy_build)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: now)
 
     await ctrl.tick()
 
     cal_slots = captured["cal_slots"]
     assert cal_slots, "expected at least one future slot"
-    assert all(s.t1 > now for s in cal_slots)
+    assert all(s.t1 > now for s in cal_slots), "an already-elapsed slot must not produce a CalibSlot"
 
-    horizon = ctrl.last_status["plan"]["horizon"]
-    excluded_starts = {row["start"] for row in horizon if row.get("estimated") or row.get("mode") == "actual"}
-    assert not ({s.t0.isoformat() for s in cal_slots} & excluded_starts), (
-        "estimated/actual rows must not produce CalibSlots"
-    )
+    slot_t0_isos = {s.t0.isoformat() for s in cal_slots}
+    assert est_start not in slot_t0_isos, "an estimated row must not produce a CalibSlot"
+    assert actual_start not in slot_t0_isos, 'a mode="actual" row must not produce a CalibSlot'
 
 
 @pytest.mark.asyncio
@@ -779,3 +908,21 @@ async def test_cost_is_published(monkeypatch):
     await ctrl.tick()
 
     assert ctrl.last_status["calibration_cost_eur"] == 0.617
+
+
+@pytest.mark.asyncio
+async def test_cost_is_none_when_nothing_was_costed(monkeypatch):
+    """cost_eur defaults to None (not due, or nothing could be costed) and
+    must publish as None, not 0 or a stale rounded value."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    plan = calibration.CalibPlan("idle", None, None)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: plan)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+
+    assert ctrl.last_status["calibration_cost_eur"] is None

@@ -1557,6 +1557,12 @@ class Controller:
             # values forever (they are never otherwise copied across).
             self.last_status["export_curve_covered"] = _shadow_dp_out.get("export_curve_covered")
             self.last_status["export_curve_slots"] = _shadow_dp_out.get("export_curve_slots")
+            # This tick never reached the calibration block below, so the
+            # policy was not re-evaluated this tick -- a committed
+            # charging/holding plan must not resume uncosted on the next
+            # enabled tick that does reach it.
+            self._calibration = None
+            self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
 
             # Publish a self-consumption display horizon (no grid charging) so the
             # card still renders PV + load + projected SoC while disabled.
@@ -1610,6 +1616,12 @@ class Controller:
         if inputs is None or not slots or sunset is None or pv_remaining is None:
             await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
+            # This tick never reached the calibration block below, so the
+            # policy was not re-evaluated this tick -- a committed
+            # charging/holding plan must not resume uncosted on the next
+            # tick that does reach it.
+            self._calibration = None
+            self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
             return self._status(now, 0.0, None, "failsafe")
 
         _slot_minutes = self._resolve_slot_minutes(slots)
@@ -1861,8 +1873,13 @@ class Controller:
                         self._calibration_overdue_warned = True
                         # The start-SoC gate is HARD: past interval+grace it
                         # still suppresses every window, so the forcing message
-                        # below would be false. Same helper the policy gates on
-                        # (F3) rather than a second reading of the horizon.
+                        # below would be false. plan_peak_soc approximates --
+                        # it is not identical to -- the policy's own
+                        # per-candidate soc_start gate (select_window skips a
+                        # candidate whose plan SoC at ITS OWN start is below
+                        # CALIBRATION_MIN_START_SOC); this reads the plan's
+                        # single overall peak, which is enough for this log
+                        # line without a second reading of the horizon.
                         _peak = calibration.plan_peak_soc(inputs.soc, _cal_slots)
                         if _peak < const.CALIBRATION_MIN_START_SOC:
                             _LOGGER.warning(
@@ -1880,8 +1897,10 @@ class Controller:
                         else:
                             _LOGGER.warning(
                                 "Calibration overdue by %.1f days (past interval %d + grace %d): taking the "
-                                "cheapest window up to €%.2f with the price bar bypassed. If this persists, the "
-                                "pack is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
+                                "cheapest window up to €%.2f with the price bar bypassed. If this persists, check "
+                                "calibration_cost_eur — either the pack is not reaching "
+                                "calibration_top_soc=%.0f%% (check batt_w during the hold) or every window costs "
+                                "more than the cap and the cycle is waiting it out",
                                 _since,
                                 self.cfg.calibration_interval_days,
                                 const.CALIBRATION_GRACE_DAYS,
