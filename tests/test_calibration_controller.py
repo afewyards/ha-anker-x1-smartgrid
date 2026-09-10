@@ -465,6 +465,10 @@ async def test_calibration_soc_wobble_at_top_does_not_churn_engage_release(monke
     at_bar = ctrl.cfg.calibration_top_soc
     dipped = calibration.continue_soc(ctrl.cfg)
 
+    # A fresh top-out is now costed before it is held; make the hold free so
+    # this test still exercises the F1 latch rather than the cost gate.
+    monkeypatch.setattr(calibration, "window_cost", lambda *a, **k: 0.0)
+
     now_selected_holder = {"value": False}
     monkeypatch.setattr(scheduler, "decide_state", lambda plan, **kwargs: plan)  # always coast
     _wrap_compute_decision(monkeypatch, now_selected_holder)
@@ -618,7 +622,7 @@ async def test_calibration_warns_once_when_stuck_past_grace(monkeypatch, caplog)
 
 @pytest.mark.asyncio
 async def test_overdue_warning_reports_the_gate_when_the_plan_never_climbs(monkeypatch, caplog):
-    """Past interval+grace the pack is overdue, but below CALIBRATION_MIN_PLAN_SOC
+    """Past interval+grace the pack is overdue, but below CALIBRATION_MIN_START_SOC
     no window is planned at all -- so the "forcing the cheapest window daily"
     message would be simply false. Report the real reason instead, still once
     per streak."""
@@ -667,3 +671,111 @@ async def test_calibration_days_since_falls_back_to_history_span_when_never_cali
 
     expected_span = (BASE - start).total_seconds() / 86400.0
     assert ctrl.last_status["calibration_days_since"] == pytest.approx(expected_span)
+
+
+@pytest.mark.asyncio
+async def test_prev_plan_is_threaded(monkeypatch):
+    """The controller's own previous-tick CalibPlan is threaded into the
+    policy as `prev`, unbroken across ticks -- the `prev`-kwarg replacement
+    for the old `_calibration_was_holding` bool."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    plan = calibration.CalibPlan("charging", BASE, BASE + timedelta(minutes=40), 0.1)
+    calls: list[dict] = []
+
+    def _spy(*a, **k):
+        calls.append(k)
+        return plan
+
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+    await ctrl.tick()
+
+    assert len(calls) == 2
+    assert calls[1]["prev"].phase == "charging"
+
+
+@pytest.mark.asyncio
+async def test_water_value_reaches_the_policy(monkeypatch):
+    """The DP's own water value (`_dp_out["water_value"]`, DP path only) is
+    threaded into the policy so it can credit calibration's parked energy at
+    the same value the optimizer would refill it for."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    real_compute_decision = controller.compute_decision
+
+    def _fake(*args, **kwargs):
+        result = real_compute_decision(*args, **kwargs)
+        _out = kwargs.get("_out")
+        if _out is not None:
+            _out["water_value"] = 0.123
+        return result
+
+    monkeypatch.setattr(controller, "compute_decision", _fake)
+
+    calls: list[dict] = []
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: calls.append(k) or _IDLE_PLAN)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+
+    assert calls[0]["water_value"] == 0.123
+
+
+@pytest.mark.asyncio
+async def test_cal_slots_exclude_past_and_estimated_rows(monkeypatch):
+    """CalibSlots are built only from future, real (non-estimated,
+    non-actual) plan rows -- closes the "yesterday's actuals open the gate"
+    bug. Ticking partway through the seeded forecast puts several horizon
+    rows in the past, so the exclusion is exercised, not just declared."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    now = BASE + timedelta(hours=3, minutes=30)
+    captured: dict = {}
+
+    def _spy(now_arg, soc_pct, cal_slots, *rest, **k):
+        captured["cal_slots"] = cal_slots
+        return _IDLE_PLAN
+
+    monkeypatch.setattr(calibration, "calibration_plan", _spy)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: now)
+
+    await ctrl.tick()
+
+    cal_slots = captured["cal_slots"]
+    assert cal_slots, "expected at least one future slot"
+    assert all(s.t1 > now for s in cal_slots)
+
+    horizon = ctrl.last_status["plan"]["horizon"]
+    excluded_starts = {row["start"] for row in horizon if row.get("estimated") or row.get("mode") == "actual"}
+    assert not ({s.t0.isoformat() for s in cal_slots} & excluded_starts), (
+        "estimated/actual rows must not produce CalibSlots"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_is_published(monkeypatch):
+    """The plan's cost_eur reaches last_status, rounded for display."""
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    seed_valid_inputs(hass, soc="50.0")
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, calibration_enabled=True)
+
+    plan = calibration.CalibPlan("idle", None, None, 0.61749)
+    monkeypatch.setattr(calibration, "calibration_plan", lambda *a, **k: plan)
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
+
+    await ctrl.tick()
+
+    assert ctrl.last_status["calibration_cost_eur"] == 0.617

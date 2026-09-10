@@ -9,6 +9,7 @@ import importlib.util
 import json
 import logging
 import math
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
 from homeassistant.core import HomeAssistant
@@ -1775,11 +1776,13 @@ class Controller:
         # PREVIOUS tick? Captured before self._calibration_engaged updates
         # below and before self.plan is reassigned further down.
         _calibration_was_engaged = self._calibration_engaged
-        # F1: was the PREVIOUS tick's action already "holding"? Captured before
-        # self._calibration is reset below -- threaded into calibration_action
-        # so its top_soc re-entry bar can soften by 1 point and absorb SoC
-        # wobble at the boundary instead of cancelling/re-engaging every tick.
-        _calibration_was_holding = self._calibration is not None and self._calibration.phase == "holding"
+        # The PREVIOUS tick's full plan (phase + window). Captured before
+        # self._calibration_plan is reset below -- threaded into
+        # calibration_plan as `prev` so a committed cycle (charging/holding)
+        # is not re-costed or re-gated mid-way, and F1's top_soc re-entry bar
+        # can soften by 1 point to absorb SoC wobble at the boundary instead
+        # of cancelling/re-engaging every tick.
+        _calibration_prev = self._calibration_plan
         self._calibration = None
         self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
         self._calibration_last_success = None
@@ -1802,18 +1805,25 @@ class Controller:
             try:
                 _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
                 _price_hist = self._price_store.history if self._price_store is not None else {}
-                # Window PLACEMENT reads the DP's own projected SoC so a window
-                # at the solar top is not costed as though it still had to
-                # charge from this morning's empty pack. One-directional: the
-                # DP never sees calibration back. Estimated rows are excluded —
-                # that tail is display-only synthesis, and sizing a real charge
-                # against a fabricated SoC would place tomorrow's window on
-                # numbers no optimiser produced.
-                _cal_soc_fc: list[tuple[datetime, float]] = [
-                    (datetime.fromisoformat(e["start"]), float(e["soc"]))
-                    for e in horizon
-                    if not e.get("estimated") and e.get("soc") is not None
-                ]
+                # Window PLACEMENT and cost both read the DP's own plan so a
+                # window at the solar top is not costed as though it still had
+                # to charge from this morning's empty pack. One-directional:
+                # the DP never sees calibration back. Estimated rows,
+                # past-actual rows, and rows that have already fully elapsed
+                # are excluded -- that tail is display-only synthesis (or
+                # already-measured history), and sizing or costing a real
+                # charge against fabricated or stale numbers no optimiser
+                # produced would place or price the window on nothing real.
+                _cal_slots = calibration.build_calib_slots(
+                    horizon,
+                    now,
+                    inputs.soc,
+                    _slot_minutes,
+                    self._export_price_fn(
+                        now, horizon, _export_price, _export_slots, _slot_minutes, _export_matches_import
+                    ),
+                    self._delivered_fn(delivered_now, _slot_minutes),
+                )
                 (
                     self._calibration_last_success,
                     self._calibration_plan,
@@ -1823,10 +1833,10 @@ class Controller:
                     _since_iso,
                     now,
                     inputs.soc,
-                    slots,
+                    _cal_slots,
                     _price_hist,
-                    _calibration_was_holding,
-                    _cal_soc_fc,
+                    _calibration_prev,
+                    _dp_out.get("water_value"),
                 )
                 # Narrowing: `scheduled` and `idle` yield None, so nothing
                 # below can actuate on a window that has not started.
@@ -1849,12 +1859,12 @@ class Controller:
                 if _since is not None and _since >= _overdue_at:
                     if not self._calibration_overdue_warned:
                         self._calibration_overdue_warned = True
-                        # The plan-peak gate is HARD: past interval+grace it
+                        # The start-SoC gate is HARD: past interval+grace it
                         # still suppresses every window, so the forcing message
                         # below would be false. Same helper the policy gates on
                         # (F3) rather than a second reading of the horizon.
-                        _peak = calibration.plan_peak_soc(inputs.soc, _cal_soc_fc)
-                        if _peak < const.CALIBRATION_MIN_PLAN_SOC:
+                        _peak = calibration.plan_peak_soc(inputs.soc, _cal_slots)
+                        if _peak < const.CALIBRATION_MIN_START_SOC:
                             _LOGGER.warning(
                                 "Calibration overdue by %.1f days (past interval %d + grace %d) but the plan "
                                 "peaks at %.0f%% (< %.0f%%): no window will be planned until the plan climbs, "
@@ -1864,17 +1874,18 @@ class Controller:
                                 self.cfg.calibration_interval_days,
                                 const.CALIBRATION_GRACE_DAYS,
                                 _peak,
-                                const.CALIBRATION_MIN_PLAN_SOC,
+                                const.CALIBRATION_MIN_START_SOC,
                                 self.cfg.calibration_top_soc,
                             )
                         else:
                             _LOGGER.warning(
-                                "Calibration overdue by %.1f days (past interval %d + grace %d): forcing the "
-                                "cheapest window daily with the price bar bypassed. If this persists, the pack "
-                                "is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
+                                "Calibration overdue by %.1f days (past interval %d + grace %d): taking the "
+                                "cheapest window up to €%.2f with the price bar bypassed. If this persists, the "
+                                "pack is not reaching calibration_top_soc=%.0f%% — check batt_w during the hold",
                                 _since,
                                 self.cfg.calibration_interval_days,
                                 const.CALIBRATION_GRACE_DAYS,
+                                const.CALIBRATION_OVERDUE_COST_CAP_EUR,
                                 self.cfg.calibration_top_soc,
                             )
                 elif _since is not None and _since < self.cfg.calibration_interval_days:
@@ -2079,6 +2090,11 @@ class Controller:
             self._calibration_last_success.isoformat() if self._calibration_last_success is not None else None
         )
         self.last_status["calibration_days_since"] = self._calibration_days_since
+        # Cost-aware placement (spec 2026-09-10): the window the policy this
+        # tick settled on, priced against the plan -- the accepted window while
+        # scheduled/charging/holding, or the cheapest rejected candidate while
+        # a due cycle sits idle. None when nothing could be costed.
+        self.last_status["calibration_cost_eur"] = round(_cal.cost_eur, 3) if _cal.cost_eur is not None else None
         # The band the card draws: charge target on top, continuation bar
         # below. Published rather than hardcoded in the card so tuning either
         # const cannot leave the chart lying about where the dwell counts.
@@ -2116,10 +2132,10 @@ class Controller:
         since_iso: str,
         now: datetime,
         soc_pct: float,
-        slots: list[PriceSlot],
+        cal_slots: list[calibration.CalibSlot],
         price_history: dict,
-        already_holding: bool,
-        soc_forecast: list[tuple[datetime, float]] | None = None,
+        prev: calibration.CalibPlan | None,
+        water_value: float | None,
     ) -> tuple[datetime | None, calibration.CalibPlan, float]:
         """Synchronous: recorder read + calibration policy evaluation, together.
 
@@ -2141,12 +2157,12 @@ class Controller:
         plan = calibration.calibration_plan(
             now,
             soc_pct,
-            slots,
+            cal_slots,
             soc_rows,
             price_history,
             self.cfg,
-            already_holding=already_holding,
-            soc_forecast=soc_forecast,
+            prev=prev,
+            water_value=water_value,
         )
         return last_success, plan, calibration.history_span_days(soc_rows)
 
@@ -2382,23 +2398,20 @@ class Controller:
             _led.today_house_export_kwh,
         )
 
-    def _publish_daily_stats(
+    def _export_price_fn(
         self,
         now: datetime,
         horizon: list[dict],
         export_price: float | None,
         export_slots: list[PriceSlot] | None,
         slot_minutes: int,
-        delivered_by_hour: dict | None = None,
-        export_matches_import: bool = False,
-    ) -> None:
-        """Merge cached actuals + live ledger + plan horizon into last_status.
-
-        Cheap: the measured half is already cached and the horizon is in
-        memory, so this runs every tick.
+        export_matches_import: bool,
+    ) -> Callable[[datetime, float | None], float | None]:
+        """Build the export-price resolver ``daily_stats`` and ``calibration``
+        use to value a planned kWh.
 
         Export valuation MIRRORS ``decision.py``'s four-branch ladder, because
-        the table's job is to report what the DP planned — value the same kWh
+        the caller's job is to report what the DP planned — value the same kWh
         differently and the row stops being the plan's net:
 
         1. static tariff mode → the configured constant, broadcast flat (never
@@ -2417,12 +2430,6 @@ class Controller:
         Every branch goes through ``effective_export_price`` so the feed-in fee
         is subtracted exactly once.  A ``None`` export price zeroes the revenue
         leg only, matching the DP's own "no export credit" branch.
-
-        ``delivered_by_hour`` is the SAME dict this tick handed to
-        ``plan.build_display_horizon``, so the delivered add-back subtracted
-        out of the planned half below is exactly the one folded in there.  See
-        ``daily_stats.aggregate_planned_days`` for why both it and ``now`` are
-        needed to keep today's row from counting the in-progress hour twice.
         """
         _curve = resolution.resample_price_map(export_slots, slot_minutes) if export_slots else {}
         _flat = optimize_mod.effective_export_price(export_price, self.cfg) if export_price is not None else None
@@ -2442,16 +2449,53 @@ class Controller:
                 return optimize_mod.effective_export_price(_scaled, self.cfg)
             return _flat
 
+        return _export_price_at
+
+    @staticmethod
+    def _delivered_fn(delivered_by_hour: dict | None, slot_minutes: int) -> Callable[[datetime], float]:
+        """Build the grid-charge add-back resolver ``daily_stats`` and
+        ``calibration`` use to subtract out of the in-progress slot's planned
+        remainder.
+
+        ``delivered_by_hour`` is the SAME dict this tick handed to
+        ``plan.build_display_horizon``, so the add-back subtracted here is
+        exactly the one folded in there.  See
+        ``daily_stats.aggregate_planned_days`` for why both it and ``now`` are
+        needed to keep today's row from counting the in-progress hour twice.
+
+        floor_to_slot matches ``plan.build_plan_horizon``'s own lookup key for
+        deliv_by_slot. Since 2026-08-03 the add-back lands on now's slot ALONE,
+        and ``aggregate_planned_days`` already skips every row with
+        ``start <= now``, so this subtraction has nothing left to reverse for
+        that caller — kept (and kept key-aligned) so the two halves cannot
+        drift if that skip rule ever changes.
+        """
+
         def _delivered_at(start: datetime) -> float:
-            # floor_to_slot matches plan.build_plan_horizon's own lookup key for
-            # deliv_by_slot. Since 2026-08-03 the add-back lands on now's slot
-            # ALONE, and aggregate_planned_days already skips every row with
-            # start <= now, so this subtraction has nothing left to reverse —
-            # kept (and kept key-aligned) so the two halves cannot drift if that
-            # skip rule ever changes.
             _rec = (delivered_by_hour or {}).get(resolution.floor_to_slot(start, slot_minutes))
             return float((_rec or {}).get("grid_charge_kwh") or 0.0)
 
+        return _delivered_at
+
+    def _publish_daily_stats(
+        self,
+        now: datetime,
+        horizon: list[dict],
+        export_price: float | None,
+        export_slots: list[PriceSlot] | None,
+        slot_minutes: int,
+        delivered_by_hour: dict | None = None,
+        export_matches_import: bool = False,
+    ) -> None:
+        """Merge cached actuals + live ledger + plan horizon into last_status.
+
+        Cheap: the measured half is already cached and the horizon is in
+        memory, so this runs every tick.
+        """
+        _export_price_at = self._export_price_fn(
+            now, horizon, export_price, export_slots, slot_minutes, export_matches_import
+        )
+        _delivered_at = self._delivered_fn(delivered_by_hour, slot_minutes)
         _tz = dt_util.DEFAULT_TIME_ZONE
         _today_totals = daily_stats.new_day_totals()
         _today_totals.update(

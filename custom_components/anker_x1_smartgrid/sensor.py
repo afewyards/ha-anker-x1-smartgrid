@@ -336,6 +336,7 @@ class X1PlanSensor(_Base):
             "calibration_days_since": self._controller.last_status.get("calibration_days_since"),
             "calibration_target_soc": self._controller.last_status.get("calibration_target_soc"),
             "calibration_hold_soc": self._controller.last_status.get("calibration_hold_soc"),
+            "calibration_cost_eur": self._controller.last_status.get("calibration_cost_eur"),
             "load_adapt_ratio": self._controller.last_status.get("load_adapt_ratio"),
             "load_adapt_matched_hours": self._controller.last_status.get("load_adapt_matched_hours"),
             "load_adapt_ratio_raw": self._controller.last_status.get("load_adapt_ratio_raw"),
