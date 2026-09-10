@@ -14,10 +14,12 @@ no new table, no Store, and the policy is restart-safe by construction.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import pairwise
 
-from . import const
+from . import const, daily_stats
 from .models import Config, ControllerState, PriceSlot
 
 # Two adjacent samples further apart than this do not belong to the same run —
@@ -320,6 +322,118 @@ def _slot_duration_min(slot: PriceSlot) -> float:
     """
     dur = slot.duration_min
     return dur if dur and dur > 0.0 else 60.0
+
+
+@dataclass(frozen=True)
+class CalibSlot:
+    """One future plan slot as the cost model sees it. Energies cover [t0, t1]:
+    t0 is ``now`` for the in-progress slot (the plan models only its remaining
+    minutes), the slot start otherwise. SoC runs soc_start -> soc_end over it."""
+
+    t0: datetime
+    t1: datetime
+    import_price: float
+    export_price: float | None  # post-fee; None zeroes the revenue leg
+    pv_kwh: float
+    load_kwh: float
+    soc_start: float
+    soc_end: float
+    plan_import_kwh: float
+    plan_export_kwh: float
+
+
+def build_calib_slots(
+    horizon: list[dict],
+    now: datetime,
+    live_soc: float,
+    slot_minutes: int,
+    export_price_at: Callable[[datetime, float | None], float | None],
+    delivered_at: Callable[[datetime], float] | None = None,
+) -> list[CalibSlot]:
+    """``CalibSlot``s for the future, uncompleted rows of a plan horizon.
+
+    Skips ``estimated`` rows, past-actual rows (``mode == "actual"``), rows
+    missing SoC/price, and rows that have already fully elapsed. The
+    in-progress row (if any) is truncated to ``[now, row end]``.
+    """
+    dur = timedelta(minutes=slot_minutes)
+    out: list[CalibSlot] = []
+    prev_soc = live_soc
+    for row in horizon:
+        if row.get("estimated") or row.get("mode") == "actual" or row.get("soc") is None or row.get("price") is None:
+            continue
+        start = datetime.fromisoformat(row["start"])
+        end = start + dur
+        if end <= now:
+            continue
+        t0 = max(start, now)
+        # build_plan_horizon scales only the flow columns to the remaining
+        # minutes; pv_kwh/load_kwh stay full-slot on the in-progress row.
+        frac = (end - t0) / dur
+        pv = float(row.get("pv_kwh") or 0.0) * frac
+        load = float(row.get("load_kwh") or 0.0) * frac
+        charge = float(row.get("grid_charge_kwh") or 0.0)
+        if start <= now and delivered_at is not None:
+            charge = max(0.0, charge - float(delivered_at(start) or 0.0))
+        imp, exp = daily_stats.planned_house_flows({**row, "pv_kwh": pv, "load_kwh": load}, charge)
+        price = float(row["price"])
+        soc_end = float(row["soc"])
+        out.append(CalibSlot(t0, end, price, export_price_at(start, price), pv, load, prev_soc, soc_end, imp, exp))
+        prev_soc = soc_end
+    return out
+
+
+def _plan_soc_at(cal_slots: list[CalibSlot], when: datetime) -> float | None:
+    """Linearly-interpolated plan SoC at ``when``, or None outside every slot."""
+    for s in cal_slots:
+        if s.t0 <= when <= s.t1:
+            span = (s.t1 - s.t0).total_seconds()
+            f = (when - s.t0).total_seconds() / span if span > 0 else 0.0
+            return s.soc_start + (s.soc_end - s.soc_start) * f
+    return None
+
+
+def window_cost(
+    cal_slots: list[CalibSlot],
+    start: datetime,
+    end: datetime,
+    *,
+    cfg: Config,
+    water_value: float | None,
+) -> float | None:
+    """EUR a calibration over [start, end] costs relative to the plan, or None
+    when the plan does not cover the window contiguously.
+
+    Calibration charges at max rate to the top (solar first), then holds: the
+    battery never discharges, so load minus PV meets the grid. The energy it
+    leaves in the pack above the plan is credited at the DP's water value.
+    """
+    covering = [s for s in cal_slots if s.t1 > start and s.t0 < end]
+    if not covering or covering[0].t0 > start or covering[-1].t1 < end:
+        return None
+    for a, b in pairwise(covering):
+        if abs(b.t0 - a.t1) > _CONTIGUITY_TOLERANCE:
+            return None
+    soc0, soc1 = _plan_soc_at(cal_slots, start), _plan_soc_at(cal_slots, end)
+    if soc0 is None or soc1 is None:
+        return None
+    e, e_top = cfg.pct_to_kwh(soc0), cfg.pct_to_kwh(cfg.calibration_top_soc)
+    eta = cfg.eta_charge_safe()
+    delta = 0.0
+    for s in covering:
+        m_h = (min(s.t1, end) - max(s.t0, start)).total_seconds() / 3600.0
+        span_h = (s.t1 - s.t0).total_seconds() / 3600.0
+        f = m_h / span_h if span_h > 0 else 0.0
+        charge_ac = 0.0
+        if e < e_top:
+            charge_ac = min(cfg.max_charge_w / 1000.0 * m_h, (e_top - e) / eta)
+            e += charge_ac * eta
+        net = (s.load_kwh - s.pv_kwh) * f + charge_ac
+        exp_p = s.export_price or 0.0
+        cal_eur = max(0.0, net) * s.import_price - max(0.0, -net) * exp_p
+        plan_eur = (s.plan_import_kwh * s.import_price - s.plan_export_kwh * exp_p) * f
+        delta += cal_eur - plan_eur
+    return delta - (water_value or 0.0) * max(0.0, e - cfg.pct_to_kwh(soc1))
 
 
 def select_window(
