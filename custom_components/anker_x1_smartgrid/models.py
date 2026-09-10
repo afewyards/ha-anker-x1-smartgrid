@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -120,7 +121,12 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict) -> Config:
         fields = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in d.items() if k in fields})
+        cfg = cls(**{k: v for k, v in d.items() if k in fields})
+        # Clamps a UI-saved dwell from before the cap dropped to
+        # const.CALIBRATION_MAX_DWELL_H.
+        if cfg.calibration_dwell_h > const.CALIBRATION_MAX_DWELL_H:
+            cfg = dataclasses.replace(cfg, calibration_dwell_h=const.CALIBRATION_MAX_DWELL_H)
+        return cfg
 
     def eta_charge_safe(self) -> float:
         """Charge efficiency guarded against zero/near-zero (avoids div-by-zero)."""

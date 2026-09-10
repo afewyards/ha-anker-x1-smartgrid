@@ -416,7 +416,7 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (
         const.CONF_CALIBRATION_DWELL_H,
         const.DEFAULT_CALIBRATION_DWELL_H,
-        vol.All(vol.Coerce(float), vol.Range(min=0.25, max=12.0)),
+        vol.All(vol.Coerce(float), vol.Range(min=0.25, max=const.CALIBRATION_MAX_DWELL_H)),
     ),
 ]
 

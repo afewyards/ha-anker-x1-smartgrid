@@ -101,7 +101,7 @@
               "calibration_enabled": "Periodically force a full charge to the top SoC so the BMS can recalibrate its capacity estimate. Ships off; enable to counter gauge drift over time.",
               "calibration_interval_days": "Days since the last qualifying full charge before calibration schedules a dedicated window. Natural full days from solar or a high price also satisfy the interval. Default 5.",
               "calibration_top_soc": "SoC the calibration charge targets. Set below 100 so the pack reliably reaches and holds it, since some inverters stall short of a true 100%. Default 97. WARNING: too little margin risks two failure modes -- a bar the pack never reaches forces a full grid charge every day indefinitely (no escalation, no log), and a bar the pack reaches but wobbles at can pin a forced hold with export suppressed that never completes (watch for calibration_state stuck on 'holding'). Pick a value with real margin below the pack's actually-observed achievable top.",
-              "calibration_dwell_h": "Hours to hold at the calibration top SoC before releasing, giving the BMS time to settle its capacity estimate. Default 2."
+              "calibration_dwell_h": "Hours to hold at the calibration top SoC before releasing (0.25–0.5). Default 0.5."
             }
           },
           "export": {

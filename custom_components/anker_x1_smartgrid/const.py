@@ -132,7 +132,7 @@ DEFAULT_CALIBRATION_INTERVAL_DAYS = 5
 # ever reaches balancing voltage -- which is why the pack kept stranding
 # ~3.6 kWh at the bottom despite "successful" cycles.
 DEFAULT_CALIBRATION_TOP_SOC = 100.0
-DEFAULT_CALIBRATION_DWELL_H = 1.0
+DEFAULT_CALIBRATION_DWELL_H = 0.5
 
 # Tuning consts, deliberately not user-facing.
 # CONTINUATION allowance only — never an entry discount. A dwell starts at
@@ -161,6 +161,15 @@ CALIBRATION_FREE_TOPUP_KWH = 1.0
 # the grid buys the whole way to calibration_top_soc. See
 # calibration.plan_peak_soc.
 CALIBRATION_MIN_PLAN_SOC = 80.0
+# A cycle may only start this close to calibration_top_soc: caps the top-up
+# a placed cycle pays for at roughly 5% of the pack.
+CALIBRATION_MIN_START_SOC = 95.0
+# Below this window cost (EUR) a calibration is cheap enough to place outright.
+CALIBRATION_COST_ALLOWANCE_EUR = 0.50
+# Above this window cost (EUR) even an overdue calibration is too expensive to force.
+CALIBRATION_OVERDUE_COST_CAP_EUR = 1.00
+# Upper bound on calibration_dwell_h: the hold blocks export, so it must stay short.
+CALIBRATION_MAX_DWELL_H = 0.5
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730

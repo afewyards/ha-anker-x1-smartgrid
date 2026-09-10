@@ -10,13 +10,27 @@ def test_defaults_ship_on():
     assert cfg.calibration_enabled is True
     assert cfg.calibration_interval_days == 5
     assert cfg.calibration_top_soc == 100.0
-    assert cfg.calibration_dwell_h == 1.0
+    assert cfg.calibration_dwell_h == 0.5
 
 
 def test_tuning_consts():
     assert const.CALIBRATION_PRICE_PERCENTILE == 30.0
     assert const.CALIBRATION_GRACE_DAYS == 7
     assert const.CALIBRATION_HOLD_TOLERANCE == 1.0
+
+
+def test_new_cost_placement_consts():
+    assert const.CALIBRATION_MIN_START_SOC == 95.0
+    assert const.CALIBRATION_COST_ALLOWANCE_EUR == 0.50
+    assert const.CALIBRATION_OVERDUE_COST_CAP_EUR == 1.00
+    assert const.CALIBRATION_MAX_DWELL_H == 0.5
+
+
+def test_from_dict_clamps_a_ui_saved_dwell_above_the_new_max():
+    """Live boxes may still carry a UI-saved 1.0 or 2.0 from before the cap
+    dropped to 0.5; from_dict must clamp it rather than propagate it."""
+    assert Config.from_dict({"calibration_dwell_h": 2.0}).calibration_dwell_h == 0.5
+    assert Config.from_dict({"calibration_dwell_h": 0.25}).calibration_dwell_h == 0.25
 
 
 def test_top_soc_schema_admits_the_firmware_cap():
