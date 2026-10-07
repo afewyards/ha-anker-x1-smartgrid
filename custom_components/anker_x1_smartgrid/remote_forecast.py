@@ -322,6 +322,10 @@ class RemoteForecastPredictor:
         self._map = forecast_map
         self._secondary = secondary
 
+    def replace_map(self, forecast_map: dict[datetime, tuple[float, float]]) -> None:
+        """Serve a freshly fetched map without refitting the secondary."""
+        self._map = forecast_map
+
     def predict(
         self,
         when: datetime,

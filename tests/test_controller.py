@@ -112,8 +112,8 @@ async def test_tick_disabled_persists_disengaged_so_next_restart_no_release():
 
 @pytest.mark.asyncio
 async def test_weather_forecast_fetched_once_per_hour(monkeypatch):
-    """E4: the hourly weather forecast is fetched at most once per clock-hour;
-    a second tick within the same hour reuses the cached result."""
+    """E4: once a non-empty forecast has been read, it is fetched at most once per
+    clock-hour; a second tick within the same hour reuses the cached result."""
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     monkeypatch.setattr(controller.dt_util, "utcnow", lambda: BASE)
@@ -121,7 +121,7 @@ async def test_weather_forecast_fetched_once_per_hour(monkeypatch):
 
     async def _fake(hass_, data_):
         calls["n"] += 1
-        return []
+        return [{"datetime": BASE, "temp_forecast": 10.0}]
 
     monkeypatch.setattr(controller.coordinator, "read_hourly_weather_forecast", _fake)
     await ctrl.tick()

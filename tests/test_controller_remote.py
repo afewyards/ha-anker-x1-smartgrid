@@ -136,6 +136,16 @@ def _sample_forecast_map(hour: datetime) -> dict:
     return {hour_key: (300.0, 450.0)}
 
 
+def _weather_entry(hour: datetime) -> dict:
+    return {
+        "datetime": hour,
+        "temp_forecast": 12.0,
+        "cloud_cover": 50.0,
+        "humidity": 70.0,
+        "wind_speed": 3.0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # (a) addon_enabled=True + non-empty map → Tier-0 selected
 # ---------------------------------------------------------------------------
@@ -229,7 +239,7 @@ async def test_tick_fetch_fires_at_most_once_per_clock_hour():
         patch(
             "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=[_weather_entry(_NOW)],
         ),
         patch(
             "homeassistant.util.dt.utcnow",
@@ -272,7 +282,7 @@ async def test_tick_fetch_fires_again_on_new_clock_hour():
         patch(
             "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=[_weather_entry(_NOW)],
         ),
     ):
         with patch("homeassistant.util.dt.utcnow", return_value=hour_a):
@@ -491,7 +501,7 @@ async def test_health_polled_before_forecast_predict_path():
     when the predict path fails.
     """
     ctrl = _make_controller(addon_enabled=True)
-    health = {"ready": True, "promoted": False, "n_rows": 900, "last_trained": None}
+    health = {"ready": True, "promoted": True, "n_rows": 900, "last_trained": None}
 
     async def fake_health(session, url, timeout):
         return health
@@ -507,7 +517,7 @@ async def test_health_polled_before_forecast_predict_path():
         patch(
             "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
             side_effect=exploding_forecast,
-        ),
+        ) as forecast,
         patch(
             "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
             return_value=object(),
@@ -515,12 +525,13 @@ async def test_health_polled_before_forecast_predict_path():
         patch(
             "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=[_weather_entry(_NOW)],
         ),
         patch("homeassistant.util.dt.utcnow", return_value=_NOW),
     ):
         await ctrl.tick()
 
+    assert forecast.call_count == 1, "the predict path must actually have blown up"
     assert ctrl.last_status["addon_reachable"] is True
     assert ctrl.last_status["addon_n_rows"] == 900
 
@@ -623,8 +634,8 @@ async def test_coverage_counted_even_when_remote_tier_active():
 @pytest.mark.asyncio
 async def test_health_retried_on_later_tick_same_hour_after_failure():
     """First tick's health poll fails; a second tick in the SAME clock-hour
-    must retry /health (not wait for the next hour) -- and must NOT re-run
-    the expensive remote-forecast fetch."""
+    must retry /health (not wait for the next hour); an unpromoted retry
+    must not POST a forecast request."""
     ctrl = _make_controller(addon_enabled=True)
 
     call_count = 0
@@ -634,7 +645,7 @@ async def test_health_retried_on_later_tick_same_hour_after_failure():
         call_count += 1
         if call_count == 1:
             return None  # add-on not up yet
-        return {"ready": True, "promoted": False, "n_rows": 5, "last_trained": None}
+        return {"ready": True, "promoted": False, "n_rows": 5, "last_trained": "t0"}
 
     with (
         patch(
@@ -653,7 +664,7 @@ async def test_health_retried_on_later_tick_same_hour_after_failure():
         patch(
             "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=[_weather_entry(_NOW)],
         ),
         patch("homeassistant.util.dt.utcnow", return_value=_NOW),
     ):
@@ -664,7 +675,7 @@ async def test_health_retried_on_later_tick_same_hour_after_failure():
         assert ctrl.last_status["addon_reachable"] is True
 
     assert call_count == 2, "the retry must call fetch_health again"
-    assert mock_fetch_forecast.call_count == 1, "the expensive forecast fetch must not be retried"
+    assert mock_fetch_forecast.call_count == 1, "an unpromoted retry must not POST again"
 
 
 @pytest.mark.asyncio
@@ -785,3 +796,325 @@ async def test_health_retry_writes_fresh_timestamp_each_attempt():
         with patch("homeassistant.util.dt.utcnow", return_value=tick_2):
             await ctrl.tick()
         assert ctrl._addon_health_ts == tick_2, "retry must stamp its OWN attempt's timestamp"
+
+
+# ---------------------------------------------------------------------------
+# (h) Startup race: weather not populated on the first tick after boot
+# ---------------------------------------------------------------------------
+
+
+_HEALTH_PROMOTED = {"ready": True, "promoted": True, "n_rows": 900, "last_trained": None}
+
+
+@contextmanager
+def _addon_env(weather_fn, *, fetch_fn=None, health_fn=None):
+    """Patch the add-on/weather edges of tick(); utcnow is set per tick by
+    ``_tick_at``.  Default add-on: ready+promoted, ``{}`` for an empty payload
+    and a one-hour map for a real one."""
+
+    async def _fetch(session, url, timeout, payload):
+        return {} if not payload else _sample_forecast_map(_NOW)
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED
+
+    with (
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_forecast",
+            side_effect=fetch_fn or _fetch,
+        ) as fetch,
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.fetch_health",
+            side_effect=health_fn or _health,
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.controller.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.anker_x1_smartgrid.coordinator.read_hourly_weather_forecast",
+            side_effect=weather_fn,
+        ) as weather,
+    ):
+        yield fetch, weather
+
+
+def _disabled_controller() -> Controller:
+    """The stub plant has no sensors, so an enabled tick ends at the failsafe
+    before the model refresh; the disabled path reaches the real call site."""
+    ctrl = _make_controller(addon_enabled=True)
+    ctrl.enabled = False
+    return ctrl
+
+
+async def _tick_at(ctrl, now: datetime = _NOW) -> None:
+    with patch("homeassistant.util.dt.utcnow", return_value=now):
+        await ctrl.tick()
+
+
+async def _steady_weather(hass, data):
+    return [_weather_entry(_NOW)]
+
+
+@pytest.mark.asyncio
+async def test_remote_tier_picked_once_weather_arrives_after_empty_first_tick():
+    ctrl = _disabled_controller()
+    reads = []
+
+    async def _weather(hass, data):
+        reads.append(1)
+        return [] if len(reads) == 1 else [_weather_entry(_NOW)]
+
+    with _addon_env(_weather):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name != "remote"
+        await _tick_at(ctrl, _NOW + timedelta(minutes=1))
+
+    assert ctrl.active_model_name == "remote"
+    assert isinstance(ctrl.predictor, RemoteForecastPredictor)
+
+
+@pytest.mark.asyncio
+async def test_weather_read_retried_after_empty_but_once_per_hour_after_success():
+    ctrl = _make_controller(addon_enabled=True)
+    reads = []
+
+    async def _weather(hass, data):
+        reads.append(1)
+        return [] if len(reads) == 1 else [_weather_entry(_NOW)]
+
+    with _addon_env(_weather) as (_fetch, weather):
+        await _tick_at(ctrl)
+        await _tick_at(ctrl)
+        assert weather.call_count == 2
+        await _tick_at(ctrl)
+        await _tick_at(ctrl)
+        assert weather.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_steady_remote_map_does_not_retrigger_retrain():
+    ctrl = _disabled_controller()
+
+    with _addon_env(_steady_weather):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name == "remote"
+        with patch.object(ctrl, "retrain", new_callable=AsyncMock) as retrain:
+            await _tick_at(ctrl, _NOW + timedelta(hours=1))
+    assert retrain.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hourly_map_refresh_reaches_the_live_remote_predictor():
+    ctrl = _disabled_controller()
+    noon = _NOW + timedelta(hours=1)
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if ctrl._remote_forecast_map is None else {noon: (777.0, 888.0)}
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name == "remote"
+        with patch.object(ctrl, "retrain", new_callable=AsyncMock) as retrain:
+            await _tick_at(ctrl, noon)
+
+    assert retrain.call_count == 0
+    assert ctrl.predictor.predict(noon, None, 400.0, quantile=0.5) == 777.0
+    assert ctrl.predictor.predict(noon, None, 400.0, quantile=0.8) == 888.0
+
+
+@pytest.mark.asyncio
+async def test_empty_weather_never_posts_predict():
+    ctrl = _disabled_controller()
+
+    async def _no_weather(hass, data):
+        return []
+
+    with _addon_env(_no_weather) as (fetch, _weather):
+        for minute in range(3):
+            await _tick_at(ctrl, _NOW + timedelta(minutes=minute))
+
+    assert fetch.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_map_for_real_payload_drops_the_remote_tier_once():
+    ctrl = _disabled_controller()
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if ctrl._remote_forecast_map is None else {}
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name == "remote"
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+        assert ctrl._remote_forecast_map == {}
+        assert ctrl.active_model_name != "remote"
+        with patch.object(ctrl, "retrain", new_callable=AsyncMock) as retrain:
+            await _tick_at(ctrl, _NOW + timedelta(hours=2))
+
+    assert retrain.call_count == 0
+
+
+_HEALTH_UNPROMOTED = {"ready": True, "promoted": False, "n_rows": 900, "last_trained": "2026-07-21T01:00:00+00:00"}
+_HEALTH_UNTRAINED = {"ready": False, "promoted": False, "n_rows": 0, "last_trained": None}
+
+
+async def _unpromoted_health(session, url, timeout):
+    return _HEALTH_UNPROMOTED
+
+
+async def _refused_fetch(session, url, timeout, payload):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_addon_reporting_not_promoted_demotes_remote_tier_within_a_tick():
+    ctrl = _disabled_controller()
+    promoted = [True]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED if promoted[0] else _HEALTH_UNPROMOTED
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if promoted[0] else None
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch, health_fn=_health):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name == "remote"
+        promoted[0] = False
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+
+    assert ctrl._remote_forecast_map is None
+    assert ctrl.active_model_name != "remote"
+    assert not isinstance(ctrl.predictor, RemoteForecastPredictor)
+
+
+@pytest.mark.asyncio
+async def test_addon_with_no_result_since_restart_keeps_the_remote_map():
+    ctrl = _disabled_controller()
+    restarted = [False]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_UNTRAINED if restarted[0] else _HEALTH_PROMOTED
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW)
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch, health_fn=_health):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name == "remote"
+        restarted[0] = True
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+
+    assert ctrl._remote_forecast_map == _sample_forecast_map(_NOW)
+    assert ctrl.active_model_name == "remote"
+
+
+@pytest.mark.asyncio
+async def test_unreachable_addon_keeps_the_remote_tier():
+    ctrl = _disabled_controller()
+    up = [True]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED if up[0] else None
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if up[0] else None
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch, health_fn=_health):
+        await _tick_at(ctrl)
+        up[0] = False
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+        await _tick_at(ctrl, _NOW + timedelta(hours=1, minutes=1))
+
+    assert ctrl.active_model_name == "remote"
+    assert ctrl._remote_forecast_map == _sample_forecast_map(_NOW)
+
+
+@pytest.mark.asyncio
+async def test_unpromoted_addon_steady_state_neither_posts_nor_retrains():
+    ctrl = _disabled_controller()
+
+    with _addon_env(_steady_weather, fetch_fn=_refused_fetch, health_fn=_unpromoted_health) as (fetch, _weather):
+        await _tick_at(ctrl)
+        with patch.object(ctrl, "retrain", new_callable=AsyncMock) as retrain:
+            for hours in (1, 2):
+                await _tick_at(ctrl, _NOW + timedelta(hours=hours))
+
+    assert retrain.call_count == 0
+    assert fetch.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_late_starting_addon_fetched_on_the_tick_its_health_recovers():
+    ctrl = _disabled_controller()
+    up = [False]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED if up[0] else None
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if up[0] else None
+
+    with _addon_env(_steady_weather, fetch_fn=_fetch, health_fn=_health) as (fetch, _weather):
+        await _tick_at(ctrl)
+        assert ctrl.active_model_name != "remote"
+        up[0] = True
+        await _tick_at(ctrl, _NOW + timedelta(minutes=1))
+        await _tick_at(ctrl, _NOW + timedelta(minutes=2))
+
+    assert ctrl.active_model_name == "remote"
+    assert fetch.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_weather_reads_capped_per_hour():
+    ctrl = _make_controller(addon_enabled=True)
+    budget = controller_mod._MAX_WEATHER_READ_RETRIES
+
+    async def _no_weather(hass, data):
+        return []
+
+    with _addon_env(_no_weather) as (_fetch, weather):
+        for minute in range(budget + 5):
+            await _tick_at(ctrl, _NOW + timedelta(minutes=minute))
+        assert weather.call_count == 1 + budget
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+
+    assert weather.call_count == 2 + budget
+
+
+@pytest.mark.asyncio
+async def test_empty_weather_reads_not_retried_once_a_forecast_is_cached():
+    ctrl = _make_controller(addon_enabled=True)
+    empty = [False]
+
+    async def _weather(hass, data):
+        return [] if empty[0] else [_weather_entry(_NOW)]
+
+    with _addon_env(_weather) as (_fetch, weather):
+        await _tick_at(ctrl)
+        empty[0] = True
+        for minute in range(60, 68):
+            await _tick_at(ctrl, _NOW + timedelta(minutes=minute))
+
+    assert weather.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failing_local_tier_with_empty_map_does_not_retrain_every_hour():
+    ctrl = _disabled_controller()
+
+    async def _fetch(session, url, timeout, payload):
+        return _sample_forecast_map(_NOW) if ctrl._remote_forecast_map is None else {}
+
+    with (
+        _addon_env(_steady_weather, fetch_fn=_fetch),
+        patch.object(ctrl, "_retrain_local_sync", side_effect=RuntimeError("no rows")) as local,
+    ):
+        for hours in range(6):
+            await _tick_at(ctrl, _NOW + timedelta(hours=hours))
+
+    # one fit at the first map, one at the flip to {}; later empty hours must not retry
+    assert local.call_count <= 2

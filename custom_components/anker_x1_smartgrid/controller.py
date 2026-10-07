@@ -106,6 +106,10 @@ _LIMIT_LOG_META = {
 # add-on every tick for the rest of the clock-hour.
 _MAX_ADDON_HEALTH_RETRIES = 5
 
+# Same-hour retries of an EMPTY weather read (integration not populated yet
+# after boot), bounded for the same reason when the entity never fills.
+_MAX_WEATHER_READ_RETRIES = 5
+
 
 def _persist_iso_or_none(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
@@ -236,12 +240,17 @@ class Controller:
         self._last_rollup_hour = -1
         self._last_wal_checkpoint_hour = -1
         self._last_weather_hour = -1
+        self._weather_retries_left = 0
         self._weather_forecast: list[dict] = []
         self._first_tick_after_start = True
         self._learned_model_warned = False
         self._last_remote_forecast_hour = -1
         self._remote_forecast_map: dict | None = None
-        # ML-status visibility (observability only — never feeds planning).
+        # The clock-hour's forecast fetch is still owed: weather was empty, or the
+        # add-on only answered a same-hour health retry.
+        self._remote_forecast_pending = False
+        # ML-status visibility; planning reads it only to drop the remote map
+        # once a reachable add-on reports itself not ready/promoted.
         self._addon_health: dict | None = None
         self._addon_health_ts: datetime | None = None
         # RACE 2: bounded same-hour retry budget for a failed health poll;
@@ -780,9 +789,9 @@ class Controller:
 
         Four-tier fallback chain:
 
-        0. **Remote** (Tier-0) — when ``addon_enabled`` is True and a non-empty
-           forecast map has been fetched this clock-hour, the add-on's ML
-           forecast wins.  It does NOT short-circuit the local chain any more
+        0. **Remote** (Tier-0) — when ``addon_enabled`` is True and the latest
+           stored forecast map is non-empty, the add-on's ML forecast wins.  It
+           does NOT short-circuit the local chain any more
            (see below): the local tier is fitted first and handed to
            ``RemoteForecastPredictor`` as its *secondary*.
         1. **HGBR** — tried first when the coverage gate (``is_ready``) and
@@ -991,6 +1000,61 @@ class Controller:
             if abs(old - new) > 1e-9:
                 label, unit = _LIMIT_LOG_META[key]
                 _LOGGER.info("%s resolved late: %.1f -> %.1f %s", label, old, new, unit)
+
+    async def _refresh_remote_forecast(self, now: datetime, wf_list: list[dict], persons_home_now: int | None) -> None:
+        # A reachable add-on that reports itself not ready/promoted has withdrawn
+        # its forecast (/predict would refuse too): drop the map so the tier
+        # falls back. An unreachable one (health None) is transient and keeps it,
+        # as does one with no training result since its start (last_trained None).
+        _health = self._addon_health
+        if (
+            _health is not None
+            and _health.get("last_trained") is not None
+            and not (_health.get("ready") and _health.get("promoted"))
+        ):
+            self._remote_forecast_pending = False
+            self._store_remote_forecast(None)
+            return
+        _hour_starts = [e["datetime"] for e in (wf_list or []) if e.get("datetime") is not None]
+        # A promoted add-on answers an empty payload with an empty map, so the
+        # fetch is owed until the weather integration has populated.
+        self._remote_forecast_pending = not _hour_starts
+        if not _hour_starts:
+            return
+        _persons_by_ts = None
+        if self._recorder is not None:
+            _ph_since = (now - timedelta(days=remote_forecast.PERSONS_HOW_LOOKBACK_DAYS)).isoformat()
+            _ph_samples = await self._hass.async_add_executor_job(self._recorder.read_persons_home_samples, _ph_since)
+            _ph_means = remote_forecast.persons_home_hour_of_week_means(_ph_samples)
+            _persons_by_ts = remote_forecast.project_persons_home(
+                now,
+                persons_home_now,
+                _ph_means,
+                _hour_starts,
+                persistence_hours=self.cfg.occ_persistence_h,
+            )
+        _payload = build_hours_payload(wf_list, _persons_by_ts)
+        _fetched_map = await fetch_forecast(
+            async_get_clientsession(self._hass),
+            self.cfg.addon_url,
+            self.cfg.addon_timeout,
+            _payload,
+        )
+        # {} for a real payload means the add-on dropped every prediction (a broken
+        # model): store it so the tier falls back rather than keep the last good map.
+        if _fetched_map is not None:
+            self._store_remote_forecast(_fetched_map)
+
+    def _store_remote_forecast(self, forecast_map: dict | None) -> None:
+        _flipped = bool(forecast_map) != bool(self._remote_forecast_map)
+        self._remote_forecast_map = forecast_map
+        # The live predictor is rebuilt only at retrain (every retrain_hours), so
+        # hand it each hourly map, and re-pick the tier now whenever the map
+        # flips it instead of waiting.
+        if isinstance(self.predictor, RemoteForecastPredictor):
+            self.predictor.replace_map(forecast_map or {})
+        if _flipped:
+            self._last_retrain = None
 
     async def _poll_addon_health(self, now: datetime) -> None:
         """Poll the add-on's cheap ``/health`` endpoint and store the result.
@@ -1279,13 +1343,22 @@ class Controller:
         await self._refresh_efficiency_curve(now)
         # Hour-gate: the hourly forecast changes at most hourly, and an unbounded
         # await here (a hung weather integration) would otherwise wedge every 60 s
-        # tick with the inverter parked. Fetch once per clock-hour; keep the last
-        # good forecast if a refresh returns [] (transient failure).
-        if now.hour != self._last_weather_hour:
+        # tick with the inverter parked. Read once per clock-hour, plus up to
+        # _MAX_WEATHER_READ_RETRIES same-hour retries while the read comes back []
+        # (integration not populated yet after boot); keep the last good forecast
+        # on [].
+        _read_weather = now.hour != self._last_weather_hour
+        if _read_weather:
             self._last_weather_hour = now.hour
+            self._weather_retries_left = _MAX_WEATHER_READ_RETRIES
+        elif self._weather_retries_left > 0 and not self._weather_forecast:
+            self._weather_retries_left -= 1
+            _read_weather = True
+        if _read_weather:
             _fetched = await coordinator.read_hourly_weather_forecast(self._hass, self._data)
             if _fetched:
                 self._weather_forecast = _fetched
+                self._weather_retries_left = 0
         _wf_list = self._weather_forecast
         _now_hour = resolution.hour_floor(now)
         _weather_entry = coordinator.get_forecast_for_hour(_wf_list, _now_hour)
@@ -1336,12 +1409,15 @@ class Controller:
 
         # Health poll + remote forecast fetch: once per clock-hour when the add-on
         # is enabled. Uses the weather forecast already fetched above as the
-        # feature payload. A fetch failure (network error, add-on dormant,
-        # non-200, bad JSON) silently returns None — the map is then left
-        # unchanged so the next successful fetch will update it.  This never
-        # raises; any exception is swallowed here as a final backstop even
-        # though fetch_forecast and fetch_health already guarantee non-raising.
-        if self.cfg.addon_enabled and now.hour != self._last_remote_forecast_hour:
+        # feature payload (no POST while it is empty; the fetch is then owed to a
+        # later same-hour tick). A failed fetch (network error, timeout, non-200,
+        # bad JSON) returns None and leaves the map unchanged; a {} map, or a
+        # health reading of not ready/promoted, replaces it so the tier falls back
+        # (see _refresh_remote_forecast). This never raises; any exception is
+        # swallowed here as a final backstop even though fetch_forecast and
+        # fetch_health already guarantee non-raising.
+        _addon_hour_ran = self.cfg.addon_enabled and now.hour != self._last_remote_forecast_hour
+        if _addon_hour_ran:
             self._last_remote_forecast_hour = now.hour
             # RACE 2 bookkeeping: a fresh hour resets the bounded same-hour
             # health-retry budget (see the elif branch below).
@@ -1352,30 +1428,7 @@ class Controller:
                 # in which a dead addon_url would otherwise hide.
                 await self._poll_addon_health(now)
 
-                _persons_by_ts = None
-                if self._recorder is not None:
-                    _ph_since = (now - timedelta(days=remote_forecast.PERSONS_HOW_LOOKBACK_DAYS)).isoformat()
-                    _ph_samples = await self._hass.async_add_executor_job(
-                        self._recorder.read_persons_home_samples, _ph_since
-                    )
-                    _ph_means = remote_forecast.persons_home_hour_of_week_means(_ph_samples)
-                    _ph_hour_starts = [e["datetime"] for e in (_wf_list or []) if e.get("datetime") is not None]
-                    _persons_by_ts = remote_forecast.project_persons_home(
-                        now,
-                        _persons_home_now,
-                        _ph_means,
-                        _ph_hour_starts,
-                        persistence_hours=self.cfg.occ_persistence_h,
-                    )
-                _payload = build_hours_payload(_wf_list, _persons_by_ts)
-                _fetched_map = await fetch_forecast(
-                    async_get_clientsession(self._hass),
-                    self.cfg.addon_url,
-                    self.cfg.addon_timeout,
-                    _payload,
-                )
-                if _fetched_map is not None:
-                    self._remote_forecast_map = _fetched_map
+                await self._refresh_remote_forecast(now, _wf_list, _persons_home_now)
             except Exception:
                 _LOGGER.debug("remote_forecast fetch raised unexpectedly", exc_info=True)
         elif (
@@ -1397,14 +1450,22 @@ class Controller:
             # hammering a genuinely-dead add-on every tick for the rest of the
             # hour. This branch is skipped once the poll succeeds (self._addon_health
             # is no longer None) or the cap is hit; either way it reverts to the
-            # normal once-per-hour cadence. The expensive remote-forecast fetch
-            # (persons/weather payload + POST) is deliberately NOT retried here —
-            # only the trivial /health call.
+            # normal once-per-hour cadence. Only /health is retried; its first
+            # success owes the hour's forecast fetch once more, since the hourly
+            # one most likely failed against the same not-yet-started container.
             self._addon_health_retry_count += 1
             try:
                 await self._poll_addon_health(now)
             except Exception:
                 _LOGGER.debug("remote_forecast: health retry raised unexpectedly", exc_info=True)
+            if self._addon_health is not None:
+                self._remote_forecast_pending = True
+
+        if self.cfg.addon_enabled and self._remote_forecast_pending and not _addon_hour_ran:
+            try:
+                await self._refresh_remote_forecast(now, _wf_list, _persons_home_now)
+            except Exception:
+                _LOGGER.debug("remote_forecast: owed same-hour fetch raised unexpectedly", exc_info=True)
 
         if not self.enabled:
             inputs = coordinator.read_plant_inputs(self._hass, self._data)
