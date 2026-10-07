@@ -12,6 +12,8 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 # conftest.py inserts addon/anker_x1_forecast onto sys.path
 from health import (
     DEFAULT_PORT,
@@ -370,3 +372,108 @@ def test_service_url_uses_container_hostname(monkeypatch):
     monkeypatch.setenv("FORECAST_PORT", "9100")
     assert service_url() == "http://2b933eb0-anker-x1-forecast:9100"
     assert service_url(host="local-anker_x1_forecast", port=8099) == "http://local-anker_x1_forecast:8099"
+
+
+# ---------------------------------------------------------------------------
+# read_options — half_life_days / prior_weight (recency fit + hour-mean blend)
+# ---------------------------------------------------------------------------
+
+
+def _read_options_with(**options):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(options, f)
+        tmp_path = f.name
+    try:
+        return read_options(path=tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_read_options_recency_and_prior_default_to_the_trainer_defaults():
+    import trainer
+
+    opts = read_options(path="/nonexistent/path/options.json")
+    assert opts["half_life_days"] == trainer.DEFAULT_HALF_LIFE_DAYS
+    assert opts["prior_weight"] == trainer.DEFAULT_PRIOR_WEIGHT
+
+
+def test_read_options_recency_and_prior_passthrough_as_floats():
+    opts = _read_options_with(half_life_days=14, prior_weight=0.5)
+    assert opts["half_life_days"] == 14.0 and isinstance(opts["half_life_days"], float)
+    assert opts["prior_weight"] == 0.5
+
+
+def test_read_options_zero_turns_recency_and_prior_off():
+    opts = _read_options_with(half_life_days=0, prior_weight=0)
+    assert opts["half_life_days"] == 0.0
+    assert opts["prior_weight"] == 0.0
+
+
+def test_read_options_prior_weight_one_is_valid():
+    assert _read_options_with(prior_weight=1)["prior_weight"] == 1.0
+
+
+@pytest.mark.parametrize("value", [-1, "abc", None, True, float("nan"), float("inf"), [7]])
+def test_read_options_invalid_half_life_defaults_with_warning(value, caplog):
+    import logging
+
+    import trainer
+
+    with caplog.at_level(logging.WARNING):
+        opts = _read_options_with(half_life_days=value)
+    assert opts["half_life_days"] == trainer.DEFAULT_HALF_LIFE_DAYS
+    assert "half_life_days" in caplog.text
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.5, "abc", None, False, float("nan")])
+def test_read_options_invalid_prior_weight_defaults_with_warning(value, caplog):
+    import logging
+
+    import trainer
+
+    with caplog.at_level(logging.WARNING):
+        opts = _read_options_with(prior_weight=value)
+    assert opts["prior_weight"] == trainer.DEFAULT_PRIOR_WEIGHT
+    assert "prior_weight" in caplog.text
+
+
+def test_train_kwargs_from_options_threads_recency_and_prior():
+    opts = {"train_since": "", "half_life_days": 7.0, "prior_weight": 0.25}
+    assert train_kwargs_from_options(opts) == {"half_life_days": 7.0, "prior_weight": 0.25}
+
+
+def test_train_kwargs_from_read_options_reach_train_once_with_every_key():
+    import inspect
+
+    import trainer
+
+    kwargs = train_kwargs_from_options(_read_options_with(train_since="2026-07-10", half_life_days=0, prior_weight=0))
+    assert kwargs == {"since_iso": "2026-07-10", "half_life_days": 0.0, "prior_weight": 0.0}
+    assert set(kwargs) <= set(inspect.signature(trainer.train_once).parameters)
+
+
+@pytest.mark.parametrize("value", [0.01, 0.5, 0.99])
+def test_read_options_sub_day_half_life_defaults_with_warning(value, caplog):
+    import logging
+
+    import trainer
+
+    with caplog.at_level(logging.WARNING):
+        opts = _read_options_with(half_life_days=value)
+    assert opts["half_life_days"] == trainer.DEFAULT_HALF_LIFE_DAYS
+    assert "half_life_days" in caplog.text
+
+
+def test_read_options_one_day_half_life_is_valid():
+    assert _read_options_with(half_life_days=1)["half_life_days"] == 1.0
+
+
+def test_build_health_payload_reports_model_options_when_given():
+    payload = build_health_payload(
+        _ready_state(), "1.4.0", "3.11.0", model_options={"half_life_days": 7.0, "prior_weight": 0.25}
+    )
+    assert payload["model_options"] == {"half_life_days": 7.0, "prior_weight": 0.25}
+
+
+def test_build_health_payload_omits_model_options_by_default():
+    assert "model_options" not in build_health_payload(_ready_state(), "1.4.0", "3.11.0")

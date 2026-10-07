@@ -43,6 +43,7 @@ MAX_PREDICT_HOURS = 96
 # Module-level STATE: dormant default so /health works before first train.
 _scheduler_task: asyncio.Task | None = None
 _DB_PATH: str | None = None  # set at startup; enables serve-time lag refresh
+_MODEL_OPTIONS: dict | None = None  # effective recency/prior options, reported by /health
 
 STATE: TrainState = TrainState(
     ready=False,
@@ -93,15 +94,23 @@ async def startup_event() -> None:
     db_path: str = opts["db_path"]
     retrain_hour: int = int(opts["retrain_hour"])
     train_kwargs = train_kwargs_from_options(opts)
-    _log.info("startup: db_path=%r retrain_hour=%s", db_path, retrain_hour)
+    model_options = {k: opts[k] for k in ("half_life_days", "prior_weight") if k in opts}
+    _log.info(
+        "startup: db_path=%r retrain_hour=%s half_life_days=%s prior_weight=%s",
+        db_path,
+        retrain_hour,
+        model_options.get("half_life_days"),
+        model_options.get("prior_weight"),
+    )
     url = service_url()
     _log.info("-" * 64)
     _log.info("Anker X1 Forecast is listening on 0.0.0.0:%s", service_port())
     _log.info("Set the integration option 'Add-on URL' to: %s", url)
     _log.info("Verify from Home Assistant: curl %s/health", url)
     _log.info("-" * 64)
-    global _scheduler_task, _DB_PATH
+    global _scheduler_task, _DB_PATH, _MODEL_OPTIONS
     _DB_PATH = db_path
+    _MODEL_OPTIONS = model_options
     _scheduler_task = asyncio.create_task(_scheduler(db_path, retrain_hour, train_kwargs))
 
 
@@ -140,7 +149,9 @@ def _probe_db_readable(db_path: str | None) -> bool:
 def health() -> dict:
     """Return current training state. Non-blocking — reads in-memory STATE only."""
     db_ok = _probe_db_readable(_DB_PATH)
-    return build_health_payload(STATE, sklearn.__version__, sys.version, db_readable=db_ok)
+    return build_health_payload(
+        STATE, sklearn.__version__, sys.version, db_readable=db_ok, model_options=_MODEL_OPTIONS
+    )
 
 
 @app.post("/predict")

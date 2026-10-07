@@ -45,6 +45,11 @@ _DEFAULT_HGBR_MIN_DAYS = 21
 # inside the window cannot drop the origin count below the promotion gate.
 _BACKTEST_MAX_ORIGINS = 2 * MIN_HORIZON_ORIGINS_24H
 
+# Served model (and every gate origin): recency-weighted fit, median blended
+# toward the 14-day hour-mean.  0 turns either off (the pre-blend model).
+DEFAULT_HALF_LIFE_DAYS = 7.0
+DEFAULT_PRIOR_WEIGHT = 0.25
+
 
 @dataclass
 class TrainState:
@@ -67,6 +72,8 @@ def train_once(
     quantiles: Sequence[float] = (0.5, 0.8),
     min_days: int = _DEFAULT_HGBR_MIN_DAYS,
     since_iso: str | None = None,
+    half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
+    prior_weight: float = DEFAULT_PRIOR_WEIGHT,
 ) -> TrainState:
     """Load rows, check coverage, fit, backtest, and return a TrainState.
 
@@ -92,6 +99,10 @@ def train_once(
         load_rows skips its usual minimum-row check on this path, so train_once
         enforces it here: rows shorter than _MIN_TRAIN_ROWS are treated as if
         load_rows had returned None.
+    half_life_days, prior_weight:
+        Recency half-life and hour-mean prior weight (see
+        HGBRQuantileModel.fit), applied alike to the served model and to every
+        backtest origin so the promotion gate grades what is served.
 
     Returns
     -------
@@ -134,13 +145,16 @@ def train_once(
         )
 
     try:
-        model.fit(rows, quantiles=tuple(quantiles))
+        model.fit(rows, quantiles=tuple(quantiles), half_life_days=half_life_days, prior_weight=prior_weight)
         metrics = walk_forward_hgbr(
-            _backtest_window(rows, train_days, test_days),
+            rows,
             train_days=train_days,
             test_days=test_days,
             fallback_w=fallback_w,
             quantiles=tuple(quantiles),
+            half_life_days=half_life_days,
+            prior_weight=prior_weight,
+            score_from=_backtest_score_from(rows, train_days, test_days),
         )
         promoted = should_promote(metrics)
         return TrainState(
@@ -163,48 +177,39 @@ def train_once(
         )
 
 
-def _backtest_window(rows: list[dict], train_days: int, test_days: int) -> list[dict]:
-    """Restrict rows to the most recent rolling-backtest window.
+def _backtest_score_from(rows: list[dict], train_days: int, test_days: int) -> datetime | None:
+    """Start of the rolling-backtest window: the first origin's training window.
 
-    Keeps only rows within ``train_days + _BACKTEST_MAX_ORIGINS * test_days``
-    of the newest row's hour_ts, so walk_forward_hgbr's promotion metrics
-    measure the current model instead of averaging over its entire lifetime.
-    Rows with a missing or unparseable hour_ts are dropped; row order is
-    otherwise preserved. Empty input is returned as-is.
+    ``train_days + _BACKTEST_MAX_ORIGINS * test_days`` back from the newest
+    row's hour_ts, so walk_forward_hgbr's promotion metrics measure the
+    current model instead of averaging over its entire lifetime.  Rows with a
+    missing or unparseable hour_ts are ignored; None when no row has one.
 
-    A DB mixing naive and tz-aware hour_ts values makes the newest/cutoff
-    comparison below raise TypeError ("can't compare offset-naive and
-    offset-aware datetimes"). walk_forward_hgbr already degrades gracefully
-    on bad data (its own try/except returns an all-None metrics dict), so on
-    that TypeError this function degrades the same way instead: return rows
-    unchanged (the pre-windowing full-history behavior) rather than letting
-    the exception escape into train_once's outer except, which would kill
-    the served model over a metrics-only failure.
+    A DB mixing naive and tz-aware hour_ts values makes the newest-row
+    comparison raise TypeError ("can't compare offset-naive and offset-aware
+    datetimes"); return None (score every origin) instead of letting it
+    escape into train_once's outer except, which would kill the served model
+    over a metrics-only failure — walk_forward_hgbr degrades on such rows by
+    itself.
     """
-    if not rows:
-        return rows
-
-    parsed: list[tuple[datetime, dict]] = []
+    parsed: list[datetime] = []
     for row in rows:
         ts_str = row.get("hour_ts")
         if not ts_str:
             continue
         try:
-            ts = datetime.fromisoformat(str(ts_str))
+            parsed.append(datetime.fromisoformat(str(ts_str)))
         except ValueError:
             continue
-        parsed.append((ts, row))
 
     if not parsed:
-        return []
+        return None
 
     try:
-        newest = max(ts for ts, _ in parsed)
-        cutoff = newest - timedelta(days=train_days + _BACKTEST_MAX_ORIGINS * test_days)
-        return [row for ts, row in parsed if ts >= cutoff]
+        return max(parsed) - timedelta(days=train_days + _BACKTEST_MAX_ORIGINS * test_days)
     except TypeError:
-        _log.warning("_backtest_window: mixed naive/aware hour_ts values; skipping the rolling window")
-        return rows
+        _log.warning("_backtest_score_from: mixed naive/aware hour_ts values; skipping the rolling window")
+        return None
 
 
 def load_rows(db_path: str, *, since_iso: str | None = None) -> list[dict] | None:

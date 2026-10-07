@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
+
+from trainer import DEFAULT_HALF_LIFE_DAYS, DEFAULT_PRIOR_WEIGHT
 
 if TYPE_CHECKING:
     from trainer import TrainState
@@ -24,6 +27,8 @@ _DEFAULTS: dict = {
     "db_path": "/config/anker_x1_smartgrid.db",
     "retrain_hour": 3,
     "train_since": "",
+    "half_life_days": DEFAULT_HALF_LIFE_DAYS,
+    "prior_weight": DEFAULT_PRIOR_WEIGHT,
 }
 
 DEFAULT_PORT = 8099
@@ -97,17 +102,44 @@ def read_options(path: str = "/data/options.json") -> dict:
             )
             train_since = _DEFAULTS["train_since"]
     opts["train_since"] = train_since
+    _validate_float_option(opts, "half_life_days", high=math.inf, off_or_at_least=1.0)
+    _validate_float_option(opts, "prior_weight", high=1.0)
     return opts
 
 
-def train_kwargs_from_options(opts: dict) -> dict:
-    """Build the train_once() training-data-floor kwargs from add-on options.
+def _validate_float_option(opts: dict, key: str, *, high: float, off_or_at_least: float = 0.0) -> None:
+    """Coerce opts[key] to a finite float in [0, high]; anything else → default + warning.
 
-    Returns {} (no floor, train on full history) when train_since is empty or
-    missing; otherwise {"since_iso": <value>}.
+    0 means off; a value between 0 and *off_or_at_least* is rejected as well — the
+    add-on schema cannot express "0 or at least N".
+    """
+    value = opts.get(key, _DEFAULTS[key])
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0.0 <= value <= high
+        and (value == 0.0 or value >= off_or_at_least)
+    ):
+        opts[key] = float(value)
+        return
+    _log.warning("read_options: invalid %s %r, using default %s", key, value, _DEFAULTS[key])
+    opts[key] = _DEFAULTS[key]
+
+
+def train_kwargs_from_options(opts: dict) -> dict:
+    """Build the train_once() kwargs from add-on options.
+
+    ``since_iso`` only when train_since is set (empty = train on full
+    history); ``half_life_days`` / ``prior_weight`` whenever present, so
+    train_once's own defaults apply to an options dict without them.
     """
     since = opts.get("train_since", "")
-    return {"since_iso": since} if since else {}
+    kwargs: dict = {"since_iso": since} if since else {}
+    for key in ("half_life_days", "prior_weight"):
+        if key in opts:
+            kwargs[key] = opts[key]
+    return kwargs
 
 
 def build_health_payload(
@@ -115,6 +147,7 @@ def build_health_payload(
     sklearn_version: str,
     python_version: str,
     db_readable: bool | None = None,
+    model_options: dict | None = None,
 ) -> dict:
     """Assemble the /health response body from a TrainState.
 
@@ -125,13 +158,16 @@ def build_health_payload(
     yet" (state.ready=False on a fresh install looks identical to a broken
     read-only mount otherwise). None when the caller has no DB path to probe.
 
+    model_options, when given, is reported as-is under "model_options" (the
+    effective recency half-life and prior weight).
+
     Returns
     -------
     dict with keys: ready, promoted, last_trained, n_rows, metrics,
     sklearn_version, python_version, db_readable.
     """
     last_trained = state.last_trained
-    return {
+    payload = {
         "ready": state.ready,
         "promoted": state.promoted,
         "last_trained": last_trained.isoformat() if last_trained is not None else None,
@@ -141,6 +177,9 @@ def build_health_payload(
         "python_version": python_version,
         "db_readable": db_readable,
     }
+    if model_options is not None:
+        payload["model_options"] = model_options
+    return payload
 
 
 def seconds_until_next_run(now: datetime, retrain_hour: int, tz: str = "Europe/Amsterdam") -> float:

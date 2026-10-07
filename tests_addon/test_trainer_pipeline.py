@@ -183,60 +183,41 @@ def test_backtest_max_origins_sized_off_promotion_gate():
     assert trainer._BACKTEST_MAX_ORIGINS == 2 * MIN_HORIZON_ORIGINS_24H
 
 
-def test_backtest_window_keeps_recent_rows_drops_old():
-    """_backtest_window keeps only rows within train_days + _BACKTEST_MAX_ORIGINS
-    * test_days of the newest hour_ts, preserving row order and dropping
-    everything older."""
+def test_backtest_score_from_starts_the_window_before_the_newest_row():
+    """Origins are scored over train_days + _BACKTEST_MAX_ORIGINS * test_days
+    back from the newest hour_ts, so the gate measures the current model."""
     window_days = 14 + trainer._BACKTEST_MAX_ORIGINS * 3
-    total_days = window_days + 16  # comfortably past the window edge, so some rows are dropped
-    rows = [{"hour_ts": (_SYNTHETIC_START + timedelta(days=d)).isoformat()} for d in range(total_days)]
+    rows = [{"hour_ts": (_SYNTHETIC_START + timedelta(days=d)).isoformat()} for d in range(window_days + 16)]
 
-    windowed = trainer._backtest_window(rows, train_days=14, test_days=3)
-
-    cutoff = _SYNTHETIC_START + timedelta(days=total_days - 1) - timedelta(days=window_days)
-    assert windowed
-    assert len(windowed) < len(rows)
-    assert all(datetime.fromisoformat(r["hour_ts"]) >= cutoff for r in windowed)
-    # order preserved relative to the input
-    assert windowed == [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= cutoff]
+    newest = _SYNTHETIC_START + timedelta(days=window_days + 15)
+    assert trainer._backtest_score_from(rows, train_days=14, test_days=3) == newest - timedelta(days=window_days)
 
 
-def test_backtest_window_empty_input_returned_as_is():
-    """L4: empty input is returned as-is (no crash, no allocation surprise)."""
-    rows = []
-    assert trainer._backtest_window(rows, train_days=14, test_days=3) is rows
+def test_backtest_score_from_empty_input_is_none():
+    assert trainer._backtest_score_from([], train_days=14, test_days=3) is None
 
 
-def test_backtest_window_all_rows_missing_hour_ts_returns_empty():
-    """L4: rows entirely lacking hour_ts parse to nothing → []."""
+def test_backtest_score_from_all_rows_missing_hour_ts_is_none():
     rows = [{"house_load_mean": 100.0}, {"house_load_mean": 200.0}]
-    assert trainer._backtest_window(rows, train_days=14, test_days=3) == []
+    assert trainer._backtest_score_from(rows, train_days=14, test_days=3) is None
 
 
-def test_backtest_window_drops_unparseable_hour_ts_keeps_parseable():
-    """L4: an unparseable hour_ts row is dropped (per-row ValueError catch)
-    while a parseable row alongside it is kept."""
-    good = {"hour_ts": _SYNTHETIC_START.isoformat()}
-    bad = {"hour_ts": "not-a-timestamp"}
-    rows = [good, bad]
-
-    windowed = trainer._backtest_window(rows, train_days=14, test_days=3)
-
-    assert windowed == [good]
+def test_backtest_score_from_ignores_unparseable_hour_ts():
+    rows = [{"hour_ts": _SYNTHETIC_START.isoformat()}, {"hour_ts": "not-a-timestamp"}]
+    window_days = 14 + trainer._BACKTEST_MAX_ORIGINS * 3
+    assert trainer._backtest_score_from(rows, train_days=14, test_days=3) == _SYNTHETIC_START - timedelta(
+        days=window_days
+    )
 
 
-def test_backtest_window_mixed_naive_aware_hour_ts_does_not_raise():
-    """A DB mixing tz-aware and tz-naive hour_ts must not raise TypeError out of
-    _backtest_window ('can't compare offset-naive and offset-aware datetimes' at
-    the max()/comparison) — degrade to the old full-history behavior instead:
-    return rows unchanged."""
+def test_backtest_score_from_mixed_naive_aware_hour_ts_does_not_raise():
+    """A DB mixing tz-aware and tz-naive hour_ts cannot order its rows; degrade
+    to scoring every origin instead of raising TypeError ('can't compare
+    offset-naive and offset-aware datetimes') into train_once."""
     rows = [{"hour_ts": (_SYNTHETIC_START + timedelta(days=d)).isoformat()} for d in range(5)]
-    # Strip the tz offset from one row to create a naive/aware mix.
     rows[2]["hour_ts"] = (_SYNTHETIC_START + timedelta(days=2)).replace(tzinfo=None).isoformat()
 
-    windowed = trainer._backtest_window(rows, train_days=14, test_days=3)
-
-    assert windowed == rows
+    assert trainer._backtest_score_from(rows, train_days=14, test_days=3) is None
 
 
 def test_train_once_survives_mixed_tz_hour_ts(tmp_path):
@@ -274,52 +255,105 @@ def test_train_once_survives_mixed_tz_hour_ts(tmp_path):
     assert st.model is not None
 
 
-def test_train_once_backtests_on_window(tmp_path, monkeypatch):
-    """train_once must feed walk_forward_hgbr only the windowed rows (the gate
-    measures the current model) while model.fit sees the full floored rows
-    (the served model keeps all history) — pinned by capturing fit's own rows,
-    not just the n_rows bookkeeping field."""
-    # Comfortably exceeds DEFAULT_TRAIN_DAYS + _BACKTEST_MAX_ORIGINS * DEFAULT_BACKTEST_TEST_DAYS
-    # so the window genuinely drops rows regardless of how the cap is sized.
-    total_days = 90
-    db = str(tmp_path / "window.db")
-    make_samples_hourly_db(db, total_days)
-
-    captured = {}
+def _capture_training(monkeypatch) -> dict:
+    """Capture what train_once hands the gate and the served fit."""
+    captured: dict = {}
 
     def _fake_walk_forward_hgbr(rows, **kwargs):
         captured["backtest_rows"] = rows
-        return {
-            "model_mae": None,
-            "baseline_mae": None,
-            "model_rmse": None,
-            "baseline_rmse": None,
-            "n_test": 0,
-            "improvement_pct": 0.0,
-            "horizon_energy_mae_24h": None,
-            "horizon_energy_mae_12h": None,
-            "baseline_horizon_energy_mae_24h": None,
-            "pinball_p50": None,
-            "pinball_p80": None,
-        }
+        captured["backtest_kwargs"] = kwargs
+        return {"model_mae": None, "baseline_mae": None, "n_test": 0}
 
     monkeypatch.setattr(trainer, "walk_forward_hgbr", _fake_walk_forward_hgbr)
 
     real_fit = HGBRQuantileModel.fit
 
-    def _capturing_fit(self, hourly_rows, quantiles=(0.5, 0.8)):
+    def _capturing_fit(self, hourly_rows, quantiles=(0.5, 0.8), **kwargs):
         captured["fit_rows"] = hourly_rows
-        return real_fit(self, hourly_rows, quantiles=quantiles)
+        captured["fit_kwargs"] = kwargs
+        return real_fit(self, hourly_rows, quantiles=quantiles, **kwargs)
 
     monkeypatch.setattr(HGBRQuantileModel, "fit", _capturing_fit)
+    return captured
+
+
+def test_train_once_grades_on_all_rows_scoring_the_trailing_window(tmp_path, monkeypatch):
+    """Each gate origin trains on everything before it, like the served model,
+    so walk_forward_hgbr gets all floored rows; only the ORIGINS are confined to
+    the trailing window, so the gate still measures the current model."""
+    total_days = 90
+    db = str(tmp_path / "window.db")
+    make_samples_hourly_db(db, total_days)
+    captured = _capture_training(monkeypatch)
 
     st = train_once(db)
 
     assert st.n_rows == total_days * 24
-    assert len(captured["fit_rows"]) == total_days * 24  # fit genuinely saw everything
-
+    assert len(captured["fit_rows"]) == total_days * 24
+    assert len(captured["backtest_rows"]) == total_days * 24
     newest = _SYNTHETIC_START + timedelta(hours=total_days * 24 - 1)
-    cutoff = newest - timedelta(days=DEFAULT_TRAIN_DAYS + trainer._BACKTEST_MAX_ORIGINS * DEFAULT_BACKTEST_TEST_DAYS)
-    earliest_captured = min(datetime.fromisoformat(r["hour_ts"]) for r in captured["backtest_rows"])
-    assert earliest_captured >= cutoff
-    assert len(captured["backtest_rows"]) < len(captured["fit_rows"])  # genuinely windowed
+    assert captured["backtest_kwargs"]["score_from"] == newest - timedelta(
+        days=DEFAULT_TRAIN_DAYS + trainer._BACKTEST_MAX_ORIGINS * DEFAULT_BACKTEST_TEST_DAYS
+    )
+
+
+def test_recency_and_prior_defaults_are_the_validated_model():
+    assert trainer.DEFAULT_HALF_LIFE_DAYS == 7.0
+    assert trainer.DEFAULT_PRIOR_WEIGHT == 0.25
+
+
+def test_train_once_serves_and_grades_with_the_default_recency_and_prior(tmp_path, monkeypatch):
+    db = str(tmp_path / "defaults.db")
+    make_samples_hourly_db(db, 28)
+    captured = _capture_training(monkeypatch)
+
+    train_once(db)
+
+    expected = {"half_life_days": trainer.DEFAULT_HALF_LIFE_DAYS, "prior_weight": trainer.DEFAULT_PRIOR_WEIGHT}
+    assert captured["fit_kwargs"] == expected
+    assert {k: captured["backtest_kwargs"][k] for k in expected} == expected
+
+
+def test_train_once_serves_and_grades_with_the_same_given_recency_and_prior(tmp_path, monkeypatch):
+    db = str(tmp_path / "custom.db")
+    make_samples_hourly_db(db, 28)
+    captured = _capture_training(monkeypatch)
+
+    train_once(db, half_life_days=3.0, prior_weight=0.5)
+
+    assert captured["fit_kwargs"] == {"half_life_days": 3.0, "prior_weight": 0.5}
+    assert captured["backtest_kwargs"]["half_life_days"] == 3.0
+    assert captured["backtest_kwargs"]["prior_weight"] == 0.5
+
+
+def test_train_once_with_recency_and_prior_off_reproduces_the_legacy_model_and_gate(tmp_path):
+    """Rollback: zero half-life and prior weight serve the unweighted all-history
+    model and grade fixed-window origins over the trailing window — as before."""
+    from forecast_core.backtest import walk_forward_hgbr
+
+    total_days = 70
+    db = str(tmp_path / "legacy.db")
+    make_samples_hourly_db(db, total_days)
+    rows = trainer.load_rows(db)
+
+    st = train_once(db, half_life_days=0.0, prior_weight=0.0)
+
+    cutoff = datetime.fromisoformat(rows[-1]["hour_ts"]) - timedelta(
+        days=DEFAULT_TRAIN_DAYS + trainer._BACKTEST_MAX_ORIGINS * DEFAULT_BACKTEST_TEST_DAYS
+    )
+    legacy_metrics = walk_forward_hgbr(
+        [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= cutoff],
+        train_days=DEFAULT_TRAIN_DAYS,
+        test_days=DEFAULT_BACKTEST_TEST_DAYS,
+        fallback_w=trainer.DEFAULT_FALLBACK_LOAD_W,
+        quantiles=(0.5, 0.8),
+    )
+    assert st.metrics == legacy_metrics
+
+    hours = [
+        {"when": datetime.fromisoformat(rows[-1]["hour_ts"]) + timedelta(hours=h), "temp": 10.0} for h in range(1, 25)
+    ]
+    legacy_model = HGBRQuantileModel().fit(rows, quantiles=(0.5, 0.8))
+    assert st.model.predict_series(hours, 400.0, quantiles=(0.5, 0.8)) == legacy_model.predict_series(
+        hours, 400.0, quantiles=(0.5, 0.8)
+    )

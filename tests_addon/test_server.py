@@ -231,6 +231,41 @@ def test_startup_threads_train_since_to_scheduler(monkeypatch):
     assert received["train_kwargs"] == {"since_iso": "2026-07-10"}
 
 
+def test_startup_threads_recency_and_prior_to_scheduler(monkeypatch):
+    """The served model's recency half-life and prior weight come from the add-on
+    options and reach train_once through the scheduler's train_kwargs."""
+    import asyncio
+    import server
+
+    monkeypatch.setattr(
+        server,
+        "read_options",
+        lambda: {
+            "db_path": "/nonexistent.db",
+            "retrain_hour": 3,
+            "train_since": "",
+            "half_life_days": 0.0,
+            "prior_weight": 0.0,
+        },
+    )
+    monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
+
+    received = {}
+
+    async def _capturing_scheduler(db_path, retrain_hour, train_kwargs=None):
+        received["train_kwargs"] = train_kwargs
+
+    monkeypatch.setattr(server, "_scheduler", _capturing_scheduler)
+
+    async def _run():
+        await server.startup_event()
+        if server._scheduler_task is not None:
+            await server._scheduler_task
+
+    asyncio.run(_run())
+    assert received["train_kwargs"] == {"half_life_days": 0.0, "prior_weight": 0.0}
+
+
 def test_health_and_predict_smoke():
     """Exercise the real Pydantic request schema via TestClient (not importorskip'd
     away): /health returns ready flag; /predict validates the hours schema."""
@@ -244,3 +279,38 @@ def test_health_and_predict_smoke():
         assert ok.status_code == 200 and "predictions" in ok.json()
         bad = client.post("/predict", json={"hours": "notalist"})
         assert bad.status_code == 422
+
+
+def test_startup_logs_and_reports_recency_and_prior(monkeypatch, caplog):
+    import asyncio
+    import logging
+    import server
+
+    monkeypatch.setattr(
+        server,
+        "read_options",
+        lambda: {
+            "db_path": "/nonexistent.db",
+            "retrain_hour": 3,
+            "train_since": "",
+            "half_life_days": 5.0,
+            "prior_weight": 0.4,
+        },
+    )
+    monkeypatch.setattr(server, "service_url", lambda: "http://2b933eb0-anker-x1-forecast:8099")
+
+    async def _noop(db_path, retrain_hour, train_kwargs=None):
+        return None
+
+    monkeypatch.setattr(server, "_scheduler", _noop)
+
+    async def _run():
+        await server.startup_event()
+        if server._scheduler_task is not None:
+            await server._scheduler_task
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(_run())
+
+    assert "half_life_days=5.0" in caplog.text and "prior_weight=0.4" in caplog.text
+    assert server.health()["model_options"] == {"half_life_days": 5.0, "prior_weight": 0.4}

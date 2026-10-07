@@ -52,7 +52,7 @@ from datetime import datetime, timedelta
 from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
-from . import featureset
+from . import const, featureset
 
 # ---------------------------------------------------------------------------
 # Module-level constants (no sklearn import here)
@@ -81,6 +81,19 @@ def _coerce_serve(x: float | None) -> float:
 # HistGBR would either crash or produce a degenerate model.  The
 # is_ready() gate is far stricter (21 days × 24 h = 504+ rows).
 _MIN_TRAIN_ROWS: int = 24
+
+# Recency-weighted fits drop rows older than this many half-lives (weight
+# < 0.1 %), so fit cost stays bounded as the recorder history grows.
+_RECENCY_CAP_HALF_LIVES: int = 10
+
+# History behind the hour-mean prior the served median is blended toward — the
+# same window the promotion gate's baseline hour-mean uses.
+_PRIOR_DAYS: int = const.DEFAULT_TRAIN_DAYS
+
+# Days of history a row's lag features reach back (load_lag_168h dominates the
+# 24 h rolling mean and the previous-day total) plus a day of slack; rows older
+# than the training cap and this margin never influence a recency-weighted fit.
+_LAG_REACH_DAYS: int = 8
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +156,11 @@ class HGBRQuantileModel:
         self._utc_lookup: dict[datetime, float | None] = {}
         self._local_date_kwh: dict = {}
 
+        # Hour-mean prior (featureset.hour_mean_key → W) and the weight
+        # predict_series blends the served median toward it with; 0 = off.
+        self._prior: dict[tuple[bool, int], float] = {}
+        self._prior_weight: float = 0.0
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -151,6 +169,10 @@ class HGBRQuantileModel:
         self,
         hourly_rows: list[dict],
         quantiles: Sequence[float] = (0.5, 0.8),
+        *,
+        half_life_days: float | None = None,
+        prior_weight: float | None = None,
+        as_of: datetime | None = None,
     ) -> HGBRQuantileModel:
         """Fit one HGBR per quantile on the hourly rollup data.
 
@@ -161,6 +183,20 @@ class HGBRQuantileModel:
             ``recorder.read_hourly_rows()``.
         quantiles:
             Quantile values to train.  Default: ``(0.5, 0.8)``.
+        half_life_days:
+            Weight each training row by ``0.5 ** (age_days / half_life_days)``
+            and leave out rows older than ``_RECENCY_CAP_HALF_LIVES``
+            half-lives (they still feed the kept rows' lag features).
+            ``None``/``0`` fits every row unweighted.
+        prior_weight:
+            Weight of the hour-mean prior — the mean load per
+            ``featureset.hour_mean_key`` over the ``_PRIOR_DAYS`` before
+            *as_of* — in the median :meth:`predict_series` serves.
+            ``None``/``0`` serves the model alone.
+        as_of:
+            The instant row ages and the prior window are measured from.
+            Defaults to the end of the newest row's hour, so a fit is a pure
+            function of its rows.
 
         Returns
         -------
@@ -171,13 +207,40 @@ class HGBRQuantileModel:
         # Reset to unfitted; every call is a full retrain
         self._fitted = False
         self._models = {}
+        self._prior = {}
+        self._prior_weight = 0.0
 
         try:
             HGBR = _import_sklearn()
         except ImportError:
             return self
 
-        X, y, _index = featureset.build_feature_matrix(hourly_rows)
+        if (half_life_days or prior_weight) and as_of is None:
+            stamps = [
+                datetime.fromisoformat(str(r["hour_ts"]))
+                for r in hourly_rows
+                if r.get("hour_ts") and featureset.hourly_load_w(r) is not None
+            ]
+            if stamps:
+                as_of = max(stamps) + timedelta(hours=1)
+        if half_life_days and as_of is not None:
+            reach = timedelta(days=max(_RECENCY_CAP_HALF_LIVES * half_life_days + _LAG_REACH_DAYS, _PRIOR_DAYS))
+            try:
+                hourly_rows = [
+                    r
+                    for r in hourly_rows
+                    if r.get("hour_ts") and datetime.fromisoformat(str(r["hour_ts"])) >= as_of - reach
+                ]
+            except TypeError:  # mixed naive/aware hour_ts: keep every row rather than fail the fit
+                pass
+        X, y, index = featureset.build_feature_matrix(hourly_rows)
+        sample_weight: list[float] | None = None
+        if half_life_days and as_of is not None:
+            ages = [(as_of - datetime.fromisoformat(i)).total_seconds() / 86400.0 for i in index]
+            keep = [j for j, age in enumerate(ages) if 0.0 < age <= _RECENCY_CAP_HALF_LIVES * half_life_days]
+            X = [X[j] for j in keep]
+            y = [y[j] for j in keep]
+            sample_weight = [0.5 ** (ages[j] / half_life_days) for j in keep]
         if len(X) < _MIN_TRAIN_ROWS:
             return self
 
@@ -217,7 +280,7 @@ class HGBRQuantileModel:
                     random_state=0,  # reproducible across restarts
                 )
                 # sklearn accepts plain Python list-of-lists — no numpy import needed
-                model.fit(X, y)
+                model.fit(X, y, sample_weight=sample_weight)
                 self._models[float(q)] = model
         except Exception:
             self._fitted = False
@@ -225,6 +288,18 @@ class HGBRQuantileModel:
             return self
 
         self._fitted = bool(self._models)
+        if self._fitted and prior_weight and as_of is not None:
+            since = as_of - timedelta(days=_PRIOR_DAYS)
+            self._prior = featureset.hour_mean_profile(
+                [
+                    row
+                    for row in hourly_rows
+                    if row.get("hour_ts")
+                    and featureset.hourly_load_w(row) is not None
+                    and since <= datetime.fromisoformat(str(row["hour_ts"])) < as_of
+                ]
+            )
+            self._prior_weight = float(prior_weight)
         return self
 
     def refresh_lookups(self, hourly_rows: list[dict]) -> bool:
@@ -358,6 +433,15 @@ class HGBRQuantileModel:
             median when it is requested, else the first quantile asked for —
             never a high quantile, whose bias would compound down the horizon.
 
+        Hour-mean prior
+        ---------------
+        When fitted with a ``prior_weight``, the served median is
+        ``(1 − w)·model + w·prior`` for every hour whose
+        ``featureset.hour_mean_key`` the prior covers (the model alone
+        otherwise), and the other quantiles move by the same delta, upper ones
+        never below the served median.  The served median — not the raw model
+        output — is what feeds the chain, whichever quantiles were requested.
+
         Returns
         -------
         One ``{quantile: watts}`` dict per requested hour, in request order.
@@ -371,7 +455,9 @@ class HGBRQuantileModel:
 
         lookup = dict(self._utc_lookup)
         date_kwh = dict(self._local_date_kwh)
-        chain_q = 0.5 if 0.5 in qs else qs[0]
+        blend = self._prior_weight > 0 and bool(self._prior) and 0.5 in self._models
+        pred_qs = list(dict.fromkeys((0.5, *qs))) if blend else qs
+        chain_q = 0.5 if 0.5 in pred_qs else qs[0]
 
         for idx in sorted(range(len(hours)), key=lambda i: hours[i]["when"]):
             hour = hours[idx]
@@ -390,9 +476,11 @@ class HGBRQuantileModel:
                     utc_lookup=lookup,
                     local_date_kwh=date_kwh,
                 )
-                for q in qs
+                for q in pred_qs
             }
-            results[idx] = preds
+            if blend:
+                self._blend_prior(preds, when)
+            results[idx] = {q: preds[q] for q in qs}
             if lookup.get(when) is None:
                 self._record_chain_hour(lookup, date_kwh, when, preds[chain_q])
         return results
@@ -477,6 +565,21 @@ class HGBRQuantileModel:
 
         self._utc_lookup = utc_lookup
         self._local_date_kwh = local_date_kwh
+
+    def _blend_prior(self, preds: dict[float, float], when: datetime) -> None:
+        """Pull the median toward the hour-mean prior and move the other quantiles with it."""
+        prior = self._prior.get(featureset.hour_mean_key(when))
+        if prior is None:
+            return
+        model_p50 = preds[0.5]
+        served = (1.0 - self._prior_weight) * model_p50 + self._prior_weight * prior
+        delta = served - model_p50
+        for q in preds:
+            if q > 0.5:
+                preds[q] = max(preds[q] + delta, served)
+            elif q < 0.5:
+                preds[q] = min(preds[q] + delta, served)
+        preds[0.5] = served
 
     @staticmethod
     def _record_chain_hour(

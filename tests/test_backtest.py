@@ -620,3 +620,143 @@ def test_walk_forward_hgbr_per_hour_regime_is_opt_in():
     ]
 
     assert res["model_mae"] == pytest.approx(backtest.mae(expected), rel=1e-9)
+
+
+def _shifted_rows(n_days: int, *, shift_before: datetime, shift_w: float) -> list[dict]:
+    """``_make_hourly_rows`` with a day-to-day wobble and ``shift_w`` added to every
+    row before ``shift_before`` — separates a 14-day window from all history."""
+    rows = _make_hourly_rows(n_days)
+    for i, row in enumerate(rows):
+        row["house_load_mean"] += ((i // 24) * 37 % 11) * 15.0
+        if datetime.fromisoformat(row["hour_ts"]) < shift_before:
+            row["house_load_mean"] += shift_w
+    return rows
+
+
+def test_walk_forward_hgbr_score_from_places_origins_without_trimming_history():
+    """Rows before ``score_from`` are history only: with the fixed training window
+    the gate is identical to scoring the trimmed rows."""
+    rows = _make_hourly_rows(40)
+    cut = datetime.fromisoformat(rows[0]["hour_ts"]) + timedelta(days=15)
+
+    res = backtest.walk_forward_hgbr(rows, train_days=10, test_days=3, fallback_w=500.0, score_from=cut)
+    trimmed = backtest.walk_forward_hgbr(
+        [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= cut],
+        train_days=10,
+        test_days=3,
+        fallback_w=500.0,
+    )
+
+    assert res["n_test"] > 0
+    assert res == trimmed
+
+
+def test_walk_forward_hgbr_recency_mode_grades_the_served_model_against_the_window_baseline():
+    """With a half-life each origin's model trains on ALL rows before it (recency
+    weighted, as of the origin) and serves the prior blend — exactly what the
+    add-on serves — while the baseline stays the train_days hour-mean."""
+    import pytest
+
+    from custom_components.anker_x1_smartgrid import featureset
+    from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
+
+    start = datetime(2025, 1, 8, 0, 0, tzinfo=UTC)
+    origin = start + timedelta(days=29)
+    rows = _shifted_rows(30, shift_before=origin - timedelta(days=14), shift_w=600.0)
+    res = backtest.walk_forward_hgbr(
+        rows,
+        train_days=14,
+        test_days=1,
+        fallback_w=500.0,
+        half_life_days=7.0,
+        prior_weight=0.25,
+        score_from=start + timedelta(days=15),
+    )
+
+    train = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) < origin]
+    test = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= origin]
+    assert len(test) == 24, "fixture must yield a single 24 h test window"
+    preds = (
+        HGBRQuantileModel()
+        .fit(train, quantiles=(0.5, 0.8), half_life_days=7.0, prior_weight=0.25, as_of=origin)
+        .predict_series(
+            [
+                {
+                    "when": datetime.fromisoformat(r["hour_ts"]),
+                    "temp": r.get("temp_forecast_mean"),
+                    "cloud_cover": r.get("cloud_cover_mean"),
+                    "humidity": r.get("humidity_mean"),
+                    "wind_speed": r.get("wind_speed_mean"),
+                    "persons_home": r.get("persons_home_mean"),
+                }
+                for r in test
+            ],
+            500.0,
+            quantiles=(0.5, 0.8),
+        )
+    )
+    actual = [featureset.hourly_load_w(r) for r in test]
+    window = featureset.hour_mean_profile(
+        [r for r in train if datetime.fromisoformat(r["hour_ts"]) >= origin - timedelta(days=14)]
+    )
+    base = [window[featureset.hour_mean_key(datetime.fromisoformat(r["hour_ts"]))] for r in test]
+
+    assert res["model_mae"] == pytest.approx(backtest.mae(list(zip([p[0.5] for p in preds], actual))), rel=1e-9)
+    assert res["baseline_mae"] == pytest.approx(backtest.mae(list(zip(base, actual))), rel=1e-9)
+
+
+def test_walk_forward_hgbr_recency_origin_ages_rows_from_the_origin_not_the_last_row():
+    """Hours missing just before an origin must not move the ages/prior window:
+    the gate fits as of the origin, as the add-on serves as of now."""
+    import pytest
+
+    from custom_components.anker_x1_smartgrid import featureset
+    from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
+
+    start = datetime(2025, 1, 8, 0, 0, tzinfo=UTC)
+    origin = start + timedelta(days=29)
+    gap_from = origin - timedelta(hours=6)
+    rows = [
+        r
+        for r in _shifted_rows(30, shift_before=origin - timedelta(days=14), shift_w=600.0)
+        if not gap_from <= datetime.fromisoformat(r["hour_ts"]) < origin
+    ]
+    res = backtest.walk_forward_hgbr(
+        rows,
+        train_days=14,
+        test_days=1,
+        fallback_w=500.0,
+        half_life_days=7.0,
+        prior_weight=0.25,
+        score_from=start + timedelta(days=15),
+    )
+
+    train = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) < origin]
+    test = [r for r in rows if datetime.fromisoformat(r["hour_ts"]) >= origin]
+    series = [
+        {
+            "when": datetime.fromisoformat(r["hour_ts"]),
+            "temp": r.get("temp_forecast_mean"),
+            "cloud_cover": r.get("cloud_cover_mean"),
+            "humidity": r.get("humidity_mean"),
+            "wind_speed": r.get("wind_speed_mean"),
+            "persons_home": r.get("persons_home_mean"),
+        }
+        for r in test
+    ]
+    actual = [featureset.hourly_load_w(r) for r in test]
+
+    def mae_as_of(as_of):
+        model = HGBRQuantileModel().fit(train, quantiles=(0.5, 0.8), half_life_days=7.0, prior_weight=0.25, as_of=as_of)
+        preds = model.predict_series(series, 500.0, quantiles=(0.5, 0.8))
+        return backtest.mae(list(zip([p[0.5] for p in preds], actual)))
+
+    assert res["model_mae"] == pytest.approx(mae_as_of(origin), rel=1e-9)
+    assert mae_as_of(origin) != pytest.approx(mae_as_of(None), rel=1e-9), "fixture must separate the two"
+
+
+def test_walk_forward_hgbr_unchained_scoring_ignores_the_prior_blend():
+    rows = _shifted_rows(30, shift_before=datetime(2025, 1, 1, tzinfo=UTC), shift_w=0.0)
+    kw = dict(train_days=14, test_days=1, fallback_w=500.0, half_life_days=7.0, chained=False)
+
+    assert backtest.walk_forward_hgbr(rows, prior_weight=0.25, **kw) == backtest.walk_forward_hgbr(rows, **kw)

@@ -248,6 +248,27 @@ def hourly_load_w(row: dict) -> float | None:
     return float(mean) if mean is not None else None
 
 
+def hour_mean_key(ts: datetime) -> tuple[bool, int]:
+    """``(is_weekend, hour)`` in Europe/Amsterdam local time — the hour-mean profile key."""
+    t_local = ts.astimezone(_TZ_AMS)
+    return t_local.weekday() >= 5, t_local.hour
+
+
+def hour_mean_profile(hourly_rows: list[dict]) -> dict[tuple[bool, int], float]:
+    """Mean energy-derived hourly load per :func:`hour_mean_key`.
+
+    Rows without an ``hour_ts`` or a target (:func:`hourly_load_w` is None) are skipped.
+    """
+    acc: dict[tuple[bool, int], list[float]] = {}
+    for row in hourly_rows:
+        ts_str = row.get("hour_ts")
+        load = hourly_load_w(row)
+        if ts_str is None or load is None:
+            continue
+        acc.setdefault(hour_mean_key(datetime.fromisoformat(str(ts_str))), []).append(float(load))
+    return {k: sum(v) / len(v) for k, v in acc.items()}
+
+
 # ---------------------------------------------------------------------------
 # Canonical lag helper — single source of truth for train AND predict paths
 # ---------------------------------------------------------------------------

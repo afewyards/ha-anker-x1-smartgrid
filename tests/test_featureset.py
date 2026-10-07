@@ -20,6 +20,8 @@ from custom_components.anker_x1_smartgrid.featureset import (
     encode_lag_features_from_lookups,
     encode_weather_features,
     feature_names,
+    hour_mean_key,
+    hour_mean_profile,
 )
 
 # ---------------------------------------------------------------------------
@@ -897,3 +899,20 @@ def test_persons_home_missing_is_nan_in_matrix():
     X, y, index = build_feature_matrix(rows)
     names = feature_names()
     assert math.isnan(X[0][names.index("persons_home")])
+
+
+def test_hour_mean_key_is_weekend_and_amsterdam_local_hour():
+    # Fri 22:00Z in summer = Sat 00:00 CEST
+    assert hour_mean_key(datetime(2026, 7, 3, 22, 0, tzinfo=UTC)) == (True, 0)
+    # Mon 11:00Z in winter = Mon 12:00 CET
+    assert hour_mean_key(datetime(2026, 1, 5, 11, 0, tzinfo=UTC)) == (False, 12)
+
+
+def test_hour_mean_profile_averages_the_target_per_key_and_skips_missing_loads():
+    rows = [
+        _row("2026-07-06T10:00:00+00:00", 400.0),  # Mon 12:00 CEST
+        _row("2026-07-07T10:00:00+00:00", 600.0),  # Tue 12:00 CEST
+        _row("2026-07-08T10:00:00+00:00", None),  # no target -> skipped
+        _row("2026-07-04T10:00:00+00:00", 900.0, house_load_kwh_sum=0.3),  # Sat: kWh target wins
+    ]
+    assert hour_mean_profile(rows) == {(False, 12): 500.0, (True, 12): 300.0}

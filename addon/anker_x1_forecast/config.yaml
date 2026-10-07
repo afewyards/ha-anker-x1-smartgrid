@@ -15,7 +15,11 @@ options:
   db_path: "/config/anker_x1_smartgrid.db"
   retrain_hour: 3
   train_since: ""
+  half_life_days: 7
+  prior_weight: 0.25
 schema:
   db_path: "str"
   retrain_hour: "int(0,23)"
   train_since: "str?"
+  half_life_days: "float(0,)"
+  prior_weight: "float(0,1)"

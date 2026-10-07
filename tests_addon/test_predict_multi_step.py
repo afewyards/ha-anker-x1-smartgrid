@@ -72,3 +72,15 @@ def test_horizon_is_predicted_as_a_chain(model_and_horizon_start) -> None:
 
     assert [e["p50_w"] for e in out] == [round(p[0.5], 1) for p in expected]
     assert [e["p80_w"] for e in out] == [round(max(p[0.8], p[0.5]), 1) for p in expected]
+
+
+def test_predict_hours_serves_the_prior_blended_chain():
+    rows = make_hourly_rows(_TRAIN_DAYS, start=_SYNTH_START)
+    model = HGBRQuantileModel().fit(rows, quantiles=(0.5, 0.8), half_life_days=7.0, prior_weight=0.25)
+    hours = _payload_hours(datetime.fromisoformat(rows[-1]["hour_ts"]) + timedelta(hours=1))
+
+    served = predict_hours(model, hours)
+    series = model.predict_series(_as_series_hours(hours), DEFAULT_FALLBACK_LOAD_W, quantiles=(0.5, 0.8))
+
+    assert [p["p50_w"] for p in served] == [round(s[0.5], 1) for s in series]
+    assert all(p["p80_w"] >= p["p50_w"] for p in served)

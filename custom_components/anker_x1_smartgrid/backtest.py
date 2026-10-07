@@ -69,16 +69,7 @@ def _baseline_fit_hourly(hourly_rows: list[dict]) -> dict:
     Target is the energy-derived hourly load (``house_load_kwh_sum``×1000,
     ``house_load_mean`` fallback). Rows where it is ``None`` are silently skipped.
     """
-    acc: dict[tuple, list[float]] = {}
-    for row in hourly_rows:
-        ts_str = row.get("hour_ts")
-        load = featureset.hourly_load_w(row)
-        if ts_str is None or load is None:
-            continue
-        t_local = datetime.fromisoformat(str(ts_str)).astimezone(_TZ_AMS)
-        key = (t_local.weekday() >= 5, t_local.hour)
-        acc.setdefault(key, []).append(float(load))
-    return {k: sum(v) / len(v) for k, v in acc.items()}
+    return featureset.hour_mean_profile(hourly_rows)
 
 
 def should_promote(metrics: dict | None) -> bool:
@@ -253,6 +244,9 @@ def walk_forward_hgbr(
     fallback_w: float,
     quantiles: tuple[float, ...] = (0.5, 0.8),
     chained: bool = True,
+    half_life_days: float | None = None,
+    prior_weight: float | None = None,
+    score_from: datetime | None = None,
 ) -> dict:
     """Rolling-origin evaluation of :class:`HGBRQuantileModel` on hourly rollup data.
 
@@ -284,6 +278,16 @@ def walk_forward_hgbr(
         hour independently, with temperature as the only weather signal — what
         an in-process ``LoadPredictor`` tier does, since it is called one hour
         at a time and cannot chain.
+    half_life_days, prior_weight:
+        Forwarded to :meth:`HGBRQuantileModel.fit` (as of each origin), so the
+        gate grades the model the way it is served.  With a half-life each
+        origin trains on every row before it instead of the trailing
+        ``train_days``; the baseline stays the ``train_days`` hour-mean.
+        ``prior_weight`` blends only the chained series: ``predict_load_w``
+        never sees the prior, so it is ignored when ``chained`` is False.
+    score_from:
+        Place the first origin ``train_days`` after the first row at or after
+        this instant; earlier rows are training and lag history only.
 
     Returns
     -------
@@ -291,6 +295,9 @@ def walk_forward_hgbr(
     empty dict when there is insufficient data or when sklearn is not
     installed.  **Never raises.**
     """
+    if prior_weight and not chained:
+        _LOGGER.debug("walk_forward_hgbr: prior_weight ignored; per-hour prediction serves no prior blend")
+        prior_weight = None
     empty = {
         "model_mae": None,
         "baseline_mae": None,
@@ -318,7 +325,7 @@ def walk_forward_hgbr(
             return empty
         parsed.sort(key=lambda x: x[0])
 
-        start_ts = parsed[0][0]
+        start_ts = next(ts for ts, _ in parsed if score_from is None or ts >= score_from)
         end_ts = parsed[-1][0]
 
         model_pairs: list[tuple[float, float]] = []
@@ -332,7 +339,8 @@ def walk_forward_hgbr(
 
         origin = start_ts + timedelta(days=train_days)
         while origin < end_ts:
-            train_rows = [row for ts, row in parsed if origin - timedelta(days=train_days) <= ts < origin]
+            window_rows = [row for ts, row in parsed if origin - timedelta(days=train_days) <= ts < origin]
+            train_rows = [row for ts, row in parsed if ts < origin] if half_life_days else window_rows
             # Only include test entries that have a real target (energy-derived
             # hourly load: house_load_kwh_sum×1000, house_load_mean fallback).
             test_entries = [
@@ -347,9 +355,15 @@ def walk_forward_hgbr(
                 # reflect what the model would actually see at the origin timestamp
                 # (no look-ahead from later rows).
                 model = HGBRQuantileModel()
-                model.fit(train_rows, quantiles=quantiles)
+                model.fit(
+                    train_rows,
+                    quantiles=quantiles,
+                    half_life_days=half_life_days,
+                    prior_weight=prior_weight,
+                    as_of=origin,
+                )
                 if model._fitted:  # False when sklearn absent or too few rows
-                    base = _baseline_fit_hourly(train_rows)
+                    base = _baseline_fit_hourly(window_rows)
 
                     # The test window is predicted as ONE chain, exactly as the
                     # add-on serves a horizon: hour-by-hour calls would leave
