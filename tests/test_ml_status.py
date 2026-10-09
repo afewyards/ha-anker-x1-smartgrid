@@ -218,25 +218,44 @@ HEALTH_GATE = {
 
 def test_gate_line_full():
     a = _attrs(health=HEALTH_GATE)
-    assert a["ml_status"] == "backtest gate · 5/8 · -24%"
+    assert a["ml_status"] == "backtest gate · 5/8 · -24% · 24h -6%"
+
+
+def test_gate_line_24h_negative_signed():
+    m = {**HEALTH_GATE["metrics"], "horizon_energy_mae_24h": 5.0, "baseline_horizon_energy_mae_24h": 4.0}
+    a = _attrs(health={**HEALTH_READY, "metrics": m})
+    assert a["ml_status"] == "backtest gate · 5/8 · -24% · 24h -25%"
+
+
+def test_gate_line_24h_improvement_positive():
+    m = {**HEALTH_GATE["metrics"], "horizon_energy_mae_24h": 3.0, "baseline_horizon_energy_mae_24h": 4.0}
+    a = _attrs(health={**HEALTH_READY, "metrics": m})
+    assert a["ml_status"].endswith("· 24h +25%")
+
+
+def test_gate_line_24h_dropped_when_baseline_zero_or_missing():
+    m = {**HEALTH_GATE["metrics"], "baseline_horizon_energy_mae_24h": 0.0}
+    assert _attrs(health={**HEALTH_READY, "metrics": m})["ml_status"] == "backtest gate · 5/8 · -24%"
+    m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "horizon_energy_mae_24h"}
+    assert _attrs(health={**HEALTH_READY, "metrics": m})["ml_status"] == "backtest gate · 5/8 · -24%"
 
 
 def test_gate_line_positive_improvement_signed():
     h = {**HEALTH_READY, "metrics": {**HEALTH_GATE["metrics"], "improvement_pct": 2.0}}
-    assert _attrs(health=h)["ml_status"] == "backtest gate · 5/8 · +2%"
+    assert _attrs(health=h)["ml_status"] == "backtest gate · 5/8 · +2% · 24h -6%"
 
 
 def test_gate_line_missing_improvement_drops_segment():
     m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "improvement_pct"}
     a = _attrs(health={**HEALTH_READY, "metrics": m})
-    assert a["ml_status"] == "backtest gate · 5/8"
+    assert a["ml_status"] == "backtest gate · 5/8 · 24h -6%"
     assert a["addon_improvement_pct"] is None
 
 
 def test_gate_line_missing_origins_drops_segment():
     m = {k: v for k, v in HEALTH_GATE["metrics"].items() if k != "n_horizon_origins_24h"}
     a = _attrs(health={**HEALTH_READY, "metrics": m})
-    assert a["ml_status"] == "backtest gate · -24%"
+    assert a["ml_status"] == "backtest gate · -24% · 24h -6%"
     assert a["addon_origins_24h"] is None
 
 

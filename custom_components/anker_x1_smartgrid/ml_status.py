@@ -153,6 +153,8 @@ def build_ml_status_attrs(
             parts.append(f"{origins}/{MIN_HORIZON_ORIGINS_24H}")
         if improvement is not None:
             parts.append(f"{improvement:+.0f}%")
+        if h24_mae is not None and baseline_h24_mae:
+            parts.append(f"24h {(baseline_h24_mae - h24_mae) / baseline_h24_mae * 100:+.0f}%")
         status = " · ".join(parts)
     elif eta_days is not None:
         status = f"ML in ~{eta_days}d"
