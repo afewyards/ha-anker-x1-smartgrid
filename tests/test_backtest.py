@@ -221,16 +221,39 @@ def test_should_promote_true_when_beats_both():
     assert backtest.should_promote(metrics) is True
 
 
-def test_should_promote_false_tie_on_horizon():
-    """Tie on horizon-energy-24h → do not promote."""
-    metrics = {
-        "horizon_energy_mae_24h": 2.0,
-        "baseline_horizon_energy_mae_24h": 2.0,
-        "model_mae": 50.0,
+def _h24_case(h24, *, mae=50.0):
+    return {
+        "horizon_energy_mae_24h": h24,
+        "baseline_horizon_energy_mae_24h": 100.0,
+        "model_mae": mae,
         "baseline_mae": 100.0,
         "n_horizon_origins_24h": 8,
     }
-    assert backtest.should_promote(metrics) is False
+
+
+def test_should_promote_true_on_horizon_tie():
+    """24h energy is a non-inferiority check: a tie with a clear step win promotes."""
+    assert backtest.should_promote(_h24_case(100.0)) is True
+
+
+def test_should_promote_true_when_horizon_slightly_worse():
+    assert backtest.should_promote(_h24_case(103.0, mae=88.0)) is True
+
+
+def test_should_promote_true_at_horizon_shortfall_just_inside_bound():
+    assert backtest.should_promote(_h24_case(104.99)) is True
+
+
+def test_should_promote_false_at_horizon_shortfall_bound():
+    assert backtest.should_promote(_h24_case(105.0)) is False
+
+
+def test_should_promote_false_when_horizon_shortfall_exceeds_bound():
+    assert backtest.should_promote(_h24_case(106.0, mae=88.0)) is False
+
+
+def test_should_promote_false_when_step_gain_below_margin_despite_big_horizon_win():
+    assert backtest.should_promote(_h24_case(50.0, mae=99.0)) is False
 
 
 def test_should_promote_false_worse_on_mae():

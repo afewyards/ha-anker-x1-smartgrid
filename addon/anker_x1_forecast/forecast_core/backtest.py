@@ -20,6 +20,11 @@ _LOGGER = logging.getLogger(__name__)
 # gate metric before promotion (0.02 = 2%).  A bare strict-< win is noise.
 PROMOTE_MIN_IMPROVEMENT: float = 0.02
 
+# How much WORSE than the baseline the 24h horizon-energy MAE may be (0.05 = 5%)
+# while the model still promotes.  That metric is noise-dominated on short
+# histories, so it is a non-inferiority check rather than a second win condition.
+H24_MAX_SHORTFALL: float = 0.05
+
 # Minimum per-step test samples required to promote on the MAE-only fallback
 # path (when the 24h horizon-energy MAE cannot be formed on gappy data).
 # ~7 days of hourly samples — high enough that a thin model is never promoted.
@@ -73,12 +78,12 @@ def _baseline_fit_hourly(hourly_rows: list[dict]) -> dict:
 
 
 def should_promote(metrics: dict | None) -> bool:
-    """Return True only when the model strictly beats the hour-mean baseline on BOTH:
+    """Return True only when the model beats the hour-mean baseline on per-step MAE
+    AND is not materially worse on the 24h horizon energy:
 
-    - ``horizon_energy_mae_24h`` < ``baseline_horizon_energy_mae_24h``
-      (primary — the 24-hour ahead energy error that sets the grid-charge deficit).
-    - ``model_mae`` < ``baseline_mae``
-      (per-step MAE improvement).
+    - ``model_mae`` < ``baseline_mae`` by at least ``PROMOTE_MIN_IMPROVEMENT``.
+    - ``horizon_energy_mae_24h`` < ``baseline_horizon_energy_mae_24h`` ×
+      (1 + ``H24_MAX_SHORTFALL``) — non-inferiority, not a second win.
 
     Any None value or missing key → return False (do not promote).
     """
@@ -94,13 +99,13 @@ def should_promote(metrics: dict | None) -> bool:
     margin = 1.0 - PROMOTE_MIN_IMPROVEMENT
     mae_ok = m_mae < b_mae * margin
 
-    # Primary gate: BOTH 24h horizon-energy AND per-step MAE clear the margin,
-    # AND enough rolling origins produced the horizon-energy value.
+    # Primary gate: per-step MAE clears the margin and the 24h horizon-energy MAE
+    # is within the allowed shortfall, AND enough rolling origins produced it.
     if h24 is not None and bh24 is not None:
         n_origins = metrics.get("n_horizon_origins_24h", 0)
         if not isinstance(n_origins, (int, float)) or n_origins < MIN_HORIZON_ORIGINS_24H:
             return False
-        return bool(h24 < bh24 * margin and mae_ok)
+        return bool(h24 < bh24 * (1.0 + H24_MAX_SHORTFALL) and mae_ok)
 
     # M3 gappy-data fallback: the 24h horizon-energy MAE could not be formed.
     # Gate on per-step MAE ALONE, but keep the margin AND require a minimum
