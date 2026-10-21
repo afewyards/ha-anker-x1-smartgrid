@@ -30,7 +30,7 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
     Returns (resolved_values, missing_roles):
       * resolved_values: {CONF_ENT_*: entity_id, [CONF_CAPACITY_KWH: float]}.
       * missing_roles: CONF_ENT_* keys (of the 5 hard roles) with no exact match
-        on (entity domain, unique_id).
+        on (entity domain, unique_id); disabled entities do not match.
     Soft roles (meter power, inverter loss — ANKER_SOFT_ROLE_SUFFIXES) and
     capacity behave the same way: a miss is omitted from resolved_values and
     never added to missing_roles.
@@ -42,7 +42,8 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
         return {}, list(const.ANKER_ROLE_SUFFIXES)
 
     # Keyed on (domain, unique_id): anker_x1 reuses a unique_id across a sensor and a number.
-    by_uid = {(ent.domain, ent.unique_id): ent for ent in entries}
+    # Disabled entities have no state, so they never count as a match.
+    by_uid = {(ent.domain, ent.unique_id): ent for ent in entries if ent.disabled_by is None}
     resolved: dict[str, Any] = {}
     missing: list[str] = []
     for conf_key, suffix in const.ANKER_ROLE_SUFFIXES.items():

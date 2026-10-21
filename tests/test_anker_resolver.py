@@ -349,3 +349,24 @@ async def test_resolve_setpoint_number_wins_over_same_uid_sensor(hass):
     assert resolved[const.CONF_MAX_CHARGE_W] == 12000.0
     assert resolved[const.CONF_MAX_EXPORT_W] == 13200.0
 
+
+async def test_resolve_disabled_control_entity_is_missing(hass):
+    device_id, src = _register_anker_device(hass)
+    reg = er.async_get(hass)
+    reg.async_update_entity(
+        "switch.anker_x1_modbus_control_hand_battery_to_ha_vpp",
+        disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+    )
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == [const.CONF_ENT_ENGAGE]
+    assert const.CONF_ENT_ENGAGE not in resolved
+
+
+async def test_resolve_disabled_soft_role_omitted(hass):
+    device_id, _ = _register_anker_device(hass)
+    er.async_get(hass).async_update_entity(
+        "sensor.anker_x1_meter_total_power", disabled_by=er.RegistryEntryDisabler.INTEGRATION
+    )
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert const.CONF_ENT_METER_POWER not in resolved

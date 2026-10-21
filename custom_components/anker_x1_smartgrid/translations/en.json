@@ -19,7 +19,7 @@
       }
     },
     "error": {
-      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration."
+      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration, and enable its control entities in the Anker device page."
     }
   },
   "options": {
@@ -220,7 +220,7 @@
       }
     },
     "error": {
-      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration.",
+      "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration, and enable its control entities in the Anker device page.",
       "soc_floor_above_target": "SoC floor must be below SoC target.",
       "static_import_price_required": "Static mode needs a positive import price.",
       "static_offpeak_price_required": "Set a positive off-peak price, or clear the off-peak hours.",
