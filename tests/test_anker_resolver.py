@@ -329,3 +329,23 @@ async def test_apply_resolution_fills_pv_when_empty_list(hass):
     data = {const.CONF_ANKER_DEVICE: device_id, const.CONF_ENT_PV_POWER: []}
     apply_anker_resolution(hass, data)
     assert data[const.CONF_ENT_PV_POWER] == "sensor.anker_x1_usable_pv_power"
+
+
+async def test_resolve_setpoint_number_wins_over_same_uid_sensor(hass):
+    device_id, src = _register_anker_device(hass, setpoint_state="0", setpoint_attrs={"min": -12000.0, "max": 13200.0})
+    # registered last: a plain unique_id dict would keep this sensor
+    sensor = er.async_get(hass).async_get_or_create(
+        "sensor",
+        const.ANKER_X1_DOMAIN,
+        f"{src.entry_id}_battery_setpoint",
+        config_entry=src,
+        device_id=device_id,
+        suggested_object_id="anker_x1_battery_setpoint_readback",
+    )
+    hass.states.async_set(sensor.entity_id, "0")
+    resolved, missing = resolve_anker_config(hass, device_id)
+    assert missing == []
+    assert resolved[const.CONF_ENT_SETPOINT] == "number.anker_x1_battery_setpoint_charge_discharge"
+    assert resolved[const.CONF_MAX_CHARGE_W] == 12000.0
+    assert resolved[const.CONF_MAX_EXPORT_W] == 13200.0
+

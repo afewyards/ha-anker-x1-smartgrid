@@ -450,6 +450,13 @@ ANKER_ROLE_SUFFIXES: dict[str, str] = {
     CONF_ENT_WORKMODE: "work_mode_select",
     CONF_ENT_ENGAGE: "modbus_control",
 }
+# Entity domain per role; roles not listed are sensors.  The same unique_id can
+# exist in several domains (battery_setpoint is both a number and a sensor).
+ANKER_ROLE_DOMAINS: dict[str, str] = {
+    CONF_ENT_SETPOINT: "number",
+    CONF_ENT_WORKMODE: "select",
+    CONF_ENT_ENGAGE: "switch",
+}
 # SOFT roles: resolved opportunistically (like ANKER_CAPACITY_SUFFIX below) —
 # a miss is omitted from resolved_values and NEVER appended to `missing`, so it
 # never blocks setup/reload.  Older anker_x1 versions may not ship these

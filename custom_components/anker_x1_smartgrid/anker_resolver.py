@@ -29,7 +29,8 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
 
     Returns (resolved_values, missing_roles):
       * resolved_values: {CONF_ENT_*: entity_id, [CONF_CAPACITY_KWH: float]}.
-      * missing_roles: CONF_ENT_* keys (of the 5 hard roles) with no exact match.
+      * missing_roles: CONF_ENT_* keys (of the 5 hard roles) with no exact match
+        on (entity domain, unique_id).
     Soft roles (meter power, inverter loss — ANKER_SOFT_ROLE_SUFFIXES) and
     capacity behave the same way: a miss is omitted from resolved_values and
     never added to missing_roles.
@@ -40,18 +41,19 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
     if anker_entry_id is None:
         return {}, list(const.ANKER_ROLE_SUFFIXES)
 
-    by_uid = {ent.unique_id: ent for ent in entries}
+    # Keyed on (domain, unique_id): anker_x1 reuses a unique_id across a sensor and a number.
+    by_uid = {(ent.domain, ent.unique_id): ent for ent in entries}
     resolved: dict[str, Any] = {}
     missing: list[str] = []
     for conf_key, suffix in const.ANKER_ROLE_SUFFIXES.items():
-        ent = by_uid.get(f"{anker_entry_id}_{suffix}")
+        ent = by_uid.get((const.ANKER_ROLE_DOMAINS.get(conf_key, "sensor"), f"{anker_entry_id}_{suffix}"))
         if ent is None:
             missing.append(conf_key)
         else:
             resolved[conf_key] = ent.entity_id
 
     for conf_key, suffix in const.ANKER_SOFT_ROLE_SUFFIXES.items():
-        ent = by_uid.get(f"{anker_entry_id}_{suffix}")
+        ent = by_uid.get(("sensor", f"{anker_entry_id}_{suffix}"))
         if ent is None:
             _LOGGER.debug(
                 "Anker device %s: soft role %s (%s) not found; DEFAULT_ENTITIES will apply",
@@ -62,7 +64,7 @@ def resolve_anker_config(hass: HomeAssistant, device_id: str) -> tuple[dict[str,
         else:
             resolved[conf_key] = ent.entity_id
 
-    cap = by_uid.get(f"{anker_entry_id}_{const.ANKER_CAPACITY_SUFFIX}")
+    cap = by_uid.get(("sensor", f"{anker_entry_id}_{const.ANKER_CAPACITY_SUFFIX}"))
     if cap is not None:
         st = hass.states.get(cap.entity_id)
         if st is not None and st.state not in ("unknown", "unavailable"):
