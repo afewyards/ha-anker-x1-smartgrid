@@ -189,3 +189,32 @@ async def test_rescue_survives_engage_failure(monkeypatch):
     await ctrl.tick()
 
     assert any(c[0] == "engage_and_charge" for c in act.calls)
+
+
+@pytest.mark.asyncio
+async def test_failsafe_tick_still_rescues_subfloor():
+    """Missing price slots (failsafe path) must not disable the rescue."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="1.0")
+    hass.set_state("sensor.price", "unavailable")
+
+    await ctrl.tick()
+
+    assert _engages(act) == [_expected_setpoint(ctrl.cfg)]
+    assert ctrl.plan.state is ControllerState.FORCING
+    assert not any(c[0] == "release_to_self" for c in act.calls)
+
+
+@pytest.mark.asyncio
+async def test_failsafe_tick_above_floor_releases():
+    """Failsafe above the floor is unchanged: release and PASSIVE."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="6.0")
+    hass.set_state("sensor.price", "unavailable")
+
+    await ctrl.tick()
+
+    assert _engages(act) == []
+    assert ctrl.plan.state is ControllerState.PASSIVE

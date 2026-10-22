@@ -111,10 +111,10 @@ def floor_rescue_needed(controller: Controller, soc: float | None) -> bool:
 async def run_floor_rescue(controller: Controller, now: datetime) -> float | None:
     """Engage the grid-charge rescue directly; return the setpoint written.
 
-    Used only by the DISABLED tick path, which never reaches
-    :func:`run_forcing_and_export` — the enabled path expresses the same
-    rescue by overriding its plan to FORCING, reusing that function's
-    actuation (and its mutual exclusion with the export executor) verbatim.
+    Used by the DISABLED and failsafe (missing price/PV/sunset) tick paths,
+    which never reach :func:`run_forcing_and_export` — the normal enabled path
+    expresses the same rescue by overriding its plan to FORCING, reusing that
+    function's actuation (and its mutual exclusion with the export executor).
 
     Returns ``None`` when the engage failed, having released the inverter
     back to firmware control so it is not left half-engaged — same
