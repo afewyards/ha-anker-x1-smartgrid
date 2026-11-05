@@ -212,7 +212,7 @@
               "slot_resolution": "Planning slot length. Auto detects it from the price sensor's slot spacing. Default auto.",
               "retention_days": "Days of per-minute recorder samples kept in the local database. Default 90.",
               "retention_hourly_days": "Days of hourly rollups kept for the load model. Default 730.",
-              "history_days": "Days of SmartGrid house load kept in Home Assistant's recorder history; older rows are purged every 6 hours (0 = keep the recorder default). Default 2.",
+              "history_days": "Days of SmartGrid house load kept in Home Assistant's recorder history; older rows are purged every night at 04:30 (0 = keep the recorder default). Default 2.",
               "soc_hedge_fraction": "Fraction of measured SoC drift debited from the plan when live SoC runs below it (0 = off). Default 0.",
               "soc_drift_deadband_kwh": "SoC drift smaller than this is ignored. Default 0.3.",
               "soc_drift_decay_halflife_h": "Half-life for decaying accumulated drift (0 = no decay). Default 0."
