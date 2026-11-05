@@ -67,7 +67,7 @@ All tunables are editable via the integration's options flow (**Configure** butt
 | **Export & arbitrage** | Enable/disable export, grid limit, fees, cycle cost, reserve sizing, peak band, dwell times |
 | **Price anticipation** | History depth, blend weight, confidence haircut, anticipation margin |
 | **Load model & ML** | Learned model toggle, intraday adaptation, add-on connection |
-| **System** | Slot resolution, data retention, SoC drift hedge |
+| **System** | Slot resolution, data retention (incl. recorder history of the house-load sensor), SoC drift hedge |
 
 ## Entities
 

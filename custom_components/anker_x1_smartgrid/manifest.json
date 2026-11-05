@@ -1,6 +1,7 @@
 {
   "domain": "anker_x1_smartgrid",
   "name": "Anker X1 SmartGrid",
+  "after_dependencies": ["recorder"],
   "codeowners": [],
   "config_flow": true,
   "dependencies": [],

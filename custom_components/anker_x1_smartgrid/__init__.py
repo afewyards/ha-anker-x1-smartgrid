@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.helpers.storage import Store
 
 from .actuator import Actuator
 from .anker_resolver import apply_anker_resolution
 from .const import (
+    CONF_HISTORY_DAYS,
     CONF_MAX_CHARGE_W,
     CONF_MAX_EXPORT_W,
     CONF_PRICE_HISTORY_DAYS,
+    DEFAULT_HISTORY_DAYS,
     DEFAULT_MAX_CHARGE_W,
     DEFAULT_MAX_EXPORT_W,
     DEFAULT_PRICE_HISTORY_DAYS,
@@ -27,6 +31,23 @@ from .pricing_store import PriceHistoryStore
 from .recorder import DataRecorder
 
 _STORE_VERSION = 1
+_LOGGER = logging.getLogger(__name__)
+
+
+async def _purge_house_load_history(hass: HomeAssistant, history_days: int) -> None:
+    try:
+        if history_days <= 0 or not hass.services.has_service("recorder", "purge_entities"):
+            return
+        entity_id = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, "anker_x1_smartgrid_house_load_w")
+        if entity_id:
+            await hass.services.async_call(
+                "recorder",
+                "purge_entities",
+                {"entity_id": [entity_id], "keep_days": history_days},
+                blocking=True,
+            )
+    except Exception as err:
+        _LOGGER.warning("house-load recorder purge failed: %s", err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -105,6 +126,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
 
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        history_days = int(data.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS))
+        if history_days > 0:
+
+            async def _purge(_now) -> None:
+                await _purge_house_load_history(hass, history_days)
+
+            entry.async_on_unload(async_track_time_change(hass, _purge, hour=4, minute=30, second=0))
         return True
     except Exception:
         if cancel is not None:

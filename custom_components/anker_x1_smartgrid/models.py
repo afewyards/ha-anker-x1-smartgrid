@@ -29,6 +29,7 @@ class Config:
     deadband_w: float = const.DEFAULT_DEADBAND_W
     lookback_days: int = const.DEFAULT_LOOKBACK_DAYS
     retention_days: int = const.DEFAULT_RETENTION_DAYS
+    history_days: int = const.DEFAULT_HISTORY_DAYS
     use_learned_model: bool = const.DEFAULT_USE_LEARNED_MODEL
     retrain_hours: int = const.DEFAULT_RETRAIN_HOURS
     min_train_samples: int = const.DEFAULT_MIN_TRAIN_SAMPLES

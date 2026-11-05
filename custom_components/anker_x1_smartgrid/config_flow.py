@@ -221,6 +221,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_SLOT_RESOLUTION,
         const.CONF_RETENTION_DAYS,
         const.CONF_RETENTION_HOURLY_DAYS,
+        const.CONF_HISTORY_DAYS,
         const.CONF_SOC_HEDGE_FRACTION,
         const.CONF_SOC_DRIFT_DEADBAND_KWH,
         const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
@@ -259,6 +260,7 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (const.CONF_MIN_TRAIN_SAMPLES, const.DEFAULT_MIN_TRAIN_SAMPLES, cv.positive_int),
     (const.CONF_RETENTION_DAYS, const.DEFAULT_RETENTION_DAYS, cv.positive_int),
     (const.CONF_RETENTION_HOURLY_DAYS, const.DEFAULT_RETENTION_HOURLY_DAYS, cv.positive_int),
+    (const.CONF_HISTORY_DAYS, const.DEFAULT_HISTORY_DAYS, cv.positive_int),
     (const.CONF_ENABLE_EXPORT, const.DEFAULT_ENABLE_EXPORT, cv.boolean),
     (
         const.CONF_GRID_EXPORT_LIMIT_W,

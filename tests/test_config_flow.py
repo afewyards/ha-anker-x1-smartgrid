@@ -62,8 +62,8 @@ def test_sections_cover_all_option_fields():
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
     assert (
-        len(section_keys) == 67
-    )  # +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode, +4 calibration_*
+        len(section_keys) == 68
+    )  # +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode, +4 calibration_*, +1 history_days
 
 
 def test_options_schema_is_sectioned_devices_expanded():
