@@ -2587,6 +2587,7 @@ class Controller:
             daily_stats.aggregate_planned_days(horizon, _export_price_at, _tz, now, _delivered_at),
             _today_totals,
             dt_util.as_local(now).date(),
+            baseline=daily_stats.baseline_by_day(horizon, _tz, _export_price_at),
         )
 
     async def release(self) -> None:

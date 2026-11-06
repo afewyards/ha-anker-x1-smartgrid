@@ -228,6 +228,34 @@ def aggregate_planned_days(
     return out
 
 
+def baseline_by_day(horizon: list[dict] | None, tz: tzinfo, export_price_at) -> dict[date, float]:
+    """Per-local-day net € of the same house with no battery (negative = a bill).
+
+    Every non-estimated row counts, measured ``actual`` and already-started
+    slots included.  ``export_price_at`` has the same post-fee contract as in
+    :func:`aggregate_planned_days`.
+    """
+    out: dict[date, float] = {}
+    for row in horizon or []:
+        if row.get("estimated"):
+            continue
+        start = _parse(row.get("start"))
+        if start is None:
+            continue
+        net_kwh = float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)
+        price = row.get("price")
+        import_price = None if price is None else float(price)
+        day = start.astimezone(tz).date()
+        out.setdefault(day, 0.0)
+        if net_kwh > 0 and import_price is not None:
+            out[day] -= net_kwh * import_price
+        elif net_kwh < 0:
+            export_price = export_price_at(start, import_price)
+            if export_price is not None:
+                out[day] += -net_kwh * float(export_price)
+    return out
+
+
 def current_import_price(horizon: list[dict] | None, now: datetime) -> float | None:
     """Import price of the horizon slot containing ``now``.
 
@@ -258,6 +286,7 @@ def merge_days(
     today_totals: dict,
     today: date,
     window_days: int = WINDOW_DAYS,
+    baseline: dict[date, float] | None = None,
 ) -> list[dict]:
     """Stitch measured past / mixed today / planned future into one table.
 
@@ -291,6 +320,8 @@ def merge_days(
         a_hr = a["house_revenue_eur"] if a else 0.0
         p_hc = p["house_cost_eur"] if p else 0.0
         p_hr = p["house_revenue_eur"] if p else 0.0
+        house_net = round((a_hr - a_hc) + (p_hr - p_hc), 3)
+        base = (baseline or {}).get(day)
         rows.append(
             {
                 "date": day.isoformat(),
@@ -314,9 +345,11 @@ def merge_days(
                 ),
                 "house_cost_eur": round(a_hc + p_hc, 3),
                 "house_revenue_eur": round(a_hr + p_hr, 3),
-                "house_net_eur": round((a_hr - a_hc) + (p_hr - p_hc), 3),
+                "house_net_eur": house_net,
                 "actual_house_net_eur": round(a_hr - a_hc, 3) if a is not None else None,
                 "planned_house_net_eur": round(p_hr - p_hc, 3) if p is not None else None,
+                "baseline_house_net_eur": round(base, 3) if base is not None else None,
+                "savings_eur": round(house_net - base, 3) if base is not None else None,
             }
         )
     return rows

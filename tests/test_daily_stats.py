@@ -538,3 +538,22 @@ def test_planned_house_flows_balance():
     assert planned_house_flows(row) == pytest.approx((0.0, 0.6))
     # charge override (caller's delivered add-back reversal) replaces grid_charge_kwh
     assert planned_house_flows(row, charge_kwh=1.0) == pytest.approx((0.5, 0.3))
+
+
+def test_baseline_by_day_nets_import_and_export_slots():
+    h = [
+        {"start": "2026-07-20T10:00:00+02:00", "price": 0.30, "load_kwh": 2.0, "pv_kwh": 0.5},
+        {"start": "2026-07-20T12:00:00+02:00", "price": 0.20, "load_kwh": 0.5, "pv_kwh": 3.0, "mode": "actual"},
+        {"start": "2026-07-20T14:00:00+02:00", "price": 0.20, "load_kwh": 9.0, "pv_kwh": 0.0, "estimated": True},
+    ]
+    out = daily_stats.baseline_by_day(h, CEST, lambda s, p: 0.10)
+    assert out == {date(2026, 7, 20): pytest.approx(-1.5 * 0.30 + 2.5 * 0.10)}
+
+
+def test_merge_emits_savings_vs_baseline():
+    actual = daily_stats.new_day_totals()
+    actual.update({"house_cost_eur": 3.0, "house_revenue_eur": 1.0})
+    rows = daily_stats.merge_days({}, {}, actual, date(2026, 7, 20), baseline={date(2026, 7, 20): -5.0})
+    assert rows[0]["baseline_house_net_eur"] == pytest.approx(-5.0)
+    assert rows[0]["savings_eur"] == pytest.approx(3.0)
+    assert daily_stats.merge_days({}, {}, actual, date(2026, 7, 20))[0]["savings_eur"] is None

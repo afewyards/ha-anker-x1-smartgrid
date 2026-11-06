@@ -142,3 +142,22 @@ def test_subtitle_net_reads_the_whole_house_basis():
     net = _card()["variables"]["NET"]
     assert "house_net_eur" in net
     assert "rows[i].net_eur" not in net
+
+
+def test_header_shows_today_and_tomorrow_net_and_kwh():
+    card = _card()
+    v = card["variables"]
+    for name in ("NET_TOMORROW", "KWH_TODAY", "KWH_TOMORROW"):
+        assert name in v, name
+    assert "house_net_eur" in v["NET_TOMORROW"]
+    for name in ("KWH_TODAY", "KWH_TOMORROW"):
+        assert "!H0[i].estimated" in v[name] and "load_kwh" in v[name], name
+    cfg = card["card"]["apex_config"]
+    assert "KWH_TODAY" in cfg["title"]["text"] and "NET" in cfg["title"]["text"]
+    sub = cfg["subtitle"]["text"]
+    assert "KWH_TOMORROW" in sub and "NET_TOMORROW" in sub
+    assert "KWH_TOMORROW == null ? ''" in sub
+    for name in ("SAVED", "SAVED_TOMORROW"):
+        assert "savings_eur" in v[name], name
+    assert "SAVED" in cfg["title"]["text"]
+    assert "SAVED_TOMORROW" in sub

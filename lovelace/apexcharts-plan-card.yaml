@@ -65,6 +65,15 @@ variables:
   # utility meter. net_eur next to it is the narrower battery cash basis and
   # can differ by several euro on the same day.
   NET: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].house_net_eur))) return Number(rows[i].house_net_eur); } return null; })()"
+  SAVED: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].savings_eur))) return Number(rows[i].savings_eur); } return null; })()"
+  # Tomorrow's house net, same row lookup as NET but for local date + 1.
+  NET_TOMORROW: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); n.setDate(n.getDate() + 1); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].house_net_eur))) return Number(rows[i].house_net_eur); } return null; })()"
+  SAVED_TOMORROW: "(function () { var e = states['sensor.smartgrid_daily_stats']; var rows = (e && e.attributes.days) || []; var n = new Date(); n.setDate(n.getDate() + 1); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); for (var i = 0; i < rows.length; i++) { if (rows[i].date === key && !isNaN(Number(rows[i].savings_eur))) return Number(rows[i].savings_eur); } return null; })()"
+  # House load (kWh) for the local day: horizon rows include measured past
+  # slots (mode 'actual') plus the plan's remainder. Estimated-tail rows are
+  # excluded; null when no row matches.
+  KWH_TODAY: "(function () { var H0 = states['sensor.smartgrid_plan'].attributes.horizon || []; var n = new Date(); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); var s = 0, c = 0; for (var i = 0; i < H0.length; i++) { var d = new Date(H0[i].start); var k = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); if (k === key && !H0[i].estimated && !isNaN(Number(H0[i].load_kwh))) { s += Number(H0[i].load_kwh); c++; } } return c ? s : null; })()"
+  KWH_TOMORROW: "(function () { var H0 = states['sensor.smartgrid_plan'].attributes.horizon || []; var n = new Date(); n.setDate(n.getDate() + 1); var key = n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2) + '-' + ('0' + n.getDate()).slice(-2); var s = 0, c = 0; for (var i = 0; i < H0.length; i++) { var d = new Date(H0[i].start); var k = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); if (k === key && !H0[i].estimated && !isNaN(Number(H0[i].load_kwh))) { s += Number(H0[i].load_kwh); c++; } } return c ? s : null; })()"
   # Predictor tier status (spec 2026-07-21). Guarded on both the entity and the
   # attribute so a restart mid-render shows "—" rather than "undefined".
   # Double-quoted on purpose: the ternary's " : " would otherwise terminate a
@@ -270,16 +279,25 @@ card:
       # Dashed (6) for the two calibration edges: they are a target, not
       # measured or projected data, and must not read as either.
       dashArray: [0, 0, 0, 0, 0, 0, 0, 6, 6]
-    subtitle:
-      # Today's net only — one number, green/red by sign. Reads "—" until the
+    title:
+      # Today's net € and load kWh, green/red by net sign. Reads "—" until the
       # stats table has published (first tick after a restart).
-      text: "${ NET != null ? 'Today ' + (NET >= 0 ? '+' : '') + NET.toFixed(2) + ' €' : 'Today —' }"
+      text: "${ 'Today ' + (NET != null ? (NET >= 0 ? '+' : '') + NET.toFixed(2) + ' €' : '—') + ' · ' + (KWH_TODAY != null ? KWH_TODAY.toFixed(1) + ' kWh' : '—') + (SAVED != null ? ' · saved ' + (SAVED >= 0 ? '+' : '') + SAVED.toFixed(2) + ' €' : '') }"
       align: left
       offsetY: 4
       style:
         fontSize: "13px"
         fontWeight: 600
         color: "${ NET != null && NET < 0 ? '#ef4444' : '#10b981' }"
+    subtitle:
+      # Tomorrow line; empty (header collapses) until real tariff rows exist for it.
+      text: "${ KWH_TOMORROW == null ? '' : 'Tomorrow ' + (NET_TOMORROW != null ? (NET_TOMORROW >= 0 ? '+' : '') + NET_TOMORROW.toFixed(2) + ' €' : '—') + ' · ' + KWH_TOMORROW.toFixed(1) + ' kWh' + (SAVED_TOMORROW != null ? ' · saved ' + (SAVED_TOMORROW >= 0 ? '+' : '') + SAVED_TOMORROW.toFixed(2) + ' €' : '') }"
+      align: left
+      offsetY: 20
+      style:
+        fontSize: "13px"
+        fontWeight: 600
+        color: "${ NET_TOMORROW != null && NET_TOMORROW < 0 ? '#ef4444' : '#10b981' }"
     legend:
       show: true
       position: bottom
