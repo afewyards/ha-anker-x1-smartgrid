@@ -557,3 +557,14 @@ def test_merge_emits_savings_vs_baseline():
     assert rows[0]["baseline_house_net_eur"] == pytest.approx(-5.0)
     assert rows[0]["savings_eur"] == pytest.approx(3.0)
     assert daily_stats.merge_days({}, {}, actual, date(2026, 7, 20))[0]["savings_eur"] is None
+
+
+def test_merge_ignores_baseline_for_past_days():
+    past = daily_stats.new_day_totals()
+    past.update({"house_cost_eur": 3.0, "house_revenue_eur": 1.0})
+    today = daily_stats.new_day_totals()
+    today.update({"house_cost_eur": 3.0, "house_revenue_eur": 1.0})
+    d0, d1 = date(2026, 7, 19), date(2026, 7, 20)
+    rows = daily_stats.merge_days({d0: past}, {}, today, d1, baseline={d0: -2.0, d1: -5.0})
+    assert rows[0]["baseline_house_net_eur"] is None and rows[0]["savings_eur"] is None
+    assert rows[1]["baseline_house_net_eur"] == pytest.approx(-5.0)

@@ -233,7 +233,8 @@ def baseline_by_day(horizon: list[dict] | None, tz: tzinfo, export_price_at) -> 
 
     Every non-estimated row counts, measured ``actual`` and already-started
     slots included.  ``export_price_at`` has the same post-fee contract as in
-    :func:`aggregate_planned_days`.
+    :func:`aggregate_planned_days`.  :func:`merge_days` ignores past days: the
+    horizon covers them only partially.
     """
     out: dict[date, float] = {}
     for row in horizon or []:
@@ -321,7 +322,7 @@ def merge_days(
         p_hc = p["house_cost_eur"] if p else 0.0
         p_hr = p["house_revenue_eur"] if p else 0.0
         house_net = round((a_hr - a_hc) + (p_hr - p_hc), 3)
-        base = (baseline or {}).get(day)
+        base = (baseline or {}).get(day) if day >= today else None
         rows.append(
             {
                 "date": day.isoformat(),
