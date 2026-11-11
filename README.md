@@ -121,6 +121,8 @@ The `sensor.smartgrid_daily_stats` entity exposes the per-day table as attribute
     - `battery_cost_eur` — what the stored kWh that left the pack cost to put in (grid at import price, solar at the export price it gave up), so losses and idle drain count
     - `battery_margin_eur` — `battery_value_eur` minus `battery_cost_eur`
 
+  Top-level, next to `days`: `battery_margin_30d_eur` is the sum of `battery_margin_eur` over the 30 local days ending today (today so far), `battery_margin_30d_days` is how many of those days have samples; both null when there is no data.
+
   Past days are measured, today is measured-so-far plus planned-remainder, future days are plan-only. Both € bases are net of `export_fee_eur_per_kwh`, so a utility reporting feed-in gross will read higher by fee × exported kWh
 - **`window_days`** — rolling history depth of the table, in days back from today
 

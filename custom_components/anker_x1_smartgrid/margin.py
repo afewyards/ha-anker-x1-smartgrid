@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, tzinfo
+from datetime import date, timedelta, tzinfo
 
 from .daily_stats import _parse
 from .dataquality import house_load_w
@@ -88,3 +88,13 @@ def battery_margin_by_day(
     for rec in out.values():
         rec["margin_eur"] = rec["value_eur"] - rec["cost_eur"]
     return out
+
+
+def margin_total(by_day: dict[date, dict] | None, today: date, days: int = 30) -> tuple[float | None, int | None]:
+    """Sum of ``margin_eur`` over the ``days`` local days ending ``today``, and how many had samples."""
+    if not by_day:
+        return None, None
+    have = [by_day[d] for d in (today - timedelta(n) for n in range(days)) if d in by_day]
+    if not have:
+        return None, None
+    return round(sum(r["margin_eur"] for r in have), 3), len(have)

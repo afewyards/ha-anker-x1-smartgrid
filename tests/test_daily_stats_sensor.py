@@ -35,6 +35,14 @@ def test_attributes_carry_the_table_and_the_window():
     assert attrs["window_days"] == daily_stats.WINDOW_DAYS
 
 
+def test_margin_30d_attributes():
+    sensor = X1DailyStatsSensor(_StubController({"battery_margin_30d": (1.234, 12)}), "entry")
+    attrs = sensor.extra_state_attributes
+    assert (attrs["battery_margin_30d_eur"], attrs["battery_margin_30d_days"]) == (1.234, 12)
+    attrs = X1DailyStatsSensor(_StubController({}), "entry").extra_state_attributes
+    assert attrs["battery_margin_30d_eur"] is None and attrs["battery_margin_30d_days"] is None
+
+
 def test_missing_table_is_zero_rows_not_a_crash():
     # First tick after a restart, before _publish_daily_stats has run.
     sensor = X1DailyStatsSensor(_StubController({}), "entry")

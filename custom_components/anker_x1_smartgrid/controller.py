@@ -81,6 +81,7 @@ _UNSET = object()
 # Bounded wait for the tick lock during unload/reload so release()/recorder.close
 # never interleave with an in-flight tick's engage_*; unblocks if a tick wedges.
 _SHUTDOWN_LOCK_TIMEOUT_S = 15.0
+_MARGIN_REPLAY_DAYS = 32  # 30 reported + 2 warm-up
 
 # ── RACE 1 (2026-07-29 add-battery-module restart) ──────────────────────────
 # Device-derived hardware scalars: these three CONF_* keys double as the
@@ -2327,6 +2328,7 @@ class Controller:
         # ok tick. The table is explicitly a history view: stale-but-present beats
         # blank, and the enabled path overwrites this a few lines later anyway.
         _prev_daily_stats = self.last_status.get("daily_stats")
+        _prev_margin_30d = self.last_status.get("battery_margin_30d")
         self.last_status = snapshot.build_status(
             now=now,
             setpoint=setpoint,
@@ -2365,6 +2367,7 @@ class Controller:
         )
         if _prev_daily_stats is not None:
             self.last_status["daily_stats"] = _prev_daily_stats
+            self.last_status["battery_margin_30d"] = _prev_margin_30d
         return self.last_status
 
     def _rollover_daily_ledgers(self, now: datetime) -> None:
@@ -2440,14 +2443,14 @@ class Controller:
     async def _refresh_battery_margin(self, now: datetime) -> None:
         """Rebuild the per-day battery margin at most every 5 minutes.
 
-        The replay reaches up to a day past the oldest reported day, so the
-        seeded inventory cost has mostly washed out by then. On error the fields
+        The replay starts two days before the oldest reported day, so the
+        seeded inventory cost has washed out by then. On error the fields
         publish None and the warning is logged once until a rebuild succeeds.
         """
         if self._battery_margin_at is not None and abs(now - self._battery_margin_at) < timedelta(minutes=5):
             return
         self._battery_margin_at = now
-        _since = (now - timedelta(days=max(daily_stats.WINDOW_DAYS, 7) + 1)).isoformat()
+        _since = (now - timedelta(days=_MARGIN_REPLAY_DAYS)).isoformat()
         try:
             self._battery_margin = await self._hass.async_add_executor_job(
                 self._read_battery_margin_sync, _since, dt_util.DEFAULT_TIME_ZONE
@@ -2624,6 +2627,9 @@ class Controller:
             dt_util.as_local(now).date(),
             baseline=daily_stats.baseline_by_day(horizon, _tz, _export_price_at),
             margin=self._battery_margin,
+        )
+        self.last_status["battery_margin_30d"] = margin_mod.margin_total(
+            self._battery_margin, dt_util.as_local(now).date(), 30
         )
 
     async def release(self) -> None:

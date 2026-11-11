@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from custom_components.anker_x1_smartgrid.margin import battery_margin_by_day
+from custom_components.anker_x1_smartgrid.margin import battery_margin_by_day, margin_total
 
 AMS = ZoneInfo("Europe/Amsterdam")
 CAP = 20.0
@@ -118,3 +118,16 @@ def test_merge_days_publishes_margin_for_measured_days_only():
     assert by_day[d1.isoformat()]["battery_out_kwh"] == 1.235
     assert by_day[d1.isoformat()]["battery_margin_eur"] == 0.2
     assert by_day[d2.isoformat()]["battery_margin_eur"] is None
+
+
+def test_margin_total_sums_last_30_days_only():
+    today = date(2026, 11, 11)
+    by_day = {today - timedelta(n): {"margin_eur": 1.0} for n in range(31)}
+    assert margin_total(by_day, today) == (30.0, 30)
+    del by_day[today - timedelta(3)]
+    assert margin_total(by_day, today) == (29.0, 29)
+
+
+def test_margin_total_none_without_data():
+    assert margin_total(None, date(2026, 11, 11)) == (None, None)
+    assert margin_total({}, date(2026, 11, 11)) == (None, None)
