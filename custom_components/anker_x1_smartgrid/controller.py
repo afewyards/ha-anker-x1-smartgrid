@@ -30,6 +30,7 @@ from . import (
     guard,
     intra_hour,
     load_adapt,
+    margin as margin_mod,
     ml_status,
     occupancy,
     optimize as optimize_mod,
@@ -191,6 +192,9 @@ class Controller:
     _running_rows_at: datetime | None = None
     _past_actuals_slot_cache: dict | None = None
     _past_actuals_slot_minutes: int | None = None
+    _battery_margin: dict[date, dict] | None = None
+    _battery_margin_at: datetime | None = None
+    _battery_margin_failed = False
 
     def __init__(
         self,
@@ -324,6 +328,10 @@ class Controller:
         # _seed_house_ledger_if_cold.
         self._house_ledger_seeded = False
         self._daily_actuals_day: str | None = None
+        # Per-day battery margin; rebuilt from samples at most every 5 min.
+        self._battery_margin: dict[date, dict] | None = None
+        self._battery_margin_at: datetime | None = None
+        self._battery_margin_failed = False
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
         # NOT persisted.  Recorder load_w / metered-net PnL / last_status all use
@@ -1832,6 +1840,7 @@ class Controller:
         # key moves. Placed right after the ledger rollover so the cache and
         # the ledger agree on which day "today" is.
         await self._refresh_daily_actuals(now)
+        await self._refresh_battery_margin(now)
 
         # Cash ledger: realized battery €-flows, accumulated on every enabled
         # tick past the failsafe guard — independent of the executor branches
@@ -2424,6 +2433,32 @@ class Controller:
             return
         self._seed_house_ledger_if_cold(dt_util.as_local(now).date())
 
+    def _read_battery_margin_sync(self, since_iso: str, tz) -> dict[date, dict]:
+        rows = self._recorder.read_feature_rows(since_iso)
+        return margin_mod.battery_margin_by_day(rows, self.cfg.capacity_kwh, tz, self.cfg.export_fee_eur_per_kwh)
+
+    async def _refresh_battery_margin(self, now: datetime) -> None:
+        """Rebuild the per-day battery margin at most every 5 minutes.
+
+        The replay reaches up to a day past the oldest reported day, so the
+        seeded inventory cost has mostly washed out by then. On error the fields
+        publish None and the warning is logged once until a rebuild succeeds.
+        """
+        if self._battery_margin_at is not None and abs(now - self._battery_margin_at) < timedelta(minutes=5):
+            return
+        self._battery_margin_at = now
+        _since = (now - timedelta(days=max(daily_stats.WINDOW_DAYS, 7) + 1)).isoformat()
+        try:
+            self._battery_margin = await self._hass.async_add_executor_job(
+                self._read_battery_margin_sync, _since, dt_util.DEFAULT_TIME_ZONE
+            )
+            self._battery_margin_failed = False
+        except Exception:
+            if not self._battery_margin_failed:
+                _LOGGER.warning("daily stats: battery margin build failed", exc_info=True)
+            self._battery_margin_failed = True
+            self._battery_margin = None
+
     def _seed_house_ledger_if_cold(self, today: date) -> None:
         """One-shot: fill today's WHOLE-HOUSE ledger legs from recorded samples.
 
@@ -2588,6 +2623,7 @@ class Controller:
             _today_totals,
             dt_util.as_local(now).date(),
             baseline=daily_stats.baseline_by_day(horizon, _tz, _export_price_at),
+            margin=self._battery_margin,
         )
 
     async def release(self) -> None:

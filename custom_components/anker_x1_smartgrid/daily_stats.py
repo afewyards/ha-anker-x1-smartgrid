@@ -288,8 +288,12 @@ def merge_days(
     today: date,
     window_days: int = WINDOW_DAYS,
     baseline: dict[date, float] | None = None,
+    margin: dict[date, dict] | None = None,
 ) -> list[dict]:
     """Stitch measured past / mixed today / planned future into one table.
+
+    ``margin`` is ``margin.battery_margin_by_day`` output; its four ``battery_*``
+    fields are measured only, so they are None on future days and days without samples.
 
     ``today_totals`` is the LIVE ledger's ``DayTotals`` for ``today``; it wins
     over any ``actual[today]`` the samples pass produced, so the table's today
@@ -323,6 +327,7 @@ def merge_days(
         p_hr = p["house_revenue_eur"] if p else 0.0
         house_net = round((a_hr - a_hc) + (p_hr - p_hc), 3)
         base = (baseline or {}).get(day) if day >= today else None
+        m = (margin or {}).get(day) if day <= today else None
         rows.append(
             {
                 "date": day.isoformat(),
@@ -351,6 +356,10 @@ def merge_days(
                 "planned_house_net_eur": round(p_hr - p_hc, 3) if p is not None else None,
                 "baseline_house_net_eur": round(base, 3) if base is not None else None,
                 "savings_eur": round(house_net - base, 3) if base is not None else None,
+                "battery_out_kwh": round(m["out_kwh"], 3) if m else None,
+                "battery_value_eur": round(m["value_eur"], 3) if m else None,
+                "battery_cost_eur": round(m["cost_eur"], 3) if m else None,
+                "battery_margin_eur": round(m["margin_eur"], 3) if m else None,
             }
         )
     return rows
