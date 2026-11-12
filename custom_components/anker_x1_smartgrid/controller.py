@@ -9,6 +9,7 @@ import importlib.util
 import json
 import logging
 import math
+from collections import deque
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
@@ -140,6 +141,9 @@ _PERSIST_GROUPS = [
     # export_state: isolated (its own try/except in the original).
     [
         ("export_state", "export_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v), False),
+    ],
+    [
+        ("hold_state", "hold_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v), False),
     ],
     # E3: per-day export PnL accumulator — a mid-day HA restart must not zero
     # it. Grouped exactly as the original: a corrupt today_export_pnl_eur also
@@ -292,6 +296,15 @@ class Controller:
         # C3 — export dwell/hysteresis state (persisted across ticks).
         # Initial state: disengaged, state_since = construction time.
         self.export_state: ExportState = ExportState.initial(dt_util.utcnow())
+        # Low-power hold dwell/hysteresis state (engaged = holding; persisted).
+        self.hold_state: ExportState = ExportState.initial(dt_util.utcnow())
+        # (ts, house load − PV in W) per fresh tick, for the hold's rolling mean.
+        self._hold_deficit_w: deque[tuple[datetime, float]] = deque(
+            maxlen=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN * 60 // const.TICK_SECONDS
+        )
+        self._last_pv_w: float = 0.0
+        # (discharge_value, stored_value) €/DC-kWh the executor compared this tick.
+        self.last_hold_values: tuple[float | None, float | None] = (None, None)
         # E3 — realized-arbitrage PnL ledger.
         # Accumulated export PnL for the current local day (euros).
         # Reset to 0.0 on local-day rollover; G2 reads this for the sensor attribute.
@@ -1151,13 +1164,19 @@ class Controller:
                 # by expected_soc_delta_kwh on the deficit branch); static scalar when
                 # the flag is off (_eta_d_at's own gate) — byte-identical parity.
                 _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
-                _expected_dc = soc_drift.expected_soc_delta_kwh(
-                    _fc_pv_w,
-                    _fc_load_w,
-                    _dt_h,
-                    self.cfg.eta_charge,
-                    _eta_d,
-                    idle_drain_w=self.cfg.idle_drain_w,
+                # A held step (hold_state is still last tick's here) left the pack idle on
+                # purpose: only the standby drain is expected.
+                _expected_dc = (
+                    -self.cfg.idle_drain_w * _dt_h / 1000.0
+                    if self.hold_state.engaged
+                    else soc_drift.expected_soc_delta_kwh(
+                        _fc_pv_w,
+                        _fc_load_w,
+                        _dt_h,
+                        self.cfg.eta_charge,
+                        _eta_d,
+                        idle_drain_w=self.cfg.idle_drain_w,
+                    )
                 )
                 _measured_dc = soc_drift.measured_soc_delta_kwh(
                     _soc_now,
@@ -1508,7 +1527,12 @@ class Controller:
                 # every later disabled tick fall back to the live actuator flag so we do
                 # not clobber a user-set manual/modbus mode.
                 _was_engaged = self._actuator.engaged or (
-                    _first_tick and (self.plan.state is ControllerState.FORCING or self.export_state.engaged)
+                    _first_tick
+                    and (
+                        self.plan.state is ControllerState.FORCING
+                        or self.export_state.engaged
+                        or self.hold_state.engaged
+                    )
                 )
                 # Reset export dwell state so a later re-enable starts clean (mirror FORCING/C3).
                 await executor.safe_release(
@@ -1832,6 +1856,8 @@ class Controller:
         # import (a function) to avoid shadowing it within tick().
         _house_load_now_w = self._compute_house_load_w(inputs)
         self._hour_acc.add(now, _house_load_now_w)
+        if self._house_load_fresh:
+            self._hold_deficit_w.append((now, _house_load_now_w - self._last_pv_w))
 
         # E3 + cash ledger: reset ALL per-day € accumulators on local-day
         # rollover, BEFORE accumulating this tick.
@@ -2073,11 +2099,12 @@ class Controller:
 
         self.plan = new_plan
         await self._persist()
+        _recorded_state = "hold" if self.hold_state.engaged else "passive" if _engage_failed else new_plan.state.value
         await self._record_sample(
             now,
             inputs,
             setpoint=setpoint,
-            state="passive" if _engage_failed else new_plan.state.value,
+            state=_recorded_state,
             weather_entry=_weather_entry,
             export_setpoint_w=_export_setpoint_w,
             export_kwh=_export_kwh,
@@ -2101,7 +2128,7 @@ class Controller:
             tomorrow_total=tomorrow_total,
             price_window=_price_window_e,
             setpoint=setpoint,
-            state="passive" if _engage_failed else new_plan.state.value,
+            state=_recorded_state,
             horizon_mode=_horizon_mode_e,
         )
 
@@ -2145,6 +2172,9 @@ class Controller:
         # terminal_v_hi. Only "daily_stats" is deliberately carried across the
         # rebuild (see _status). A dedicated sensor reads the key.
         self.last_status["house_load_w"] = _house_load_now_w
+        self.last_status["low_power_hold_active"] = self.hold_state.engaged
+        self.last_status["hold_discharge_value_eur_per_kwh"] = self.last_hold_values[0]
+        self.last_status["hold_stored_value_eur_per_kwh"] = self.last_hold_values[1]
         # Task 4: surface the DP optimizer's terminal water-value artefacts for
         # dashboard/diagnostic observability only. Absent from _dp_out on DP
         # failure (dict left empty at declaration) → last_status carries None.
@@ -2843,6 +2873,7 @@ class Controller:
         )
         house_load_w = max(0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0))
         self._last_house_load_w = house_load_w
+        self._last_pv_w = pv_w
         self._house_load_fresh = True
         return house_load_w
 

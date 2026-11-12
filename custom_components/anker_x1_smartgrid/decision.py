@@ -449,6 +449,21 @@ def _dp_select_slots(
         dt_h=dt_h,
         eta_curve=eta_curve,
         terminal_segments=terminal_segments,
+        hold=(
+            [
+                _price_valid[h]
+                and optimize_mod.holds_at(
+                    window_price[h],
+                    (window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0,
+                    water_value,
+                    cfg,
+                    eta_curve,
+                )
+                for h in range(window_len)
+            ]
+            if cfg.low_power_hold and water_value is not None
+            else None
+        ),
     )
     schedule: list[float] = result["schedule"]
     export_kwh_by_hour: list[float] = result.get("export_schedule", [0.0] * window_len)
@@ -1337,6 +1352,7 @@ def compute_decision(
             eta_curve=eta_curve,
             est_slots=_est_slot_list,
             terminal_need_kwh=need_kwh,
+            hold_value=water_value if cfg.low_power_hold else None,
         )
     else:
         horizon = plan_mod.build_plan_horizon(
@@ -1355,5 +1371,6 @@ def compute_decision(
             delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
             now=inputs.now,
+            hold_value=water_value if cfg.low_power_hold else None,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve

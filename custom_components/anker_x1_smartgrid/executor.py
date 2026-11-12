@@ -18,7 +18,8 @@ mechanical ``self`` → ``controller`` move, not a rewrite.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from statistics import fmean
 from typing import TYPE_CHECKING
 
 from . import const, coordinator, energy, guard, optimize as optimize_mod, resolution, scheduler
@@ -39,8 +40,8 @@ async def safe_release(
     release: bool = True,
     reset_export: bool = True,
     reset_before_release: bool = False,
-) -> None:
-    """Best-effort inverter release + export dwell-state reset.
+) -> bool:
+    """Best-effort inverter release + export dwell-state reset; ``False`` if the release raised.
 
     Consolidates the try/``release_to_self()``/log-error +
     ``ExportState(engaged=False, state_since=now)`` reset pattern repeated
@@ -64,13 +65,19 @@ async def safe_release(
     """
     if reset_export and reset_before_release and controller.export_state.engaged:
         controller.export_state = ExportState(engaged=False, state_since=now)
+    released = True
     if release:
         try:
             await controller._actuator.release_to_self()
         except Exception:
             _LOGGER.error(context, exc_info=True)
+            released = False
+        else:
+            if controller.hold_state.engaged:
+                controller.hold_state = ExportState(engaged=False, state_since=now)
     if reset_export and not reset_before_release and controller.export_state.engaged:
         controller.export_state = ExportState(engaged=False, state_since=now)
+    return released
 
 
 def floor_rescue_needed(controller: Controller, soc: float | None) -> bool:
@@ -139,6 +146,43 @@ async def run_floor_rescue(controller: Controller, now: datetime) -> float | Non
     return controller._actuator.last_setpoint_w
 
 
+def hold_values(
+    controller: Controller,
+    now: datetime,
+    new_plan: PlanState,
+    slots: list[PriceSlot],
+    _dp_out: dict,
+    _slot_minutes: int,
+) -> tuple[float | None, float | None]:
+    """``(discharge_value, stored_value)`` in €/DC-kWh for the low-power hold.
+
+    ``discharge_value`` is ``None`` whenever a hold is not allowed: feature
+    off, a charge (FORCING covers calibration and the floor rescue) or an
+    export planned or still running, PV covering the house on the rolling
+    mean, or any input missing. Export's previous-tick state blocks too, so an
+    export winding down releases first instead of re-engaging in the same tick.
+    Stale house load only blocks once the rolling window has no fresh sample
+    left, so a sensor blip doesn't release the hold.
+    """
+    cfg = controller.cfg
+    stored = _dp_out.get("water_value")
+    price = resolution.price_at(slots, now, _slot_minutes)
+    window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
+    deficits = [w for t, w in controller._hold_deficit_w if now - t < window]
+    if (
+        not cfg.low_power_hold
+        or new_plan.state is ControllerState.FORCING
+        or controller.export_state.engaged
+        or resolution.floor_to_slot(now, _slot_minutes) in (_dp_out.get("export_request") or {})
+        or not deficits
+        or fmean(deficits) <= 0.0
+        or price is None
+        or stored is None
+    ):
+        return None, stored
+    return optimize_mod.discharge_value(price, fmean(deficits), cfg, controller._planner_curve()), stored
+
+
 async def run_forcing_and_export(
     controller: Controller,
     now: datetime,
@@ -166,6 +210,18 @@ async def run_forcing_and_export(
     _surplus_kwh_val: float | None = None
 
     _engage_failed = False
+    _prev_hold = controller.hold_state
+    _discharge_v, _stored_v = hold_values(controller, now, new_plan, slots, _dp_out, _slot_minutes)
+    controller.hold_state = scheduler.decide_hold_state(
+        controller.hold_state,
+        discharge_value=_discharge_v,
+        stored_value=_stored_v,
+        now=now,
+        cfg=controller.cfg,
+        slot_minutes=_slot_minutes,
+    )
+    _hold = controller.hold_state.engaged
+    controller.last_hold_values = (_discharge_v, _stored_v)
     if new_plan.state is ControllerState.FORCING:
         # Grid charging is grid import: bound the FORCING request by whichever
         # is tighter, the inverter rate or the grid connection's own rating
@@ -210,7 +266,8 @@ async def run_forcing_and_export(
         await safe_release(controller, now, release=False)
     else:
         setpoint = 0.0
-        if controller.plan.state is ControllerState.FORCING:
+        # A hold re-engages at 0 W below; releasing first would just flap the workmode.
+        if controller.plan.state is ControllerState.FORCING and not _hold:
             await safe_release(
                 controller,
                 now,
@@ -443,5 +500,25 @@ async def run_forcing_and_export(
                     "Actuator release_to_self failed (export disabled path)",
                     reset_before_release=True,
                 )
+
+        # Low-power hold: hold_values blocks on any planned or running export,
+        # so the export executor above never fires on a hold tick.
+        if _hold:
+            try:
+                await controller._actuator.engage_hold()
+            except Exception:
+                _LOGGER.error("Actuator engage_hold failed (low-power hold)", exc_info=True)
+                await safe_release(
+                    controller,
+                    now,
+                    "Actuator release_to_self failed (hold engage-failure recovery)",
+                    reset_export=False,
+                )
+        elif _prev_hold.engaged and _export_setpoint_w is None:
+            if not await safe_release(
+                controller, now, "Actuator release_to_self failed (hold exit)", reset_export=False
+            ):
+                # Still engaged at 0 W: stay in the hold state so the next tick retries the release.
+                controller.hold_state = _prev_hold
 
     return setpoint, _engage_failed, _export_setpoint_w, _export_kwh, _reserve_kwh_val, _surplus_kwh_val

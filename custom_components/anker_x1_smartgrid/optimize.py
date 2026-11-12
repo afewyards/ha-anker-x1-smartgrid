@@ -87,6 +87,16 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
     return v
 
 
+def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None) -> float:
+    """€ a DC kWh saves when discharged now to cover ``deficit_w`` of house load at ``price``."""
+    return price * _eta_discharge_at(deficit_w, cfg, eta_curve)
+
+
+def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, eta_curve=None) -> bool:
+    """Low-power hold rule: covering this deficit is worth less than keeping the stored kWh."""
+    return deficit_w > 0.0 and discharge_value(price, deficit_w, cfg, eta_curve) < water_value
+
+
 def overnight_terminal_segments(
     gap_start: datetime,
     pickup: datetime,
@@ -553,6 +563,7 @@ def optimize_grid(
     slots_per_day: int = 24,
     day_index: list[int] | None = None,
     eta_curve=None,
+    hold: list[bool] | None = None,
 ) -> dict:
     """Minimum-cost grid schedule for a forecast window (DP-exact).
 
@@ -609,6 +620,12 @@ def optimize_grid(
         that window, and if the reserve target then becomes unreachable the DP
         still surfaces ``infeasible=True`` via the existing infeasible path —
         the mask never silently swallows a floor or reserve breach.
+    hold :
+        Optional per-slot low-power-hold mask (see :func:`holds_at`).  In a
+        held deficit slot the charge/idle transitions keep the battery idle
+        (standby drain only) and import the deficit directly (booked like the
+        floor import); export transitions still discharge.  ``None`` is
+        byte-identical.
     feed_in :
         Optional per-hour dynamic feed-in tariff (€/kWh).  Must have exactly
         ``window_len`` elements when provided.
@@ -786,11 +803,17 @@ def optimize_grid(
             # Solar/load step — physics imported from regret.py (shared).
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
 
+            # Low-power hold: charge/idle transitions start from the idle pack,
+            # which still pays standby drain; the export branch keeps soc_after.
+            held_kwh = -net if hold is not None and hold[h] and net < 0.0 else 0.0
+            soc_pass = soc - cfg.idle_drain_w * dt_h / 1000.0 if held_kwh > 0.0 else soc_after
+
             # SoC drift-hedge: synthetic forward DC-kWh debit that sags the projected
             # trajectory so the DP books the cheapest in-range recovery (or trims export).
             # SoC-accounting ONLY. None / all-zero → byte-identical (parity exact).
             if hedge_drain_kwh is not None and hedge_drain_kwh[h] > 0.0:
                 soc_after = max(0.0, soc_after - hedge_drain_kwh[h])
+                soc_pass = max(0.0, soc_pass - hedge_drain_kwh[h])
 
             # Solar spill: AC kWh that cannot be stored (PV overflow to grid).
             # Computed unconditionally so the export block can use it to cap
@@ -835,14 +858,14 @@ def optimize_grid(
             # solar_export_ac / hour_credit are byte-identical to the pre-fix
             # path.  In the drain case (net<0) the clamp only RAISES soc_after,
             # which these raw-based quantities deliberately do not see.
-            max_grid_dc = _max_grid_dc(soc, soc_after, cfg, dt_h, eta_curve=eta_curve)
+            max_grid_dc = _max_grid_dc(soc, soc_pass, cfg, dt_h, eta_curve=eta_curve)
             # Action mask: block grid charge when this hour is not chargeable.
             # g_dc=0 (no-charge transition) is still evaluated so the battery
             # can discharge naturally; only g_dc>0 steps are suppressed.
             if chargeable is not None and not chargeable[h]:
                 max_grid_dc = 0.0
             if grid_charge_ceiling is not None:
-                max_grid_dc = min(max_grid_dc, max(0.0, grid_charge_ceiling[h] - soc_after))
+                max_grid_dc = min(max_grid_dc, max(0.0, grid_charge_ceiling[h] - soc_pass))
 
             # Economic-only floor (A1) aligned to regret.realized_grid_cost (A5):
             # the grid charge is applied FIRST (on the raw, possibly below-floor
@@ -862,14 +885,14 @@ def optimize_grid(
                 if g_dc > max_grid_dc + 1e-9:
                     break  # monotonically increasing — safe to stop
 
-                new_soc_pre = soc_after + g_dc
+                new_soc_pre = soc_pass + g_dc
                 # Floor import on the POST-charge SoC: the charge offsets the
                 # below-firmware-floor deficit first; only the remainder is a
                 # priced grid->load import.  Booked only where it physically
                 # occurs — below const.FIRMWARE_SOC_FLOOR — not below the
                 # soft cfg.soc_floor margin.  Zero whenever new_soc_pre >=
                 # firmware_floor_kwh.
-                floor_import_cost = max(0.0, firmware_floor_kwh - new_soc_pre) * price_h
+                floor_import_cost = (held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre)) * price_h
                 new_soc = max(new_soc_pre, firmware_floor_kwh)
                 new_b = to_bin(new_soc)
                 eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
@@ -889,7 +912,7 @@ def optimize_grid(
                     # backtracking can accumulate the exact values the DP used for routing,
                     # ensuring reported eur == best_cost exactly — even when hedge_drain_kwh
                     # sags a state below floor (MAJOR-1: no unhedged recompute in backtrack).
-                    floor_import_kwh_step = max(0.0, firmware_floor_kwh - new_soc_pre)
+                    floor_import_kwh_step = held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre)
                     par_h[new_b] = (b, g_ac, hour_credit, 0.0, floor_import_cost, floor_import_kwh_step)
 
             # Action class B: export discharge (e_dc > 0). Mutually exclusive with

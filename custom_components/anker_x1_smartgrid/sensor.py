@@ -350,6 +350,10 @@ class X1PlanSensor(_Base):
             # dashboard/diagnostic observability only.
             "efficiency_curve": self._controller.last_status.get("efficiency_curve"),
             "use_measured_eta": self._controller.last_status.get("use_measured_eta"),
+            # Low-power hold: discharge value is None whenever a hold isn't allowed this tick.
+            "low_power_hold_active": self._controller.last_status.get("low_power_hold_active"),
+            "hold_discharge_value_eur_per_kwh": self._controller.last_status.get("hold_discharge_value_eur_per_kwh"),
+            "hold_stored_value_eur_per_kwh": self._controller.last_status.get("hold_stored_value_eur_per_kwh"),
         }
 
 

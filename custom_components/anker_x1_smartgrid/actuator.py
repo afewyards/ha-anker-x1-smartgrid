@@ -1,8 +1,8 @@
 """Ordered actuation protocol via HA service calls (spec §3).
 
-Engage protocol (both charge and discharge/export share the same VPP path):
+Engage protocol (charge, discharge/export and hold share the same VPP path):
   1. switch turn_on  — enables modbus control (implicitly enters VPP mode)
-  2. number set_value — writes the signed setpoint (negative = charge, positive = export)
+  2. number set_value — writes the signed setpoint (negative = charge, positive = export, 0 = hold)
 
 Release protocol (from any engaged state):
   1. number set_value 0  — zero out the setpoint first
@@ -132,6 +132,14 @@ class Actuator:
         if setpoint_w <= 0:
             raise ValueError("export-only: setpoint must be > 0")
         await self._engage(setpoint_w)
+
+    async def engage_hold(self) -> None:
+        """Engage VPP control at setpoint 0: the battery idles and the grid serves the house.
+
+        The deliberate form of the stuck-at-0 state ``release_to_self`` warns
+        about; the inverter's comms watchdog reverts it if HA goes away.
+        """
+        await self._engage(0.0)
 
     async def release_to_self(self) -> None:
         """Release VPP control and restore a passive workmode.

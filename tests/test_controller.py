@@ -686,6 +686,7 @@ async def test_persist_writes_wrapped_payload():
         "plan",
         "enabled",
         "export_state",
+        "hold_state",
         "today_export_pnl_eur",
         "export_pnl_day",
         "today_charge_cost_eur",

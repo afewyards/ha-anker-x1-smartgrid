@@ -306,6 +306,15 @@ DEFAULT_LOAD_ADAPT_PARTIAL_HOUR = False
 CONF_USE_MEASURED_ETA = "use_measured_eta"
 DEFAULT_USE_MEASURED_ETA = False
 
+# Low-power hold: idle the battery (VPP, setpoint 0) while price × eta_discharge
+# at the live deficit is worth less than a stored kWh. Off = today's passive path.
+CONF_LOW_POWER_HOLD = "low_power_hold"
+DEFAULT_LOW_POWER_HOLD = False
+# A hold releases only once discharging beats the stored value by this much (€/DC-kWh).
+LOW_POWER_HOLD_RELEASE_MARGIN_EUR_PER_KWH = 0.02
+# Rolling window over the live house deficit, so a kettle or compressor start doesn't flip it.
+LOW_POWER_HOLD_LOAD_WINDOW_MIN = 5
+
 # Static tariff mode defaults.  offpeak price 0.0 = flat-only; export 0.0 = no
 # export credit and never mirrors import (mirror = NL salderen assumption).
 DEFAULT_PRICE_MODE = PRICE_MODE_SENSOR

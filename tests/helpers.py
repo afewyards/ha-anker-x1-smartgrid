@@ -84,6 +84,14 @@ class StubActuator:
         self.last_setpoint_w = setpoint_w
         self.engaged = True
 
+    async def engage_hold(self) -> None:
+        if "engage_hold" in self.fail_on:
+            self.calls.append(("engage_hold_attempt",))
+            raise RuntimeError("modbus busy")
+        self.calls.append(("engage_hold",))
+        self.last_setpoint_w = 0.0
+        self.engaged = True
+
     async def release_to_self(self) -> None:
         if "release_to_self" in self.fail_on:
             self.calls.append(("release_to_self_attempt",))

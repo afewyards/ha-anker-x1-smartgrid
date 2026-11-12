@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from . import const
 from .interp import MidpointLinear
 from .models import Config, ForecastInterval, PriceSlot
+from .optimize import holds_at
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
 from .resolution import floor_to_slot, hour_floor
 
@@ -135,6 +136,7 @@ def build_plan_horizon(
     est_starts: frozenset | None = None,
     terminal_need_kwh: float = 0.0,
     now: datetime | None = None,
+    hold_value: float | None = None,
 ) -> list[dict]:
     """Join price/PV/load/charge-plan into an hourly horizon for visualization.
 
@@ -220,6 +222,10 @@ def build_plan_horizon(
     separately via ``delivered_by_hour``, so the two are disjoint in time and sum
     to the slot total.  ``now=None`` models every slot in full (parity-safe), as
     do all rows once ``now`` has passed their end or not yet reached their start.
+
+    ``hold_value`` (€/DC-kWh, ``None`` = low-power hold off) applies
+    :func:`optimize.holds_at` per slot: a held deficit slot draws nothing
+    from the battery, as the live executor and the DP do.
 
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
@@ -379,6 +385,17 @@ def build_plan_horizon(
         solar_charge_w = min(solar_surplus, cfg.max_charge_w, headroom_w)
         grid_charge_w = 0.0
         self_discharge_w = 0.0
+        # Export to grid (NET-EXPORT: positive setpoint = export after serving house).
+        grid_export_w = exp_by_hour.get(slot_key, 0.0)
+        # An export serves the house from the battery, live and in the DP, so it never holds.
+        held = (
+            hold_value is not None
+            and not is_grid
+            and grid_export_w <= 0.0
+            and iv is not None
+            and iv.load_w > iv.pv_w
+            and holds_at(slot.price, iv.load_w - iv.pv_w, hold_value, cfg, eta_curve)
+        )
         if is_grid:
             grid_request_w = req_by_hour.get(slot_key, cfg.max_charge_w)
             # GRID stops at the solar-reservation ceiling for this hour (leave room
@@ -401,10 +418,8 @@ def build_plan_horizon(
                     ceil_headroom_w - solar_charge_w,
                 ),
             )
-        elif iv is not None and iv.load_w > iv.pv_w:
+        elif iv is not None and iv.load_w > iv.pv_w and not held:
             self_discharge_w = min(iv.load_w - iv.pv_w, cfg.max_charge_w)
-        # Export to grid (NET-EXPORT: positive setpoint = export after serving house).
-        grid_export_w = exp_by_hour.get(slot_key, 0.0)
         total_w = solar_charge_w + grid_charge_w
         if cap_wh > 0:
             # eta_curve (measured, power-dependent) overrides the static scalars
@@ -414,11 +429,11 @@ def build_plan_horizon(
             # max_charge_w is used as an approximate discharge cap by design (no separate max_discharge_w config).
             _eta_d = eta_discharge if eta_curve is None else eta_curve.eta_discharge(self_discharge_w)
             soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * model_h / cap_wh * 100.0
-            if self_discharge_w > 0:
+            if self_discharge_w > 0 or held:
                 # Constant inverter-standby DC drain (cfg.idle_drain_w, ~130 W live) paid
-                # whenever the battery passively discharges to cover a net AC deficit.
-                # DC-side term: NOT divided by eta_discharge. Not paid on charge/export
-                # slots (self_discharge_w is 0 there). idle_drain_w=0.0 default -> no-op.
+                # whenever the battery passively discharges to cover a net AC deficit,
+                # or idles through a held one. DC-side term: NOT divided by eta_discharge.
+                # Not paid on charge slots. idle_drain_w=0.0 default -> no-op.
                 soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * model_h / 1000.0)
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
@@ -532,6 +547,7 @@ def build_display_horizon(
     eta_curve=None,
     est_slots: list[PriceSlot] | None = None,
     terminal_need_kwh: float = 0.0,
+    hold_value: float | None = None,
 ) -> list[dict]:
     """Two-day self-consumption display horizon (PV + load + discharge-aware SoC).
 
@@ -573,6 +589,7 @@ def build_display_horizon(
             ``estimated``). ``None``/empty (default) is a no-op — byte-identical.
         terminal_need_kwh: Forwarded straight through to ``build_plan_horizon``'s
             ``terminal_need_kwh`` (only meaningful together with ``est_slots``).
+        hold_value: Low-power hold stored value, forwarded to ``build_plan_horizon``.
         slot_minutes: The live/resolved slot width in minutes (15/30/60), passed
             straight through to ``build_display_intervals`` and
             ``build_plan_horizon``.  Without this, both callees fell back to
@@ -639,4 +656,5 @@ def build_display_horizon(
         est_starts=est_starts,
         terminal_need_kwh=terminal_need_kwh,
         now=now,
+        hold_value=hold_value,
     )
