@@ -76,10 +76,10 @@ const STYLE = `<style>
   --sg-dim: var(--secondary-text-color, #a59f92);
   --sg-rule: var(--divider-color, #3a3833);
   --sg-bg: var(--ha-card-background, var(--card-background-color, #1a1917));
-  --sg-charge: var(--energy-battery-in-color, #4fb3c8);
-  --sg-house: var(--energy-battery-out-color, #d9d2c4);
-  --sg-export: var(--energy-grid-return-color, #e8743b);
-  --sg-sun: var(--energy-solar-color, #f2b134);
+  --sg-charge: var(--smartgrid-power-charge-color, #4fb3c8);
+  --sg-house: var(--smartgrid-power-house-color, #b3aa98);
+  --sg-export: var(--smartgrid-power-export-color, #e8743b);
+  --sg-sun: var(--smartgrid-power-solar-color, #f2b134);
   --sg-pos: var(--success-color, #6dbf8b);
   --sg-neg: var(--warning-color, #e8743b);
 }

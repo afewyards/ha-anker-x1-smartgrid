@@ -150,7 +150,7 @@ title: true                          # optional, shows "Power"; a string sets yo
 
 House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what the battery earned, with solar charge valued at the export price given up, so on sunny days the two don't add up exactly.
 
-Colours follow the theme's `--energy-battery-in-color` (battery level and charging), `--energy-battery-out-color`, `--energy-grid-return-color` and `--energy-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
+Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color` and `--smartgrid-power-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
 
 ## Add-on
 
