@@ -34,10 +34,11 @@ _SOC_DROP_PCT_PER_MIN = 1.0 / 25.0
 # 80-minute episode's DC side, eta lands ~0.87 (a plausible measured value,
 # distinct from the static eta_charge/round_trip_eff fallback).
 _RESIDUAL_W = 95.7
-# AC-side battery power the inverter reports == what reaches the house, so the
-# pack (240 W gross, 110 W debited) drains faster than it delivers, as on real
-# hardware. The agreement gate sees 110/95.7 == 1/0.87 and lets the run in.
-_BATT_W = _RESIDUAL_W
+# batt_w sits BETWEEN the pack and the house, as on real hardware: residual_w
+# is batt_w less the reported inverter_loss, and the pack (240 W gross, 110 W
+# debited) loses more than batt_w again. The agreement gate reads batt_w and
+# sees 110/102 == 1.08; the eta ratio reads residual_w and lands on 0.87.
+_BATT_W = 102.0
 _EPISODE_MINUTES = 80  # 80 * (1/25)%/min == 3.2% dSoC, clears EFFICIENCY_DSOC_GATE_PCT=3.0
 _IDLE_DRAIN_W = 130.0
 

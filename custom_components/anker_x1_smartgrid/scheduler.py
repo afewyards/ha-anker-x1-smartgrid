@@ -297,6 +297,7 @@ def decide_hold_state(
     now: datetime,
     cfg: Config,
     slot_minutes: int = 60,
+    dp_holds: bool = True,
 ) -> ExportState:
     """Next low-power-hold state (``engaged`` = holding), on the export dwell pattern.
 
@@ -305,6 +306,10 @@ def decide_hold_state(
     when discharging is worth less than the stored kWh; release only once it
     beats the stored kWh by ``LOW_POWER_HOLD_RELEASE_MARGIN_EUR_PER_KWH``.
     Both economic flips wait out ``export_dwell_min``.
+
+    ``dp_holds`` False means the DP weighed a hold here and declined: treated
+    as an economic flip, not a blocker, so a DP that changes its mind between
+    ticks cannot flap the work mode.
     """
     if discharge_value is None or stored_value is None:
         return ExportState(engaged=False, state_since=now) if prev.engaged else prev
@@ -312,9 +317,9 @@ def decide_hold_state(
     if now - prev.state_since < timedelta(minutes=_dwell):
         return prev
     if prev.engaged:
-        if discharge_value > stored_value + const.LOW_POWER_HOLD_RELEASE_MARGIN_EUR_PER_KWH:
+        if not dp_holds or discharge_value > stored_value + const.LOW_POWER_HOLD_RELEASE_MARGIN_EUR_PER_KWH:
             return ExportState(engaged=False, state_since=now)
         return prev
-    if discharge_value < stored_value:
+    if dp_holds and discharge_value < stored_value:
         return ExportState(engaged=True, state_since=now)
     return prev

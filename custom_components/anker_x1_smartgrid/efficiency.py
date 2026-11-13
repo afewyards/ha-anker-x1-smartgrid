@@ -349,20 +349,18 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     power, because the curve is QUERIED at an AC deficit/load: the gross
     ΔSoC power sits a whole ``idle_drain_w`` above that axis (100 W is a
     quarter of the bottom bin), so binning on it files low-power runs under
-    the wrong power.
+    the wrong power.  shortcut: the debited DC power still sits ~1/eta (~12%)
+    above the AC power actually queried; upgrade to binning on ``batt_w``
+    itself if a bin edge is ever seen to straddle that gap.
 
     Also gated on instrumentation agreement, so integer-SoC quantization
     noise on short runs can't silently inflate ΔSoC-derived power into a
     higher bin: the debited ΔSoC-derived DC power must stay within
-    ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the DC power the CONFIGURED
-    efficiency implies for the run's mean ``|batt_w|``
-    (``batt_w/eta_d_static`` discharging, ``batt_w*eta_charge`` charging).
-    Anchoring on the prior rather than on ``batt_w`` itself is what keeps the
-    band from doubling as a hidden, tighter envelope: centred on 1.0 the same
-    ±25% admits only eta in ~[0.80, 1.25], so a pack whose real low-power eta
-    is 0.70 would have every run dropped and the bin filled from its
-    higher-power neighbours. Anchored, the admitted range is
-    ``eta_prior / 1.25 .. eta_prior / 0.8`` and follows the configured pack.
+    ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the run's mean ``|batt_w|``.
+    Debiting first is what makes that comparison fair — the gross figure
+    carries the standby drain, which at low power is a large share of the
+    draw and blew the band open on physics alone. See the constant's own note
+    for the limit this band still carries on ``batt_w``-style hardware.
     """
     if len(run) < 2:
         return None
@@ -379,7 +377,6 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     mean_abs_batt_w = fmean(abs(r["batt_w"]) for r in run)
     if mean_abs_batt_w <= 0.0:
         return None
-    eta_prior = cfg.eta_discharge_static() if dsoc_pct < 0.0 else cfg.eta_charge_safe()
     # Debit the modeled standby drain BEFORE the agreement check, so both sides
     # measure the same thing: conversion loss between the pack and batt_w. The
     # gross DC figure also carries idle drain, which at low power is a large
@@ -388,15 +385,7 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     if dc_kwh_eff <= 0.0:
         return None
     dc_power_w = dc_kwh_eff * 1000.0 / duration_h
-    # Agreement is measured against the DC power the CONFIGURED efficiency says
-    # batt_w should cost the pack, not against batt_w itself: the two meters sit
-    # a conversion loss apart, so centring the band on 1.0 would hide an eta
-    # band of roughly [0.80, 1.25] inside a +-25% "agreement" check, and reject
-    # every run of a pack whose real eta is poorer than that.
-    expected_dc_w = mean_abs_batt_w / eta_prior if dsoc_pct < 0.0 else mean_abs_batt_w * eta_prior
-    if expected_dc_w <= 0.0:
-        return None
-    agreement = dc_power_w / expected_dc_w
+    agreement = dc_power_w / mean_abs_batt_w
     if not (1.0 / const.EFFICIENCY_POWER_AGREEMENT_MAX <= agreement <= const.EFFICIENCY_POWER_AGREEMENT_MAX):
         return None
     ac_wh = 0.0

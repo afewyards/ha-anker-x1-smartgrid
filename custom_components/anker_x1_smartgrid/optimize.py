@@ -90,15 +90,17 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
 def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None) -> float:
     """€ a DC kWh saves when discharged now to cover ``deficit_w`` of house load at ``price``.
 
-    Covering ``deficit_w`` draws ``deficit_w/η_d + idle_drain_w`` of DC, and only
-    the ``deficit_w`` part reaches the house. A held pack pays no standby drain,
-    so that term does not cancel out of the hold comparison — it dilutes what a
-    stored kWh is worth, hardest at low power. ``idle_drain_w=0`` → ``price·η_d``.
+    Discharging spends ``deficit_w/η_d + idle_drain_w`` of DC and buys nothing.
+    Holding spends no DC but buys ``deficit_w + idle_drain_w`` from the grid —
+    the standby does not go away while held, the meter pays it instead of the
+    pack (measured: a held night imports ~90 W more than the house uses). So
+    the standby sits on BOTH sides and barely dilutes the stored kWh;
+    ``idle_drain_w=0`` → ``price·η_d``.
     """
     if deficit_w <= 0.0:
         return 0.0
     dc_w = deficit_w / _eta_discharge_at(deficit_w, cfg, eta_curve) + cfg.idle_drain_w
-    return price * deficit_w / dc_w
+    return price * (deficit_w + cfg.idle_drain_w) / dc_w
 
 
 def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, eta_curve=None) -> bool:
@@ -634,10 +636,12 @@ def optimize_grid(
         slots where holding is ALLOWED.  It is an extra action, never a
         constraint: in a masked deficit slot the charge/idle branch is
         enumerated both ways — passively discharging, and holding (battery
-        untouched, no standby drain, the deficit bought at that hour's price
-        and booked like the floor import) — and the DP keeps whichever is
-        cheaper including the continuation/terminal value, so it declines to
-        hold energy it has no later use for.  The held branch also respects
+        untouched, with the deficit AND the standby the pack would have paid
+        bought at that hour's price and booked like the floor import) — and
+        the DP keeps whichever is cheaper including the continuation/terminal
+        value, so it declines to hold energy it has no later use for.  Holding
+        moves the standby to the meter, it does not remove it.  The held
+        branch also respects
         ``grid_charge_ceiling`` — holding above the solar reservation blocks
         tomorrow's PV exactly as charging above it would.  Export transitions
         always discharge.  ``None`` is byte-identical.  When supplied, the result
@@ -848,7 +852,10 @@ def optimize_grid(
                 and net < 0.0
                 and (grid_charge_ceiling is None or soc_hold <= grid_charge_ceiling[h] + 1e-9)
             ):
-                hold_options = ((0.0, soc_after), (-net, soc_hold))
+                # The meter buys the deficit AND the standby the pack would
+                # otherwise have paid: holding moves that load, it does not
+                # remove it. SoC stays put either way.
+                hold_options = ((0.0, soc_after), (-net + cfg.idle_drain_w * dt_h / 1000.0, soc_hold))
 
             # Solar spill: AC kWh that cannot be stored (PV overflow to grid).
             # Computed unconditionally so the export block can use it to cap

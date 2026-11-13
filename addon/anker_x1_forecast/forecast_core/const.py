@@ -326,14 +326,26 @@ EFFICIENCY_DC_BIN_EDGES_W = [400.0, 800.0, 1500.0, 2500.0, 4000.0]
 EFFICIENCY_MIN_RUNS = 10
 EFFICIENCY_MIN_DC_KWH = 2.0
 EFFICIENCY_DSOC_GATE_PCT = 3.0
-# Per-run instrumentation-agreement gate: the ΔSoC-derived DC power must agree
-# with the run's mean |batt_w| (the measured DC-side power integral) within
-# this factor, both directions.  This is a coulomb-count vs power-integration
-# CONSISTENCY tolerance, not an efficiency floor — a clean run sits near 1.0
-# regardless of its eta (residual_w, not batt_w, carries the inverter loss).
-# Integer SoC (1% = 0.1 kWh) inflates ΔSoC on short runs, deflating eta AND
-# promoting runs into higher power bins; on lab data clean runs measured
-# 0.96-1.18 and quantization-poisoned runs 1.3-1.9.
+# Per-run instrumentation-agreement gate: the ΔSoC-derived DC power, standby
+# drain debited, must agree with the run's mean |batt_w| within this factor,
+# both directions.  Primarily a coulomb-count vs power-integration CONSISTENCY
+# tolerance: integer SoC (1% = 0.1 kWh) inflates ΔSoC on short runs, deflating
+# eta AND promoting runs into higher power bins; on lab data clean runs
+# measured 0.96-1.18 and quantization-poisoned runs 1.3-1.9, and the owner's
+# 30-day sample reproduces that (median 1.08, p10 0.97, p90 1.44).
+# shortcut: on this hardware batt_w is NOT the clean DC-side integral this gate
+# was designed around.  Measured over 148 runs, residual_w/batt_w is 0.972 --
+# the reported inverter_loss is ~3% -- while the pack loses ~8% more than
+# batt_w, so most of the conversion loss lands between the coulomb counter and
+# batt_w.  That makes the band double as an eta floor of about 1/1.25 = 0.80,
+# tighter than EFFICIENCY_ENVELOPE's 0.50: a pack whose real low-power eta is
+# below 0.80 would have every run dropped and its bins filled from higher-power
+# neighbours.  Widening the band to the envelope instead makes this gate reject
+# nothing at all (verified: identical bins to removing it) and drops the
+# measured 800-1500 W eta to 0.73, against ~0.85 implied by the owner's own
+# aggregate -- so the tolerance stays.  Upgrade when an AC-side battery power
+# independent of batt_w exists, which would let eta and consistency be gated
+# separately.
 EFFICIENCY_POWER_AGREEMENT_MAX = 1.25
 EFFICIENCY_ENVELOPE = (0.50, 1.02)
 EFFICIENCY_WINDOW_DAYS = 30

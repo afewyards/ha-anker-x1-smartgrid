@@ -160,8 +160,8 @@ def hold_values(
     ``discharge_value`` is ``None`` whenever a hold is not allowed: feature
     off, a charge (FORCING covers calibration and the floor rescue) or an
     export planned or still running, PV covering the house on the rolling
-    mean, SoC at or above this slot's solar-reservation ceiling, or any input
-    missing. Export's previous-tick state blocks too, so an export winding
+    mean, SoC above this slot's solar-reservation ceiling, no hold trajectory
+    published by the DP at all, or any input missing. Export's previous-tick state blocks too, so an export winding
     down releases first instead of re-engaging in the same tick. Stale house
     load only blocks once the rolling window has no fresh sample left, so a
     sensor blip doesn't release the hold.
@@ -187,7 +187,9 @@ def hold_values(
         or fmean(deficits) <= 0.0
         or price is None
         or stored is None
-        or (_ceiling is not None and soc is not None and soc >= _ceiling)
+        or _dp_out.get("held_slots") is None
+        # `>` not `>=`, to match the DP's own held branch at the boundary.
+        or (_ceiling is not None and soc is not None and soc > _ceiling)
     ):
         return None, stored
     # Concave in the deficit, and this is the 5-min mean while the DP used the
@@ -225,6 +227,9 @@ async def run_forcing_and_export(
     _engage_failed = False
     _prev_hold = controller.hold_state
     _discharge_v, _stored_v = hold_values(controller, now, new_plan, slots, _dp_out, _slot_minutes, inputs.soc)
+    # The DP weighed this slot against the whole horizon; the live rule may only
+    # refine what it chose, never hold a slot it turned down.
+    _dp_held = _dp_out.get("held_slots")
     controller.hold_state = scheduler.decide_hold_state(
         controller.hold_state,
         discharge_value=_discharge_v,
@@ -232,6 +237,7 @@ async def run_forcing_and_export(
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,
+        dp_holds=_dp_held is None or resolution.floor_to_slot(now, _slot_minutes) in _dp_held,
     )
     _hold = controller.hold_state.engaged
     controller.last_hold_values = (_discharge_v, _stored_v)

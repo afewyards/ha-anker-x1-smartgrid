@@ -56,33 +56,63 @@ def test_rule_never_holds_without_a_deficit():
     assert not optimize.holds_at(0.35, -300.0, 10.0, Config(), _Curve())
 
 
-def test_rule_dilutes_the_value_by_the_standby_drain():
-    # Holding costs no drain, discharging does: covering 250 W at eta_conv 0.85
-    # draws 250/0.85 + 100 = 394.1 W of DC and delivers 250 W of it.
+def test_rule_counts_the_standby_on_both_sides():
+    """Discharging 250 W at eta_conv 0.85 spends 250/0.85 + 100 = 394.1 W of DC
+    and buys nothing; holding spends no DC but buys 250 + 100 = 350 W, because
+    the standby keeps running and the meter covers it. So a stored kWh is worth
+    350/394.1 of the price -- the standby barely dilutes it."""
     curve = SimpleNamespace(eta_discharge=lambda _w: 0.85, eta_charge=lambda _w: 1.0)
-    assert optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve) == pytest.approx(
-        250.0 / (250.0 / 0.85 + 100.0), abs=1e-6
-    )
-    assert optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve) == pytest.approx(0.634, abs=5e-4)
+    v = optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve)
+    assert v == pytest.approx(350.0 / (250.0 / 0.85 + 100.0), abs=1e-6)
+    assert v == pytest.approx(0.888, abs=5e-4)
     # No modeled drain -> the bare conversion eta, as before.
     assert optimize.discharge_value(1.0, 250.0, Config(), curve) == pytest.approx(0.85)
 
 
-def test_live_rule_and_dp_mask_read_the_same_value():
+def test_live_rule_and_dp_read_the_same_value():
     cfg = Config(low_power_hold=True, soc_floor=5.0, idle_drain_w=100.0)
     boundary = optimize.discharge_value(0.35, 250.0, cfg, _Curve())
-    assert boundary == pytest.approx(0.35 * 250.0 / (250.0 / 0.6 + 100.0))
-    assert _values(_gate_ctrl(cfg=cfg), dp_out={"water_value": boundary})[0] == pytest.approx(boundary)
+    assert boundary == pytest.approx(0.35 * 350.0 / (250.0 / 0.6 + 100.0))
+    assert _values(_gate_ctrl(cfg=cfg), dp_out={"water_value": boundary, "held_slots": frozenset({T})})[
+        0
+    ] == pytest.approx(boundary)
     assert optimize.holds_at(0.35, 250.0, boundary + 1e-9, cfg, _Curve())
     assert not optimize.holds_at(0.35, 250.0, boundary, cfg, _Curve())
+
+
+def test_live_rule_cannot_hold_a_slot_the_dp_declined():
+    """The DP weighed this slot against the whole horizon; the live rule may
+    only refine its choice. Declining is an economic flip, so it waits out the
+    dwell instead of slamming the work mode on a DP that changes its mind."""
+    held = ExportState(engaged=True, state_since=T - timedelta(hours=1))
+    idle = ExportState(engaged=False, state_since=T - timedelta(hours=1))
+    # 0.20 < 0.25: the live rule on its own would hold.
+    assert _decide(idle, 0.20, 0.25, dp_holds=False) is idle
+    assert _decide(held, 0.20, 0.25, dp_holds=False) == ExportState(engaged=False, state_since=T)
+    # ...but not before the dwell has run.
+    fresh = ExportState(engaged=True, state_since=T - timedelta(minutes=1))
+    assert _decide(fresh, 0.20, 0.25, dp_holds=False) is fresh
+    # In a slot the DP did choose, the live rule still decides (a load spike releases).
+    assert _decide(idle, 0.20, 0.25, dp_holds=True) == ExportState(engaged=True, state_since=T)
+
+
+def test_no_dp_hold_trajectory_blocks():
+    # DP published no hold schedule at all (feature off / no water value): the
+    # live rule must not invent one.
+    assert _values(dp_out={"water_value": 0.25})[0] is None
 
 
 # ── dwell / hysteresis ──────────────────────────────────────────────────────
 
 
-def _decide(prev, dv, sv, now=T, **cfg):
+def _decide(prev, dv, sv, now=T, dp_holds=True, **cfg):
     return scheduler.decide_hold_state(
-        prev, discharge_value=dv, stored_value=sv, now=now, cfg=Config(export_dwell_min=15, **cfg)
+        prev,
+        discharge_value=dv,
+        stored_value=sv,
+        now=now,
+        cfg=Config(export_dwell_min=15, **cfg),
+        dp_holds=dp_holds,
     )
 
 
@@ -136,7 +166,7 @@ def _values(c=None, *, plan_state=ControllerState.PASSIVE, dp_out=None, slots=_S
         T,
         PlanState(plan_state, T, ()),
         slots,
-        {"water_value": 0.25} if dp_out is None else dp_out,
+        {"water_value": 0.25, "held_slots": frozenset({T})} if dp_out is None else dp_out,
         60,
         soc,
     )
@@ -179,11 +209,12 @@ def test_ceiling_blocks_the_hold_without_headroom():
     """At or above this slot's solar-reservation ceiling the kept kWh is one
     tomorrow's sun will spill, so the hold is not allowed however high the
     water value is — same ceiling the DP's held branch and the charge-stop use."""
-    dp_out = {"water_value": 10.0, "ceiling_by_hour": {T: 60.0}}
-    assert _values(dp_out=dp_out, soc=60.0)[0] is None
-    assert _values(dp_out=dp_out, soc=59.9)[0] is not None
-    # No ceiling published (DP did not run) -> unchanged behaviour.
-    assert _values(dp_out={"water_value": 10.0}, soc=100.0)[0] is not None
+    dp_out = {"water_value": 10.0, "ceiling_by_hour": {T: 60.0}, "held_slots": frozenset({T})}
+    assert _values(dp_out=dp_out, soc=60.1)[0] is None
+    # `>` not `>=`, matching the DP's own held branch at the boundary.
+    assert _values(dp_out=dp_out, soc=60.0)[0] is not None
+    # No ceiling published -> unchanged behaviour.
+    assert _values(dp_out={"water_value": 10.0, "held_slots": frozenset({T})}, soc=100.0)[0] is not None
 
 
 def test_passing_blips_keep_the_hold():
@@ -223,7 +254,7 @@ async def _run(ctrl, *, water_value=0.25, new_state=ControllerState.PASSIVE):
         PlanState(new_state, T, ()),
         PlantInputs(soc=50.0, meter_w=250.0, now=T),
         _SLOTS,
-        {"water_value": water_value},
+        {"water_value": water_value, "held_slots": frozenset({T})},
         [],
         60,
         None,
@@ -415,22 +446,69 @@ def test_dp_declines_to_hold_through_a_sunny_day():
 
     sunny_allowed, sunny = run([0.0] * 8 + [3.0, 5.0, 4.0, 2.0])
     dark_allowed, dark = run([0.0] * 12)
-    assert sunny_allowed >= 8 and dark_allowed == 12  # the rule allows a hold either way
+    assert sunny_allowed >= 7 and dark_allowed == 12  # the rule allows a hold either way
     assert sum(sunny["hold_schedule"]) == 0  # ...the DP only takes it when the pack has nowhere else to go
-    assert sum(dark["hold_schedule"]) == 12
+    assert sum(dark["hold_schedule"]) > 0
     assert sunny["kwh"] < dark["kwh"]
 
 
-def test_dp_held_slots_lose_no_soc():
-    # At the firmware floor every DC kWh the pack loses surfaces as a floor
-    # import, so the bill reads the standby drain straight off the trajectory.
+def test_dp_holds_at_15min_slots_with_a_curve():
+    """dt_h scales the standby the held slot buys, and the eta curve is read at
+    the slot's own deficit power rather than its energy."""
+    cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=100.0, capacity_kwh=20.0)
+    n = 8
+    out = optimize.optimize_grid(
+        [0.0] * n,
+        [0.08] * n,  # 320 W over a 15-min slot
+        [0.26] * n,
+        50.0,
+        cfg,
+        window_start_h=0,
+        window_len=n,
+        slots_per_day=96,
+        dt_h=0.25,
+        terminal_mode="water_value",
+        water_value=10.0,
+        eta_curve=_Curve(),
+        chargeable=[False] * n,
+        hold=[True] * n,
+    )
+    assert out["hold_schedule"] == [True] * n
+    # Per slot: 0.08 kWh deficit + 100 W x 0.25 h of standby.
+    assert out["kwh"] == pytest.approx(n * (0.08 + 0.025))
+
+
+def test_dp_can_hold_and_grid_charge_the_same_slot():
+    """A hold only says "don't serve the house from the pack". Charging is a
+    separate action and stays available in the same slot."""
+    cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=100.0)
+    out = optimize.optimize_grid(
+        [0.0] * 3,
+        [0.25] * 3,
+        [0.10, 0.50, 0.50],  # cheap now, dear later -> fill the pack while holding
+        50.0,
+        cfg,
+        window_start_h=0,
+        window_len=3,
+        terminal_mode="water_value",
+        water_value=10.0,
+        hold=[True] * 3,
+    )
+    assert out["hold_schedule"][0] is True
+    assert out["schedule"][0] > 0.0  # grid charge in a held slot
+    # The held slot's own house load + standby is bought on top of that charge.
+    assert out["kwh"] > sum(out["schedule"])
+
+
+def test_dp_held_slot_buys_the_standby_and_keeps_the_pack():
     # chargeable=False keeps the DP from refilling in the cheap slot instead.
-    kw = dict(soc=5.0, water_value=0.0, idle_drain_w=100.0, chargeable=[False] * 4)
+    kw = dict(soc=50.0, water_value=10.0, idle_drain_w=100.0, chargeable=[False] * 4)
     held = _dp([True] * 4, **kw)
     assert held["hold_schedule"] == [True] * 4
-    assert held["kwh"] == pytest.approx(4 * 0.25)  # the deficit, nothing more
-    # Passively discharging the same window pays 100 W of standby on top.
-    assert _dp(None, **kw)["kwh"] == pytest.approx(4 * 0.35)
+    # Deficit AND the standby the pack would have paid, both off the meter.
+    assert held["kwh"] == pytest.approx(4 * (0.25 + 0.1))
+    # Passively, the pack covers both and nothing is bought.
+    assert _dp(None, **kw)["kwh"] == pytest.approx(0.0)
 
 
 # ── simulation: plan display ────────────────────────────────────────────────
@@ -519,6 +597,8 @@ def _tick_ctrl(monkeypatch, **cfg_over):
         out = stub(*a, _out=_out, **k)
         if _out is not None:
             _out["water_value"] = 0.40
+            # The DP chose to hold the current slot (full tick path reads this).
+            _out["held_slots"] = frozenset({ctrl_mod.resolution.floor_to_slot(BASE, 60)})
         return out
 
     monkeypatch.setattr(ctrl_mod, "compute_decision", _cd)

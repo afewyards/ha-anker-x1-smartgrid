@@ -225,7 +225,8 @@ def build_plan_horizon(
     ``held_slots`` is the set of slot starts the DP's chosen trajectory holds
     (``None`` = low-power hold off, or the DP did not run): a held deficit slot
     draws nothing from the battery and loses no standby drain, as the live
-    executor and the DP do.
+    executor and the DP do — instead the meter buys the standby, reported per
+    row as ``hold_import_kwh``.
 
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
@@ -521,6 +522,9 @@ def build_plan_horizon(
                 "self_discharge_kwh": round(self_discharge_w * dt_h / 1000.0, 3),
                 # Level the hedge debit took off this row, so a roll-forward can tell it from drain.
                 "hedge_kwh": round(cfg.pct_to_kwh(unhedged_soc - soc_sim), 3),
+                # Grid energy a held slot buys that the pack would otherwise have
+                # paid: the standby keeps running, the meter covers it. 0 elsewhere.
+                "hold_import_kwh": round(cfg.idle_drain_w * model_h / 1000.0, 3) if held else 0.0,
             }
         )
     return out
