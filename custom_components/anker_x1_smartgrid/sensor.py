@@ -418,6 +418,24 @@ class X1DailyStatsSensor(_Base):
         }
 
 
+class X1PowerCardSensor(_Base):
+    """What the three-day power card draws; state is when days and hours were built."""
+
+    _unrecorded_attributes = frozenset({"battery", "days", "hours"})
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "power_card", "SmartGrid power card")
+
+    @property
+    def native_value(self):
+        return (self._controller.power_card or {}).get("built_at")
+
+    @property
+    def extra_state_attributes(self):
+        card = self._controller.power_card or {}
+        return {key: card.get(key) for key in ("battery", "days", "hours")}
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]["controller"]
     # Merged entry data (post Anker-device resolution) — same dict the
@@ -454,6 +472,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             X1PlanSensor(controller, entry.entry_id),
             X1FictivePlanSensor(controller, entry.entry_id),
             X1DailyStatsSensor(controller, entry.entry_id),
+            X1PowerCardSensor(controller, entry.entry_id),
             spec_sensors["regret_eur"],
             spec_sensors["dp_regret_7d"],
             spec_sensors["over_buy_kwh"],

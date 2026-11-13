@@ -1,0 +1,190 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>smartgrid-power-card harness</title>
+<!--
+  Fixture page for the power card, not served by Home Assistant.
+  ?case=normal|unpublished|dst|missing|noattrs  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
+-->
+<style>
+  body { margin: 0; padding: 4px; font-family: Roboto, system-ui, sans-serif; background: var(--primary-background-color); }
+  body.dark {
+    --primary-background-color: #000; --card-background-color: #1a1917; --ha-card-background: #1a1917;
+    --primary-text-color: #efe8da; --secondary-text-color: #8f887e; --divider-color: #2a2824;
+  }
+  body { --success-color: #4caf50; --warning-color: #ffa600; }
+  #status { position: fixed; left: 4px; bottom: 2px; font: 11px monospace; color: #888; }
+  body.light {
+    --primary-background-color: #fafafa; --card-background-color: #fff;
+    --primary-text-color: #212121; --secondary-text-color: #727272; --divider-color: rgba(0, 0, 0, .12);
+    --energy-battery-in-color: #f06292; --energy-battery-out-color: #4db6ac;
+    --energy-grid-return-color: #8353d1; --energy-solar-color: #ff9800;
+  }
+</style>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  window.STATUS = { size: '', error: 'no errors', rerender: '' };
+  window.showStatus = () => {
+    const el = document.getElementById('status');
+    if (el) el.textContent = `${STATUS.size} · ${STATUS.error} · ${STATUS.rerender}`;
+  };
+  const logError = console.error;
+  console.error = (...args) => {
+    STATUS.error = args.join(' ');
+    showStatus();
+    logError(...args);
+  };
+  addEventListener('error', (e) => {
+    STATUS.error = e.message;
+    showStatus();
+  });
+  const CASE = q.get('case') || 'normal';
+  if (q.get('fonts')) {
+    const f = q.get('fonts');
+    const css = [['400', 'Regular'], ['500', 'Medium'], ['700', 'Bold']]
+      .map(([w, n]) => `@font-face{font-family:Roboto;font-weight:${w};src:url(${f}/Roboto-${n}.woff2)}`).join('');
+    document.head.insertAdjacentHTML('beforeend', `<style>${css}</style>`);
+  }
+
+  const TZ = 'Europe/Amsterdam';
+  const H = 3600e3;
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+  function parts(t) {
+    const p = {};
+    for (const x of fmt.formatToParts(t)) p[x.type] = +x.value;
+    return p;
+  }
+  function offsetMin(t) {
+    const p = parts(t);
+    return (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - t) / 60000;
+  }
+  function midnight(date) {
+    const [y, m, d] = date.split('-').map(Number);
+    const u = Date.UTC(y, m - 1, d);
+    let t = u;
+    for (let i = 0; i < 2; i++) t = u - offsetMin(t) * 60000;
+    return t;
+  }
+  function iso(t) {
+    const p = parts(t);
+    const o = offsetMin(t);
+    const z = (n) => String(n).padStart(2, '0');
+    return `${p.year}-${z(p.month)}-${z(p.day)}T${z(p.hour)}:00:00${o < 0 ? '-' : '+'}${z(Math.abs(o) / 60)}:00`;
+  }
+  function addDays(date, k) {
+    const [y, m, d] = date.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + k)).toISOString().slice(0, 10);
+  }
+
+  const TODAY = CASE === 'dst' ? '2026-10-25' : '2026-11-13';
+  const NOW = midnight(TODAY) + (CASE === 'dst' ? 15 : 14) * H + 20 * 60e3;
+  Date.now = () => NOW;
+
+  const PRICE = [0.29, 0.28, 0.28, 0.27, 0.28, 0.3, 0.33, 0.4, 0.44, 0.41, 0.36, 0.35, 0.34, 0.32, 0.33, 0.35, 0.38, 0.43, 0.45, 0.44, 0.4, 0.37, 0.35, 0.32];
+  const USE = [0.35, 0.3, 0.3, 0.3, 0.3, 0.35, 0.55, 0.9, 0.85, 0.6, 0.5, 0.5, 0.55, 0.5, 0.45, 0.5, 0.7, 1.1, 1.2, 1.1, 0.9, 0.8, 0.6, 0.45];
+
+  function build() {
+    const dates = [-1, 0, 1].map((k) => addDays(TODAY, k));
+    const until = midnight(addDays(dates[2], 1));
+    // Before tomorrow's prices are out the planner's estimated tail carries use and solar only.
+    const unpriced = (k) => CASE === 'unpublished' && k === 2;
+    const nowHour = NOW - ((NOW - midnight(TODAY)) % H);
+    const hours = [];
+    let soc = 25;
+    for (let t = midnight(dates[0]); t < until; t += H) {
+      const hh = parts(t).hour;
+      const k = dates.indexOf(iso(t).slice(0, 10));
+      let state = 'idle';
+      if (hh >= 1 && hh <= 4) state = 'charge_grid';
+      else if (hh === 8 || hh === 9) state = 'export';
+      else if (hh === 7 || (hh >= 17 && hh <= 21)) state = 'house';
+      else if (hh >= 10 && hh <= 16) state = 'hold';
+      if (k === 2 && hh >= 11 && hh <= 13) state = 'charge_solar';
+      const delta = { charge_grid: 22, charge_solar: 4, house: -9, export: -8 }[state] || 0;
+      soc = Math.max(5, Math.min(100, soc + delta));
+      const sun = hh >= 9 && hh <= 15 ? Math.round(0.6 * [0.4, 0.55, 0.85][k] * Math.sin((Math.PI * (hh - 8.5)) / 7.5) * 100) / 100 : 0;
+      const use = Math.round(USE[hh] * (1 + 0.08 * Math.sin(hh * 3 + k)) * 100) / 100;
+      const r2 = (v) => Math.round(v * 100) / 100;
+      const est = unpriced(k);
+      hours.push({
+        start: iso(t),
+        price: est ? null : Math.round((PRICE[hh] + k * 0.012 + 0.008 * Math.sin(hh + k)) * 1000) / 1000,
+        soc: est ? null : soc,
+        state: est ? 'idle' : state,
+        use_kwh: use,
+        solar_kwh: sun,
+        plan: t >= nowHour,
+        grid_in_house_kwh: est ? null : state === 'house' || state === 'export' ? 0.03 : r2(Math.max(use - sun, 0)),
+        grid_in_charge_kwh: est ? null : state === 'charge_grid' ? r2((delta / 100) * 20.48 / 0.95) : 0,
+        grid_out_kwh: est ? null : state === 'export' ? r2((-delta / 100) * 20.48 * 0.95) : r2(Math.max(sun - use - (state === 'charge_solar' ? 0.8 : 0), 0)),
+      });
+    }
+    const days = dates.map((date, k) => {
+      const rows = hours.filter((h) => h.start.startsWith(date));
+      const sum = (...f) => Math.round(rows.reduce((a, h) => a + f.reduce((b, x) => b + h[x], 0), 0) * 100) / 100;
+      const priced = !unpriced(k);
+      return {
+        date,
+        use_kwh: sum('use_kwh'),
+        use_cost_eur: priced ? Math.round(rows.reduce((a, h) => a + h.use_kwh * h.price, 0) * 90) / 100 : null,
+        saved_eur: priced ? [-1.2, 0.19, 1.1][k] : null,
+        avg_price: priced ? Math.round((rows.reduce((a, h) => a + h.price, 0) / rows.length) * 1000) / 1000 : null,
+        solar_kwh: sum('solar_kwh'),
+        planned: ['none', 'partial', 'full'][k],
+        grid_in_kwh: priced ? sum('grid_in_house_kwh', 'grid_in_charge_kwh') : null,
+        grid_out_kwh: priced ? sum('grid_out_kwh') : null,
+      };
+    });
+    const cur = hours.find((h) => Date.parse(h.start) === nowHour) || hours[hours.length - 1];
+    return {
+      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: cur.state, margin_30d_eur: 28.4 },
+      days,
+      hours,
+    };
+  }
+
+  const states = {};
+  if (CASE === 'noattrs') {
+    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { battery: null, days: null, hours: null } };
+  } else if (CASE !== 'missing') {
+    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: build() };
+  }
+  window.HASS = { states, config: { time_zone: TZ } };
+  window.THEME = q.get('theme') === 'light' ? 'light' : 'dark';
+  window.TITLE = !!q.get('title');
+  window.WIDTH = q.get('w');
+
+  customElements.define('ha-card', class extends HTMLElement {
+    connectedCallback() {
+      this.style.cssText = 'display:block;background:var(--ha-card-background,var(--card-background-color));border-radius:12px';
+    }
+  });
+})();
+</script>
+<body>
+<div id="status"></div>
+<script src="smartgrid-power-card.js"></script>
+<script>
+  document.body.className = window.THEME;
+  const card = document.createElement('smartgrid-power-card');
+  // Headless Chrome never makes the viewport narrower than 500 px, so a small window means the wall's 456 px card.
+  if (window.WIDTH || innerWidth <= 500) card.style.width = `${window.WIDTH || 456}px`;
+  card.setConfig(window.TITLE ? { title: true } : {});
+  card.hass = window.HASS;
+  document.body.append(card);
+  new ResizeObserver(() => {
+    const r = card.getBoundingClientRect();
+    STATUS.size = `card ${Math.round(r.width)}x${Math.round(r.height)}`;
+    showStatus();
+  }).observe(card);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    // A second hass object with the same state object must not re-render.
+    const inner = () => card.shadowRoot.querySelector('ha-card').firstElementChild;
+    const before = inner();
+    card.hass = { ...window.HASS };
+    STATUS.rerender = inner() === before ? 'same state: no re-render' : 'same state: RE-RENDERED';
+    showStatus();
+  }));
+</script>

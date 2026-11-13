@@ -136,6 +136,22 @@ A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan vi
 
 A second card, [`lovelace/daily-stats-card.yaml`](lovelace/daily-stats-card.yaml), shows a per-day table of grid charge, export, and net € (paste it below the chart card). It needs no HACS dependency — `markdown` is a core Lovelace card.
 
+### Power card
+
+![Power card](custom_components/anker_x1_smartgrid/frontend/power-card.png)
+
+The integration ships its own card for yesterday, today and tomorrow: the battery line and level on top (held hours hatched), and per day what the house's use cost and what the battery saved (today also the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. House use and solar are thin outlines behind the bars. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
+
+```yaml
+type: custom:smartgrid-power-card
+entity: sensor.smartgrid_power_card  # optional, this is the default
+title: true                          # optional, shows "Power"; a string sets your own title
+```
+
+House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what the battery earned, with solar charge valued at the export price given up, so on sunny days the two don't add up exactly.
+
+Colours follow the theme's `--energy-battery-in-color` (battery level and charging), `--energy-battery-out-color`, `--energy-grid-return-color` and `--energy-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
+
 ## Add-on
 
 `addon/anker_x1_forecast/` is an optional companion add-on that offloads house-load forecasting to a dedicated container running scikit-learn.

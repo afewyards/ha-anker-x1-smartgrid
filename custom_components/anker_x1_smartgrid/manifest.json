@@ -1,10 +1,10 @@
 {
   "domain": "anker_x1_smartgrid",
   "name": "Anker X1 SmartGrid",
-  "after_dependencies": ["recorder"],
+  "after_dependencies": ["frontend", "recorder"],
   "codeowners": [],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["http"],
   "documentation": "https://github.com/afewyards/ha-anker-x1-smartgrid",
   "integration_type": "service",
   "iot_class": "local_polling",

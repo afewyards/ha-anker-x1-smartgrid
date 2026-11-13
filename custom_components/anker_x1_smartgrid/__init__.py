@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import timedelta
+from pathlib import Path
 
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.typing import ConfigType
 
 from .actuator import Actuator
 from .anker_resolver import apply_anker_resolution
@@ -32,6 +38,28 @@ from .recorder import DataRecorder
 
 _STORE_VERSION = 1
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+CARD_URL = f"/{DOMAIN}/smartgrid-power-card.js"
+_CARD_PATH = Path(__file__).parent / "frontend" / "smartgrid-power-card.js"
+
+
+def card_module_url(content: bytes) -> str:
+    # Boxes updated by copying files keep the manifest version, so the file hash busts the browser cache.
+    return f"{CARD_URL}?v={hashlib.sha1(content).hexdigest()[:8]}"
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    try:
+        content = await hass.async_add_executor_job(_CARD_PATH.read_bytes)
+    except OSError as err:
+        _LOGGER.warning("power card not registered, %s unreadable: %s", _CARD_PATH.name, err)
+        return True
+    await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(_CARD_PATH))])
+    if "frontend" in hass.config.components:
+        add_extra_js_url(hass, card_module_url(content))
+    return True
 
 
 async def _purge_house_load_history(hass: HomeAssistant, history_days: int) -> None:

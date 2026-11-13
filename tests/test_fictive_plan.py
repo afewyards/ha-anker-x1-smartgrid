@@ -168,6 +168,7 @@ _LIVE_PLAN_KEYS = {
     "grid_charge_kwh",
     "grid_export_kwh",
     "self_discharge_kwh",
+    "hedge_kwh",
     "estimated",
 }
 

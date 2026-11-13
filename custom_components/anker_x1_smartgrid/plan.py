@@ -440,6 +440,7 @@ def build_plan_horizon(
             soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * model_h / cap_wh * 100.0
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
+        unhedged_soc = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
         if hedge_by_hour and cfg.capacity_kwh > 0:
             soc_sim -= cfg.kwh_to_pct(hedge_by_hour.get(slot_key, 0.0))
         soc_sim = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
@@ -516,6 +517,8 @@ def build_plan_horizon(
                 "grid_charge_kwh": round(grid_charge_w_disp * dt_h / 1000.0, 3),
                 "grid_export_kwh": round(grid_export_w * dt_h / 1000.0, 3),
                 "self_discharge_kwh": round(self_discharge_w * dt_h / 1000.0, 3),
+                # Level the hedge debit took off this row, so a roll-forward can tell it from drain.
+                "hedge_kwh": round(cfg.pct_to_kwh(unhedged_soc - soc_sim), 3),
             }
         )
     return out

@@ -44,6 +44,7 @@ from . import (
     scheduler,
     snapshot,
     soc_drift,
+    usecost,
 )
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast, fetch_health
 from .actuator import Actuator
@@ -200,6 +201,9 @@ class Controller:
     _battery_margin: dict[date, dict] | None = None
     _battery_margin_at: datetime | None = None
     _battery_margin_failed = False
+    power_card: dict | None = None
+    _card_rows: list[dict] | None = None
+    _card_failed = False
 
     def __init__(
         self,
@@ -346,6 +350,10 @@ class Controller:
         self._battery_margin: dict[date, dict] | None = None
         self._battery_margin_at: datetime | None = None
         self._battery_margin_failed = False
+        # Power card: built from the margin's sample read when it refreshes.
+        self.power_card: dict | None = None
+        self._card_rows: list[dict] | None = None
+        self._card_failed = False
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
         # NOT persisted.  Recorder load_w / metered-net PnL / last_status all use
@@ -1116,6 +1124,7 @@ class Controller:
                 now = dt_util.utcnow()
                 await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
                 self.plan = PlanState(ControllerState.PASSIVE, now, ())
+                await self._publish_power_card(now, None, "failsafe", False)
                 status = self._status(now, 0.0, None, "failsafe")
                 status["state"] = "failsafe"
                 return status
@@ -1655,6 +1664,7 @@ class Controller:
             # really is actuating and must publish the setpoint it wrote.
             # Build status AFTER the daily regret job so regret keys are fresh.
             status = self._status(now, _disabled_setpoint, None, "disabled")
+            await self._publish_power_card(now, inputs, "forcing" if _disabled_setpoint > 0 else "disabled", False)
             # R1: mirror the enabled path below — surface the DP's export-curve
             # engagement for observability even while shadow/disabled. _status()
             # rebuilds self.last_status wholesale every tick, so these keys must
@@ -1714,9 +1724,11 @@ class Controller:
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
             if inputs is not None and (rescue_w := await self._run_floor_rescue_tick(now, inputs.soc)):
+                await self._publish_power_card(now, inputs, "forcing", False)
                 return self._status(now, rescue_w, None, "failsafe")
             await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
+            await self._publish_power_card(now, inputs, "failsafe", False)
             return self._status(now, 0.0, None, "failsafe")
 
         _slot_minutes = self._resolve_slot_minutes(slots)
@@ -2225,6 +2237,20 @@ class Controller:
         self._publish_daily_stats(
             now, horizon, _export_price, _export_slots, _slot_minutes, delivered_now, _export_matches_import
         )
+        # After the actuator commands above, so the card can never hold them up.
+        await self._publish_power_card(
+            now,
+            inputs,
+            _recorded_state,
+            (_export_setpoint_w or 0.0) > 0,
+            lambda: (
+                horizon,
+                self._export_price_fn(
+                    now, horizon, _export_price, _export_slots, _slot_minutes, _export_matches_import
+                ),
+                self._delivered_fn(delivered_now, _slot_minutes),
+            ),
+        )
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
@@ -2466,9 +2492,21 @@ class Controller:
             return
         self._seed_house_ledger_if_cold(dt_util.as_local(now).date())
 
-    def _read_battery_margin_sync(self, since_iso: str, tz) -> dict[date, dict]:
+    def _read_battery_margin_sync(self, since_iso: str, tz) -> tuple[dict[date, dict], list[dict]]:
         rows = self._recorder.read_feature_rows(since_iso)
-        return margin_mod.battery_margin_by_day(rows, self.cfg.capacity_kwh, tz, self.cfg.export_fee_eur_per_kwh)
+        return margin_mod.battery_margin_by_day(rows, self.cfg.capacity_kwh, tz, self.cfg.export_fee_eur_per_kwh), rows
+
+    def _build_power_card_sync(self, rows: list[dict], now: datetime, horizon, export_price_at, delivered_at) -> dict:
+        _tz, _cap, _fee = dt_util.DEFAULT_TIME_ZONE, self.cfg.capacity_kwh, self.cfg.export_fee_eur_per_kwh
+        days, inv = usecost.replay(rows, _cap, _tz, _fee)
+        planned = usecost.roll_plan(horizon, inv, _cap, _tz, now, export_price_at, _fee, delivered_at)
+        hours = usecost.hourly_series(rows, horizon, _tz, now, delivered_at)
+        return {
+            "built_at": now.isoformat(),
+            "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,
+            "days": usecost.merge_days(days, planned, dt_util.as_local(now).date(), hours),
+            "hours": hours,
+        }
 
     async def _refresh_battery_margin(self, now: datetime) -> None:
         """Rebuild the per-day battery margin at most every 5 minutes.
@@ -2476,14 +2514,16 @@ class Controller:
         The replay starts two days before the oldest reported day, so the
         seeded inventory cost has washed out by then. On error the fields
         publish None and the warning is logged once until a rebuild succeeds.
+        The same read feeds the power card, built after the tick has actuated.
         """
         if self._battery_margin_at is not None and abs(now - self._battery_margin_at) < timedelta(minutes=5):
             return
         self._battery_margin_at = now
         _since = (now - timedelta(days=_MARGIN_REPLAY_DAYS)).isoformat()
+        _tz = dt_util.DEFAULT_TIME_ZONE
         try:
-            self._battery_margin = await self._hass.async_add_executor_job(
-                self._read_battery_margin_sync, _since, dt_util.DEFAULT_TIME_ZONE
+            self._battery_margin, self._card_rows = await self._hass.async_add_executor_job(
+                self._read_battery_margin_sync, _since, _tz
             )
             self._battery_margin_failed = False
         except Exception:
@@ -2491,6 +2531,46 @@ class Controller:
                 _LOGGER.warning("daily stats: battery margin build failed", exc_info=True)
             self._battery_margin_failed = True
             self._battery_margin = None
+            self.power_card = None
+
+    async def _publish_power_card(self, now, inputs, recorded_state: str, exporting: bool, rebuild=None) -> None:
+        """Rebuild days and hours when ``rebuild`` is given and a fresh sample read waits; refresh the battery line.
+
+        ``rebuild()`` returns the horizon, export-price and delivered resolvers.
+        Display only: a failure clears the card and warns once, never the tick.
+        """
+        try:
+            if rebuild is not None and self._card_rows is not None:
+                rows, self._card_rows = self._card_rows, None
+                self.power_card = await self._hass.async_add_executor_job(
+                    self._build_power_card_sync, rows, now, *rebuild()
+                )
+            card = self.power_card
+            if card is None:
+                return
+            soc = inputs.soc if inputs is not None else None
+            # A new dict each tick: HA compares attributes against the previous state's
+            # references, so mutating the published one in place would hide the change.
+            card["battery"] = {
+                "soc": soc,
+                "stored_kwh": round(soc / 100.0 * self.cfg.capacity_kwh, 2) if soc is not None else None,
+                "stored_cost_eur_per_kwh": card["stored_cost_eur_per_kwh"],
+                "state": None
+                if inputs is None
+                else usecost.live_state(
+                    recorded_state,
+                    exporting,
+                    coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER]),
+                    inputs.meter_w,
+                ),
+                "margin_30d_eur": (self.last_status.get("battery_margin_30d") or (None, None))[0],
+            }
+            self._card_failed = False
+        except Exception:
+            if not self._card_failed:
+                _LOGGER.warning("power card: build failed", exc_info=True)
+            self._card_failed = True
+            self.power_card = None
 
     def _seed_house_ledger_if_cold(self, today: date) -> None:
         """One-shot: fill today's WHOLE-HOUSE ledger legs from recorded samples.

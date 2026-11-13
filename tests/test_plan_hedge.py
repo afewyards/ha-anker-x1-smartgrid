@@ -63,3 +63,16 @@ def test_hedge_is_debited_once_per_hour_at_quarter_hour_resolution():
     base = build_plan_horizon(slots, ivs, [], 80.0, _q(12), cfg, slot_minutes=15)
     hed = build_plan_horizon(slots, ivs, [], 80.0, _q(12), cfg, hedge_drain_by_hour={_q(10): 1.0}, slot_minutes=15)
     assert hed[-1]["soc"] == round(base[-1]["soc"] - 10.0, 1)
+
+
+def test_rows_publish_the_level_the_hedge_took_off():
+    slots, ivs = _inputs()
+    hed = build_plan_horizon(slots, ivs, [], 80.0, _h(14), make_cfg(), hedge_drain_by_hour={_h(10): 1.0})
+    assert [r["hedge_kwh"] for r in hed] == [1.0, 0.0, 0.0, 0.0]
+
+
+def test_hedge_kwh_is_what_the_floor_clamp_left_of_the_debit():
+    slots, ivs = _inputs()
+    hed = build_plan_horizon(slots, ivs, [], 5.5, _h(14), make_cfg(), hedge_drain_by_hour={_h(10): 1.0})
+    assert hed[0]["soc"] == 5.0
+    assert hed[0]["hedge_kwh"] == 0.05
