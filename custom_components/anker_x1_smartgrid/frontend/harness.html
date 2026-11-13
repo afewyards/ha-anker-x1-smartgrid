@@ -4,7 +4,7 @@
 <title>smartgrid-power-card harness</title>
 <!--
   Fixture page for the power card, not served by Home Assistant.
-  ?case=normal|unpublished|dst|wide|missing|noattrs  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
 <style>
@@ -77,7 +77,7 @@
   }
 
   const TODAY = CASE === 'dst' ? '2026-10-25' : '2026-11-13';
-  const NOW = midnight(TODAY) + (CASE === 'dst' ? 15 : 14) * H + 20 * 60e3;
+  const NOW = midnight(TODAY) + (CASE === 'dst' ? 15 : CASE === 'late' ? 22 : 14) * H + 20 * 60e3;
   Date.now = () => NOW;
 
   const PRICE = [0.29, 0.28, 0.28, 0.27, 0.28, 0.3, 0.33, 0.4, 0.44, 0.41, 0.36, 0.35, 0.34, 0.32, 0.33, 0.35, 0.38, 0.43, 0.45, 0.44, 0.4, 0.37, 0.35, 0.32];
@@ -123,7 +123,15 @@
       const rows = hours.filter((h) => h.start.startsWith(date));
       const sum = (...f) => Math.round(rows.reduce((a, h) => a + f.reduce((b, x) => b + h[x], 0), 0) * 100) / 100;
       const priced = !unpriced(k);
+      // The cheapest 3 consecutive priced hours still ahead, as the server's cheapest_window.
+      const ahead = rows.filter((h) => h.plan && h.price !== null);
+      let cheap = null;
+      for (let i = 0; k > 0 && i + 3 <= ahead.length; i++) {
+        const mean = ahead.slice(i, i + 3).reduce((a, h) => a + h.price, 0) / 3;
+        if (!cheap || mean < cheap.price) cheap = { start: ahead[i].start, end: iso(Date.parse(ahead[i + 2].start) + H), price: Math.round(mean * 1e4) / 1e4 };
+      }
       return {
+        cheap,
         date,
         use_kwh: sum('use_kwh'),
         use_cost_eur: priced ? Math.round(rows.reduce((a, h) => a + h.use_kwh * h.price, 0) * 90) / 100 : null,
@@ -140,7 +148,7 @@
     if (CASE === 'wide') Object.assign(days[1], { solar_gain_eur: -12.42, avg_price: -0.414 });
     const cur = hours.find((h) => Date.parse(h.start) === nowHour) || hours[hours.length - 1];
     return {
-      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: cur.state, margin_30d_eur: 28.4, solar_gain_30d_eur: CASE === 'dst' ? 0 : 3.1 },
+      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: CASE === 'noswitch' ? 'disabled' : cur.state, margin_30d_eur: CASE === 'wide' ? -1234.56 : 28.4, solar_gain_30d_eur: CASE === 'wide' ? 456.78 : CASE === 'dst' ? 0 : 3.1 },
       days,
       hours,
     };
@@ -152,7 +160,12 @@
   } else if (CASE !== 'missing') {
     states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: build() };
   }
-  window.HASS = { states, config: { time_zone: TZ } };
+  if (CASE !== 'missing' && CASE !== 'noswitch') {
+    states['switch.smartgrid_enabled'] = { state: CASE === 'disabled' ? 'off' : 'on', attributes: { friendly_name: 'SmartGrid enabled' } };
+  }
+  window.CALLS = [];
+  window.HASS = { states, config: { time_zone: TZ }, callService: (d, s, data) => CALLS.push(`${d}.${s} ${data.entity_id}`) };
+  window.CASE = CASE;
   window.THEME = q.get('theme') === 'light' ? 'light' : 'dark';
   window.TITLE = !!q.get('title');
   window.WIDTH = q.get('w');

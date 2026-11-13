@@ -246,7 +246,7 @@ async def test_a_disabled_tick_keeps_the_battery_line_live(monkeypatch):
     ctrl.power_card = _stale_card()
     await ctrl.tick()
     battery = ctrl.power_card["battery"]
-    assert (battery["soc"], battery["state"]) == (50.0, "idle")
+    assert (battery["soc"], battery["state"]) == (50.0, "disabled")
     assert battery["stored_kwh"] == round(0.5 * ctrl.cfg.capacity_kwh, 2)
 
 

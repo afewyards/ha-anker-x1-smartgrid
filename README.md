@@ -147,9 +147,14 @@ The integration ships its own card for yesterday, today and tomorrow: the batter
 type: custom:smartgrid-power-card
 entity: sensor.smartgrid_power_card  # optional, this is the default
 title: true                          # optional, shows "Power"; a string sets your own title
+switch: switch.smartgrid_enabled    # optional, this is the default; no such entity, no switch
 ```
 
 House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what grid-charged energy earned: its value when used, less what it cost to buy, so its conversion losses and standby drain land in saved. Sun is what stored solar earned over exporting it, shown only when it isn't zero.
+
+Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
+
+The switch at the top right turns the planner on and off. While it is off the card dims below the top line and shows "SmartGrid disabled" over the battery level.
 
 Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color` and `--smartgrid-power-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
 

@@ -274,6 +274,31 @@ def roll_plan(
     return _finish(out)
 
 
+def cheapest_window(rows: list[dict], n: int = 3) -> dict | None:
+    """The cheapest ``n`` consecutive priced hours of ``rows`` still ahead (``plan``), earliest on a tie.
+
+    ``rows`` are one day's rows of :func:`hourly_series`; ``end`` is the end of the last hour.
+    """
+    # The running hour counts as ahead: its row is already ``plan``.
+    ahead = [(datetime.fromisoformat(r["start"]), r["price"]) for r in rows if r["plan"] and r["price"] is not None]
+    best = None
+    for i in range(len(ahead) - n + 1):
+        win = ahead[i : i + n]
+        if any(b[0] - a[0] != timedelta(hours=1) for a, b in pairwise(win)):
+            continue
+        total = sum(p for _, p in win)
+        if best is None or total < best[0]:
+            best = (total, win)
+    if best is None:
+        return None
+    win = best[1]
+    return {
+        "start": win[0][0].isoformat(),
+        "end": (win[-1][0] + timedelta(hours=1)).isoformat(),
+        "price": round(best[0] / n, 4),
+    }
+
+
 def merge_days(
     actual: dict[date, dict], planned: dict[date, dict], today: date, hours: list[dict] | None = None
 ) -> list[dict]:
@@ -310,6 +335,9 @@ def merge_days(
                 "planned": "none" if p is None else "partial" if a is not None else "full",
                 "grid_in_kwh": grid_total("grid_in_house_kwh", "grid_in_charge_kwh"),
                 "grid_out_kwh": grid_total("grid_out_kwh"),
+                "cheap": cheapest_window([h for h in hours or () if h["start"][:10] == day.isoformat()])
+                if priced and day >= today
+                else None,
             }
         )
     return out
@@ -441,6 +469,8 @@ def live_state(recorded_state: str, exporting: bool, batt_w: float | None, p1_w:
     """The battery's action this tick, in the series' vocabulary."""
     if recorded_state == "forcing":
         return "charge_grid"
+    if recorded_state == "disabled":
+        return "disabled"
     if recorded_state == "hold":
         return "hold"
     if exporting:

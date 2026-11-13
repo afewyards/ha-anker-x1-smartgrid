@@ -8,6 +8,7 @@ import pytest
 from custom_components.anker_x1_smartgrid.margin import battery_margin_by_day
 from custom_components.anker_x1_smartgrid.usecost import (
     Inventory,
+    cheapest_window,
     hourly_series,
     live_state,
     merge_days,
@@ -305,6 +306,7 @@ class TestMergeDays:
             "planned": "none",
             "grid_in_kwh": None,
             "grid_out_kwh": None,
+            "cheap": None,
         }
 
     def test_tomorrow_before_prices_shows_use_and_solar_only(self):
@@ -558,7 +560,83 @@ class TestHourlySeries:
         ("passive", False, 800, -300, "export"),
         ("passive", False, 45, 300, "idle"),
         ("passive", False, None, 300, "idle"),
+        ("disabled", False, 800, 50, "disabled"),
     ],
 )
 def test_live_state(recorded, exporting, batt, p1, state):
     assert live_state(recorded, exporting, batt, p1) == state
+
+
+def _day_rows(day, prices, first_plan=0):
+    t0 = datetime.combine(day, datetime.min.time(), tzinfo=AMS).astimezone(UTC)
+    out = []
+    for i, p in enumerate(prices):
+        t = (t0 + timedelta(hours=i)).astimezone(AMS)
+        out.append(
+            {
+                "start": t.isoformat(),
+                "price": p,
+                "plan": i >= first_plan,
+                "grid_out_kwh": 0.0,
+                "grid_in_house_kwh": 0.0,
+                "grid_in_charge_kwh": 0.0,
+            }
+        )
+    return out
+
+
+class TestCheapestWindow:
+    def test_cheapest_three_hours_ahead_only(self):
+        prices = [0.1] * 3 + [0.5] * 9 + [0.4, 0.3, 0.3, 0.3] + [0.5] * 8
+        w = cheapest_window(_day_rows(DAY, prices, first_plan=10))
+        assert w["start"] == "2026-11-10T13:00:00+01:00"
+        assert w["end"] == "2026-11-10T16:00:00+01:00"
+        assert w["price"] == 0.3
+
+    def test_end_of_day_window_ends_at_midnight(self):
+        w = cheapest_window(_day_rows(DAY, [0.5] * 21 + [0.1] * 3))
+        assert w["end"] == "2026-11-11T00:00:00+01:00"
+
+    def test_less_than_three_hours_left(self):
+        assert cheapest_window(_day_rows(DAY, [0.2] * 24, first_plan=22)) is None
+
+    def test_unpriced_hours_break_a_window_and_unpublished_day_is_none(self):
+        assert cheapest_window(_day_rows(DAY, [None] * 24)) is None
+        assert cheapest_window(_day_rows(DAY, [0.1, 0.1, None, 0.1, 0.1])) is None
+
+    def test_tie_takes_the_earliest(self):
+        w = cheapest_window(_day_rows(DAY, [0.2] * 24))
+        assert w["start"].startswith("2026-11-10T00:00")
+
+    def test_dst_days(self):
+        spring = cheapest_window(_day_rows(date(2026, 3, 29), [0.5] * 1 + [0.1] * 3 + [0.5] * 19))
+        assert spring["start"] == "2026-03-29T01:00:00+01:00" and spring["end"] == "2026-03-29T05:00:00+02:00"
+        long = cheapest_window(_day_rows(date(2026, 10, 25), [0.5] * 2 + [0.1] * 3 + [0.5] * 20))
+        assert long["start"] == "2026-10-25T02:00:00+02:00" and long["end"] == "2026-10-25T04:00:00+01:00"
+        fall = cheapest_window(_day_rows(date(2026, 10, 25), [0.5] * 2 + [0.1] * 3 + [0.5] * 20))
+        assert fall["start"] == "2026-10-25T02:00:00+02:00" and fall["price"] == 0.1
+
+
+class TestMergeDaysCheap:
+    @staticmethod
+    def _rec(est=False):
+        return {
+            "use_kwh": 1.0, "use_cost_eur": 1.0, "saved_eur": 0.0, "solar_gain_eur": 0.0, "solar_kwh": 0.0,
+            "price_eur_h": 1.0, "price_h": 1.0, "estimated": est,
+        }  # fmt: skip
+
+    def _hours(self):
+        prices = [0.5] * 21 + [0.1] * 3
+        return [r for k in (-1, 0, 1) for r in _day_rows(DAY + timedelta(days=k), prices)]
+
+    def test_priced_today_and_tomorrow_have_a_window_yesterday_none(self):
+        actual = {DAY - timedelta(days=1): self._rec(), DAY: self._rec()}
+        planned = {DAY: self._rec(), DAY + timedelta(days=1): self._rec()}
+        y, t, tm = merge_days(actual, planned, DAY, self._hours())
+        assert y["cheap"] is None
+        assert t["cheap"]["price"] == 0.1 and tm["cheap"]["price"] == 0.1
+
+    def test_estimated_day_has_none(self):
+        planned = {DAY: self._rec(), DAY + timedelta(days=1): self._rec(est=True)}
+        _y, t, tm = merge_days({DAY: self._rec()}, planned, DAY, self._hours())
+        assert t["cheap"] is not None and tm["cheap"] is None

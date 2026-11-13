@@ -3,7 +3,7 @@ const H = 3600e3;
 const DASH = '–';
 const PAD = 6;
 const STATE_TEXT = {
-  charge_grid: 'charging', charge_solar: 'charging', house: 'to house', export: 'exporting', hold: 'holding', idle: 'idle',
+  charge_grid: 'charging', charge_solar: 'charging', house: 'to house', export: 'exporting', hold: 'holding', idle: 'idle', disabled: 'disabled',
 };
 const LINE = { charge_grid: 'charge', charge_solar: 'charge', house: 'house', export: 'export' };
 
@@ -85,13 +85,25 @@ const STYLE = `<style>
 }
 ha-card { padding: 6px 10px; color: var(--sg-ink); font-size: 11px; }
 .title { font-size: 16px; font-weight: 500; padding: 4px 0 6px; }
-.bat { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; font-size: 11.5px; line-height: 1.45; margin-bottom: 3px; }
+.bat { display: flex; align-items: center; column-gap: 8px; font-size: 11.5px; line-height: 1.45; margin-bottom: 3px; white-space: nowrap; }
 .bat b { color: var(--sg-charge); }
+.bat .b1 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bat .m30 { flex: 0 0 auto; }
+.bat button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 6px; min-width: 44px; height: 28px; margin: -6px -9px -6px 0; display: flex; align-items: center; justify-content: center; }
+.bat button:focus-visible { outline: 2px solid var(--sg-charge); outline-offset: -2px; }
+.trk { position: relative; width: 26px; height: 14px; border-radius: 7px; box-sizing: border-box; border: 1.5px solid var(--sg-dim); }
+.trk i { position: absolute; top: 1.5px; left: 1.5px; width: 8px; height: 8px; border-radius: 50%; background: var(--sg-dim); }
+[aria-checked=true] .trk { background: var(--sg-charge); border-color: var(--sg-charge); }
+[aria-checked=true] .trk i { left: 13.5px; background: var(--sg-bg); }
+.lv { position: relative; }
+.pill { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 1px 9px; border-radius: 10px; background: var(--sg-bg); border: 1px solid var(--sg-rule); font-size: 11px; white-space: nowrap; }
+.off .dm { opacity: .3; }
 svg { display: block; }
 .days { display: grid; margin: 2px 0 0; }
 .ph { padding: 0 ${PAD}px; border-left: 1px solid var(--sg-rule); color: var(--sg-dim); line-height: 1.35; min-width: 0; }
 .ph:first-child { border-left-color: transparent; }
 .ph > div { display: flex; justify-content: space-between; align-items: baseline; column-gap: 4px; white-space: nowrap; }
+.cheap { min-height: 1.35em; overflow: hidden; text-overflow: ellipsis; }
 .ph .cost { color: var(--sg-ink); font-size: 18px; font-weight: 700; line-height: 1.2; }
 .ph.on .cost { font-size: 22px; line-height: 1.1; }
 .ph.on .cost .sv { font-size: 14px; }
@@ -138,7 +150,7 @@ function stroke(cls) {
 function cuts(x, y, w) {
   return `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(w)}" height="1.2" class="cut"/><rect x="${r1(x)}" y="${r1(y + 3.2)}" width="${r1(w)}" height="1.2" class="cut"/>`;
 }
-const LEGEND = `<div class="lg">
+const LEGEND = `<div class="lg dm">
 <span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
 <span>grid kWh${swatch('gh', 9)}house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
@@ -158,11 +170,20 @@ class SmartgridPowerCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' }).innerHTML = STYLE + '<ha-card></ha-card>';
+    this.shadowRoot.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-act]');
+      if (b) this._act(b.dataset.act);
+    });
+  }
+
+  _act(act) {
+    Promise.resolve(this._hass.callService('homeassistant', act === 'on' ? 'turn_off' : 'turn_on', { entity_id: this._cfg.switch })).catch(() => {});
   }
 
   setConfig(config) {
-    this._cfg = { entity: 'sensor.smartgrid_power_card', ...config };
+    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', ...config };
     this._state = this._hass ? this._hass.states[this._cfg.entity] : null;
+    this._sw = this._hass ? this._hass.states[this._cfg.switch] : null;
     this._drawn = null;
     this._render();
   }
@@ -171,8 +192,10 @@ class SmartgridPowerCard extends HTMLElement {
     this._hass = hass;
     if (!this._cfg) return;
     const s = hass.states[this._cfg.entity];
-    if (s === this._state) return;
+    const sw = hass.states[this._cfg.switch];
+    if (s === this._state && sw === this._sw) return;
     this._state = s;
+    this._sw = sw;
     this._render();
   }
 
@@ -187,7 +210,7 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 6;
+    return 7;
   }
 
   static getStubConfig() {
@@ -197,19 +220,36 @@ class SmartgridPowerCard extends HTMLElement {
   _render() {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
-    if (this._drawn && this._drawn.st === this._state && this._drawn.width === width) return;
-    this._drawn = { st: this._state, width };
+    const d = this._drawn;
+    if (d && d.st === this._state && d.sw === this._sw && d.width === width) return;
+    this._drawn = { st: this._state, sw: this._sw, width };
     const card = this.shadowRoot.querySelector('ha-card');
+    const ae = this.shadowRoot.activeElement;
+    const refocus = !!ae && ae.matches('[role=switch]');
     try {
       card.innerHTML = this._body(width);
+      // The 30-day line gives up its sun figure, then itself, before the battery text is clipped.
+      const b1 = card.querySelector('.b1');
+      const clipped = () => b1 && b1.scrollWidth > b1.clientWidth;
+      const sunp = card.querySelector('.sunp');
+      if (sunp && clipped()) sunp.remove();
+      const m30 = card.querySelector('.m30');
+      if (m30 && clipped()) m30.remove();
       // Today's name line gives up the average price before it clips the sun figure.
       const info = card.querySelector('.ph.on .info');
       const avg = info && info.querySelector('.avg');
       if (avg && info.scrollWidth > info.clientWidth) avg.remove();
     } catch (e) {
       console.error(TAG, e);
-      card.innerHTML = '<div class="empty">The planner has no data yet.</div>';
+      card.innerHTML = `${this._battery(null, this._swState(), false)}<div class="empty">The planner has no data yet.</div>`;
     }
+    const sw = refocus && card.querySelector('[role=switch]');
+    if (sw) sw.focus();
+  }
+
+  _swState() {
+    const s = this._sw;
+    return s && (s.state === 'on' || s.state === 'off') ? s : null;
   }
 
   _body(width) {
@@ -219,7 +259,11 @@ class SmartgridPowerCard extends HTMLElement {
     const days = Array.isArray(a.days) ? a.days : [];
     const hours = Array.isArray(a.hours) ? a.hours : [];
     const title = cfg.title ? `<div class="title">${esc(typeof cfg.title === 'string' ? cfg.title : 'Power')}</div>` : '';
-    if (!days.length && !hours.length) return `${title}<div class="empty">The planner has no data yet.</div>`;
+    const sw = this._swState();
+    const off = sw ? sw.state === 'off' : !!a.battery && a.battery.state === 'disabled';
+    if (!days.length && !hours.length) {
+      return `${title}${this._battery(a.battery, sw, off)}<div class="empty">The planner has no data yet.</div>`;
+    }
 
     const tz = this._hass.config && this._hass.config.time_zone;
     const now = Date.now();
@@ -249,31 +293,41 @@ class SmartgridPowerCard extends HTMLElement {
     const geo = { dates, today, cx, cw, W, tz, X };
 
     return (
+      `<div class="${off ? 'off' : ''}">` +
       title +
-      this._battery(a.battery) +
-      this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null) +
+      this._battery(a.battery, sw, off) +
+      `<div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
       this._headers(days, fr, geo) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
-      LEGEND
+      LEGEND +
+      '</div>'
     );
   }
 
-  _battery(b) {
+  _control(sw) {
+    if (!sw) return '';
+    const name = esc((sw.attributes && sw.attributes.friendly_name) || 'SmartGrid enabled');
+    const on = sw.state === 'on';
+    return `<button role="switch" aria-checked="${on}" aria-label="${name}" data-act="${on ? 'on' : 'off'}"><span class="trk"><i></i></span></button>`;
+  }
+
+  _battery(b, sw, off) {
     b = b || {};
     const soc = num(b.soc);
     const items = [
       soc !== null && `${soc.toFixed(0)}%`,
       num(b.stored_kwh) !== null && `${b.stored_kwh.toFixed(1)} kWh`,
       num(b.stored_cost_eur_per_kwh) !== null && `${eur(b.stored_cost_eur_per_kwh)}/kWh`,
-      STATE_TEXT[b.state],
+      STATE_TEXT[off && (!b.state || b.state === 'idle') ? 'disabled' : b.state],
     ].filter(Boolean);
-    const m30 = [num(b.margin_30d_eur) !== null && `30 days ${signed(b.margin_30d_eur, '€')}`, sun(b.solar_gain_30d_eur, '€')].filter(Boolean);
-    const m = m30.length ? `<span>${m30.join(' · ')}</span>` : '';
-    return `<div class="bat"><span><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}</div>`;
+    const gain = sun(b.solar_gain_30d_eur, '€');
+    const margin = num(b.margin_30d_eur) !== null ? `30 days ${signed(b.margin_30d_eur, '€')}` : '';
+    const m = margin || gain ? `<span class="m30">${margin}${gain && margin ? `<span class="sunp"> · ${gain}</span>` : gain}</span>` : '';
+    return `<div class="bat"><span class="b1"><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}${this._control(sw)}</div>`;
   }
 
   _level(rows, { cx, W }, nowX) {
-    let s = `<svg width="${W}" height="${LEVEL_H}"><defs><pattern id="sgh" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" class="hs"/></pattern></defs>`;
+    let s = `<svg class="dm" width="${W}" height="${LEVEL_H}"><defs><pattern id="sgh" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" class="hs"/></pattern></defs>`;
     s += `<line x1="0" y1="4" x2="${W}" y2="4" class="rule" stroke-dasharray="2 3"/><line x1="0" y1="46" x2="${W}" y2="46" class="rule"/>`;
     const groups = [];
     let prev = null;
@@ -327,7 +381,13 @@ class SmartgridPowerCard extends HTMLElement {
     return s + '</svg>';
   }
 
-  _headers(days, fr, { dates, today, cw }) {
+  _cheap(c, tz) {
+    const hh = (iso) => parts(Date.parse(iso), tz).hour;
+    if (!c || !Number.isFinite(Date.parse(c.start)) || !Number.isFinite(Date.parse(c.end)) || num(c.price) === null) return '<div class="cheap"></div>';
+    return `<div class="cheap pos">cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}</div>`;
+  }
+
+  _headers(days, fr, { dates, today, cw, tz }) {
     const cols = dates.map((date, i) => {
       const d = days.find((x) => x && x.date === date) || {};
       if (date === today) {
@@ -343,19 +403,21 @@ class SmartgridPowerCard extends HTMLElement {
 <div><span class="name">Today</span>${info}</div>
 <div class="cost"><span>${eur(d.use_cost_eur)}</span>${saved(d.saved_eur, 'saved ')}</div>
 <div class="l3">${use.join(' · ')}</div>
+${this._cheap(d.cheap, tz)}
 </div>`;
       }
       return `<div class="ph">
 <div><span class="name">${date < today ? 'Yesterday' : 'Tomorrow'}</span></div>
 <div class="cost"><span>${eur(d.use_cost_eur)}</span></div>
 <div><span>${fx(d.use_kwh, 1)} kWh</span>${saved(d.saved_eur, date > today ? 'plan ' : '')}</div>
+${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
 </div>`;
     });
-    return `<div class="days" style="grid-template-columns:${fr.map((f) => `${f * 100}%`).join(' ')}">${cols.join('')}</div>`;
+    return `<div class="days dm" style="grid-template-columns:${fr.map((f) => `${f * 100}%`).join(' ')}">${cols.join('')}</div>`;
   }
 
   _panels(rows, { dates, cx, cw, W, tz, X }, nowX) {
-    let s = `<svg width="${W}" height="${PANEL_H}">`;
+    let s = `<svg class="dm" width="${W}" height="${PANEL_H}">`;
     for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${PANEL_H - 2}" class="rule"/>`;
     for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
     const priced = rows.filter((r) => num(r.price) !== null);
