@@ -84,6 +84,10 @@ variables:
   # for later and is drawable but is NOT actuating yet. Guarded so a restart
   # mid-render yields idle rather than throwing on a missing attribute.
   CAL: "(function () { var e = states['sensor.smartgrid_plan']; var a = (e && e.attributes) || {}; return { state: a.calibration_state || 'idle', s: a.calibration_window_start, e: a.calibration_window_end, target: a.calibration_target_soc, hold: a.calibration_hold_soc }; })()"
+  # Low-power hold: contiguous horizon rows with mode 'hold' merged into bands
+  # (each row ends where the next starts; the last one assumes 15 min). `on` is
+  # the live executor state, values are EUR/kWh.
+  HOLD: "(function () { var e = states['sensor.smartgrid_plan']; var a = (e && e.attributes) || {}; var H1 = a.horizon || []; var b = []; for (var i = 0; i < H1.length; i++) { if (H1[i].mode !== 'hold') continue; var s = new Date(H1[i].start).getTime(); var t = H1[i + 1] ? new Date(H1[i + 1].start).getTime() : s + 900000; if (b.length && b[b.length - 1].e === s) { b[b.length - 1].e = t; } else { b.push({ s: s, e: t }); } } return { on: !!a.low_power_hold_active, bands: b, dv: a.hold_discharge_value_eur_per_kwh, sv: a.hold_stored_value_eur_per_kwh }; })()"
 card:
   type: custom:apexcharts-card
   header:
@@ -324,10 +328,10 @@ card:
     # the first under YAML last-key-wins, which is how the first attempt at
     # this became a no-op.
     #
-    # The idle branch returns the original [{x: 0, x2: 0}] placeholder rather
-    # than [], so behaviour with no cycle pending is byte-identical to before.
+    # The list always ends with the original [{x: 0, x2: 0}] placeholder, so
+    # with no cycle or hold it is identical to before. Hold bands: HOLD above.
     annotations:
-      xaxis: "${ (CAL.state !== 'idle' && CAL.s) ? [{ x: new Date(CAL.s).getTime(), x2: new Date(CAL.e).getTime(), fillColor: '#f59e0b', opacity: 0.12, label: { text: 'calibration · ' + CAL.state, orientation: 'horizontal', position: 'top', style: { background: '#f59e0b', color: '#fff', fontSize: '10px' } } }] : [{ x: 0, x2: 0 }] }"
+      xaxis: "${ (CAL.state !== 'idle' && CAL.s ? [{ x: new Date(CAL.s).getTime(), x2: new Date(CAL.e).getTime(), fillColor: '#f59e0b', opacity: 0.12, label: { text: 'calibration · ' + CAL.state, orientation: 'horizontal', position: 'top', style: { background: '#f59e0b', color: '#fff', fontSize: '10px' } } }] : []).concat(HOLD.bands.map(function (b) { return { x: b.s, x2: b.e, fillColor: '#64748b', opacity: 0.12, label: { text: 'hold', orientation: 'horizontal', position: 'bottom', style: { background: '#64748b', color: '#fff', fontSize: '10px' } } }; })).concat([{ x: 0, x2: 0 }]) }"
     # Hover tooltip: list EVERY series' value at the hovered hour. We render it
     # ourselves (tooltip.custom) instead of relying on ApexCharts' built-in
     # shared tooltip, which collapses to a single series here because all series

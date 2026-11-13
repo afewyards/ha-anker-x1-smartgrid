@@ -462,6 +462,8 @@ def build_plan_horizon(
             mode = "export"
         elif iv is not None and iv.pv_w > iv.load_w:
             mode = "solar"
+        elif held:
+            mode = "hold"
         else:
             mode = "idle"
         # Rates -> slot averages (a no-op at out_scale == 1.0, i.e. every row but

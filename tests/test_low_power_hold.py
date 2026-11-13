@@ -362,8 +362,10 @@ def test_plan_holds_cheap_slot_and_discharges_expensive_one():
     held = _horizon(0.25)  # 0.35×0.6=0.21 holds; 0.60×0.6=0.36 discharges
     assert held[0]["self_discharge_w"] == 0.0 and held[0]["soc"] == pytest.approx(50.0)
     assert held[1]["self_discharge_w"] == 250.0
+    assert [r["mode"] for r in held] == ["hold", "idle"]
     off = _horizon(None)
     assert off[0]["self_discharge_w"] == 250.0 and off[0]["soc"] < 50.0
+    assert [r["mode"] for r in off] == ["idle", "idle"]
 
 
 def test_plan_held_slot_pays_standby_drain():
@@ -372,7 +374,7 @@ def test_plan_held_slot_pays_standby_drain():
 
 def test_plan_export_slot_never_holds():
     row = _horizon(0.25, export_request={T: 2000.0})[0]
-    assert row["self_discharge_w"] == 250.0 and row["grid_export_w"] == 2000.0
+    assert row["self_discharge_w"] == 250.0 and row["grid_export_w"] == 2000.0 and row["mode"] == "export"
 
 
 # ── soc drift ───────────────────────────────────────────────────────────────
