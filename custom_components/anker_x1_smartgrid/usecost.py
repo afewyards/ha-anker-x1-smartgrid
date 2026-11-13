@@ -3,19 +3,22 @@
 Display only, no HA imports. Two weighted-average inventories follow the
 battery level the way ``margin.py`` does: ``c_free`` prices solar charge at
 zero (what the house's use cost), ``c_exp`` at the export price given up (what
-the battery earned, identical to ``battery_margin_eur``).
+the battery earned, identical to ``battery_margin_eur`` plus
+``battery_solar_gain_eur``). ``c_free`` is also the grid part of ``c_exp``: both
+seed and price grid charge alike and release by the same fraction, so
+``c_exp - c_free`` is what the stored solar cost.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import pairwise
 
 from .daily_stats import _parse
 from .dataquality import house_load_w
-from .margin import _EMPTY_KWH, _MAX_DT_S
+from .margin import _EMPTY_KWH, _MAX_DT_S, sun_share
 
 _BAND_W = 50.0
 _MOVED_KWH = 0.05
@@ -34,12 +37,23 @@ class Inventory:
     e_kwh: float
     c_free: float
     c_exp: float
+    # AC kWh charged from the grid and from solar still in stock, released with the cost.
+    grid_kwh: float
+    sun_kwh: float
 
 
 def _day(out: dict, day: date) -> dict:
     return out.setdefault(
         day,
-        {"use_kwh": 0.0, "use_cost_eur": 0.0, "saved_eur": 0.0, "solar_kwh": 0.0, "price_eur_h": 0.0, "price_h": 0.0},
+        {
+            "use_kwh": 0.0,
+            "use_cost_eur": 0.0,
+            "saved_eur": 0.0,
+            "solar_gain_eur": 0.0,
+            "solar_kwh": 0.0,
+            "price_eur_h": 0.0,
+            "price_h": 0.0,
+        },
     )
 
 
@@ -49,7 +63,21 @@ def _fall(inv: Inventory, e_new: float) -> tuple[float, float]:
     free, exp = inv.c_free * f, inv.c_exp * f
     inv.c_free -= free
     inv.c_exp -= exp
+    inv.grid_kwh -= inv.grid_kwh * f
+    inv.sun_kwh -= inv.sun_kwh * f
     return free, exp
+
+
+def _earn(rec: dict, inv: Inventory, value: float) -> None:
+    """Book battery output's value as saved and solar gain by the solar share of the stock."""
+    sun = sun_share(inv.grid_kwh, inv.sun_kwh)
+    rec["saved_eur"] += value * (1.0 - sun)
+    rec["solar_gain_eur"] += value * sun
+
+
+def _seed(inv: Inventory, e_kwh: float, price: float) -> None:
+    inv.c_free = inv.c_exp = e_kwh * price
+    inv.grid_kwh, inv.sun_kwh = e_kwh, 0.0
 
 
 def _finish(out: dict[date, dict]) -> dict[date, dict]:
@@ -72,7 +100,8 @@ def replay(
       part is ``min(output, max(load - pv, 0))``;
     - a level fall releases cost from both inventories; ``use_cost_eur`` books
       the house share of the free one (all of it when nothing came out),
-      ``saved_eur`` is the margin: output value minus released ``c_exp``.
+      ``saved_eur`` and ``solar_gain_eur`` are the margin's two parts: output
+      value minus released ``c_exp``, split between grid and solar charge.
     """
     pts = []
     for row in rows:
@@ -82,7 +111,7 @@ def replay(
     pts.sort(key=lambda p: p[0])
 
     out: dict[date, dict] = {}
-    inv = Inventory(0.0, 0.0, 0.0)
+    inv = Inventory(0.0, 0.0, 0.0, 0.0, 0.0)
     share = 1.0
     for i, (ts, row) in enumerate(pts):
         rec = _day(out, ts.astimezone(tz).date())
@@ -91,17 +120,19 @@ def replay(
         exp = (imp if raw_exp is None else float(raw_exp)) - export_fee
         e_new = float(row["soc"]) / 100.0 * capacity_kwh
         if i == 0:
-            inv.c_free = inv.c_exp = e_new * imp
+            _seed(inv, e_new, imp)
         elif (ts - pts[i - 1][0]).total_seconds() > _MAX_DT_S:
             if inv.e_kwh > _EMPTY_KWH:
-                inv.c_free *= e_new / inv.e_kwh
-                inv.c_exp *= e_new / inv.e_kwh
+                # shortcut: a gap rise keeps the pre-gap grid/sun ratio;
+                # split it by PV surplus if restarts start showing up in the split.
+                _fall(inv, e_new)  # a rise too: the level is re-read at unchanged cost per kWh
             else:
-                inv.c_free = inv.c_exp = e_new * imp
+                _seed(inv, e_new, imp)
         elif e_new < inv.e_kwh:
             free, spent = _fall(inv, e_new)
             rec["use_cost_eur"] += free * share
-            rec["saved_eur"] -= spent
+            rec["saved_eur"] -= free  # c_free is the grid part of c_exp: same seed, grid price and release
+            rec["solar_gain_eur"] -= spent - free
         inv.e_kwh = e_new
         share = 1.0
 
@@ -125,10 +156,12 @@ def replay(
             solar = min(ac_in, max(pv - load, 0.0) * kwh_per_w)
             inv.c_free += (ac_in - solar) * imp
             inv.c_exp += (ac_in - solar) * imp + solar * exp
+            inv.grid_kwh += ac_in - solar
+            inv.sun_kwh += solar
         elif batt > 0:
             dc_out = batt * kwh_per_w
             dc_house = min(dc_out, deficit)
-            rec["saved_eur"] += dc_house * imp + (dc_out - dc_house) * exp
+            _earn(rec, inv, dc_house * imp + (dc_out - dc_house) * exp)
             p1 = row.get("p1_w")
             ac_out = dc_out if p1 is None else max(load - pv - float(p1), 0.0) * kwh_per_w
             house = min(ac_out, deficit)
@@ -200,7 +233,7 @@ def roll_plan(
     The drift hedge's ``hedge_kwh`` is a display debit on the level, not
     drain: its share of the cost is dropped, not booked as use.
     """
-    inv = Inventory(inv.e_kwh, inv.c_free, inv.c_exp)
+    inv = replace(inv)
     out: dict[date, dict] = {}
     for start, row, h, left in _ahead(horizon, now):
         rec = _day(out, start.astimezone(tz).date())
@@ -223,14 +256,18 @@ def roll_plan(
             e_mid = max(inv.e_kwh - hedge, 0.0)
             _fall(inv, e_mid)
             inv.e_kwh = e_mid
+        # Output is valued by the stock it left, before this slot's own charge joins it.
+        _earn(rec, inv, house * imp + export * exp)
         inv.c_free += kwh["charge_grid"] * imp
         inv.c_exp += kwh["charge_grid"] * imp + kwh["charge_solar"] * exp
+        inv.grid_kwh += kwh["charge_grid"]
+        inv.sun_kwh += kwh["charge_solar"]
         if e_new < inv.e_kwh:
             free, spent = _fall(inv, e_new)
             rec["use_cost_eur"] += free * (house / (house + export) if house + export > 0 else 1.0)
-            rec["saved_eur"] -= spent
+            rec["saved_eur"] -= free  # c_free is the grid part of c_exp: same seed, grid price and release
+            rec["solar_gain_eur"] -= spent - free
         inv.e_kwh = e_new
-        rec["saved_eur"] += house * imp + export * exp
         rec["use_cost_eur"] += max(load - pv - house, 0.0) * imp
         rec["price_eur_h"] += imp * h * left
         rec["price_h"] += h * left
@@ -253,7 +290,7 @@ def merge_days(
         price_h = sum(r["price_h"] for r in parts)
 
         def total(key, parts=parts):
-            return round(sum(r[key] for r in parts), 3)
+            return round(sum(r[key] for r in parts), 3) + 0.0
 
         grid = [h for h in hours or () if h["start"][:10] == day.isoformat() and h["grid_out_kwh"] is not None]
         grid = grid if priced else []
@@ -267,6 +304,7 @@ def merge_days(
                 "use_kwh": total("use_kwh") if parts else None,
                 "use_cost_eur": total("use_cost_eur") if priced else None,
                 "saved_eur": total("saved_eur") if priced else None,
+                "solar_gain_eur": total("solar_gain_eur") if priced else None,
                 "avg_price": round(sum(r["price_eur_h"] for r in parts) / price_h, 4) if priced and price_h else None,
                 "solar_kwh": total("solar_kwh") if parts else None,
                 "planned": "none" if p is None else "partial" if a is not None else "full",

@@ -95,7 +95,7 @@ async def test_controller_builds_the_card_from_one_sample_read():
     assert battery["soc"] == 48.0
     assert battery["stored_kwh"] == round(0.48 * ctrl.cfg.capacity_kwh, 2)
     assert battery["stored_cost_eur_per_kwh"] == 0.25
-    assert battery["margin_30d_eur"] is None
+    assert battery["margin_30d_eur"] is None and battery["solar_gain_30d_eur"] is None
     assert [d["planned"] for d in card["days"]] == ["none", "partial", "full"]
     today = card["days"][1]
     grid_in = sum(
@@ -151,6 +151,7 @@ def test_payload_fits_the_16_kb_attribute_budget():
         "use_kwh": 12.345,
         "use_cost_eur": 2.345,
         "saved_eur": 0.456,
+        "solar_gain_eur": 0.123,
         "avg_price": 0.2345,
         "solar_kwh": 3.456,
         "planned": "partial",
@@ -163,6 +164,7 @@ def test_payload_fits_the_16_kb_attribute_budget():
         "stored_cost_eur_per_kwh": 0.1987,
         "state": "charge_solar",
         "margin_30d_eur": 12.345,
+        "solar_gain_30d_eur": 1.234,
     }
     card = {"built_at": NOW.isoformat(), "battery": battery, "days": [day] * 3, "hours": [hour] * 72}
     sensor = X1PowerCardSensor(_Stub(card), "entry")
@@ -185,6 +187,9 @@ async def test_a_tick_publishes_the_card(monkeypatch):
     assert card["battery"]["soc"] == 50.0
     assert card["battery"]["state"] in {"charge_grid", "charge_solar", "house", "export", "hold", "idle"}
     assert len(card["days"]) == 3
+    assert all("solar_gain_eur" in d for d in card["days"])
+    margin, solar = ctrl.last_status["battery_margin_30d"], ctrl.last_status["battery_solar_gain_30d"]
+    assert card["battery"]["margin_30d_eur"] == margin[0] and card["battery"]["solar_gain_30d_eur"] == solar[0]
 
 
 def _tick_setup(monkeypatch, *, enabled=True, seed=True):

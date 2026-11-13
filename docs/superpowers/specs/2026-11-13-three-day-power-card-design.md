@@ -69,11 +69,13 @@ level fall with no output (standby drain) goes to house cost in full. So
 charge losses raise the cost per stored kWh, and discharge losses and drain
 are booked when they happen. Export revenue is not part of house cost.
 
-**Saved per day** stays exactly what `battery_margin_eur` is today: output
-valued at that minute's price minus stored cost, where solar charge is
-costed at the **export price given up**. The owner agreed to this split
+**Saved per day** is `battery_margin_eur`: output valued at that minute's
+price minus stored cost, for grid-charged energy only. What stored solar
+earned over the **export price given up** shows apart as "sun"
+(`battery_solar_gain_eur`); each kWh out is grid or solar in proportion to
+what is stored. The owner agreed to this split
 knowingly: house cost answers "what did my use cost", saved answers "what
-did the battery earn", and on sunny days the two no longer add up exactly.
+did the battery earn", and house cost and saved no longer add up exactly.
 That is accepted.
 
 **Stored cost per kWh** shown on the battery line uses the solar-is-free

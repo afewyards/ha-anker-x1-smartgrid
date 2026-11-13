@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from custom_components.anker_x1_smartgrid.margin import battery_margin_by_day, margin_total
+from custom_components.anker_x1_smartgrid.margin import battery_margin_by_day, margin_total, sun_share
 
 AMS = ZoneInfo("Europe/Amsterdam")
 CAP = 20.0
@@ -50,6 +50,7 @@ def test_lossless_cycle_earns_the_spread():
     assert rec["value_eur"] == pytest.approx(5.0)
     assert rec["cost_eur"] == pytest.approx(3.0)
     assert rec["margin_eur"] == pytest.approx(2.0)
+    assert rec["solar_gain_eur"] == 0.0
 
 
 def test_losses_raise_the_cost_per_stored_kwh():
@@ -76,7 +77,52 @@ def test_solar_charge_costs_the_export_price():
     # 4 kW PV surplus covers 4 of the 10 kWh charged; the rest comes from the grid.
     rec = battery_margin_by_day(_cycle(10_000, 10_000, pv=4_000, export=0.10), CAP, AMS)[DAY]
     assert rec["cost_eur"] == pytest.approx(6 * 0.30 + 4 * 0.10)
-    assert rec["margin_eur"] == pytest.approx(5.0 - 2.2)
+    assert rec["margin_eur"] == pytest.approx(0.6 * 5.0 - 6 * 0.30)
+    assert rec["solar_gain_eur"] == pytest.approx(0.4 * 5.0 - 4 * 0.10)
+    assert rec["margin_eur"] + rec["solar_gain_eur"] == pytest.approx(5.0 - 2.2)
+
+
+def test_stored_solar_earns_solar_gain_not_margin():
+    rec = battery_margin_by_day(_cycle(10_000, 10_000, pv=10_000, export=0.10), CAP, AMS)[DAY]
+    assert rec["margin_eur"] == pytest.approx(0.0)
+    assert rec["solar_gain_eur"] == pytest.approx(5.0 - 10 * 0.10)
+
+
+def test_a_mixed_stock_releases_both_parts_in_proportion():
+    # 10 kWh grid at 0.30 then 5 kWh solar at 0.10; 6 of the 15 kWh go to the house at 0.50.
+    t1, t2, t3 = (T0 + timedelta(hours=h) for h in (1, 2, 3))
+    rows = (
+        _phase(T0, 60, 0, 50, -10_000, 0.30, export=0.10)
+        + _phase(t1, 60, 50, 75, -5_000, 0.30, pv=5_000, export=0.10)
+        + _phase(t2, 60, 75, 45, 6_000, 0.50, load=6_000, export=0.10)
+        + _end(t3, 45)
+    )
+    rec = battery_margin_by_day(rows, CAP, AMS)[DAY]
+    assert rec["margin_eur"] == pytest.approx(6 * 0.50 * 2 / 3 - 10 * 0.30 * 0.4)
+    assert rec["solar_gain_eur"] == pytest.approx(6 * 0.50 / 3 - 5 * 0.10 * 0.4)
+    assert rec["margin_eur"] + rec["solar_gain_eur"] == pytest.approx(3.0 - 3.5 * 0.4)
+
+
+def test_sun_share():
+    assert sun_share(0.0, 0.0) == 0.0
+    assert sun_share(3.0, 1.0) == 0.25
+
+
+def test_a_fully_released_day_publishes_zero_not_minus_zero():
+    from custom_components.anker_x1_smartgrid import daily_stats
+
+    d = date(2026, 11, 10)
+    m = {"out_kwh": 0.0, "value_eur": 0.0, "cost_eur": 1e-9, "margin_eur": -1e-9, "solar_gain_eur": -1e-12}
+    (row,) = daily_stats.merge_days({}, {}, daily_stats.new_day_totals(), d, margin={d: m})
+    assert str(row["battery_margin_eur"]) == "0.0" and str(row["battery_solar_gain_eur"]) == "0.0"
+    assert str(margin_total({d: m}, d)[0]) == "0.0"
+
+
+def test_the_seed_counts_as_grid():
+    rows = _phase(T0, 60, 50, 0, 10_000, 0.50, load=10_000) + _end(T0 + timedelta(hours=1), 0)
+    rec = battery_margin_by_day(rows, CAP, AMS)[DAY]
+    assert rec["solar_gain_eur"] == 0.0
+    assert rec["margin_eur"] == pytest.approx(rec["value_eur"] - rec["cost_eur"])
 
 
 def test_discharge_beyond_house_load_is_valued_at_export_price():
@@ -98,14 +144,14 @@ def test_gap_over_five_minutes_contributes_nothing():
         },
     ]
     rec = battery_margin_by_day(rows, CAP, AMS)[DAY]
-    assert rec == {"out_kwh": 0.0, "value_eur": 0.0, "cost_eur": 0.0, "margin_eur": 0.0}
+    assert rec == {"out_kwh": 0.0, "value_eur": 0.0, "cost_eur": 0.0, "solar_gain_eur": 0.0, "margin_eur": 0.0}
 
 
 def test_merge_days_publishes_margin_for_measured_days_only():
     from custom_components.anker_x1_smartgrid import daily_stats
 
     d0, d1, d2 = date(2026, 11, 9), date(2026, 11, 10), date(2026, 11, 11)
-    m = {"out_kwh": 1.23456, "value_eur": 0.5, "cost_eur": 0.3, "margin_eur": 0.2}
+    m = {"out_kwh": 1.23456, "value_eur": 0.5, "cost_eur": 0.3, "margin_eur": 0.15, "solar_gain_eur": 0.05}
     rows = daily_stats.merge_days(
         {d0: daily_stats.new_day_totals()},
         {d2: daily_stats.new_day_totals()},
@@ -116,7 +162,9 @@ def test_merge_days_publishes_margin_for_measured_days_only():
     by_day = {r["date"]: r for r in rows}
     assert by_day[d0.isoformat()]["battery_margin_eur"] is None
     assert by_day[d1.isoformat()]["battery_out_kwh"] == 1.235
-    assert by_day[d1.isoformat()]["battery_margin_eur"] == 0.2
+    assert by_day[d1.isoformat()]["battery_margin_eur"] == 0.15
+    assert by_day[d1.isoformat()]["battery_solar_gain_eur"] == 0.05
+    assert by_day[d0.isoformat()]["battery_solar_gain_eur"] is None
     assert by_day[d2.isoformat()]["battery_margin_eur"] is None
 
 
@@ -126,6 +174,8 @@ def test_margin_total_sums_last_30_days_only():
     assert margin_total(by_day, today) == (30.0, 30)
     del by_day[today - timedelta(3)]
     assert margin_total(by_day, today) == (29.0, 29)
+    by_day = {today - timedelta(n): {"margin_eur": 1.0, "solar_gain_eur": 0.5} for n in range(31)}
+    assert margin_total(by_day, today, 30, "solar_gain_eur") == (15.0, 30)
 
 
 def test_margin_total_none_without_data():

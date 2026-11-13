@@ -410,11 +410,13 @@ class X1DailyStatsSensor(_Base):
     @property
     def extra_state_attributes(self):
         m30 = self._controller.last_status.get("battery_margin_30d") or (None, None)
+        s30 = self._controller.last_status.get("battery_solar_gain_30d") or (None, None)
         return {
             "days": self._controller.last_status.get("daily_stats") or [],
             "window_days": daily_stats.WINDOW_DAYS,
             "battery_margin_30d_eur": m30[0],
             "battery_margin_30d_days": m30[1],
+            "battery_solar_gain_30d_eur": s30[0],
         }
 
 

@@ -4,7 +4,7 @@
 <title>smartgrid-power-card harness</title>
 <!--
   Fixture page for the power card, not served by Home Assistant.
-  ?case=normal|unpublished|dst|missing|noattrs  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?case=normal|unpublished|dst|wide|missing|noattrs  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
 <style>
@@ -128,6 +128,7 @@
         use_kwh: sum('use_kwh'),
         use_cost_eur: priced ? Math.round(rows.reduce((a, h) => a + h.use_kwh * h.price, 0) * 90) / 100 : null,
         saved_eur: priced ? [-1.2, 0.19, 1.1][k] : null,
+        solar_gain_eur: priced ? (CASE === 'dst' ? 0 : [0.08, 0.42, 0.31][k]) : null,
         avg_price: priced ? Math.round((rows.reduce((a, h) => a + h.price, 0) / rows.length) * 1000) / 1000 : null,
         solar_kwh: sum('solar_kwh'),
         planned: ['none', 'partial', 'full'][k],
@@ -135,9 +136,11 @@
         grid_out_kwh: priced ? sum('grid_out_kwh') : null,
       };
     });
+    // Today's name line at its widest: a large sun figure and a negative average price.
+    if (CASE === 'wide') Object.assign(days[1], { solar_gain_eur: -12.42, avg_price: -0.414 });
     const cur = hours.find((h) => Date.parse(h.start) === nowHour) || hours[hours.length - 1];
     return {
-      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: cur.state, margin_30d_eur: 28.4 },
+      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: cur.state, margin_30d_eur: 28.4, solar_gain_30d_eur: CASE === 'dst' ? 0 : 3.1 },
       days,
       hours,
     };
@@ -166,23 +169,27 @@
 <script src="smartgrid-power-card.js"></script>
 <script>
   document.body.className = window.THEME;
-  const card = document.createElement('smartgrid-power-card');
-  // Headless Chrome never makes the viewport narrower than 500 px, so a small window means the wall's 456 px card.
-  if (window.WIDTH || innerWidth <= 500) card.style.width = `${window.WIDTH || 456}px`;
-  card.setConfig(window.TITLE ? { title: true } : {});
-  card.hass = window.HASS;
-  document.body.append(card);
-  new ResizeObserver(() => {
-    const r = card.getBoundingClientRect();
-    STATUS.size = `card ${Math.round(r.width)}x${Math.round(r.height)}`;
-    showStatus();
-  }).observe(card);
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    // A second hass object with the same state object must not re-render.
-    const inner = () => card.shadowRoot.querySelector('ha-card').firstElementChild;
-    const before = inner();
-    card.hass = { ...window.HASS };
-    STATUS.rerender = inner() === before ? 'same state: no re-render' : 'same state: RE-RENDERED';
-    showStatus();
-  }));
+  // Fonts load lazily; the card measures its Today line once, so it mounts after Roboto is in (as on the wall).
+  Promise.all(['400 11px Roboto', '700 11px Roboto'].map((f) => document.fonts.load(f))).then(mount);
+  function mount() {
+    const card = document.createElement('smartgrid-power-card');
+    // Headless Chrome never makes the viewport narrower than 500 px, so a small window means the wall's 456 px card.
+    if (window.WIDTH || innerWidth <= 500) card.style.width = `${window.WIDTH || 456}px`;
+    card.setConfig(window.TITLE ? { title: true } : {});
+    card.hass = window.HASS;
+    document.body.append(card);
+    new ResizeObserver(() => {
+      const r = card.getBoundingClientRect();
+      STATUS.size = `card ${Math.round(r.width)}x${Math.round(r.height)}`;
+      showStatus();
+    }).observe(card);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      // A second hass object with the same state object must not re-render.
+      const inner = () => card.shadowRoot.querySelector('ha-card').firstElementChild;
+      const before = inner();
+      card.hass = { ...window.HASS };
+      STATUS.rerender = inner() === before ? 'same state: no re-render' : 'same state: RE-RENDERED';
+      showStatus();
+    }));
+  }
 </script>

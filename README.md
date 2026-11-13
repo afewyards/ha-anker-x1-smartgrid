@@ -115,13 +115,14 @@ The `sensor.smartgrid_daily_stats` entity exposes the per-day table as attribute
 - **`days`** — ordered list of per-day dicts, each with `date` (ISO `YYYY-MM-DD`) and `source` (`actual` / `mixed` / `plan`), plus two accounting bases:
   - **battery** — `grid_charge_kwh`, `grid_export_kwh`, `cost_eur`, `revenue_eur`, `net_eur`, `actual_net_eur`, `planned_net_eur`. Grid energy that reached the battery and battery energy that reached the grid (`min()` attribution); this is what the optimiser maximises
   - **whole house** — `house_import_kwh`, `house_export_kwh`, `house_cost_eur`, `house_revenue_eur`, `house_net_eur`, `actual_house_net_eur`, `planned_house_net_eur`, `baseline_house_net_eur` (same house with no battery, raw), `savings_eur` (`house_net_eur` minus baseline; null on past days). Every kWh across the meter, including grid the house consumed directly and PV that spilled straight to the grid; this is the figure that reconciles against the utility meter
-  - **battery margin** — what the battery earned on the energy it delivered, at weighted-average cost of what is stored; measured only (null on future days and days without samples), today is so far. Energy bought one day and used the next earns on the second day
+  - **battery margin** — what the battery earned on the energy it delivered, at weighted-average cost of what is stored; measured only (null on future days and days without samples), today is so far. Energy bought one day and used the next earns on the second day. What is stored is split into grid and solar charge, and each kWh out draws on both in proportion
     - `battery_out_kwh` — AC kWh the battery delivered
     - `battery_value_eur` — that energy at the import price of the minute it covered house load, export price for what went to the grid
     - `battery_cost_eur` — what the stored kWh that left the pack cost to put in (grid at import price, solar at the export price it gave up), so losses and idle drain count
-    - `battery_margin_eur` — `battery_value_eur` minus `battery_cost_eur`
+    - `battery_margin_eur` — what grid-charged energy earned: its part of `battery_value_eur` minus its part of `battery_cost_eur`
+    - `battery_solar_gain_eur` — the same for stored solar, so what it earned over exporting it; the two add up to `battery_value_eur` minus `battery_cost_eur`
 
-  Top-level, next to `days`: `battery_margin_30d_eur` is the sum of `battery_margin_eur` over the 30 local days ending today (today so far), `battery_margin_30d_days` is how many of those days have samples; both null when there is no data.
+  Top-level, next to `days`: `battery_margin_30d_eur` is the sum of `battery_margin_eur` over the 30 local days ending today (today so far), `battery_solar_gain_30d_eur` the same for `battery_solar_gain_eur`, `battery_margin_30d_days` is how many of those days have samples; all null when there is no data.
 
   Past days are measured, today is measured-so-far plus planned-remainder, future days are plan-only. Both € bases are net of `export_fee_eur_per_kwh`, so a utility reporting feed-in gross will read higher by fee × exported kWh
 - **`window_days`** — rolling history depth of the table, in days back from today
@@ -140,7 +141,7 @@ A second card, [`lovelace/daily-stats-card.yaml`](lovelace/daily-stats-card.yaml
 
 ![Power card](custom_components/anker_x1_smartgrid/frontend/power-card.png)
 
-The integration ships its own card for yesterday, today and tomorrow: the battery line and level on top (held hours hatched), and per day what the house's use cost and what the battery saved (today also the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. House use and solar are thin outlines behind the bars. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
+The integration ships its own card for yesterday, today and tomorrow: the battery line and level on top (held hours hatched), and per day what the house's use cost and what the battery saved (today also what stored solar earned, the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. House use and solar are thin outlines behind the bars. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
 
 ```yaml
 type: custom:smartgrid-power-card
@@ -148,7 +149,7 @@ entity: sensor.smartgrid_power_card  # optional, this is the default
 title: true                          # optional, shows "Power"; a string sets your own title
 ```
 
-House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what the battery earned, with solar charge valued at the export price given up, so on sunny days the two don't add up exactly.
+House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what grid-charged energy earned: its value when used, less what it cost to buy, so its conversion losses and standby drain land in saved. Sun is what stored solar earned over exporting it, shown only when it isn't zero.
 
 Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color` and `--smartgrid-power-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
 

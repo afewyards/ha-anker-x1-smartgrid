@@ -71,6 +71,7 @@ class TestReplay:
         assert inv.e_kwh == pytest.approx(14.0)
         assert inv.c_free == pytest.approx(10 * 0.30)
         assert inv.c_exp == pytest.approx(10 * 0.30 + 4 * 0.08)
+        assert (inv.grid_kwh, inv.sun_kwh) == pytest.approx((10.0, 4.0))
 
     def test_only_the_house_share_of_a_discharge_is_use_cost(self):
         # 4 kWh out, 1 kWh to the house, 3 kWh exported.
@@ -93,18 +94,43 @@ class TestReplay:
         ]
         days, inv = replay(rows, CAP, AMS)
         assert days[DAY]["use_kwh"] == 0.0 and days[DAY]["use_cost_eur"] == 0.0 and days[DAY]["saved_eur"] == 0.0
-        assert (inv.e_kwh, inv.c_free, inv.c_exp) == pytest.approx((8.0, 4.0, 4.0))
+        assert (inv.e_kwh, inv.c_free, inv.c_exp, inv.grid_kwh) == pytest.approx((8.0, 4.0, 4.0, 8.0))
 
-    def test_saved_is_the_battery_margin(self):
+    def test_saved_and_solar_gain_are_the_battery_margins_two_parts(self):
+        # Across local midnight (23:00Z) and a gap, mixed grid and solar charge.
+        t = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
         rows = (
             _phase(T0, 60, 10, 50, -10_000, 0.30, pv=3_000, load=500, export=0.12)
             + _phase(H1, 60, 50, 20, 6_000, 0.45, pv=200, load=2_500, export=0.12)
             + _phase(H2, 60, 20, 18, 100, 0.25, load=300)
-            + _end(H2 + timedelta(hours=1), 18)
+            + _phase(t, 60, 40, 70, -6_000, 0.20)
+            + _phase(t + timedelta(hours=1, minutes=20), 120, 70, 30, 4_000, 0.40, load=3_000, export=0.05)
+            + _end(t + timedelta(hours=3, minutes=20), 30)
         )
         days, _inv = replay(rows, CAP, AMS, export_fee=0.02)
         margin = battery_margin_by_day(rows, CAP, AMS, 0.02)
-        assert days[DAY]["saved_eur"] == pytest.approx(margin[DAY]["margin_eur"])
+        assert set(days) == set(margin) == {DAY, date(2026, 11, 11)}
+        for day, m in margin.items():
+            assert days[day]["saved_eur"] + days[day]["solar_gain_eur"] == pytest.approx(m["value_eur"] - m["cost_eur"])
+            assert days[day]["saved_eur"] == pytest.approx(m["margin_eur"])
+            assert days[day]["solar_gain_eur"] == pytest.approx(m["solar_gain_eur"])
+        assert margin[DAY]["solar_gain_eur"] != pytest.approx(0.0)
+
+    def test_a_gap_keeps_the_grid_and_solar_parts_of_the_stock(self):
+        # 10 kWh grid at 0.30 and 5 kWh solar at 0.20, then 10 minutes unrecorded: the level reads
+        # 12 kWh, so both parts keep 80%. All 12 kWh then go to the house at 0.50, a third of it solar.
+        t1, t2 = H1 + timedelta(hours=1), H1 + timedelta(hours=1, minutes=10)
+        rows = (
+            _phase(T0, 60, 0, 50, -10_000, 0.30, export=0.20)
+            + _phase(H1, 60, 50, 75, -5_000, 0.30, pv=5_000, export=0.20)
+            + _end(t1, 75)
+            + _phase(t2, 60, 60, 0, 12_000, 0.50, load=12_000, export=0.20)
+            + _end(t2 + timedelta(hours=1), 0)
+        )
+        rec = replay(rows, CAP, AMS)[0][DAY]
+        assert rec["solar_gain_eur"] == pytest.approx(12 * 0.50 / 3 - 5 * 0.20 * 0.8)
+        assert rec["saved_eur"] == pytest.approx(12 * 0.50 * 2 / 3 - 10 * 0.30 * 0.8)
+        assert battery_margin_by_day(rows, CAP, AMS)[DAY]["solar_gain_eur"] == pytest.approx(rec["solar_gain_eur"])
 
     def test_a_25_hour_local_day_sums_into_one_date(self):
         # 2026-10-25 is the end of CEST: 00:00 local is 22:00Z the day before, the day lasts 25 h.
@@ -149,7 +175,7 @@ NOW = datetime(2026, 11, 10, 21, 0, tzinfo=UTC)  # 22:00 local
 
 class TestRollPlan:
     def test_planned_charge_is_booked_on_the_day_the_house_uses_it(self):
-        inv = Inventory(2.0, 0.6, 0.6)
+        inv = Inventory(2.0, 0.6, 0.6, 2.0, 0.0)
         horizon = [
             _slot(NOW + timedelta(hours=1), 57.5, 0.20, grid=10.0, mode="grid"),  # 23:00 local
             _slot(NOW + timedelta(hours=2), 35.0, 0.40, load=4.0, house=4.0),  # 00:00 local, next day
@@ -159,27 +185,51 @@ class TestRollPlan:
         assert planned[DAY]["use_cost_eur"] == pytest.approx(0.0)
         assert planned[date(2026, 11, 11)]["use_cost_eur"] == pytest.approx(released)
         assert planned[date(2026, 11, 11)]["saved_eur"] == pytest.approx(4.0 * 0.40 - released)
-        assert (inv.e_kwh, inv.c_free) == (2.0, 0.6), "the caller's inventory is not touched"
+        assert planned[date(2026, 11, 11)]["solar_gain_eur"] == 0.0
+        assert (inv.e_kwh, inv.c_free, inv.grid_kwh, inv.sun_kwh) == (2.0, 0.6, 2.0, 0.0), (
+            "the caller's inventory is not touched"
+        )
 
-    def test_solar_charge_is_free_for_use_and_export_valued_for_saved(self):
-        inv = Inventory(10.0, 3.0, 3.0)
+    def test_solar_charge_is_free_for_use_and_export_valued_for_solar_gain(self):
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         horizon = [
             _slot(NOW, 60.0, 0.30, pv=3.0, load=1.0, solar=2.0, mode="solar"),
             _slot(NOW + timedelta(hours=1), 50.0, 0.30, load=2.0, house=2.0),
         ]
         rec = roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at, export_fee=0.02)[DAY]
         assert rec["use_cost_eur"] == pytest.approx(3.0 * 2 / 12)
-        assert rec["saved_eur"] == pytest.approx(2.0 * 0.30 - (3.0 + 2.0 * 0.05) * 2 / 12)
+        # The stock is 10 kWh grid and 2 kWh solar; the 2 kWh out draw on both in proportion.
+        assert rec["saved_eur"] == pytest.approx(2.0 * 0.30 * 10 / 12 - 3.0 * 2 / 12)
+        assert rec["solar_gain_eur"] == pytest.approx(2.0 * 0.30 * 2 / 12 - 2.0 * 0.05 * 2 / 12)
+        assert rec["saved_eur"] + rec["solar_gain_eur"] == pytest.approx(2.0 * 0.30 - (3.0 + 2.0 * 0.05) * 2 / 12)
+
+    def test_output_is_valued_by_the_stock_before_the_slots_own_charge(self):
+        # All-grid stock; one slot charges 2 kWh solar and exports 4 kWh, so the level falls 10 -> 8.
+        horizon = [_slot(NOW, 40.0, 0.30, solar=2.0, export=4.0, mode="export")]
+        rec = roll_plan(horizon, Inventory(10.0, 3.0, 3.0, 10.0, 0.0), CAP, AMS, NOW, _exp_at)[DAY]
+        assert rec["saved_eur"] == pytest.approx(4.0 * 0.05 - 3.0 * 0.2)
+        # The export earns nothing as sun; the net fall still releases its share of the fresh solar's cost.
+        assert rec["solar_gain_eur"] == pytest.approx(-2.0 * 0.05 * 0.2)
+        assert rec["saved_eur"] + rec["solar_gain_eur"] == pytest.approx(4.0 * 0.05 - (3.0 + 2.0 * 0.05) * 0.2)
+
+    def test_a_solar_charged_stock_earns_solar_gain_only(self):
+        horizon = [
+            _slot(NOW, 50.0, 0.30, pv=10.0, solar=10.0, mode="solar"),
+            _slot(NOW + timedelta(hours=1), 0.0, 0.40, load=10.0, house=10.0),
+        ]
+        rec = roll_plan(horizon, Inventory(0.0, 0.0, 0.0, 0.0, 0.0), CAP, AMS, NOW, _exp_at)[DAY]
+        assert rec["saved_eur"] == pytest.approx(0.0)
+        assert rec["solar_gain_eur"] == pytest.approx(10.0 * 0.40 - 10.0 * 0.05)
 
     def test_grid_direct_and_export_share(self):
-        inv = Inventory(10.0, 3.0, 3.0)
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         # 1 kWh of house deficit from the battery, 1 from the grid, 2 kWh exported: share 1/3.
         horizon = [_slot(NOW, 35.0, 0.40, load=2.5, pv=0.5, house=1.0, export=2.0, mode="export")]
         rec = roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at)[DAY]
         assert rec["use_cost_eur"] == pytest.approx(1.0 * 0.40 + 3.0 * 3 / 10 / 3)
 
     def test_finished_and_actual_rows_do_not_count(self):
-        inv = Inventory(10.0, 3.0, 3.0)
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         horizon = [
             _slot(NOW - timedelta(minutes=15), 50.0, 0.30, load=9.0),  # ends at NOW
             _slot(NOW + timedelta(hours=1), 50.0, 0.30, load=9.0, mode="actual"),
@@ -196,7 +246,13 @@ class TestRollPlan:
             _slot(NOW + timedelta(minutes=30), 50.0, 0.40, load=2.0, house=2.0),
         ]
         rec = roll_plan(
-            horizon, Inventory(10.0, 3.0, 3.0), CAP, AMS, now, _exp_at, delivered_at=lambda s: 1.0 * (s == NOW)
+            horizon,
+            Inventory(10.0, 3.0, 3.0, 10.0, 0.0),
+            CAP,
+            AMS,
+            now,
+            _exp_at,
+            delivered_at=lambda s: 1.0 * (s == NOW),
         )[DAY]
         assert rec["use_kwh"] == pytest.approx(0.4 + 2.0)
         assert rec["use_cost_eur"] == pytest.approx(0.4 * 0.20 + (3.0 + 2.0 * 0.20) * 2 / 12)
@@ -205,7 +261,7 @@ class TestRollPlan:
     def test_rows_at_the_soc_floor_put_nothing_out_of_the_battery(self):
         # plan.py keeps planning house use from the battery once the level sits clamped at the floor.
         horizon = [_slot(NOW + timedelta(minutes=15 * k), 5.0, 0.25, load=0.4, house=0.4) for k in range(4)]
-        rec = roll_plan(horizon, Inventory(1.0, 0.25, 0.25), CAP, AMS, NOW, _exp_at)[DAY]
+        rec = roll_plan(horizon, Inventory(1.0, 0.25, 0.25, 1.0, 0.0), CAP, AMS, NOW, _exp_at)[DAY]
         assert rec["use_cost_eur"] == pytest.approx(4 * 0.4 * 0.25)
         assert rec["saved_eur"] == pytest.approx(0.0)
 
@@ -215,12 +271,12 @@ class TestRollPlan:
             _slot(NOW, 45.0, 0.30) | {"hedge_kwh": 1.0},
             _slot(NOW + timedelta(hours=1), 35.0, 0.30, load=2.0, house=2.0),
         ]
-        rec = roll_plan(horizon, Inventory(10.0, 3.0, 3.0), CAP, AMS, NOW, _exp_at)[DAY]
+        rec = roll_plan(horizon, Inventory(10.0, 3.0, 3.0, 10.0, 0.0), CAP, AMS, NOW, _exp_at)[DAY]
         assert rec["use_cost_eur"] == pytest.approx(2.0 * 0.30)
         assert rec["saved_eur"] == pytest.approx(0.0)
 
     def test_missing_horizon_plans_nothing(self):
-        assert roll_plan(None, Inventory(10.0, 3.0, 3.0), CAP, AMS, NOW, _exp_at) == {}
+        assert roll_plan(None, Inventory(10.0, 3.0, 3.0, 10.0, 0.0), CAP, AMS, NOW, _exp_at) == {}
 
 
 class TestMergeDays:
@@ -243,6 +299,7 @@ class TestMergeDays:
             "use_kwh": None,
             "use_cost_eur": None,
             "saved_eur": None,
+            "solar_gain_eur": None,
             "avg_price": None,
             "solar_kwh": None,
             "planned": "none",
@@ -251,7 +308,7 @@ class TestMergeDays:
         }
 
     def test_tomorrow_before_prices_shows_use_and_solar_only(self):
-        inv = Inventory(10.0, 3.0, 3.0)
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         tomorrow = datetime(2026, 11, 10, 23, 0, tzinfo=UTC)
         horizon = [_slot(NOW, 50.0, 0.30, load=1.0)] + [
             _slot(tomorrow + timedelta(hours=h), 45.0, 0.30, load=1.0, pv=0.25, est=True) for h in range(24)
@@ -260,6 +317,7 @@ class TestMergeDays:
         assert tm["planned"] == "full"
         assert tm["use_kwh"] == pytest.approx(24.0) and tm["solar_kwh"] == pytest.approx(6.0)
         assert tm["use_cost_eur"] is None and tm["saved_eur"] is None and tm["avg_price"] is None
+        assert tm["solar_gain_eur"] is None
 
     def test_grid_day_totals_are_the_sum_of_that_days_hours(self):
         # Measured from yesterday 00:00 local to NOW at 1 kW from the grid, but today two hours
@@ -296,7 +354,7 @@ class TestMergeDays:
         assert tm["grid_in_kwh"] == pytest.approx(0.0)
 
     def test_grid_totals_are_unknown_when_the_days_figures_are(self):
-        inv = Inventory(10.0, 3.0, 3.0)
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         tomorrow = datetime(2026, 11, 10, 23, 0, tzinfo=UTC)
         horizon = [_slot(NOW, 50.0, 0.30, load=1.0)] + [
             _slot(tomorrow + timedelta(hours=h), 45.0, 0.30, load=1.0, est=True) for h in range(24)

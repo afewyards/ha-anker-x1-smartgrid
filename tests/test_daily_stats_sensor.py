@@ -36,11 +36,13 @@ def test_attributes_carry_the_table_and_the_window():
 
 
 def test_margin_30d_attributes():
-    sensor = X1DailyStatsSensor(_StubController({"battery_margin_30d": (1.234, 12)}), "entry")
-    attrs = sensor.extra_state_attributes
+    status = {"battery_margin_30d": (1.234, 12), "battery_solar_gain_30d": (0.567, 12)}
+    attrs = X1DailyStatsSensor(_StubController(status), "entry").extra_state_attributes
     assert (attrs["battery_margin_30d_eur"], attrs["battery_margin_30d_days"]) == (1.234, 12)
+    assert attrs["battery_solar_gain_30d_eur"] == 0.567
     attrs = X1DailyStatsSensor(_StubController({}), "entry").extra_state_attributes
     assert attrs["battery_margin_30d_eur"] is None and attrs["battery_margin_30d_days"] is None
+    assert attrs["battery_solar_gain_30d_eur"] is None
 
 
 def test_missing_table_is_zero_rows_not_a_crash():

@@ -2385,6 +2385,7 @@ class Controller:
         # blank, and the enabled path overwrites this a few lines later anyway.
         _prev_daily_stats = self.last_status.get("daily_stats")
         _prev_margin_30d = self.last_status.get("battery_margin_30d")
+        _prev_solar_gain_30d = self.last_status.get("battery_solar_gain_30d")
         self.last_status = snapshot.build_status(
             now=now,
             setpoint=setpoint,
@@ -2424,6 +2425,7 @@ class Controller:
         if _prev_daily_stats is not None:
             self.last_status["daily_stats"] = _prev_daily_stats
             self.last_status["battery_margin_30d"] = _prev_margin_30d
+            self.last_status["battery_solar_gain_30d"] = _prev_solar_gain_30d
         return self.last_status
 
     def _rollover_daily_ledgers(self, now: datetime) -> None:
@@ -2564,6 +2566,7 @@ class Controller:
                     inputs.meter_w,
                 ),
                 "margin_30d_eur": (self.last_status.get("battery_margin_30d") or (None, None))[0],
+                "solar_gain_30d_eur": (self.last_status.get("battery_solar_gain_30d") or (None, None))[0],
             }
             self._card_failed = False
         except Exception:
@@ -2738,8 +2741,10 @@ class Controller:
             baseline=daily_stats.baseline_by_day(horizon, _tz, _export_price_at),
             margin=self._battery_margin,
         )
-        self.last_status["battery_margin_30d"] = margin_mod.margin_total(
-            self._battery_margin, dt_util.as_local(now).date(), 30
+        _today = dt_util.as_local(now).date()
+        self.last_status["battery_margin_30d"] = margin_mod.margin_total(self._battery_margin, _today, 30)
+        self.last_status["battery_solar_gain_30d"] = margin_mod.margin_total(
+            self._battery_margin, _today, 30, "solar_gain_eur"
         )
 
     async def release(self) -> None:

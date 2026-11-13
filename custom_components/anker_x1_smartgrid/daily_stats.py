@@ -292,7 +292,7 @@ def merge_days(
 ) -> list[dict]:
     """Stitch measured past / mixed today / planned future into one table.
 
-    ``margin`` is ``margin.battery_margin_by_day`` output; its four ``battery_*``
+    ``margin`` is ``margin.battery_margin_by_day`` output; its five ``battery_*``
     fields are measured only, so they are None on future days and days without samples.
 
     ``today_totals`` is the LIVE ledger's ``DayTotals`` for ``today``; it wins
@@ -359,7 +359,9 @@ def merge_days(
                 "battery_out_kwh": round(m["out_kwh"], 3) if m else None,
                 "battery_value_eur": round(m["value_eur"], 3) if m else None,
                 "battery_cost_eur": round(m["cost_eur"], 3) if m else None,
-                "battery_margin_eur": round(m["margin_eur"], 3) if m else None,
+                # + 0.0: a fully released day rounds to -0.0 otherwise.
+                "battery_margin_eur": round(m["margin_eur"], 3) + 0.0 if m else None,
+                "battery_solar_gain_eur": round(m["solar_gain_eur"], 3) + 0.0 if m else None,
             }
         )
     return rows

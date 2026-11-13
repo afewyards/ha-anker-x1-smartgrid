@@ -96,7 +96,8 @@ svg { display: block; }
 .ph.on .cost { font-size: 22px; line-height: 1.1; }
 .ph.on .cost .sv { font-size: 14px; }
 .ph.on .name { color: var(--sg-ink); font-weight: 700; }
-.ph .l3 { display: block; overflow: hidden; text-overflow: ellipsis; }
+.ph .l3, .ph .info { display: block; overflow: hidden; text-overflow: ellipsis; }
+.ph .info { min-width: 0; }
 .pos { color: var(--sg-pos); } .neg { color: var(--sg-neg); }
 .lg { display: flex; flex-wrap: wrap; column-gap: 10px; color: var(--sg-dim); margin-top: 2px; line-height: 1.5; }
 .lg > span { white-space: nowrap; }
@@ -142,6 +143,11 @@ const LEGEND = `<div class="lg">
 <span>grid kWh${swatch('gh', 9)}house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
+
+// What stored solar earned over exporting it; left out while it rounds to zero.
+function sun(v, cur = '') {
+  return num(v) === null || Math.abs(v) < 0.005 ? '' : `sun ${signed(v, cur)}`;
+}
 
 function saved(v, prefix = '') {
   if (num(v) === null) return `<span class="sv">${DASH}</span>`;
@@ -196,6 +202,10 @@ class SmartgridPowerCard extends HTMLElement {
     const card = this.shadowRoot.querySelector('ha-card');
     try {
       card.innerHTML = this._body(width);
+      // Today's name line gives up the average price before it clips the sun figure.
+      const info = card.querySelector('.ph.on .info');
+      const avg = info && info.querySelector('.avg');
+      if (avg && info.scrollWidth > info.clientWidth) avg.remove();
     } catch (e) {
       console.error(TAG, e);
       card.innerHTML = '<div class="empty">The planner has no data yet.</div>';
@@ -257,7 +267,8 @@ class SmartgridPowerCard extends HTMLElement {
       num(b.stored_cost_eur_per_kwh) !== null && `${eur(b.stored_cost_eur_per_kwh)}/kWh`,
       STATE_TEXT[b.state],
     ].filter(Boolean);
-    const m = num(b.margin_30d_eur) === null ? '' : `<span>30 days ${signed(b.margin_30d_eur, '€')}</span>`;
+    const m30 = [num(b.margin_30d_eur) !== null && `30 days ${signed(b.margin_30d_eur, '€')}`, sun(b.solar_gain_30d_eur, '€')].filter(Boolean);
+    const m = m30.length ? `<span>${m30.join(' · ')}</span>` : '';
     return `<div class="bat"><span><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}</div>`;
   }
 
@@ -320,13 +331,16 @@ class SmartgridPowerCard extends HTMLElement {
     const cols = dates.map((date, i) => {
       const d = days.find((x) => x && x.date === date) || {};
       if (date === today) {
-        const avg = num(d.avg_price) === null ? '' : `<span>avg ${eur(d.avg_price)}/kWh</span>`;
+        // The detail line has no room for sun at the wall's width; the name line does.
+        const gain = sun(d.solar_gain_eur, '€');
+        const avg = num(d.avg_price) === null ? '' : `<span class="avg">${gain && ' · '}avg ${eur(d.avg_price)}/kWh</span>`;
+        const info = gain || avg ? `<span class="info">${gain}${avg}</span>` : '';
         // The full wording needs about 200 px; the wall's Today column is narrower.
         const use = [`${fx(d.use_kwh, 1)} kWh${cw[i] - 2 * PAD - 1 >= 200 ? ' used' : ''}`];
         if (num(d.grid_in_kwh) !== null) use.push(`${d.grid_in_kwh.toFixed(1)} from grid`);
         if (num(d.grid_out_kwh) !== null) use.push(`${d.grid_out_kwh.toFixed(1)} sold`);
         return `<div class="ph on">
-<div><span class="name">Today</span>${avg}</div>
+<div><span class="name">Today</span>${info}</div>
 <div class="cost"><span>${eur(d.use_cost_eur)}</span>${saved(d.saved_eur, 'saved ')}</div>
 <div class="l3">${use.join(' · ')}</div>
 </div>`;
