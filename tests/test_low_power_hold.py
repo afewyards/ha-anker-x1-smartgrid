@@ -461,13 +461,45 @@ def _flips(mask):
     return sum(1 for a, b in itertools.pairwise(mask) if a != b)
 
 
-def test_min_run_is_one_slot_at_hourly_resolution():
-    # Fed the CLAMPED dwell the hold actually waits out, not the raw config value.
-    assert optimize.hold_min_run_slots(scheduler._effective_dwell_min(15, 60, label="x"), 60) == 1
-    assert optimize.hold_min_run_slots(scheduler._effective_dwell_min(60, 15, label="x"), 15) == 1
-    assert optimize.hold_min_run_slots(15, 60) == 1  # no-op, unchanged behaviour
-    assert optimize.hold_min_run_slots(15, 15) == 2
-    assert optimize.hold_min_run_slots(30, 15) == 3
+def test_min_run_comes_out_of_the_shipped_config():
+    """Fed the CONFIGURED dwell: the clamped one caps at slot_minutes-1, which
+    would put the threshold at 1 slot at every resolution and smooth nothing."""
+    cfg = Config()  # whatever the integration actually ships
+    assert optimize.hold_min_run_slots(cfg.export_dwell_min, 60) == 1  # hourly: no-op
+    assert optimize.hold_min_run_slots(cfg.export_dwell_min, 15) == 2
+    assert optimize.hold_min_run_slots(cfg.export_dwell_min, 15) > optimize.hold_min_run_slots(
+        scheduler._effective_dwell_min(cfg.export_dwell_min, 15, label="x"), 15
+    )
+
+
+def test_dp_select_slots_smooths_a_noisy_night_at_15min(monkeypatch):
+    """End to end through the real _dp_select_slots with the shipped Config: the
+    published held_slots must be smoothed, not the raw slot-by-slot choice."""
+    n = 24
+    sched = [c == "H" for c in "HHHH.HHHH..HHH.HHHH.HHHH"]
+    monkeypatch.setattr(
+        ctrl_mod.optimize_mod,
+        "optimize_grid",
+        lambda *a, **k: {"schedule": [0.0] * n, "kwh": 0.0, "eur": 0.0, "hold_schedule": list(sched)},
+    )
+    now = T.replace(minute=0)
+    out = ctrl_mod._dp_select_slots(
+        inputs=PlantInputs(soc=50.0, meter_w=250.0, now=now),
+        slots=[PriceSlot(now + timedelta(minutes=15 * i), 0.26) for i in range(n)],
+        deadline=now + timedelta(minutes=15 * n),
+        ceiling=0.30,
+        cfg=Config(low_power_hold=True, soc_floor=5.0, capacity_kwh=20.0),
+        intervals=[ForecastInterval(now + timedelta(minutes=15 * i), 0.0, 320.0, 0.25) for i in range(n)],
+        export_price=None,
+        slot_minutes=15,
+        dt_h=0.25,
+        terminal_mode="water_value",
+        water_value=0.30,
+    )
+    held = out[6]
+    chosen = [now + timedelta(minutes=15 * i) in held for i in range(n)]
+    assert _flips(chosen) < _flips(sched)
+    assert chosen == optimize.smooth_hold_runs([False, *sched], 2)[1:]
 
 
 def test_smoothing_collapses_a_noisy_hold_pattern():

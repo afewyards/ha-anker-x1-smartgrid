@@ -166,11 +166,14 @@ def replay(
             ac_out = dc_out if p1 is None else max(load - pv - float(p1), 0.0) * kwh_per_w
             house = min(ac_out, deficit)
             share = house / ac_out if ac_out > 0 else 1.0
-        if row.get("state") == "hold":
+        _p1 = row.get("p1_w")
+        if row.get("state") == "hold" and _p1 is not None:
             # Held: the pack is parked, so the meter carries the house AND the
             # inverter standby. p1 is the grid cost; the derived load is not,
             # because the controller takes the standby off it on held ticks.
-            rec["use_cost_eur"] += max(float(row.get("p1_w") or 0.0), 0.0) * kwh_per_w * imp
+            # A charge inside a held-labelled row is already booked as
+            # grid_kwh above, so take it back off p1 rather than pay it twice.
+            rec["use_cost_eur"] += max(float(_p1) + min(batt, 0.0), 0.0) * kwh_per_w * imp
         else:
             rec["use_cost_eur"] += (deficit - house) * imp
     return _finish(out), inv

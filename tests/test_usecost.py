@@ -222,6 +222,21 @@ class TestRollPlan:
         # 277 W off the meter at 0.40 over the 59 sampled intervals, not 177 W.
         assert day[DAY]["use_cost_eur"] == pytest.approx(0.277 * (59 / 60) * 0.40, abs=1e-4)
 
+    def test_a_held_hour_without_a_meter_reading_falls_back_to_the_load(self):
+        # p1_w NULL: cost the deficit as any other row, never 0.
+        rows = _phase(T0, 60, 50.0, 50.0, 0.0, 0.40, load=177.0, p1=None, state="hold")
+        for r in rows:
+            r["p1_w"] = None
+        day, _ = replay(rows, CAP, AMS)
+        assert day[DAY]["use_cost_eur"] == pytest.approx(0.177 * (59 / 60) * 0.40, abs=1e-4)
+
+    def test_a_charge_inside_a_held_hour_is_not_booked_twice(self):
+        # 300 W off the meter of which 200 W goes into the pack: the charge is
+        # already booked as grid_kwh, so only the 100 W house share is use cost.
+        rows = _phase(T0, 60, 50.0, 55.0, -200.0, 0.40, load=100.0, p1=300.0, state="hold")
+        day, _ = replay(rows, CAP, AMS)
+        assert day[DAY]["use_cost_eur"] == pytest.approx(0.100 * (59 / 60) * 0.40, abs=1e-4)
+
     def test_a_held_slot_buys_the_standby_the_pack_would_have_paid(self):
         """A held slot serves the house from the meter and keeps the inverter
         standby running on the meter too; past hours carry that from p1, so the

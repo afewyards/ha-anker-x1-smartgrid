@@ -582,10 +582,9 @@ def _dp_select_slots(
     # so re-planning each slot would shave the last slot off every run. The hold
     # actually engaged right now is that predecessor.
     _hold_sched = result.get("hold_schedule")
-    _min_run = optimize_mod.hold_min_run_slots(
-        scheduler._effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"),
-        slot_minutes,
-    )
+    # The CONFIGURED dwell, not the clamped one: the clamp caps at slot_minutes-1
+    # so the threshold would always come out at 1 slot and smooth nothing.
+    _min_run = optimize_mod.hold_min_run_slots(cfg.export_dwell_min, slot_minutes)
     held_slots = (
         frozenset(
             now_h + h * stride
