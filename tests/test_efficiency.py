@@ -168,7 +168,7 @@ def test_discharge_eta_subtracts_idle_drain():
     cfg = Config(capacity_kwh=10.0, idle_drain_w=135.0)
     t0 = datetime(2026, 7, 11, 0, 0, 0)
     resid_w = 208.333333  # 4h * resid_w/1000 ~= 0.8333 kWh AC delivered
-    batt_w = 225.0  # AC-side battery power: residual + inverter loss, NOT the gross DC power
+    batt_w = resid_w  # AC-side battery power == what reaches the house, NOT the gross DC power
     run = [
         {"ts": t0.isoformat(), "soc": 65.0, "batt_w": batt_w, "residual_w": resid_w},
         {"ts": (t0 + timedelta(hours=4)).isoformat(), "soc": 50.0, "batt_w": batt_w, "residual_w": resid_w},
@@ -273,18 +273,17 @@ def test_build_drops_out_of_window_rows():
 
 def _bin0_discharge_run(t0: datetime, n: int = 121, step_s: int = 120):
     # 4h run (120 x 120s ticks, the max hysteresis-tolerant gap): ΔSoC 15.4%
-    # -> dc_kwh=1.54 (gross), avg dc_power=385 W (bin0, <400W); batt_w is the
-    # AC-side 230 W, so the pack drains faster than it delivers. idle_drain_w
-    # =135W over 4h -> idle_kwh=0.54, dc_kwh_eff=1.00. Constant residual_w
-    # =217.5W over 4h -> ac_delivered=0.87 kWh (trapz of a constant
+    # -> dc_kwh=1.54 gross, 385 W; idle_drain_w=135W over 4h -> idle_kwh=0.54,
+    # dc_kwh_eff=1.00 -> 250 W, the binning axis (bin0, <400W). Constant
+    # residual_w=217.5W over 4h -> ac_delivered=0.87 kWh (trapz of a constant
     # telescopes to resid_w * duration regardless of tick resolution).
-    # eta = 0.87 / 1.00 = 0.87 exactly.
+    # eta = 0.87 / 1.00 = 0.87 exactly; agreement 250/217.5 = 1/0.87.
     soc0, soc1 = 80.0, 80.0 - 15.4
     return [
         {
             "ts": (t0 + timedelta(seconds=step_s * i)).isoformat(),
             "soc": soc0 + (soc1 - soc0) * i / (n - 1),
-            "batt_w": 230.0,
+            "batt_w": 217.5,  # AC side == what reaches the house
             "residual_w": 217.5,
         }
         for i in range(n)
@@ -334,9 +333,33 @@ def _agreement_run(batt_w: float, residual_w: float | None = None, n: int = 5, s
 
 
 def test_agreement_gate_rejects_dsoc_batt_disagreement():
-    # dc_power 1875 W vs mean |batt_w| 1200 W -> ratio 1.56 > 1.25 -> discarded.
+    # batt_w 700 W against 1875 W of ΔSoC-derived power -> ratio 2.68, past the
+    # envelope's own 1/0.50 -> discarded. residual_w still implies a plausible
+    # eta (0.64), so only the ΔSoC-vs-batt_w check can catch this one.
     cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
-    assert run_eta(_agreement_run(1200.0), cfg) is None
+    assert run_eta(_agreement_run(700.0, residual_w=1200.0), cfg) is None
+
+
+def test_agreement_band_follows_the_configured_efficiency():
+    """The band is anchored on the configured efficiency, not on 1.0, so it
+    admits eta in ``eta_prior/1.25 .. eta_prior/0.8``. A pack configured as
+    inefficient keeps its own runs instead of having the bin filled from its
+    higher-power neighbours; centring the band on 1.0 would pin that floor at
+    0.80 whatever the pack really does.
+
+    ``_agreement_run`` moves 0.5 kWh of DC over 960 s, so eta == batt_w / 1875.
+    """
+    stock = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
+    floor = stock.eta_discharge_static() / const.EFFICIENCY_POWER_AGREEMENT_MAX  # 0.739
+    assert math.isclose(floor, 0.7391, abs_tol=5e-4)
+    inside = run_eta(_agreement_run(1390.0), stock)  # eta 0.741
+    assert inside is not None and math.isclose(inside.eta, 1390.0 / 1875.0, rel_tol=1e-6)
+    assert run_eta(_agreement_run(1300.0), stock) is None  # eta 0.693, under the floor
+
+    # Declare a poorer pack and the same 0.693 run becomes plausible.
+    poor = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.72)  # floor 0.626
+    r = run_eta(_agreement_run(1300.0), poor)
+    assert r is not None and math.isclose(r.eta, 1300.0 / 1875.0, rel_tol=1e-6)
 
 
 def test_agreement_gate_keeps_agreeing_run():
@@ -348,9 +371,12 @@ def test_agreement_gate_keeps_agreeing_run():
 
 
 def test_agreement_gate_boundary_inclusive():
-    # ratio exactly 1875/1500 = 1.25 -> kept (<=); eta = 0.8, inside envelope.
+    # batt_w placed so the ratio to the prior-implied DC power is exactly the
+    # 1.25 bound -> kept (<=).
     cfg = Config(capacity_kwh=10.0, eta_charge=0.92, round_trip_eff=0.85)
-    assert run_eta(_agreement_run(1500.0), cfg) is not None
+    batt_w = 1875.0 * cfg.eta_discharge_static() / const.EFFICIENCY_POWER_AGREEMENT_MAX
+    assert run_eta(_agreement_run(batt_w), cfg) is not None
+    assert run_eta(_agreement_run(batt_w * 0.99), cfg) is None
 
 
 def test_agreement_gate_applies_to_charge_direction():
@@ -385,7 +411,7 @@ def test_agreement_gate_accepts_a_real_low_power_discharge():
     assert const.EFFICIENCY_POWER_AGREEMENT_MAX < 400.0 / 250.0  # the gross ratio the old gate saw
     r = run_eta(run, cfg)
     assert r is not None and r.direction == "discharge"
-    assert math.isclose(r.dc_power_w, 400.0, rel_tol=1e-6)  # binning stays on the gross power
+    assert math.isclose(r.dc_power_w, 300.0, rel_tol=1e-6)  # binning axis: drain debited
     assert math.isclose(r.eta, 1.0 / 1.2, rel_tol=1e-6)
 
 

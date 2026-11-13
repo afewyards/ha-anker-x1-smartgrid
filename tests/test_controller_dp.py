@@ -472,7 +472,7 @@ def test_dp_select_slots_calls_optimize_grid_with_export_and_builds_export_reque
     # plan_charge_and_export has been deleted (Task 10) — the greedy path no longer exists.
 
     cfg = _cfg()
-    selected, grid_request, infeasible, export_request, export_rev, _ceiling = _call_dp_select_slots(
+    selected, grid_request, infeasible, export_request, export_rev, _ceiling, *_ = _call_dp_select_slots(
         cfg, soc=80.0, export_price=0.30
     )
 

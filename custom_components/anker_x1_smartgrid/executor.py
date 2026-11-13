@@ -153,33 +153,46 @@ def hold_values(
     slots: list[PriceSlot],
     _dp_out: dict,
     _slot_minutes: int,
+    soc: float | None = None,
 ) -> tuple[float | None, float | None]:
     """``(discharge_value, stored_value)`` in €/DC-kWh for the low-power hold.
 
     ``discharge_value`` is ``None`` whenever a hold is not allowed: feature
     off, a charge (FORCING covers calibration and the floor rescue) or an
     export planned or still running, PV covering the house on the rolling
-    mean, or any input missing. Export's previous-tick state blocks too, so an
-    export winding down releases first instead of re-engaging in the same tick.
-    Stale house load only blocks once the rolling window has no fresh sample
-    left, so a sensor blip doesn't release the hold.
+    mean, SoC at or above this slot's solar-reservation ceiling, or any input
+    missing. Export's previous-tick state blocks too, so an export winding
+    down releases first instead of re-engaging in the same tick. Stale house
+    load only blocks once the rolling window has no fresh sample left, so a
+    sensor blip doesn't release the hold.
+
+    The ceiling is the headroom test: above it the forecast solar of this cycle
+    already refills the pack, so a kWh kept there is one tomorrow's sun will
+    spill — worth ~0, whatever the water value says. Same signal the DP's own
+    held branch and the charge-stop use, so the three cannot disagree.
     """
     cfg = controller.cfg
     stored = _dp_out.get("water_value")
     price = resolution.price_at(slots, now, _slot_minutes)
     window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
     deficits = [w for t, w in controller._hold_deficit_w if now - t < window]
+    _slot = resolution.floor_to_slot(now, _slot_minutes)
+    _ceiling = (_dp_out.get("ceiling_by_hour") or {}).get(_slot)
     if (
         not cfg.low_power_hold
         or new_plan.state is ControllerState.FORCING
         or controller.export_state.engaged
-        or resolution.floor_to_slot(now, _slot_minutes) in (_dp_out.get("export_request") or {})
+        or _slot in (_dp_out.get("export_request") or {})
         or not deficits
         or fmean(deficits) <= 0.0
         or price is None
         or stored is None
+        or (_ceiling is not None and soc is not None and soc >= _ceiling)
     ):
         return None, stored
+    # Concave in the deficit, and this is the 5-min mean while the DP used the
+    # slot mean, so the two can straddle the boundary inside one slot; the
+    # engage/release dwell is what keeps that from flapping.
     return optimize_mod.discharge_value(price, fmean(deficits), cfg, controller._planner_curve()), stored
 
 
@@ -211,7 +224,7 @@ async def run_forcing_and_export(
 
     _engage_failed = False
     _prev_hold = controller.hold_state
-    _discharge_v, _stored_v = hold_values(controller, now, new_plan, slots, _dp_out, _slot_minutes)
+    _discharge_v, _stored_v = hold_values(controller, now, new_plan, slots, _dp_out, _slot_minutes, inputs.soc)
     controller.hold_state = scheduler.decide_hold_state(
         controller.hold_state,
         discharge_value=_discharge_v,

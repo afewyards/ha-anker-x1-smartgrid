@@ -29,14 +29,15 @@ from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 # Design point: 1%/25min SoC drop on a 10 kWh pack == 0.1 kWh / (25/60 h) ==
 # 240 W average GROSS DC power -> lands in the lowest bin ([0, 400) W).
 _SOC_DROP_PCT_PER_MIN = 1.0 / 25.0
-# AC-side battery power the inverter reports: the pack drains faster than this
-# because of the standby drain, as it does on real hardware.
-_BATT_W = 110.0
 # AC delivered (via load_w, p1_w=pv_w=0 so residual_w == load_w). Tuned so
 # that, after debiting the modeled idle_drain_w=130 standby drain from the
 # 80-minute episode's DC side, eta lands ~0.87 (a plausible measured value,
 # distinct from the static eta_charge/round_trip_eff fallback).
 _RESIDUAL_W = 95.7
+# AC-side battery power the inverter reports == what reaches the house, so the
+# pack (240 W gross, 110 W debited) drains faster than it delivers, as on real
+# hardware. The agreement gate sees 110/95.7 == 1/0.87 and lets the run in.
+_BATT_W = _RESIDUAL_W
 _EPISODE_MINUTES = 80  # 80 * (1/25)%/min == 3.2% dSoC, clears EFFICIENCY_DSOC_GATE_PCT=3.0
 _IDLE_DRAIN_W = 130.0
 

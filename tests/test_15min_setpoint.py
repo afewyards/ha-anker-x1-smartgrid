@@ -22,7 +22,7 @@ def test_half_kwh_quarter_slot_is_2000w():
     slots = [PriceSlot(NOW + timedelta(minutes=15 * i), 0.05) for i in range(n)]
     ivs = [ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 0.0, 0.25) for i in range(n)]
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
-    sel, grid, infeasible, exp, rev, ceil = ctrl._dp_select_slots(
+    sel, grid, infeasible, exp, rev, ceil, *_ = ctrl._dp_select_slots(
         inputs=inputs,
         slots=slots,
         deadline=NOW + timedelta(hours=1),

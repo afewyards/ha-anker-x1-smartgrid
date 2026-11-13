@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from . import const
 from .interp import MidpointLinear
 from .models import Config, ForecastInterval, PriceSlot
-from .optimize import holds_at
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
 from .resolution import floor_to_slot, hour_floor
 
@@ -136,7 +135,7 @@ def build_plan_horizon(
     est_starts: frozenset | None = None,
     terminal_need_kwh: float = 0.0,
     now: datetime | None = None,
-    hold_value: float | None = None,
+    held_slots: frozenset[datetime] | None = None,
 ) -> list[dict]:
     """Join price/PV/load/charge-plan into an hourly horizon for visualization.
 
@@ -223,9 +222,10 @@ def build_plan_horizon(
     to the slot total.  ``now=None`` models every slot in full (parity-safe), as
     do all rows once ``now`` has passed their end or not yet reached their start.
 
-    ``hold_value`` (€/DC-kWh, ``None`` = low-power hold off) applies
-    :func:`optimize.holds_at` per slot: a held deficit slot draws nothing
-    from the battery, as the live executor and the DP do.
+    ``held_slots`` is the set of slot starts the DP's chosen trajectory holds
+    (``None`` = low-power hold off, or the DP did not run): a held deficit slot
+    draws nothing from the battery and loses no standby drain, as the live
+    executor and the DP do.
 
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
@@ -387,14 +387,16 @@ def build_plan_horizon(
         self_discharge_w = 0.0
         # Export to grid (NET-EXPORT: positive setpoint = export after serving house).
         grid_export_w = exp_by_hour.get(slot_key, 0.0)
-        # An export serves the house from the battery, live and in the DP, so it never holds.
+        # Label only what the DP's CHOSEN trajectory holds — re-deriving the rule
+        # here would show holds the DP looked at and declined. An export serves
+        # the house from the battery, live and in the DP, so it never holds.
         held = (
-            hold_value is not None
+            held_slots is not None
+            and slot_key in held_slots
             and not is_grid
             and grid_export_w <= 0.0
             and iv is not None
             and iv.load_w > iv.pv_w
-            and holds_at(slot.price, iv.load_w - iv.pv_w, hold_value, cfg, eta_curve)
         )
         if is_grid:
             grid_request_w = req_by_hour.get(slot_key, cfg.max_charge_w)
@@ -552,7 +554,7 @@ def build_display_horizon(
     eta_curve=None,
     est_slots: list[PriceSlot] | None = None,
     terminal_need_kwh: float = 0.0,
-    hold_value: float | None = None,
+    held_slots: frozenset[datetime] | None = None,
 ) -> list[dict]:
     """Two-day self-consumption display horizon (PV + load + discharge-aware SoC).
 
@@ -594,7 +596,7 @@ def build_display_horizon(
             ``estimated``). ``None``/empty (default) is a no-op — byte-identical.
         terminal_need_kwh: Forwarded straight through to ``build_plan_horizon``'s
             ``terminal_need_kwh`` (only meaningful together with ``est_slots``).
-        hold_value: Low-power hold stored value, forwarded to ``build_plan_horizon``.
+        held_slots: Slot starts the DP chose to hold, forwarded to ``build_plan_horizon``.
         slot_minutes: The live/resolved slot width in minutes (15/30/60), passed
             straight through to ``build_display_intervals`` and
             ``build_plan_horizon``.  Without this, both callees fell back to
@@ -661,5 +663,5 @@ def build_display_horizon(
         est_starts=est_starts,
         terminal_need_kwh=terminal_need_kwh,
         now=now,
-        hold_value=hold_value,
+        held_slots=held_slots,
     )

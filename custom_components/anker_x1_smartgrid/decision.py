@@ -573,10 +573,13 @@ def _dp_select_slots(
     ceiling_by_hour: dict[datetime, float] = {
         now_h + h * stride: grid_charge_ceiling[h] / cap * 100.0 for h in range(window_len)
     }
+    # Slots the CHOSEN DP trajectory holds — a subset of the mask it was offered.
+    _hold_sched = result.get("hold_schedule")
+    held_slots = frozenset(now_h + h * stride for h, held in enumerate(_hold_sched) if held) if _hold_sched else None
     if _out is not None:
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
-    return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour
+    return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots
 
 
 def _build_is_cheap_by_hour(
@@ -1182,8 +1185,17 @@ def compute_decision(
     live_grid_request: dict[datetime, float] | None = None
     live_export_request: dict[datetime, float] | None = None
     live_ceiling_by_hour: dict[datetime, float] | None = None
+    live_held_slots: frozenset[datetime] | None = None
     try:
-        (_dp_selected, _dp_request, _dp_infeasible, _dp_export_request, _dp_export_rev, _dp_ceiling) = _dp_select_slots(
+        (
+            _dp_selected,
+            _dp_request,
+            _dp_infeasible,
+            _dp_export_request,
+            _dp_export_rev,
+            _dp_ceiling,
+            _dp_held,
+        ) = _dp_select_slots(
             inputs=inputs,
             slots=slots,
             deadline=horizon_edge,  # window spans [now, trough] in new mode
@@ -1209,6 +1221,7 @@ def compute_decision(
         live_grid_request = _dp_request
         live_export_request = _dp_export_request
         live_ceiling_by_hour = _dp_ceiling
+        live_held_slots = _dp_held
         # Expose DP artefacts for fictive-plan publication (T0.6a).
         if _out is not None:
             _out["dp_selected"] = _dp_selected
@@ -1220,6 +1233,8 @@ def compute_decision(
             _out["terminal_v_hi"] = v_hi_mean
             _out["terminal_need_kwh"] = need_kwh
             _out["water_value"] = water_value
+            _out["ceiling_by_hour"] = _dp_ceiling
+            _out["held_slots"] = _dp_held
             _out["terminal_segments"] = terminal_segments
     except Exception:
         _LOGGER.warning(
@@ -1352,7 +1367,7 @@ def compute_decision(
             eta_curve=eta_curve,
             est_slots=_est_slot_list,
             terminal_need_kwh=need_kwh,
-            hold_value=water_value if cfg.low_power_hold else None,
+            held_slots=live_held_slots,
         )
     else:
         horizon = plan_mod.build_plan_horizon(
@@ -1371,6 +1386,6 @@ def compute_decision(
             delivered_by_hour=delivered_by_hour,
             eta_curve=eta_curve,
             now=inputs.now,
-            hold_value=water_value if cfg.low_power_hold else None,
+            held_slots=live_held_slots,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve

@@ -60,7 +60,7 @@ def _day96():
 def test_dp_charges_cheapest_quarter_and_exports_priciest_quarter():
     slots, ivs = _day96()
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
-    sel, grid, infeasible, exp, rev, ceil_ = ctrl._dp_select_slots(
+    sel, grid, infeasible, exp, rev, ceil_, *_ = ctrl._dp_select_slots(
         inputs=inputs,
         slots=slots,
         deadline=NOW + timedelta(hours=24),
@@ -92,7 +92,7 @@ def test_dp_charges_cheapest_quarter_and_exports_priciest_quarter():
     # neighbors and never clears the export band. Every assertion above would
     # fail under this hourly call, proving they exercise real sub-hour DP
     # resolution rather than being vacuously true.
-    _, grid_hourly, _, exp_hourly, _, _ = ctrl._dp_select_slots(
+    _, grid_hourly, _, exp_hourly, _, _, *_ = ctrl._dp_select_slots(
         inputs=inputs,
         slots=slots,
         deadline=NOW + timedelta(hours=24),

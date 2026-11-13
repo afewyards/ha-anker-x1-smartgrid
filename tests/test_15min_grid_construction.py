@@ -30,7 +30,7 @@ def test_cheapest_quarter_is_individually_resolvable_not_hour_collapsed():
     slots = [PriceSlot(NOW + timedelta(minutes=15 * i), p) for i, p in enumerate(prices)]
     ivs = [ForecastInterval(NOW + timedelta(minutes=15 * i), 0.0, 400.0, 0.25) for i in range(8)]
     inputs = PlantInputs(soc=50.0, meter_w=0.0, now=NOW)
-    sel, grid, infeasible, exp, rev, ceil = ctrl._dp_select_slots(
+    sel, grid, infeasible, exp, rev, ceil, *_ = ctrl._dp_select_slots(
         inputs=inputs,
         slots=slots,
         deadline=NOW + timedelta(hours=2),

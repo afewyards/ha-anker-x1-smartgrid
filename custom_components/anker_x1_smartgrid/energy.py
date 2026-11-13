@@ -104,6 +104,10 @@ def ride_out_reserve_kwh(
         deficit_w = max(0.0, iv.load_w - iv.pv_w)
         if deficit_w > 0.0:
             _eta_d = eta_d if eta_curve is None else eta_curve.eta_discharge(deficit_w)
+            # shortcut: charges standby drain on every deficit hour, including ones the
+            # low-power hold may idle through (a held pack measures flat) — the reserve
+            # comes out conservative, never short. Upgrade when the ride-out walk gets
+            # access to the DP's chosen hold trajectory.
             draw = deficit_w / _eta_d * iv.dt_h / 1000.0 + cfg.idle_drain_w * iv.dt_h / 1000.0
             debit_cum += draw
             signed_cum -= draw

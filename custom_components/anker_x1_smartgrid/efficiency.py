@@ -311,9 +311,9 @@ def segment_episodes(rows: list[dict]) -> list[list[dict]]:
 @dataclass(frozen=True)
 class RunEta:
     direction: str
-    dc_power_w: float
+    dc_power_w: float  # binning axis: standby drain debited, so it tracks the AC power queried
     eta: float
-    dc_kwh: float
+    dc_kwh: float  # gross DC energy moved (weights the per-bin median)
 
 
 def run_eta(run: list[dict], cfg: Config) -> RunEta | None:
@@ -345,17 +345,24 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     ``idle_drain_w``, so leaving it in the eta fit would double-count it
     (once via eta, once via ``idle_drain_w``). Returns None if the modeled
     idle energy would consume the run's entire ΔSoC. CHARGE runs are
-    unaffected. Binning (``dc_power_w``) always uses the GROSS,
-    non-debiased DC energy — only the eta ratio's denominator changes.
+    unaffected. ``dc_power_w`` — the binning axis — is the same debited
+    power, because the curve is QUERIED at an AC deficit/load: the gross
+    ΔSoC power sits a whole ``idle_drain_w`` above that axis (100 W is a
+    quarter of the bottom bin), so binning on it files low-power runs under
+    the wrong power.
 
-    Also gated on instrumentation agreement: the ΔSoC-derived DC power must
-    stay within ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the run's mean
-    ``|batt_w|`` (both directions), so integer-SoC quantization noise on
-    short runs can't silently inflate ΔSoC-derived power into a higher bin.
-    On a DISCHARGE run the comparison uses the drain-debited DC power — the
-    same numerator the eta ratio uses — because the gross figure differs from
-    ``batt_w`` by idle drain as well as conversion loss, and at low power that
-    alone pushes genuine runs outside the band.
+    Also gated on instrumentation agreement, so integer-SoC quantization
+    noise on short runs can't silently inflate ΔSoC-derived power into a
+    higher bin: the debited ΔSoC-derived DC power must stay within
+    ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the DC power the CONFIGURED
+    efficiency implies for the run's mean ``|batt_w|``
+    (``batt_w/eta_d_static`` discharging, ``batt_w*eta_charge`` charging).
+    Anchoring on the prior rather than on ``batt_w`` itself is what keeps the
+    band from doubling as a hidden, tighter envelope: centred on 1.0 the same
+    ±25% admits only eta in ~[0.80, 1.25], so a pack whose real low-power eta
+    is 0.70 would have every run dropped and the bin filled from its
+    higher-power neighbours. Anchored, the admitted range is
+    ``eta_prior / 1.25 .. eta_prior / 0.8`` and follows the configured pack.
     """
     if len(run) < 2:
         return None
@@ -369,10 +376,10 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     dc_kwh = cfg.pct_to_kwh(abs(dsoc_pct))
     if dc_kwh <= 0.0:
         return None
-    dc_power_w = dc_kwh * 1000.0 / duration_h
     mean_abs_batt_w = fmean(abs(r["batt_w"]) for r in run)
     if mean_abs_batt_w <= 0.0:
         return None
+    eta_prior = cfg.eta_discharge_static() if dsoc_pct < 0.0 else cfg.eta_charge_safe()
     # Debit the modeled standby drain BEFORE the agreement check, so both sides
     # measure the same thing: conversion loss between the pack and batt_w. The
     # gross DC figure also carries idle drain, which at low power is a large
@@ -380,7 +387,16 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     dc_kwh_eff = dc_kwh - cfg.idle_drain_w * duration_h / 1000.0 if dsoc_pct < 0.0 else dc_kwh
     if dc_kwh_eff <= 0.0:
         return None
-    agreement = dc_kwh_eff * 1000.0 / duration_h / mean_abs_batt_w
+    dc_power_w = dc_kwh_eff * 1000.0 / duration_h
+    # Agreement is measured against the DC power the CONFIGURED efficiency says
+    # batt_w should cost the pack, not against batt_w itself: the two meters sit
+    # a conversion loss apart, so centring the band on 1.0 would hide an eta
+    # band of roughly [0.80, 1.25] inside a +-25% "agreement" check, and reject
+    # every run of a pack whose real eta is poorer than that.
+    expected_dc_w = mean_abs_batt_w / eta_prior if dsoc_pct < 0.0 else mean_abs_batt_w * eta_prior
+    if expected_dc_w <= 0.0:
+        return None
+    agreement = dc_power_w / expected_dc_w
     if not (1.0 / const.EFFICIENCY_POWER_AGREEMENT_MAX <= agreement <= const.EFFICIENCY_POWER_AGREEMENT_MAX):
         return None
     ac_wh = 0.0

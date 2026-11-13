@@ -151,7 +151,7 @@ def test_evening_peak_kept_submin_dribble_dropped():
     export_schedule = [0.0, 0.0, 1.617, 0.0, 0.23, 0.0]
     cfg = _cfg(export_min_block_kwh=0.5)
 
-    _, _, _, export_request, export_revenue_eur, _ = _call_dp(cfg, NOW, prices, export_schedule)
+    _, _, _, export_request, export_revenue_eur, _, *_ = _call_dp(cfg, NOW, prices, export_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2
     hour_21 = NOW + timedelta(hours=4)  # idx 4
@@ -198,7 +198,7 @@ def test_receding_horizon_inprogress_run_not_truncated():
     export_schedule = [0.2, 0.2, 0.0, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.5)
 
-    _, _, _, export_request, _, _ = _call_dp(cfg, NOW, prices, export_schedule)
+    _, _, _, export_request, _, _, *_ = _call_dp(cfg, NOW, prices, export_schedule)
 
     hour_0 = NOW  # idx 0 — in-progress
     hour_1 = NOW + timedelta(hours=1)  # idx 1 — same run
@@ -237,10 +237,10 @@ def test_reserve_feasibility_filtered_soc_geq_unfiltered():
     cfg_filtered = _cfg(export_min_block_kwh=0.5, soc_target=97.0, soc_floor=10.0)
     cfg_unfiltered = _cfg(export_min_block_kwh=0.0, soc_target=97.0, soc_floor=10.0)
 
-    selected_f, grid_req_f, _, export_req_f, _, ceil_f = _call_dp(
+    selected_f, grid_req_f, _, export_req_f, _, ceil_f, *_ = _call_dp(
         cfg_filtered, NOW, prices, export_schedule, soc=soc_start
     )
-    _, _, _, export_req_u, _, _ = _call_dp(cfg_unfiltered, NOW, prices, export_schedule, soc=soc_start)
+    _, _, _, export_req_u, _, _, *_ = _call_dp(cfg_unfiltered, NOW, prices, export_schedule, soc=soc_start)
 
     hour_21 = NOW + timedelta(hours=4)  # idx 4 — dropped dribble
 
@@ -311,7 +311,7 @@ def test_filter_touches_export_only_not_grid():
     charge_schedule = [0.0, 0.0, 0.0, 0.5, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.5)
 
-    _, grid_request, _, export_request, _, _ = _call_dp(cfg, NOW, prices, export_schedule, schedule=charge_schedule)
+    _, grid_request, _, export_request, _, _, *_ = _call_dp(cfg, NOW, prices, export_schedule, schedule=charge_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2 — peak export
     hour_20 = NOW + timedelta(hours=3)  # idx 3 — grid charge (non-overlapping)
@@ -354,7 +354,7 @@ def test_noop_when_min_block_zero():
     export_schedule = [0.0, 0.0, 1.617, 0.0, 0.23, 0.0]
     cfg = _cfg(export_min_block_kwh=0.0)  # filter disabled
 
-    _, _, _, export_request, export_revenue_eur, _ = _call_dp(cfg, NOW, prices, export_schedule)
+    _, _, _, export_request, export_revenue_eur, _, *_ = _call_dp(cfg, NOW, prices, export_schedule)
 
     hour_19 = NOW + timedelta(hours=2)  # idx 2
     hour_21 = NOW + timedelta(hours=4)  # idx 4
@@ -433,7 +433,7 @@ def test_real_dp_submin_dribble_dropped():
     hour_4 = now + timedelta(hours=4)  # 21:00 UTC — potential dribble
 
     # Precondition: with filter disabled, DP produces a sub-min dribble at h=4.
-    _, _, _, unfiltered_req, _, _ = _run(export_min_block_kwh=0.0)
+    _, _, _, unfiltered_req, _, _, *_ = _run(export_min_block_kwh=0.0)
     assert hour_4 in unfiltered_req, (
         "Precondition: DP must schedule export at h=4 when filter is disabled. "
         "If the DP doesn't emit a dribble here the test scenario is misconfigured."
@@ -448,7 +448,7 @@ def test_real_dp_submin_dribble_dropped():
     assert unfiltered_req[hour_1] / 1000.0 >= 0.5, "Peak run at h=1 must be ≥ 0.5 kWh"
 
     # With filter enabled: h=4 dribble must be dropped; h=1 peak must survive.
-    _, _, _, filtered_req, export_rev, _ = _run(export_min_block_kwh=0.5)
+    _, _, _, filtered_req, export_rev, _, *_ = _run(export_min_block_kwh=0.5)
     assert hour_4 not in filtered_req, f"Filter must drop the sub-min dribble ({dribble_kwh:.3f} kWh < 0.5) at h=4"
     assert hour_1 in filtered_req, "Peak run at h=1 must be kept by filter"
     assert filtered_req[hour_1] / 1000.0 >= 0.5, "Kept peak must be ≥ min_block_kwh"
@@ -479,7 +479,7 @@ def test_export_dominant_hour_netted_to_export_only():
     export_schedule = [0.0, 0.0, 3.2799, 0.0, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.0)
 
-    selected, grid_request, _, export_request, _, _ = _call_dp(
+    selected, grid_request, _, export_request, _, _, *_ = _call_dp(
         cfg, NOW, prices, export_schedule, schedule=charge_schedule
     )
 
@@ -512,7 +512,7 @@ def test_charge_dominant_hour_netted_to_charge_only():
     export_schedule = [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.0)
 
-    selected, grid_request, _, export_request, _, _ = _call_dp(
+    selected, grid_request, _, export_request, _, _, *_ = _call_dp(
         cfg, NOW, prices, export_schedule, schedule=charge_schedule
     )
 
@@ -544,7 +544,7 @@ def test_near_equal_charge_export_cancels_to_idle():
     export_schedule = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.0)
 
-    selected, grid_request, _, export_request, _, _ = _call_dp(
+    selected, grid_request, _, export_request, _, _, *_ = _call_dp(
         cfg, NOW, prices, export_schedule, schedule=charge_schedule
     )
 
@@ -569,7 +569,7 @@ def test_revenue_reduced_when_export_netted_down():
     export_schedule = [0.0, 0.0, 3.2799, 0.0, 0.0, 0.0]
     cfg = _cfg(export_min_block_kwh=0.0)
 
-    _, _, _, export_request, export_revenue_eur, _ = _call_dp(
+    _, _, _, export_request, export_revenue_eur, _, *_ = _call_dp(
         cfg, NOW, prices, export_schedule, schedule=charge_schedule
     )
 
