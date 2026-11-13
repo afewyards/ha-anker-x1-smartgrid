@@ -56,7 +56,7 @@ def derive_house_load_w(row: dict) -> float | None:
     return float(p1) + float(batt) + float(pv)
 
 
-def house_load_w(row: dict, idle_drain_w: float = 0.0) -> float | None:
+def house_load_w(row: dict) -> float | None:
     """Return the best available house-load value for ``row``.
 
     Priority
@@ -81,18 +81,15 @@ def house_load_w(row: dict, idle_drain_w: float = 0.0) -> float | None:
     Use this function everywhere the ML pipeline needs a per-row house-load value so
     that historical (derived) rows age out naturally as newer recorded rows accumulate.
 
-    Held rows
-    ---------
-    On a ``state == "hold"`` row the meter carries the inverter standby, so the
-    balance books it as house load. ``idle_drain_w`` (0.0 = off, byte-identical)
-    takes it back off on read, which is how hold rows recorded before the live
-    fix are corrected without rewriting them.
+    Held rows carry the inverter standby in ``load_w`` only when recorded before
+    the controller started taking it off live; correcting them here would subtract
+    it twice on every row written since, and they age out of each consumer's own
+    window within days.
     """
     recorded = row.get("load_w")
-    load = float(recorded) if recorded is not None else derive_house_load_w(row)
-    if load is not None and idle_drain_w and row.get("state") == "hold":
-        return max(0.0, load - idle_drain_w)
-    return load
+    if recorded is not None:
+        return float(recorded)
+    return derive_house_load_w(row)
 
 
 def clean_rows(rows: list[dict]) -> list[FeatureRow]:

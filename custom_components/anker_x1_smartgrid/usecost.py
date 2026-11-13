@@ -166,7 +166,13 @@ def replay(
             ac_out = dc_out if p1 is None else max(load - pv - float(p1), 0.0) * kwh_per_w
             house = min(ac_out, deficit)
             share = house / ac_out if ac_out > 0 else 1.0
-        rec["use_cost_eur"] += (deficit - house) * imp
+        if row.get("state") == "hold":
+            # Held: the pack is parked, so the meter carries the house AND the
+            # inverter standby. p1 is the grid cost; the derived load is not,
+            # because the controller takes the standby off it on held ticks.
+            rec["use_cost_eur"] += max(float(row.get("p1_w") or 0.0), 0.0) * kwh_per_w * imp
+        else:
+            rec["use_cost_eur"] += (deficit - house) * imp
     return _finish(out), inv
 
 
@@ -268,9 +274,10 @@ def roll_plan(
             rec["saved_eur"] -= free  # c_free is the grid part of c_exp: same seed, grid price and release
             rec["solar_gain_eur"] -= spent - free
         inv.e_kwh = e_new
-        # A held slot also buys the standby the pack would have paid (plan.py's
-        # hold_import_kwh); past hours already carry it via the meter.
-        rec["use_cost_eur"] += (max(load - pv - house, 0.0) + float(row.get("hold_import_kwh") or 0.0) * left) * imp
+        # A held slot also buys the standby the pack would have paid; past hours
+        # carry it from the meter instead. Already sized to this slot's modelled
+        # remainder by plan.py, so it is NOT scaled by `left` again.
+        rec["use_cost_eur"] += (max(load - pv - house, 0.0) + float(row.get("hold_import_kwh") or 0.0)) * imp
         rec["price_eur_h"] += imp * h * left
         rec["price_h"] += h * left
     return _finish(out)
@@ -436,7 +443,7 @@ def hourly_series(
             b[action] += kwh[action]
         _add_grid(
             b,
-            max(load - pv - kwh["house"], 0.0) + float(row.get("hold_import_kwh") or 0.0) * left,
+            max(load - pv - kwh["house"], 0.0) + float(row.get("hold_import_kwh") or 0.0),
             kwh["charge_grid"],
             kwh["export"] + max(pv - load - kwh["charge_solar"], 0.0),
         )

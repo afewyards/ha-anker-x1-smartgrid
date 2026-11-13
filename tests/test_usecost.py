@@ -213,6 +213,15 @@ class TestRollPlan:
             "the caller's inventory is not touched"
         )
 
+    def test_a_held_hour_is_costed_from_the_meter(self):
+        """Past held hours: the pack is parked and the meter carries the house
+        AND the inverter standby, which the controller takes off the derived
+        load. Costing from that load would drop the standby on the floor."""
+        rows = _phase(T0, 60, 50.0, 50.0, 0.0, 0.40, load=177.0, p1=277.0, state="hold")
+        day, _ = replay(rows, CAP, AMS)
+        # 277 W off the meter at 0.40 over the 59 sampled intervals, not 177 W.
+        assert day[DAY]["use_cost_eur"] == pytest.approx(0.277 * (59 / 60) * 0.40, abs=1e-4)
+
     def test_a_held_slot_buys_the_standby_the_pack_would_have_paid(self):
         """A held slot serves the house from the meter and keeps the inverter
         standby running on the meter too; past hours carry that from p1, so the
@@ -225,6 +234,16 @@ class TestRollPlan:
         # Without the standby it would have been 0.3 x 0.40.
         bare = roll_plan([_slot(NOW, 50.0, 0.40, load=0.3, mode="hold")], replace_inv(inv), CAP, AMS, NOW, _exp_at)
         assert bare[DAY]["use_cost_eur"] == pytest.approx(0.3 * 0.4)
+
+    def test_hold_import_is_not_rescaled_on_the_running_slot(self):
+        """plan.py already sized hold_import_kwh to the slot's modelled remainder;
+        scaling it again by the remaining fraction would halve it mid-slot."""
+        mid = NOW + timedelta(minutes=30)  # half of the NOW slot is already gone
+        inv = Inventory(10.0, 0.0, 0.0, 0.0, 0.0)
+        horizon = [_slot(NOW, 50.0, 0.40, load=0.3, mode="hold", hold_import=0.05)]
+        planned = roll_plan(horizon, inv, CAP, AMS, mid, _exp_at)
+        # load halves with the slot (0.15), the standby does not (0.05).
+        assert planned[DAY]["use_cost_eur"] == pytest.approx((0.15 + 0.05) * 0.4)
 
     def test_hourly_series_counts_the_held_standby_as_grid_import(self):
         rows = hourly_series([], [_slot(NOW, 50.0, 0.40, load=0.3, mode="hold", hold_import=0.1)], AMS, NOW)

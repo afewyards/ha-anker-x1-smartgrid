@@ -68,7 +68,7 @@ def _kwh_sum(group: list[dict], col: str) -> float | None:
     return sum(vals) if vals else None
 
 
-def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60, idle_drain_w: float = 0.0) -> dict[datetime, dict]:
+def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60) -> dict[datetime, dict]:
     """Group recorder sample rows into measured-actuals records, one per bucket.
 
     Each row is a column-keyed dict from ``DataRecorder.read_feature_rows``
@@ -108,9 +108,7 @@ def aggregate_past_actuals(rows: list[dict], slot_minutes: int = 60, idle_drain_
     out: dict[datetime, dict] = {}
     for hour, group in buckets.items():
         pv_vals = [float(r["pv_w"]) for r in group if r.get("pv_w") is not None]
-        # idle_drain_w takes the inverter standby back off held rows, where the
-        # meter carried it and the AC balance booked it as house load.
-        load_vals = [v for v in (house_load_w(r, idle_drain_w) for r in group) if v is not None]
+        load_vals = [v for v in (house_load_w(r) for r in group) if v is not None]
         soc_vals = [float(r["soc"]) for r in group if r.get("soc") is not None]
         charge_vals = [max(0.0, -float(r["batt_w"])) for r in group if r.get("batt_w") is not None]
         # Attribution matches optimize.cash_energy_kwh (the live ledger) and the

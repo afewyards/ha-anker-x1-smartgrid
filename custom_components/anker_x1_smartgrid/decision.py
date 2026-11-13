@@ -164,6 +164,7 @@ def _dp_select_slots(
     eta_curve: EfficiencyCurve | None = None,
     terminal_segments: list[tuple[float, float]] | None = None,
     export_slots: list[PriceSlot] | None = None,
+    hold_engaged: bool = False,
     _out: dict | None = None,
 ) -> tuple[
     list[datetime],
@@ -576,15 +577,19 @@ def _dp_select_slots(
     # Slots the CHOSEN DP trajectory holds — a subset of the mask it was offered,
     # smoothed to runs the actuator can actually execute (price noise otherwise
     # alternates the choice slot by slot and every flip is a work-mode write).
+    # The live rule only ever reads slot 0, so the horizon is a LEFT EDGE: without
+    # a predecessor an edge gap is never filled and an edge run is always dropped,
+    # so re-planning each slot would shave the last slot off every run. The hold
+    # actually engaged right now is that predecessor.
     _hold_sched = result.get("hold_schedule")
+    _min_run = optimize_mod.hold_min_run_slots(
+        scheduler._effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"),
+        slot_minutes,
+    )
     held_slots = (
         frozenset(
             now_h + h * stride
-            for h, held in enumerate(
-                optimize_mod.smooth_hold_runs(
-                    _hold_sched, optimize_mod.hold_min_run_slots(cfg.export_dwell_min, slot_minutes)
-                )
-            )
+            for h, held in enumerate(optimize_mod.smooth_hold_runs([hold_engaged, *_hold_sched], _min_run)[1:])
             if held
         )
         if _hold_sched
@@ -902,6 +907,7 @@ def compute_decision(
     slot_minutes: int | None = None,
     eta_curve: EfficiencyCurve | None = None,
     export_slots: list[PriceSlot] | None = None,
+    hold_engaged: bool = False,
 ) -> tuple[PlanState, float, datetime, list, str, list]:
     """Pure wiring of energy + scheduler + guard.
 
@@ -1228,6 +1234,7 @@ def compute_decision(
             dt_h=dt_h,
             eta_curve=eta_curve,
             terminal_segments=terminal_segments,
+            hold_engaged=hold_engaged,
             _out=_out,
         )
         # Live path: DP replaces heuristic selected slots.

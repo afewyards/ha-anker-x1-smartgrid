@@ -14,6 +14,7 @@ import pytest
 from custom_components.anker_x1_smartgrid import controller as ctrl
 from custom_components.anker_x1_smartgrid.models import (
     Config,
+    ExportState,
     PlantInputs,
     PlanState,
     PriceSlot,
@@ -74,6 +75,7 @@ async def test_get_current_delivered_returns_only_the_in_progress_hour():
             return [r for r in rows if r["ts"] >= (since_iso or "")]
 
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c._recorder = _Rec()
     c.cfg = Config()
@@ -149,6 +151,7 @@ async def test_get_current_delivered_is_scoped_to_the_in_progress_slot_at_15_min
             return [r for r in rows if r["ts"] >= (since_iso or "")]
 
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c._recorder = _Rec()
     c.cfg = Config()
@@ -182,6 +185,7 @@ async def test_get_current_delivered_is_not_cached_across_ticks_within_the_hour(
             return []
 
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c._recorder = _Rec()
     c.cfg = Config()
@@ -204,6 +208,7 @@ async def test_run_compute_decision_forwards_delivered_on_the_live_path(monkeypa
 
     monkeypatch.setattr(ctrl, "compute_decision", _capture)
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c.cfg = Config()
     monkeypatch.setattr(type(c), "_planner_curve", lambda self: None, raising=False)
@@ -244,6 +249,7 @@ async def test_run_compute_decision_omits_delivered_on_the_shadow_path(monkeypat
 
     monkeypatch.setattr(ctrl, "compute_decision", _capture)
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c.cfg = Config()
     monkeypatch.setattr(type(c), "_planner_curve", lambda self: None, raising=False)
@@ -280,6 +286,7 @@ async def test_get_current_delivered_swallows_recorder_errors():
             raise RuntimeError("db gone")
 
     c = ctrl.Controller.__new__(ctrl.Controller)
+    c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     c._hass = _Hass()
     c._recorder = _Rec()
     c.cfg = Config()

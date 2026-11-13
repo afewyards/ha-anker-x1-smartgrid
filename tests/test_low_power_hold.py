@@ -462,6 +462,9 @@ def _flips(mask):
 
 
 def test_min_run_is_one_slot_at_hourly_resolution():
+    # Fed the CLAMPED dwell the hold actually waits out, not the raw config value.
+    assert optimize.hold_min_run_slots(scheduler._effective_dwell_min(15, 60, label="x"), 60) == 1
+    assert optimize.hold_min_run_slots(scheduler._effective_dwell_min(60, 15, label="x"), 15) == 1
     assert optimize.hold_min_run_slots(15, 60) == 1  # no-op, unchanged behaviour
     assert optimize.hold_min_run_slots(15, 15) == 2
     assert optimize.hold_min_run_slots(30, 15) == 3
@@ -475,6 +478,34 @@ def test_smoothing_collapses_a_noisy_hold_pattern():
     assert _flips(raw) == 9
     assert _flips(smooth) == 3
     assert optimize.smooth_hold_runs(raw, 1) == raw  # min_run<=1 is a no-op
+
+
+def _live_walk(raw, min_run):
+    """Replan at every slot, as the box does: the live rule only ever reads slot 0."""
+    live, engaged = [], False
+    for i in range(len(raw)):
+        engaged = optimize.smooth_hold_runs([engaged, *raw[i:]], min_run)[1:][0]
+        live.append(engaged)
+    return live
+
+
+def test_live_walk_matches_the_plan_it_was_smoothed_from():
+    """The horizon is a left edge. Without the engaged hold as slot -1 an edge gap
+    is never filled and an edge run is always dropped, so replanning each slot
+    shaves the last slot off every run and the card shows holds the box skips."""
+    raw = [c == "H" for c in "HHHH.HHHH..HHH.HH"]
+    plan = optimize.smooth_hold_runs([False, *raw], 2)[1:]
+    assert _live_walk(raw, 2) == plan
+    assert _flips(plan) == 2 and _flips(raw) == 6
+
+
+def test_live_walk_keeps_each_run_whole_at_a_longer_dwell():
+    raw = [c == "H" for c in "HHHH.HHHH..HHH.HH"]
+    live = _live_walk(raw, 3)
+    # Only the final slot can differ: there the receding horizon has nothing left
+    # to anchor a full run against.
+    assert live[:-1] == optimize.smooth_hold_runs([False, *raw], 3)[1:][:-1]
+    assert _flips(live) <= _flips(raw)
 
 
 def test_smoothing_keeps_long_runs_and_drops_lone_slots():

@@ -582,13 +582,13 @@ class Controller:
         try:
             since_iso = (now - timedelta(hours=48)).isoformat()
             rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, since_iso)
-            hourly = past_actuals_mod.aggregate_past_actuals(rows, idle_drain_w=self.cfg.idle_drain_w)
+            hourly = past_actuals_mod.aggregate_past_actuals(rows)
             self._past_actuals_cache = {h: v for h, v in hourly.items() if h < now_h}
             if slot_minutes == 60:
                 # Same bucketing — reuse rather than aggregate the rows twice.
                 self._past_actuals_slot_cache = self._past_actuals_cache
             else:
-                by_slot = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
+                by_slot = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
                 self._past_actuals_slot_cache = {h: v for h, v in by_slot.items() if h < now_h}
             self._past_actuals_slot_minutes = slot_minutes
             self._past_actuals_hour = now_h
@@ -636,7 +636,7 @@ class Controller:
         if now_slot > resolution.hour_floor(now):
             try:
                 rows = await self._get_running_hour_rows(now)
-                running = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
+                running = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
                 out.update({s: v for s, v in running.items() if s < now_slot})
             except Exception:
                 _LOGGER.warning(
@@ -695,7 +695,7 @@ class Controller:
         now_slot = resolution.floor_to_slot(now, slot_minutes)
         try:
             rows = await self._get_running_hour_rows(now)
-            actuals = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
+            actuals = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
             return {s: v for s, v in actuals.items() if s == now_slot}
         except Exception:
             _LOGGER.warning(
@@ -1315,6 +1315,9 @@ class Controller:
                 sun_times,
                 today_arrays,
                 tomorrow_arrays,
+                # Last tick's hold, as the smoother's slot -1: the live rule only
+                # reads slot 0, so without it every planned run loses its tail.
+                hold_engaged=self.hold_state.engaged,
                 **kwargs,
             )
         )
