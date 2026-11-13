@@ -1174,9 +1174,9 @@ class Controller:
                 # the flag is off (_eta_d_at's own gate) — byte-identical parity.
                 _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
                 # A held step (hold_state is still last tick's here) left the pack idle on
-                # purpose: only the standby drain is expected.
+                # purpose, and a held pack measures flat: expect no change at all.
                 _expected_dc = (
-                    -self.cfg.idle_drain_w * _dt_h / 1000.0
+                    0.0
                     if self.hold_state.engaged
                     else soc_drift.expected_soc_delta_kwh(
                         _fc_pv_w,

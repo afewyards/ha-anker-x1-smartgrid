@@ -88,8 +88,17 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
 
 
 def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None) -> float:
-    """€ a DC kWh saves when discharged now to cover ``deficit_w`` of house load at ``price``."""
-    return price * _eta_discharge_at(deficit_w, cfg, eta_curve)
+    """€ a DC kWh saves when discharged now to cover ``deficit_w`` of house load at ``price``.
+
+    Covering ``deficit_w`` draws ``deficit_w/η_d + idle_drain_w`` of DC, and only
+    the ``deficit_w`` part reaches the house. A held pack pays no standby drain,
+    so that term does not cancel out of the hold comparison — it dilutes what a
+    stored kWh is worth, hardest at low power. ``idle_drain_w=0`` → ``price·η_d``.
+    """
+    if deficit_w <= 0.0:
+        return 0.0
+    dc_w = deficit_w / _eta_discharge_at(deficit_w, cfg, eta_curve) + cfg.idle_drain_w
+    return price * deficit_w / dc_w
 
 
 def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, eta_curve=None) -> bool:
@@ -622,10 +631,10 @@ def optimize_grid(
         the mask never silently swallows a floor or reserve breach.
     hold :
         Optional per-slot low-power-hold mask (see :func:`holds_at`).  In a
-        held deficit slot the charge/idle transitions keep the battery idle
-        (standby drain only) and import the deficit directly (booked like the
-        floor import); export transitions still discharge.  ``None`` is
-        byte-identical.
+        held deficit slot the charge/idle transitions leave the battery
+        untouched (no standby drain) and import the deficit directly (booked
+        like the floor import); export transitions still discharge.  ``None``
+        is byte-identical.
     feed_in :
         Optional per-hour dynamic feed-in tariff (€/kWh).  Must have exactly
         ``window_len`` elements when provided.
@@ -803,10 +812,10 @@ def optimize_grid(
             # Solar/load step — physics imported from regret.py (shared).
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
 
-            # Low-power hold: charge/idle transitions start from the idle pack,
-            # which still pays standby drain; the export branch keeps soc_after.
+            # Low-power hold: charge/idle transitions start from the untouched
+            # pack (a held pack measures flat); the export branch keeps soc_after.
             held_kwh = -net if hold is not None and hold[h] and net < 0.0 else 0.0
-            soc_pass = soc - cfg.idle_drain_w * dt_h / 1000.0 if held_kwh > 0.0 else soc_after
+            soc_pass = soc if held_kwh > 0.0 else soc_after
 
             # SoC drift-hedge: synthetic forward DC-kWh debit that sags the projected
             # trajectory so the DP books the cheapest in-range recovery (or trims export).

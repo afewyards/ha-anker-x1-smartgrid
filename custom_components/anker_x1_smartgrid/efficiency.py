@@ -352,6 +352,10 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     stay within ``const.EFFICIENCY_POWER_AGREEMENT_MAX`` of the run's mean
     ``|batt_w|`` (both directions), so integer-SoC quantization noise on
     short runs can't silently inflate ΔSoC-derived power into a higher bin.
+    On a DISCHARGE run the comparison uses the drain-debited DC power — the
+    same numerator the eta ratio uses — because the gross figure differs from
+    ``batt_w`` by idle drain as well as conversion loss, and at low power that
+    alone pushes genuine runs outside the band.
     """
     if len(run) < 2:
         return None
@@ -369,7 +373,14 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     mean_abs_batt_w = fmean(abs(r["batt_w"]) for r in run)
     if mean_abs_batt_w <= 0.0:
         return None
-    agreement = dc_power_w / mean_abs_batt_w
+    # Debit the modeled standby drain BEFORE the agreement check, so both sides
+    # measure the same thing: conversion loss between the pack and batt_w. The
+    # gross DC figure also carries idle drain, which at low power is a large
+    # share of the draw and blows the band open on physics alone.
+    dc_kwh_eff = dc_kwh - cfg.idle_drain_w * duration_h / 1000.0 if dsoc_pct < 0.0 else dc_kwh
+    if dc_kwh_eff <= 0.0:
+        return None
+    agreement = dc_kwh_eff * 1000.0 / duration_h / mean_abs_batt_w
     if not (1.0 / const.EFFICIENCY_POWER_AGREEMENT_MAX <= agreement <= const.EFFICIENCY_POWER_AGREEMENT_MAX):
         return None
     ac_wh = 0.0
@@ -387,10 +398,6 @@ def _run_eta_impl(run: list[dict], cfg: Config) -> RunEta | None:
     else:
         ac_delivered = ac_kwh
         if ac_delivered <= 0.0:
-            return None
-        idle_kwh = cfg.idle_drain_w * duration_h / 1000.0
-        dc_kwh_eff = dc_kwh - idle_kwh
-        if dc_kwh_eff <= 0.0:
             return None
         eta = ac_delivered / dc_kwh_eff
         direction = "discharge"

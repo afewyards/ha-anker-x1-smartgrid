@@ -1,6 +1,7 @@
 import math
 from datetime import datetime, timedelta
 
+from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve, bin_index, segment_episodes, run_eta
 
@@ -167,7 +168,7 @@ def test_discharge_eta_subtracts_idle_drain():
     cfg = Config(capacity_kwh=10.0, idle_drain_w=135.0)
     t0 = datetime(2026, 7, 11, 0, 0, 0)
     resid_w = 208.333333  # 4h * resid_w/1000 ~= 0.8333 kWh AC delivered
-    batt_w = 375.0  # matches the ΔSoC-implied gross DC power (1.5 kWh / 4h)
+    batt_w = 225.0  # AC-side battery power: residual + inverter loss, NOT the gross DC power
     run = [
         {"ts": t0.isoformat(), "soc": 65.0, "batt_w": batt_w, "residual_w": resid_w},
         {"ts": (t0 + timedelta(hours=4)).isoformat(), "soc": 50.0, "batt_w": batt_w, "residual_w": resid_w},
@@ -272,7 +273,8 @@ def test_build_drops_out_of_window_rows():
 
 def _bin0_discharge_run(t0: datetime, n: int = 121, step_s: int = 120):
     # 4h run (120 x 120s ticks, the max hysteresis-tolerant gap): ΔSoC 15.4%
-    # -> dc_kwh=1.54 (gross), avg dc_power=385 W (bin0, <400W). idle_drain_w
+    # -> dc_kwh=1.54 (gross), avg dc_power=385 W (bin0, <400W); batt_w is the
+    # AC-side 230 W, so the pack drains faster than it delivers. idle_drain_w
     # =135W over 4h -> idle_kwh=0.54, dc_kwh_eff=1.00. Constant residual_w
     # =217.5W over 4h -> ac_delivered=0.87 kWh (trapz of a constant
     # telescopes to resid_w * duration regardless of tick resolution).
@@ -282,7 +284,7 @@ def _bin0_discharge_run(t0: datetime, n: int = 121, step_s: int = 120):
         {
             "ts": (t0 + timedelta(seconds=step_s * i)).isoformat(),
             "soc": soc0 + (soc1 - soc0) * i / (n - 1),
-            "batt_w": 385.0,
+            "batt_w": 230.0,
             "residual_w": 217.5,
         }
         for i in range(n)
@@ -360,6 +362,31 @@ def test_agreement_gate_applies_to_charge_direction():
     for i, row in enumerate(run):
         row["soc"] = 60.0 + 5.0 * i / (len(run) - 1)
     assert run_eta(run, cfg) is None
+
+
+def test_agreement_gate_accepts_a_real_low_power_discharge():
+    """The owner's overnight shape: 250 W reaches the house, the pack also pays
+    the 100 W standby drain, so the GROSS DC power is 1.6x batt_w and the gross
+    comparison dropped the run on physics alone. Debited, it agrees to 1.20.
+    """
+    cfg = Config(capacity_kwh=10.0, idle_drain_w=100.0, eta_charge=0.9, round_trip_eff=0.77)
+    t0 = datetime(2026, 10, 15, 0, 0, 0)
+    # 4 h, dSoC -16% -> 1.6 kWh gross (400 W); minus 0.4 kWh standby -> 1.2 kWh
+    # (300 W) against a 250 W AC-side batt_w.
+    run = [
+        {
+            "ts": (t0 + timedelta(seconds=120 * i)).isoformat(),
+            "soc": 60.0 - 16.0 * i / 120,
+            "batt_w": 250.0,
+            "residual_w": 250.0,
+        }
+        for i in range(121)
+    ]
+    assert const.EFFICIENCY_POWER_AGREEMENT_MAX < 400.0 / 250.0  # the gross ratio the old gate saw
+    r = run_eta(run, cfg)
+    assert r is not None and r.direction == "discharge"
+    assert math.isclose(r.dc_power_w, 400.0, rel_tol=1e-6)  # binning stays on the gross power
+    assert math.isclose(r.eta, 1.0 / 1.2, rel_tol=1e-6)
 
 
 def test_bin_median_is_dc_kwh_weighted():

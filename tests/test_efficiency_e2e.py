@@ -27,9 +27,11 @@ from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 
 # Design point: 1%/25min SoC drop on a 10 kWh pack == 0.1 kWh / (25/60 h) ==
-# 240 W average DC power -> lands in the lowest bin ([0, 400) W).
+# 240 W average GROSS DC power -> lands in the lowest bin ([0, 400) W).
 _SOC_DROP_PCT_PER_MIN = 1.0 / 25.0
-_BATT_W = 240.0
+# AC-side battery power the inverter reports: the pack drains faster than this
+# because of the standby drain, as it does on real hardware.
+_BATT_W = 110.0
 # AC delivered (via load_w, p1_w=pv_w=0 so residual_w == load_w). Tuned so
 # that, after debiting the modeled idle_drain_w=130 standby drain from the
 # 80-minute episode's DC side, eta lands ~0.87 (a plausible measured value,
@@ -42,8 +44,8 @@ _IDLE_DRAIN_W = 130.0
 def _write_discharge_episode(rec: DataRecorder, t0: datetime, soc0: float) -> tuple[datetime, float]:
     """Append one contiguous per-minute discharge episode starting at (t0, soc0).
 
-    batt_w stays constant at 240 W (same band throughout -> one low-power-bin
-    run), residual_w constant so the AC-side trapezoid integration is exact.
+    batt_w stays constant (same band throughout -> one low-power-bin run),
+    residual_w constant so the AC-side trapezoid integration is exact.
     Returns (end_ts, end_soc) so episodes can be chained.
     """
     soc = soc0
@@ -92,7 +94,7 @@ def _make_cfg() -> Config:
 def test_recorder_to_curve_promotes_low_power_discharge_bin(tmp_path):
     """Full pipeline: DB write -> read_efficiency_samples -> EfficiencyCurve.build.
 
-    10 independent low-power discharge episodes (240 W, same band) clear
+    10 independent low-power discharge episodes (same band) clear
     EFFICIENCY_MIN_RUNS=10 and EFFICIENCY_MIN_DC_KWH=2.0 for bin 0, so it
     should be promoted to the measured median instead of the static fallback.
     """

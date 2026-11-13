@@ -56,6 +56,27 @@ def test_rule_never_holds_without_a_deficit():
     assert not optimize.holds_at(0.35, -300.0, 10.0, Config(), _Curve())
 
 
+def test_rule_dilutes_the_value_by_the_standby_drain():
+    # Holding costs no drain, discharging does: covering 250 W at eta_conv 0.85
+    # draws 250/0.85 + 100 = 394.1 W of DC and delivers 250 W of it.
+    curve = SimpleNamespace(eta_discharge=lambda _w: 0.85, eta_charge=lambda _w: 1.0)
+    assert optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve) == pytest.approx(
+        250.0 / (250.0 / 0.85 + 100.0), abs=1e-6
+    )
+    assert optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve) == pytest.approx(0.634, abs=5e-4)
+    # No modeled drain -> the bare conversion eta, as before.
+    assert optimize.discharge_value(1.0, 250.0, Config(), curve) == pytest.approx(0.85)
+
+
+def test_live_rule_and_dp_mask_read_the_same_value():
+    cfg = Config(low_power_hold=True, soc_floor=5.0, idle_drain_w=100.0)
+    boundary = optimize.discharge_value(0.35, 250.0, cfg, _Curve())
+    assert boundary == pytest.approx(0.35 * 250.0 / (250.0 / 0.6 + 100.0))
+    assert _values(_gate_ctrl(cfg=cfg), dp_out={"water_value": boundary})[0] == pytest.approx(boundary)
+    assert optimize.holds_at(0.35, 250.0, boundary + 1e-9, cfg, _Curve())
+    assert not optimize.holds_at(0.35, 250.0, boundary, cfg, _Curve())
+
+
 # ── dwell / hysteresis ──────────────────────────────────────────────────────
 
 
@@ -326,10 +347,11 @@ def test_dp_held_slots_import_the_deficit():
     assert held["eur"] == pytest.approx(base["eur"] + 0.5 * 0.30)
 
 
-def test_dp_held_slots_pay_standby_drain():
+def test_dp_held_slots_lose_no_soc():
     def held(idle_w):
         cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=idle_w)
-        # At the firmware floor every held kWh, deficit and standby alike, is a floor import.
+        # At the firmware floor every DC kWh the pack lost would surface as a
+        # floor import, so an unchanged bill is an unchanged pack.
         return optimize.optimize_grid(
             [0.0] * 4,
             [0.25] * 4,
@@ -343,7 +365,8 @@ def test_dp_held_slots_pay_standby_drain():
             hold=[True] * 4,
         )
 
-    assert held(100.0)["kwh"] == pytest.approx(held(0.0)["kwh"] + 4 * 0.1)
+    assert held(100.0) == held(0.0)
+    assert held(100.0)["kwh"] == pytest.approx(4 * 0.25)  # the deficit, nothing more
 
 
 # ── simulation: plan display ────────────────────────────────────────────────
@@ -368,8 +391,16 @@ def test_plan_holds_cheap_slot_and_discharges_expensive_one():
     assert [r["mode"] for r in off] == ["idle", "idle"]
 
 
-def test_plan_held_slot_pays_standby_drain():
-    assert _horizon(0.25, idle_drain_w=100.0)[0]["soc"] == pytest.approx(49.0)  # 0.1 kWh of 10
+def test_plan_held_slot_loses_no_soc():
+    assert _horizon(0.25, idle_drain_w=100.0)[0]["soc"] == pytest.approx(50.0)
+
+
+def test_plan_feature_off_still_pays_the_drain():
+    # Same slot with the hold off: passive discharge keeps the drain it always had.
+    off = _horizon(None, idle_drain_w=100.0)
+    assert off[0]["mode"] == "idle"
+    # 250 W / eta_d 0.6 + 100 W standby, over one hour of a 10 kWh pack (soc is rounded to 0.1).
+    assert off[0]["soc"] == pytest.approx(50.0 - (250.0 / 0.6 + 100.0) / 10000.0 * 100.0, abs=0.05)
 
 
 def test_plan_export_slot_never_holds():
@@ -380,8 +411,11 @@ def test_plan_export_slot_never_holds():
 # ── soc drift ───────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("holding, drifts", [(True, False), (False, True)])
-def test_held_step_expects_only_standby_drain(monkeypatch, holding, drifts):
+@pytest.mark.parametrize(
+    "holding, soc_now, drifts",
+    [(True, 50.0, False), (True, 49.9, True), (False, 49.9, True)],
+)
+def test_held_step_expects_a_flat_pack(monkeypatch, holding, soc_now, drifts):
     monkeypatch.setattr(ctrl_mod.dt_util, "now", lambda: T)
     ctrl, _ = _exec_ctrl(soc_hedge_fraction=0.5, capacity_kwh=10.0, idle_drain_w=600.0)
     ctrl._soc_drift_day = ctrl_mod.dt_util.as_local(T).date().isoformat()
@@ -389,8 +423,9 @@ def test_held_step_expects_only_standby_drain(monkeypatch, holding, drifts):
     ctrl._soc_drift_last_update = T - timedelta(minutes=1)
     ctrl._soc_drift_last_intervals = [ForecastInterval(T - timedelta(minutes=30), 0.0, 1000.0, 1.0)]
     ctrl.hold_state = ExportState(engaged=holding, state_since=T - timedelta(hours=1))
-    # 600 W standby for one minute = 0.01 kWh = 0.1 % of 10 kWh
-    ctrl._apply_drift_hedge(T, PlantInputs(soc=49.9, meter_w=1000.0, now=T), _SLOTS, T + timedelta(hours=8))
+    # 600 W for one minute = 0.01 kWh = 0.1 % of 10 kWh: a held pack that really
+    # sagged that far is drift, a flat one is not.
+    ctrl._apply_drift_hedge(T, PlantInputs(soc=soc_now, meter_w=1000.0, now=T), _SLOTS, T + timedelta(hours=8))
     assert (abs(ctrl._soc_drift_kwh) > 1e-9) is drifts
 
 
