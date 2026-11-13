@@ -176,7 +176,9 @@ def hold_values(
     price = resolution.price_at(slots, now, _slot_minutes)
     window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
     deficits = [w for t, w in controller._hold_deficit_w if now - t < window]
-    _slot = resolution.floor_to_slot(now, _slot_minutes)
+    # The DP's own slot key when it published one: re-flooring `now` here can
+    # land on the next slot and miss the current one entirely.
+    _slot = _dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)
     _ceiling = (_dp_out.get("ceiling_by_hour") or {}).get(_slot)
     if (
         not cfg.low_power_hold
@@ -237,7 +239,8 @@ async def run_forcing_and_export(
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,
-        dp_holds=_dp_held is None or resolution.floor_to_slot(now, _slot_minutes) in _dp_held,
+        dp_holds=_dp_held is None
+        or (_dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)) in _dp_held,
     )
     _hold = controller.hold_state.engaged
     controller.last_hold_values = (_discharge_v, _stored_v)

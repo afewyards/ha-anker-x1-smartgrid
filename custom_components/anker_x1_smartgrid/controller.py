@@ -582,13 +582,13 @@ class Controller:
         try:
             since_iso = (now - timedelta(hours=48)).isoformat()
             rows = await self._hass.async_add_executor_job(self._recorder.read_feature_rows, since_iso)
-            hourly = past_actuals_mod.aggregate_past_actuals(rows)
+            hourly = past_actuals_mod.aggregate_past_actuals(rows, idle_drain_w=self.cfg.idle_drain_w)
             self._past_actuals_cache = {h: v for h, v in hourly.items() if h < now_h}
             if slot_minutes == 60:
                 # Same bucketing — reuse rather than aggregate the rows twice.
                 self._past_actuals_slot_cache = self._past_actuals_cache
             else:
-                by_slot = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+                by_slot = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
                 self._past_actuals_slot_cache = {h: v for h, v in by_slot.items() if h < now_h}
             self._past_actuals_slot_minutes = slot_minutes
             self._past_actuals_hour = now_h
@@ -636,7 +636,7 @@ class Controller:
         if now_slot > resolution.hour_floor(now):
             try:
                 rows = await self._get_running_hour_rows(now)
-                running = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+                running = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
                 out.update({s: v for s, v in running.items() if s < now_slot})
             except Exception:
                 _LOGGER.warning(
@@ -695,7 +695,7 @@ class Controller:
         now_slot = resolution.floor_to_slot(now, slot_minutes)
         try:
             rows = await self._get_running_hour_rows(now)
-            actuals = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes)
+            actuals = past_actuals_mod.aggregate_past_actuals(rows, slot_minutes, self.cfg.idle_drain_w)
             return {s: v for s, v in actuals.items() if s == now_slot}
         except Exception:
             _LOGGER.warning(
@@ -2957,6 +2957,12 @@ class Controller:
             ),
         )
         house_load_w = max(0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0))
+        if self.hold_state.engaged:
+            # Held: batt_w is ~0 and the meter carries the inverter standby, so the
+            # balance above books it as house load. Left in, the forecast learns it,
+            # the DP's deficit inherits it and the held branch adds idle_drain_w on
+            # top — the same ~100 W counted twice.
+            house_load_w = max(0.0, house_load_w - self.cfg.idle_drain_w)
         self._last_house_load_w = house_load_w
         self._last_pv_w = pv_w
         self._house_load_fresh = True

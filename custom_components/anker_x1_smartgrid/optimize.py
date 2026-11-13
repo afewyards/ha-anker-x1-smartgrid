@@ -103,6 +103,48 @@ def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None)
     return price * (deficit_w + cfg.idle_drain_w) / dc_w
 
 
+def smooth_hold_runs(held: list[bool], min_run: int) -> list[bool]:
+    """Drop hold runs shorter than ``min_run`` slots, and fill declined gaps that
+    short between two holds.
+
+    Same trade the export path makes in :func:`export_filter.apply_min_export_block`:
+    a run the actuator cannot execute is churn, not economics. Price noise of a
+    few hundredths makes the raw DP choice alternate slot by slot
+    (``H.HHHHH.HH.HHHHHH..HHH.``), and every flip is a work-mode write the dwell
+    cannot absorb. Gaps are filled before short runs are dropped, so filling can
+    rescue the neighbours it joins. ``min_run <= 1`` is a no-op.
+    """
+    if min_run <= 1 or not held:
+        return list(held)
+    out = list(held)
+    for value, keep_edges in ((False, True), (True, False)):
+        i = 0
+        while i < len(out):
+            if out[i] is not value:
+                i += 1
+                continue
+            j = i
+            while j < len(out) and out[j] is value:
+                j += 1
+            interior = i > 0 and j < len(out)
+            if j - i < min_run and (interior or not keep_edges):
+                for k in range(i, j):
+                    out[k] = not value
+            i = j
+    return out
+
+
+def hold_min_run_slots(dwell_min: int, slot_minutes: int) -> int:
+    """Shortest executable hold run, in slots: longer than the engage/release dwell.
+
+    At 60-minute slots this is 1 (no smoothing, unchanged behaviour); at 15 it is
+    2 with the default 15-minute dwell, which is what removes the churn.
+    """
+    if slot_minutes <= 0:
+        return 1
+    return max(1, int(dwell_min // slot_minutes) + 1)
+
+
 def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, eta_curve=None) -> bool:
     """Low-power hold rule: covering this deficit is worth less than keeping the stored kWh."""
     return deficit_w > 0.0 and discharge_value(price, deficit_w, cfg, eta_curve) < water_value
@@ -186,7 +228,14 @@ def overnight_terminal_segments(
             eta_d = eta_d_static if eta_curve is None else eta_curve.eta_discharge(load_w)
             dc_h = load_w / eta_d * dt_h / 1000.0 + cfg.idle_drain_w * dt_h / 1000.0
             if dc_h > 0.0:
-                raw_v_h = (load_w * dt_h / 1000.0 * p_h) / dc_h
+                # With the hold available, the alternative to spending this kWh is
+                # holding — which buys the standby from the meter — so the segment
+                # must be valued by the same helper the hold decision uses.
+                raw_v_h = (
+                    discharge_value(p_h, load_w, cfg, eta_curve)
+                    if cfg.low_power_hold
+                    else (load_w * dt_h / 1000.0 * p_h) / dc_h
+                )
                 seg_v = max(v_lo, raw_v_h)
                 raw_segments.append([dc_h, seg_v, raw_v_h])
         cur += timedelta(hours=1)
@@ -794,9 +843,10 @@ def optimize_grid(
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_credit_eur, export_dc_kwh,
-    #                 floor_import_eur, floor_import_kwh, held_dc_kwh).
+    #                 floor_import_eur, floor_import_kwh, held_ac_kwh).
     # export_dc_kwh is 0.0 for all grid-charge / idle transitions (no export).
-    # held_dc_kwh > 0.0 marks a low-power-hold transition (0.0 everywhere else).
+    # held_ac_kwh > 0.0 marks a low-power-hold transition (0.0 everywhere else):
+    # the AC the meter buys for the house, deficit plus displaced standby.
     # floor_import_eur/kwh are stored from the HEDGED forward pass so the backtrack
     # sums them (no unhedged _apply_solar_load recompute needed; parity safe at hedge=None
     # because the stored values equal the old recompute when no hedge is applied).
@@ -1074,7 +1124,9 @@ def optimize_grid(
         export_credit += step_credit
         floor_import_eur += fi_eur  # stored from the HEDGED forward pass (was: unhedged recompute)
         floor_import_kwh += fi_kwh
-        held_sched[h] = held_kwh > 0.0
+        # A slot that grid-charges is a charge, whatever else it does with the
+        # house: the actuator can only be in one work mode.
+        held_sched[h] = held_kwh > 0.0 and g_ac <= 0.0
         cur_b = prev_b
 
     total_kwh = sum(schedule_ac) + floor_import_kwh

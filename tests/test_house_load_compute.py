@@ -17,9 +17,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, UTC
 
+import pytest
+
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
-from custom_components.anker_x1_smartgrid.models import PlantInputs
+from custom_components.anker_x1_smartgrid.models import Config, ExportState, PlantInputs
 
 NOW = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
 
@@ -45,10 +47,12 @@ class _Hass:
         self.states = _States()
 
 
-def _make_ctrl(hass, *, last_house_load_w: float = 0.0) -> Controller:
+def _make_ctrl(hass, *, last_house_load_w: float = 0.0, holding: bool = False, idle_drain_w: float = 0.0) -> Controller:
     """Minimal Controller carrying only what _compute_house_load_w touches."""
     ctrl = Controller.__new__(Controller)
     ctrl._hass = hass
+    ctrl.cfg = Config(idle_drain_w=idle_drain_w)
+    ctrl.hold_state = ExportState(engaged=holding, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     ctrl._data = {
         const.CONF_ENT_PV_POWER: "sensor.pv",
         const.CONF_ENT_BATTERY_POWER: "sensor.batt",
@@ -57,6 +61,22 @@ def _make_ctrl(hass, *, last_house_load_w: float = 0.0) -> Controller:
     ctrl._last_house_load_w = last_house_load_w
     ctrl._house_load_fresh = False
     return ctrl
+
+
+def test_held_tick_takes_the_inverter_standby_off_the_house_load():
+    """Held, batt_w is ~0 and the meter carries the inverter standby, so the AC
+    balance books it as house load. Left in, the forecast learns it and the DP's
+    held branch adds idle_drain_w again -- the same ~100 W counted twice."""
+    hass = _Hass()
+    hass.states.set("sensor.pv", "0.0")
+    hass.states.set("sensor.batt", "0.0")
+    hass.states.set("sensor.loss", "0.0")
+    inputs = PlantInputs(soc=50.0, meter_w=277.0, now=datetime(2026, 11, 12, 1, tzinfo=UTC))
+    assert _make_ctrl(hass, holding=True, idle_drain_w=100.0)._compute_house_load_w(inputs) == pytest.approx(177.0)
+    # Not held: the pack pays the standby, nothing to take off.
+    assert _make_ctrl(hass, holding=False, idle_drain_w=100.0)._compute_house_load_w(inputs) == pytest.approx(277.0)
+    # Clamped at zero, never negative.
+    assert _make_ctrl(hass, holding=True, idle_drain_w=400.0)._compute_house_load_w(inputs) == 0.0
 
 
 def test_normal_compute_is_pv_plus_meter_plus_batt_minus_loss():
@@ -137,6 +157,8 @@ def _make_ctrl_no_loss_key(hass, *, last_house_load_w: float = 0.0) -> Controlle
     (it only existed at runtime via apply_anker_resolution's in-memory
     mutation). Exercises the DEFAULT_ENTITIES .get() fallback."""
     ctrl = Controller.__new__(Controller)
+    ctrl.cfg = Config(idle_drain_w=0.0)
+    ctrl.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     ctrl._hass = hass
     ctrl._data = {
         const.CONF_ENT_PV_POWER: "sensor.pv",
@@ -273,6 +295,8 @@ def test_fresh_flag_recovers_true_after_a_prior_cache_fallback_tick():
 
 def _make_ctrl_multi_pv(hass, *, last_house_load_w: float = 0.0) -> Controller:
     ctrl = Controller.__new__(Controller)
+    ctrl.cfg = Config(idle_drain_w=0.0)
+    ctrl.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     ctrl._hass = hass
     ctrl._data = {
         const.CONF_ENT_PV_POWER: ["sensor.pv_1", "sensor.pv_2"],

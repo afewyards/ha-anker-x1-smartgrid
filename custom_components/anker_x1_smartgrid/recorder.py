@@ -692,23 +692,24 @@ class DataRecorder:
         with self._lock:
             if since_iso is not None:
                 cur = self._conn.execute(
-                    "SELECT ts, soc, batt_w, p1_w, pv_w, load_w FROM samples "
+                    "SELECT ts, soc, batt_w, p1_w, pv_w, load_w, state FROM samples "
                     f"WHERE {where} AND ts >= ? ORDER BY ts ASC",
                     (since_iso,),
                 )
             else:
                 cur = self._conn.execute(
-                    f"SELECT ts, soc, batt_w, p1_w, pv_w, load_w FROM samples WHERE {where} ORDER BY ts ASC"
+                    f"SELECT ts, soc, batt_w, p1_w, pv_w, load_w, state FROM samples WHERE {where} ORDER BY ts ASC"
                 )
             raw = cur.fetchall()
         out: list[dict] = []
-        for ts, soc, batt_w, p1_w, pv_w, load_w in raw:
+        for ts, soc, batt_w, p1_w, pv_w, load_w, state in raw:
             out.append(
                 {
                     "ts": ts,
                     "soc": float(soc),
                     "batt_w": float(batt_w),
                     "residual_w": float(load_w) - float(p1_w) - float(pv_w or 0.0),
+                    "state": state,
                 }
             )
         return out

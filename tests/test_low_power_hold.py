@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -440,6 +441,7 @@ def test_dp_declines_to_hold_through_a_sunny_day():
             terminal_mode="water_value",
             water_value=wv,
             grid_charge_ceiling=ceiling,
+            chargeable=[False] * n,  # isolate the hold choice from refilling
             hold=mask,
         )
         return sum(mask), out
@@ -450,6 +452,69 @@ def test_dp_declines_to_hold_through_a_sunny_day():
     assert sum(sunny["hold_schedule"]) == 0  # ...the DP only takes it when the pack has nowhere else to go
     assert sum(dark["hold_schedule"]) > 0
     assert sunny["kwh"] < dark["kwh"]
+
+
+# ── smoothing ───────────────────────────────────────────────────────────
+
+
+def _flips(mask):
+    return sum(1 for a, b in itertools.pairwise(mask) if a != b)
+
+
+def test_min_run_is_one_slot_at_hourly_resolution():
+    assert optimize.hold_min_run_slots(15, 60) == 1  # no-op, unchanged behaviour
+    assert optimize.hold_min_run_slots(15, 15) == 2
+    assert optimize.hold_min_run_slots(30, 15) == 3
+
+
+def test_smoothing_collapses_a_noisy_hold_pattern():
+    """Price noise of a few hundredths makes the raw DP choice alternate slot by
+    slot; each flip is a work-mode write the dwell cannot absorb."""
+    raw = [c == "H" for c in "H.HHHHH.HH.HHHHHH..HHH."]
+    smooth = optimize.smooth_hold_runs(raw, 2)
+    assert _flips(raw) == 9
+    assert _flips(smooth) == 3
+    assert optimize.smooth_hold_runs(raw, 1) == raw  # min_run<=1 is a no-op
+
+
+def test_smoothing_keeps_long_runs_and_drops_lone_slots():
+    assert optimize.smooth_hold_runs([False, True, False, False, False], 2) == [False] * 5
+    assert optimize.smooth_hold_runs([True, True, False, False, True, True], 2) == [
+        True,
+        True,
+        False,
+        False,
+        True,
+        True,
+    ]
+
+
+def test_noisy_prices_do_not_churn_the_work_mode():
+    """End to end on the DP: +-0.3 ct of noise on a flat night, 15-min slots."""
+    cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=100.0, capacity_kwh=20.0)
+    n = 24
+    price = [0.26 + (0.003 if i % 3 else -0.003) for i in range(n)]
+    wv = optimize.compute_water_value(min(price), cfg)
+    mask = [optimize.holds_at(price[i], 320.0, wv, cfg) for i in range(n)]
+    out = optimize.optimize_grid(
+        [0.0] * n,
+        [0.08] * n,
+        price,
+        60.0,
+        cfg,
+        window_start_h=0,
+        window_len=n,
+        slots_per_day=96,
+        dt_h=0.25,
+        terminal_mode="water_value",
+        water_value=wv,
+        chargeable=[False] * n,
+        hold=mask,
+    )
+    raw = out["hold_schedule"]
+    smooth = optimize.smooth_hold_runs(raw, optimize.hold_min_run_slots(cfg.export_dwell_min, 15))
+    assert _flips(smooth) <= _flips(raw)
+    assert _flips(smooth) <= 2  # at most one hold run per night
 
 
 def test_dp_holds_at_15min_slots_with_a_curve():
@@ -478,9 +543,9 @@ def test_dp_holds_at_15min_slots_with_a_curve():
     assert out["kwh"] == pytest.approx(n * (0.08 + 0.025))
 
 
-def test_dp_can_hold_and_grid_charge_the_same_slot():
-    """A hold only says "don't serve the house from the pack". Charging is a
-    separate action and stays available in the same slot."""
+def test_a_grid_charging_slot_is_not_labelled_held():
+    """A hold only says "don't serve the house from the pack", so charging stays
+    available in the same slot — but the slot is reported as a charge."""
     cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=100.0)
     out = optimize.optimize_grid(
         [0.0] * 3,
@@ -494,9 +559,11 @@ def test_dp_can_hold_and_grid_charge_the_same_slot():
         water_value=10.0,
         hold=[True] * 3,
     )
-    assert out["hold_schedule"][0] is True
-    assert out["schedule"][0] > 0.0  # grid charge in a held slot
-    # The held slot's own house load + standby is bought on top of that charge.
+    # The slot both idles the pack and charges it, but the actuator can only be
+    # in one work mode: a charging slot is never labelled held.
+    assert out["schedule"][0] > 0.0
+    assert out["hold_schedule"][0] is False
+    # The house load it idles through is still bought on top of the charge.
     assert out["kwh"] > sum(out["schedule"])
 
 
@@ -613,6 +680,37 @@ async def test_tick_records_hold_and_publishes_both_values(monkeypatch):
     assert ctrl.last_status["low_power_hold_active"] is True
     assert ctrl.last_status["hold_discharge_value_eur_per_kwh"] == pytest.approx(0.30)
     assert ctrl.last_status["hold_stored_value_eur_per_kwh"] == 0.40
+
+
+async def test_executor_keys_on_the_dp_slot_at_15min_resolution(monkeypatch):
+    """The executor reads `now` later in the tick than the DP did. Re-flooring it
+    there lands on the NEXT slot when a tick falls on a boundary, so the hold
+    looks unchosen (spurious release) and the ceiling check fails open. It must
+    use the slot the DP keyed its own maps on."""
+    ctrl, act = _exec_ctrl()
+    boundary = T.replace(minute=15)  # exactly a 15-min slot start
+    dp_slot = boundary - timedelta(minutes=15)  # the slot the DP planned for
+    ctrl._hold_deficit_w.clear()
+    ctrl._hold_deficit_w.append((boundary, 250.0))
+    out = await executor.run_forcing_and_export(
+        ctrl,
+        boundary,
+        PlanState(ControllerState.PASSIVE, boundary, ()),
+        PlantInputs(soc=50.0, meter_w=250.0, now=boundary),
+        [PriceSlot(dp_slot, 0.35), PriceSlot(boundary, 0.35)],
+        {
+            "water_value": 0.45,
+            "held_slots": frozenset({dp_slot}),
+            "ceiling_by_hour": {dp_slot: 90.0},
+            "dp_slot_start": dp_slot,
+        },
+        [],
+        15,
+        None,
+        250.0,
+    )
+    assert out is not None
+    assert act.calls == [("engage_hold",)] and ctrl.hold_state.engaged
 
 
 async def test_tick_feature_off_records_passive(monkeypatch):

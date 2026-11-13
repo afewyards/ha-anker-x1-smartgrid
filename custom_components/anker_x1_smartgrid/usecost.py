@@ -268,7 +268,9 @@ def roll_plan(
             rec["saved_eur"] -= free  # c_free is the grid part of c_exp: same seed, grid price and release
             rec["solar_gain_eur"] -= spent - free
         inv.e_kwh = e_new
-        rec["use_cost_eur"] += max(load - pv - house, 0.0) * imp
+        # A held slot also buys the standby the pack would have paid (plan.py's
+        # hold_import_kwh); past hours already carry it via the meter.
+        rec["use_cost_eur"] += (max(load - pv - house, 0.0) + float(row.get("hold_import_kwh") or 0.0) * left) * imp
         rec["price_eur_h"] += imp * h * left
         rec["price_h"] += h * left
     return _finish(out)
@@ -434,7 +436,7 @@ def hourly_series(
             b[action] += kwh[action]
         _add_grid(
             b,
-            max(load - pv - kwh["house"], 0.0),
+            max(load - pv - kwh["house"], 0.0) + float(row.get("hold_import_kwh") or 0.0) * left,
             kwh["charge_grid"],
             kwh["export"] + max(pv - load - kwh["charge_solar"], 0.0),
         )

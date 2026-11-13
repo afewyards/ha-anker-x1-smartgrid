@@ -118,7 +118,7 @@ def test_recorder_to_curve_promotes_low_power_discharge_bin(tmp_path):
     # exact field names.
     assert len(rows) == 10 * (_EPISODE_MINUTES + 1) + 10  # episodes + idle breaks
     for row in rows[:5]:
-        assert set(row) == {"ts", "soc", "batt_w", "residual_w"}
+        assert set(row) == {"ts", "soc", "batt_w", "residual_w", "state"}
 
     cfg = _make_cfg()
     now = last_ts + timedelta(hours=1)

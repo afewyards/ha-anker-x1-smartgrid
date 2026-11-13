@@ -279,14 +279,17 @@ def _same_band(prev_w: float, cur_w: float) -> bool:
 
 
 def segment_episodes(rows: list[dict]) -> list[list[dict]]:
-    """Split rows into contiguous same-sign, band-stable, gap-free runs (len >= 2)."""
+    """Split rows into contiguous same-sign, band-stable, gap-free, unheld runs (len >= 2)."""
     max_gap_s = 2 * const.TICK_SECONDS
     runs: list[list[dict]] = []
     cur: list[dict] = []
     for row in rows:
         b = row["batt_w"]
-        if abs(b) < 1e-9:
-            # idle tick ends any run (no charge/discharge episode here)
+        if abs(b) < 1e-9 or row.get("state") == "hold":
+            # Idle tick ends any run (no charge/discharge episode here). So does a
+            # held one: a few watts of batt_w can stay in band while the pack is
+            # parked, and running a discharge episode through it would debit
+            # idle_drain_w over time the pack never spent, inflating the bin's eta.
             if len(cur) >= 2:
                 runs.append(cur)
             cur = []

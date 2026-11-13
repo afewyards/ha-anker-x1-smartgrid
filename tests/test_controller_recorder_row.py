@@ -15,7 +15,7 @@ from datetime import datetime, timezone, UTC
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.controller import Controller
-from custom_components.anker_x1_smartgrid.models import PlantInputs
+from custom_components.anker_x1_smartgrid.models import Config, ExportState, PlantInputs
 from tests.helpers import StubRecorder as _Recorder
 
 NOW = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
@@ -53,6 +53,8 @@ class _Hass:
 def _make_ctrl(hass, *, last_house_load_w: float = 0.0) -> Controller:
     """Minimal Controller carrying only what _record_sample touches."""
     ctrl = Controller.__new__(Controller)
+    ctrl.cfg = Config(idle_drain_w=0.0)
+    ctrl.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     ctrl._hass = hass
     ctrl._data = {
         const.CONF_ENT_PV_POWER: "sensor.pv",
@@ -115,6 +117,8 @@ async def test_recorder_row_computes_house_load_when_not_threaded_in():
 
 def _make_ctrl_multi_pv(hass, *, last_house_load_w: float = 0.0) -> Controller:
     ctrl = Controller.__new__(Controller)
+    ctrl.cfg = Config(idle_drain_w=0.0)
+    ctrl.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
     ctrl._hass = hass
     ctrl._data = {
         const.CONF_ENT_PV_POWER: ["sensor.pv_1", "sensor.pv_2"],

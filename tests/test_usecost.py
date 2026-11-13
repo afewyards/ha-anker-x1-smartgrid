@@ -16,6 +16,13 @@ from custom_components.anker_x1_smartgrid.usecost import (
     roll_plan,
 )
 
+
+def replace_inv(inv):
+    from dataclasses import replace
+
+    return replace(inv)
+
+
 AMS = ZoneInfo("Europe/Amsterdam")
 CAP = 20.0
 T0 = datetime(2026, 11, 10, 8, 0, tzinfo=UTC)
@@ -151,7 +158,21 @@ class TestReplay:
         assert days == {} and inv.e_kwh == 0.0
 
 
-def _slot(start, soc, price, *, load=0.0, pv=0.0, grid=0.0, solar=0.0, house=0.0, export=0.0, mode="idle", est=False):
+def _slot(
+    start,
+    soc,
+    price,
+    *,
+    load=0.0,
+    pv=0.0,
+    grid=0.0,
+    solar=0.0,
+    house=0.0,
+    export=0.0,
+    mode="idle",
+    est=False,
+    hold_import=0.0,
+):
     return {
         "start": start.isoformat(),
         "price": price,
@@ -164,6 +185,7 @@ def _slot(start, soc, price, *, load=0.0, pv=0.0, grid=0.0, solar=0.0, house=0.0
         "grid_export_kwh": export,
         "mode": "estimated" if est else mode,
         "estimated": est,
+        "hold_import_kwh": hold_import,
     }
 
 
@@ -190,6 +212,23 @@ class TestRollPlan:
         assert (inv.e_kwh, inv.c_free, inv.grid_kwh, inv.sun_kwh) == (2.0, 0.6, 2.0, 0.0), (
             "the caller's inventory is not touched"
         )
+
+    def test_a_held_slot_buys_the_standby_the_pack_would_have_paid(self):
+        """A held slot serves the house from the meter and keeps the inverter
+        standby running on the meter too; past hours carry that from p1, so the
+        planned side has to carry it from the row."""
+        inv = Inventory(10.0, 0.0, 0.0, 0.0, 0.0)
+        horizon = [_slot(NOW, 50.0, 0.40, load=0.3, mode="hold", hold_import=0.1)]
+        planned = roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at)
+        # 0.3 kWh of house load, none of it from the pack, plus 0.1 kWh of standby.
+        assert planned[DAY]["use_cost_eur"] == pytest.approx(0.4 * 0.4)
+        # Without the standby it would have been 0.3 x 0.40.
+        bare = roll_plan([_slot(NOW, 50.0, 0.40, load=0.3, mode="hold")], replace_inv(inv), CAP, AMS, NOW, _exp_at)
+        assert bare[DAY]["use_cost_eur"] == pytest.approx(0.3 * 0.4)
+
+    def test_hourly_series_counts_the_held_standby_as_grid_import(self):
+        rows = hourly_series([], [_slot(NOW, 50.0, 0.40, load=0.3, mode="hold", hold_import=0.1)], AMS, NOW)
+        assert rows[0]["grid_in_house_kwh"] == pytest.approx(0.4)
 
     def test_solar_charge_is_free_for_use_and_export_valued_for_solar_gain(self):
         inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)

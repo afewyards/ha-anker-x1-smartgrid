@@ -573,9 +573,23 @@ def _dp_select_slots(
     ceiling_by_hour: dict[datetime, float] = {
         now_h + h * stride: grid_charge_ceiling[h] / cap * 100.0 for h in range(window_len)
     }
-    # Slots the CHOSEN DP trajectory holds — a subset of the mask it was offered.
+    # Slots the CHOSEN DP trajectory holds — a subset of the mask it was offered,
+    # smoothed to runs the actuator can actually execute (price noise otherwise
+    # alternates the choice slot by slot and every flip is a work-mode write).
     _hold_sched = result.get("hold_schedule")
-    held_slots = frozenset(now_h + h * stride for h, held in enumerate(_hold_sched) if held) if _hold_sched else None
+    held_slots = (
+        frozenset(
+            now_h + h * stride
+            for h, held in enumerate(
+                optimize_mod.smooth_hold_runs(
+                    _hold_sched, optimize_mod.hold_min_run_slots(cfg.export_dwell_min, slot_minutes)
+                )
+            )
+            if held
+        )
+        if _hold_sched
+        else None
+    )
     if _out is not None:
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
@@ -1235,6 +1249,10 @@ def compute_decision(
             _out["water_value"] = water_value
             _out["ceiling_by_hour"] = _dp_ceiling
             _out["held_slots"] = _dp_held
+            # The slot the DP keyed its maps on: the executor reads `now` later in
+            # the tick and must not re-floor it, or a tick landing on a boundary
+            # looks up the next slot and misses its own.
+            _out["dp_slot_start"] = resolution.floor_to_slot(inputs.now, slot_minutes)
             _out["terminal_segments"] = terminal_segments
     except Exception:
         _LOGGER.warning(
