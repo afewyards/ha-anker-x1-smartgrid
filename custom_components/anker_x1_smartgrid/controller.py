@@ -146,6 +146,9 @@ _PERSIST_GROUPS = [
     [
         ("hold_state", "hold_state", lambda v: v.to_dict(), lambda v: ExportState.from_dict(v), False),
     ],
+    [
+        ("standby", "standby", lambda v: v, bool, False),
+    ],
     # E3: per-day export PnL accumulator — a mid-day HA restart must not zero
     # it. Grouped exactly as the original: a corrupt today_export_pnl_eur also
     # blocks export_pnl_day from restoring in the same pass.
@@ -190,6 +193,9 @@ _PERSIST_FIELDS = [field for group in _PERSIST_GROUPS for field in group]
 
 
 class Controller:
+    # Class default only so the bare __new__ test stubs can read it.
+    standby: bool = False
+
     # Pure per-tick caches, declared at class level (and re-initialised in
     # __init__) so they read as "empty" rather than raising AttributeError on a
     # partially constructed instance — the __new__-without-__init__ stub the
@@ -302,6 +308,9 @@ class Controller:
         self.export_state: ExportState = ExportState.initial(dt_util.utcnow())
         # Low-power hold dwell/hysteresis state (engaged = holding; persisted).
         self.hold_state: ExportState = ExportState.initial(dt_util.utcnow())
+        # Master switch turned off: battery held idle (VPP at 0 W) rather than released.
+        # Stays False on a fresh install so a never-toggled switch never actuates.
+        self.standby = False
         # (ts, house load − PV in W) per fresh tick, for the hold's rolling mean.
         self._hold_deficit_w: deque[tuple[datetime, float]] = deque(
             maxlen=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN * 60 // const.TICK_SECONDS
@@ -1528,7 +1537,18 @@ class Controller:
             # This branch never reaches run_forcing_and_export, so it actuates
             # directly. On success we must NOT take the hands-off release below.
             _disabled_setpoint = await self._run_floor_rescue_tick(now, inputs.soc if inputs is not None else None)
-            if _disabled_setpoint == 0.0:
+            if _disabled_setpoint == 0.0 and self.standby:
+                # Re-asserted every tick, like the low-power hold; also covers the first
+                # tick after a restart and the end of a floor rescue.
+                try:
+                    await self._actuator.engage_hold()
+                except Exception:
+                    _LOGGER.error("Actuator engage_hold failed (standby)", exc_info=True)
+                await executor.safe_release(self, now, release=False)
+                if self.hold_state.engaged:
+                    self.hold_state = ExportState(engaged=False, state_since=now)
+                self.plan = PlanState(ControllerState.PASSIVE, now, ())
+            elif _disabled_setpoint == 0.0:
                 # Hand control back to the X1 ONCE if we were actively engaged, then stay
                 # hands-off — re-asserting self-consumption every tick would clobber a
                 # user-set manual/modbus mode while disabled.
@@ -2787,21 +2807,26 @@ class Controller:
     async def set_enabled(self, value: bool) -> None:
         """Set the master enable flag and persist it immediately.
 
-        Disabling also hands the inverter back now (once, if engaged) instead of
-        waiting for the next disabled tick; that tick then sees it released.
+        Disabling holds the battery idle now (VPP at 0 W: no charge, no discharge)
+        and keeps it held every disabled tick. Enabling releases it back to the
+        firmware once if it was held.
         """
         self.enabled = bool(value)
         if not self.enabled:
             async with self._tick_lock:
-                if (
-                    self._actuator.engaged
-                    or self.plan.state is ControllerState.FORCING
-                    or self.export_state.engaged
-                    or self.hold_state.engaged
-                ):
-                    now = dt_util.utcnow()
-                    await executor.safe_release(self, now, "Actuator release failed on disable")
-                    self.plan = PlanState(ControllerState.PASSIVE, now, ())
+                now = dt_util.utcnow()
+                self.standby = True
+                await executor.safe_release(self, now, release=False)
+                self.hold_state = ExportState(engaged=False, state_since=now)
+                self.plan = PlanState(ControllerState.PASSIVE, now, ())
+                try:
+                    await self._actuator.engage_hold()
+                except Exception:
+                    _LOGGER.error("Actuator engage_hold failed on disable", exc_info=True)
+        elif self.standby:
+            async with self._tick_lock:
+                self.standby = False
+                await executor.safe_release(self, dt_util.utcnow(), "Actuator release failed on enable")
         await self._persist()
 
     def restore(self, saved: dict) -> None:
@@ -2975,7 +3000,7 @@ class Controller:
             ),
         )
         house_load_w = max(0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0))
-        if self.hold_state.engaged:
+        if self.hold_state.engaged or self.standby:
             # Held: batt_w is ~0 and the meter carries the inverter standby, so the
             # balance above books it as house load. Left in, the forecast learns it,
             # the DP's deficit inherits it and the held branch adds idle_drain_w on

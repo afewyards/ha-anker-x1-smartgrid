@@ -15,7 +15,7 @@ A Home Assistant custom integration that turns an [Anker SOLIX X1](https://www.a
 - **Self-scaling overnight reserve** — rides out to the next cheap grid hour or solar pickup without draining below firmware floor
 - **Price anticipation** — blends recent price history to estimate tomorrow-morning prices before they're published
 - **15-minute tariff support** — native sub-hourly planning for providers like Zonneplan
-- **Master switch** — `switch.smartgrid_enabled` pauses all actuation without removing the config entry
+- **Master switch** — `switch.smartgrid_enabled` pauses the planner and holds the battery idle (no charge, no discharge) without removing the config entry
 - **Full observability** — plan horizon, regret tracking, forecast accuracy metrics, and efficiency curves exposed as sensor attributes
 
 ## Prerequisites
@@ -75,7 +75,7 @@ All tunables are editable via the integration's options flow (**Configure** butt
 
 | Entity | Description |
 |---|---|
-| `switch.smartgrid_enabled` | Master on/off — pauses all planning and actuation |
+| `switch.smartgrid_enabled` | Master on/off — off pauses the planner and holds the battery idle: no charge, no discharge, the house runs on grid/PV; a fresh install stays hands-off until first toggled |
 
 ### Sensors
 
@@ -154,7 +154,7 @@ House cost is what the house's use cost: grid power at the import price, plus ba
 
 Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
 
-The switch at the top right turns the planner on and off. While it is off the card dims below the top line and shows "SmartGrid disabled" over the battery level.
+The switch at the top right turns the planner on and off. While it is off the battery is held idle (no charge, no discharge) and the card dims below the top line and shows "SmartGrid disabled" over the battery level.
 
 Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color` and `--smartgrid-power-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
 

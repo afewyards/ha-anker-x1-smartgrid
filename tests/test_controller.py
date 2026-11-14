@@ -704,6 +704,7 @@ async def test_persist_writes_wrapped_payload():
         "soc_drift_last_soc_pct",
         "soc_drift_engaged",
         "soc_drift_last_export_kwh_dc",
+        "standby",
     }
     assert ctrl._store.saved["enabled"] is True
 
@@ -719,22 +720,56 @@ async def test_set_enabled_persists():
 
 
 @pytest.mark.asyncio
-async def test_set_enabled_false_releases_once_when_engaged():
+async def test_set_enabled_false_holds_battery_idle():
     ctrl, act = _make_controller(_StubHass())
     ctrl._store = _CapturingStore()
     act.engaged = True
     await ctrl.set_enabled(False)
-    assert [c[0] for c in act.calls] == ["release_to_self"]
-    await ctrl.tick()
-    assert [c[0] for c in act.calls] == ["release_to_self"]
+    assert [c[0] for c in act.calls] == ["engage_hold"]
+    assert ctrl.standby is True
+    assert ctrl._store.saved["standby"] is True
 
 
 @pytest.mark.asyncio
-async def test_set_enabled_false_idle_does_not_touch_actuator():
+async def test_disabled_tick_reasserts_hold_after_restart():
     ctrl, act = _make_controller(_StubHass())
     ctrl._store = _CapturingStore()
     await ctrl.set_enabled(False)
+    ctrl2, act2 = _make_controller(_StubHass())
+    ctrl2.restore(ctrl._store.saved)
+    assert ctrl2.enabled is False and ctrl2.standby is True
+    await ctrl2.tick()
+    assert [c[0] for c in act2.calls] == ["engage_hold"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_without_standby_never_touches_actuator():
+    ctrl, act = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    ctrl.enabled = False
+    await ctrl.tick()
     assert act.calls == []
+
+
+@pytest.mark.asyncio
+async def test_set_enabled_true_releases_once_after_standby():
+    ctrl, act = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    await ctrl.set_enabled(False)
+    await ctrl.set_enabled(True)
+    assert [c[0] for c in act.calls] == ["engage_hold", "release_to_self"]
+    assert ctrl.standby is False
+    await ctrl.set_enabled(True)
+    assert [c[0] for c in act.calls] == ["engage_hold", "release_to_self"]
+
+
+@pytest.mark.asyncio
+async def test_set_enabled_false_engage_failure_keeps_standby_for_retry():
+    ctrl, act = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    act.fail_on = {"engage_hold"}
+    await ctrl.set_enabled(False)
+    assert ctrl.standby is True
 
 
 def test_restore_wrapped_payload():
