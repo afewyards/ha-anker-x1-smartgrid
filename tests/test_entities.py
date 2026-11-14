@@ -81,3 +81,17 @@ def test_regret_sensors_return_none_when_no_regret_data():
     assert X1RegretEurSensor(ctl, "e1").native_value is None
     assert X1OverBuyKwhSensor(ctl, "e1").native_value is None
     assert X1UnderBuyKwhSensor(ctl, "e1").native_value is None
+
+
+async def test_enable_switch_writes_state_before_persist():
+    order = []
+
+    class _C(_Ctl):
+        async def set_enabled(self, value):
+            order.append("persist")
+
+    sw = X1EnableSwitch(_C(), "e1")
+    sw.hass = object()
+    sw.async_write_ha_state = lambda: order.append("write")
+    await sw.async_turn_off()
+    assert order == ["write", "persist"] and sw.is_on is False

@@ -718,6 +718,25 @@ async def test_set_enabled_persists():
     assert ctrl._store.saved["enabled"] is False
 
 
+@pytest.mark.asyncio
+async def test_set_enabled_false_releases_once_when_engaged():
+    ctrl, act = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    act.engaged = True
+    await ctrl.set_enabled(False)
+    assert [c[0] for c in act.calls] == ["release_to_self"]
+    await ctrl.tick()
+    assert [c[0] for c in act.calls] == ["release_to_self"]
+
+
+@pytest.mark.asyncio
+async def test_set_enabled_false_idle_does_not_touch_actuator():
+    ctrl, act = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    await ctrl.set_enabled(False)
+    assert act.calls == []
+
+
 def test_restore_wrapped_payload():
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)

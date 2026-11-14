@@ -2785,8 +2785,23 @@ class Controller:
         await self._store.async_save(payload)
 
     async def set_enabled(self, value: bool) -> None:
-        """Set the master enable flag and persist it immediately."""
+        """Set the master enable flag and persist it immediately.
+
+        Disabling also hands the inverter back now (once, if engaged) instead of
+        waiting for the next disabled tick; that tick then sees it released.
+        """
         self.enabled = bool(value)
+        if not self.enabled:
+            async with self._tick_lock:
+                if (
+                    self._actuator.engaged
+                    or self.plan.state is ControllerState.FORCING
+                    or self.export_state.engaged
+                    or self.hold_state.engaged
+                ):
+                    now = dt_util.utcnow()
+                    await executor.safe_release(self, now, "Actuator release failed on disable")
+                    self.plan = PlanState(ControllerState.PASSIVE, now, ())
         await self._persist()
 
     def restore(self, saved: dict) -> None:

@@ -23,14 +23,18 @@ class X1EnableSwitch(SwitchEntity):
         return self._controller.enabled
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._controller.set_enabled(True)
+        # Show the new state before the persist round-trip; set_enabled re-sets the same flag.
+        self._controller.enabled = True
         if self.hass is not None:
             self.async_write_ha_state()
+        await self._controller.set_enabled(True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._controller.set_enabled(False)
+        # Show the new state before the persist round-trip; set_enabled re-sets the same flag.
+        self._controller.enabled = False
         if self.hass is not None:
             self.async_write_ha_state()
+        await self._controller.set_enabled(False)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:

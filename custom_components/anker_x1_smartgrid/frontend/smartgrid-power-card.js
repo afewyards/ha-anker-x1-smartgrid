@@ -177,7 +177,19 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   _act(act) {
-    Promise.resolve(this._hass.callService('homeassistant', act === 'on' ? 'turn_off' : 'turn_on', { entity_id: this._cfg.switch })).catch(() => {});
+    // Optimistic: draw the flip now; the real state replaces it, or the timeout / a rejected call reverts it.
+    this._pending = act === 'on' ? 'off' : 'on';
+    clearTimeout(this._pendingTimer);
+    this._pendingTimer = setTimeout(() => this._clearPending(), 5000);
+    this._render();
+    Promise.resolve(this._hass.callService('homeassistant', act === 'on' ? 'turn_off' : 'turn_on', { entity_id: this._cfg.switch })).catch(() => this._clearPending());
+  }
+
+  _clearPending() {
+    clearTimeout(this._pendingTimer);
+    if (this._pending == null) return;
+    this._pending = null;
+    this._render();
   }
 
   setConfig(config) {
@@ -194,6 +206,10 @@ class SmartgridPowerCard extends HTMLElement {
     const s = hass.states[this._cfg.entity];
     const sw = hass.states[this._cfg.switch];
     if (s === this._state && sw === this._sw) return;
+    if (sw !== this._sw) {
+      this._pending = null;
+      clearTimeout(this._pendingTimer);
+    }
     this._state = s;
     this._sw = sw;
     this._render();
@@ -221,8 +237,8 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.width === width) return;
-    this._drawn = { st: this._state, sw: this._sw, width };
+    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width) return;
+    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
     const refocus = !!ae && ae.matches('[role=switch]');
@@ -249,7 +265,8 @@ class SmartgridPowerCard extends HTMLElement {
 
   _swState() {
     const s = this._sw;
-    return s && (s.state === 'on' || s.state === 'off') ? s : null;
+    if (!s || (s.state !== 'on' && s.state !== 'off')) return null;
+    return this._pending ? { ...s, state: this._pending } : s;
   }
 
   _body(width) {
