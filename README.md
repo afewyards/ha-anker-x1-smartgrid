@@ -148,11 +148,14 @@ type: custom:smartgrid-power-card
 entity: sensor.smartgrid_power_card  # optional, this is the default
 title: true                          # optional, shows "Power"; a string sets your own title
 switch: switch.smartgrid_enabled    # optional, this is the default; no such entity, no switch
+debug: true                          # optional, adds the plan-against-reality panel and hour inspector
 ```
 
 House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what grid-charged energy earned: its value when used, less what it cost to buy, so its conversion losses and standby drain land in saved. Sun is what stored solar earned over exporting it, shown only when it isn't zero.
 
 Hover over an hour, or tap it on a touch screen, to see what the battery did or plans to do: for planned hours the two options the planner weighed per stored kWh and what the energy is kept for, then how the house's use split between grid, battery and sun.
+
+With `debug: true` the card adds a panel under it: the day's first plan drawn over what happened, with forecast use against measured use. Click an hour to see its quarters, the commanded and measured battery power, and the planner's settings. Nothing extra is fetched or drawn when it is off. The comparison fills in from the first day after upgrading.
 
 Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
 
