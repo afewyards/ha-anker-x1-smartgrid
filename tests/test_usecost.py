@@ -473,6 +473,11 @@ class TestBatteryGridAmount:
         rec = replay(rows, CAP, AMS)[0][DAY]
         assert rec["batt_grid_eur"] == pytest.approx(0, abs=0.005)
 
+    def test_replay_inverter_loss_on_a_house_discharge_is_not_a_sale(self):
+        rows = _phase(T0, 60, 50, 45, 1_100, 0.30, load=1_000, p1=0.0, export=0.10) + _end(H1, 45)
+        rec = replay(rows, CAP, AMS)[0][DAY]
+        assert rec["batt_grid_eur"] == pytest.approx(0, abs=0.005)
+
     def test_roll_plan_books_planned_charge_and_export(self):
         inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
         horizon = [

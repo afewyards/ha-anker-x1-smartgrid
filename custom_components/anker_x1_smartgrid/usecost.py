@@ -164,8 +164,10 @@ def replay(
             dc_out = batt * kwh_per_w
             dc_house = min(dc_out, deficit)
             _earn(rec, inv, dc_house * imp + (dc_out - dc_house) * exp)
-            rec["batt_grid_eur"] -= (dc_out - dc_house) * exp
             p1 = row.get("p1_w")
+            # Sold as the cash ledger counts it; dc_out - dc_house also holds the inverter loss.
+            sold = dc_out - dc_house if p1 is None else min(max(-float(p1), 0.0), batt) * kwh_per_w
+            rec["batt_grid_eur"] -= sold * exp
             ac_out = dc_out if p1 is None else max(load - pv - float(p1), 0.0) * kwh_per_w
             house = min(ac_out, deficit)
             share = house / ac_out if ac_out > 0 else 1.0
