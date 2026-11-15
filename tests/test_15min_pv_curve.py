@@ -152,3 +152,39 @@ def test_display_horizon_builds_watts_curve_on_the_slot_grid():
     pv = [r["pv_w"] for r in rows]
     assert len(pv) == 4
     assert pv == pytest.approx([386.0, 825.75, 1705.25, 2145.0])
+
+
+def test_estimated_tail_energy_matches_its_hourly_duration_at_15min():
+    from custom_components.anker_x1_smartgrid.models import Config
+    from custom_components.anker_x1_smartgrid.plan import build_display_horizon
+
+    class _Flat:
+        def predict(self, *a, **k):
+            return 400.0
+
+    base = datetime(2026, 8, 2, 20, 0, tzinfo=UTC)
+    slots = [PriceSlot(base + timedelta(minutes=15 * i), 0.20) for i in range(4)]
+    est = [PriceSlot(base + timedelta(hours=1 + i), 0.20) for i in range(3)]
+    rows = build_display_horizon(
+        slots,
+        base,
+        _Flat(),
+        None,
+        (base - timedelta(hours=2), base + timedelta(hours=40), base + timedelta(hours=52)),
+        _P(),
+        20.0,
+        400.0,
+        80.0,
+        [],
+        base + timedelta(hours=1),
+        Config(capacity_kwh=10.0, max_charge_w=3000.0, eta_charge=1.0),
+        est_slots=est,
+        slot_minutes=15,
+    )
+    tail = [r for r in rows if r["estimated"]]
+    assert len(tail) == 12
+    assert sum(r["load_kwh"] for r in tail) == pytest.approx(3 * tail[0]["load_w"] / 1000, abs=0.02)
+    for r in tail:
+        assert r["load_kwh"] == pytest.approx(r["load_w"] * 0.25 / 1000, abs=1e-3)
+    drop = 80.0 - tail[-1]["soc"]
+    assert drop > 3 * tail[0]["load_w"] / 1000 / 10.0 * 100

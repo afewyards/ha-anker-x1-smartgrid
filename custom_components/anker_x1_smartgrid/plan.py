@@ -640,8 +640,14 @@ def build_display_horizon(
     # intervals, so pv/load for those hours are derived from this same two-day
     # PV curve + predictor (not left None/0). `est_slots=None`/`[]` is a no-op —
     # `all_slots is slots` and `est_starts` stays `None`, byte-identical.
-    all_slots = slots + est_slots if est_slots else slots
     est_starts = frozenset(hour_floor(s.start) for s in est_slots) if est_slots else None
+    # Estimated slots are hourly; split them to the display grid so dt_h matches their duration.
+    est_grid = [
+        PriceSlot(s.start + timedelta(minutes=k * slot_minutes), s.price)
+        for s in est_slots or ()
+        for k in range(60 // slot_minutes)
+    ]
+    all_slots = slots + est_grid if est_grid else slots
     ivals = build_display_intervals(
         all_slots,
         now,
