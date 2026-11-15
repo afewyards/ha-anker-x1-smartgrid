@@ -174,6 +174,25 @@ svg { display: block; }
 .dgap { fill: var(--sg-debug); fill-opacity: .2; }
 .dsum { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 8px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
 .dsum b { display: block; color: var(--sg-ink); font-size: 14px; }
+.dsel { cursor: pointer; }
+.dsel:focus-visible { outline: 2px solid var(--sg-debug); outline-offset: 1px; }
+.dsb { fill: var(--sg-debug); fill-opacity: .3; }
+.din { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--sg-rule); line-height: 1.35; color: var(--sg-dim); }
+.dcap { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; }
+.dcap b { color: var(--sg-ink); font-weight: 600; }
+.dtw { overflow-x: auto; margin-top: 2px; }
+.dtw table { width: 100%; border-collapse: collapse; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dtw th, .dtw td { text-align: right; padding: 2px 3px; border-bottom: 1px solid var(--sg-rule); }
+.dtw th { font-weight: 400; }
+.dtw td { color: var(--sg-ink); }
+.dtw th:first-child, .dtw td:first-child { text-align: left; padding-left: 0; }
+.dtw th:last-child, .dtw td:last-child { padding-right: 0; }
+.dtw td.sp { color: var(--sg-debug); } .dtw td.neg { color: var(--sg-neg); }
+.dwhy { margin-top: 5px; }
+.dwhy b { color: var(--sg-ink); font-weight: 600; }
+.dkv { display: flex; flex-wrap: wrap; gap: 4px 5px; margin-top: 6px; }
+.dkv span { border: 1px solid var(--sg-rule); border-radius: 9px; padding: 0 7px; white-space: nowrap; }
+.dkv b { color: var(--sg-ink); font-weight: 600; }
 </style>`;
 
 const LEVEL_H = 48;
@@ -288,6 +307,47 @@ function saved(v, prefix = '') {
   return `<span class="sv ${v < 0 ? 'neg' : 'pos'}">${prefix}${signed(v)}</span>`;
 }
 
+// The planner's reason for an hour: the winning and the losing option per stored kWh, and what the energy is kept for.
+function decision(w, tz) {
+  if (!w || !w.kind || num(w.keep_eur) === null || num(w.use_eur) === null) return null;
+  const kind = w.kind;
+  const f = w.kept_for || {};
+  const kept = kind === 'hold' || kind === 'charge';
+  const later = [kind === 'charge' ? 'Worth later' : !kept && f.kind === 'refill' ? 'Refill later' : 'Keep for later', w.keep_eur];
+  const now = [{ export: 'Sell now', charge: 'Costs now' }[kind] || 'Use for the house now', w.use_eur];
+  const a = Date.parse(f.start);
+  const b = Date.parse(f.end);
+  const what = { export: 'export', house: 'house use' }[f.kind];
+  const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
+  const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
+  let note = '';
+  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.`;
+  else if (target) note = `${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.`;
+  return { win: kept ? later : now, lose: kept ? now : later, note };
+}
+
+function per(v) {
+  return `${eur(v)}/kWh`;
+}
+function pct(v) {
+  return `${fx(v, 0)}%`;
+}
+const INTERNALS = new Map([
+  ['built_at', ['plan built', (v, tz) => (Number.isFinite(Date.parse(v)) ? clock(Date.parse(v), tz) : esc(v))]],
+  ['forecast_source', ['forecast', (v) => esc(v)]],
+  ['load_correction_ratio', ['load correction', (v) => `×${fx(v, 2)}`]],
+  ['reserve_soc', ['reserve', pct]],
+  ['target_soc', ['target', pct]],
+  ['end_value_eur_per_kwh', ['end value', per]],
+  ['cycle_cost_eur_per_kwh', ['wear', per]],
+  ['charge_margin_eur_per_kwh', ['charge margin', per]],
+  ['idle_drain_w', ['standby', (v) => `${fx(v, 0)} W`]],
+]);
+// Charge-positive watts.
+function watts(v) {
+  return num(v) === null ? DASH : `${Math.round(v) ? signed(v, '', 0) : '0'} W`;
+}
+
 class SmartgridPowerCard extends HTMLElement {
   constructor() {
     super();
@@ -296,6 +356,14 @@ class SmartgridPowerCard extends HTMLElement {
     root.addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]');
       if (b) this._act(b.dataset.act);
+      else if (e.target.closest('.dsel')) this._select(this._hit(this._locate(e), '.dsel'));
+    });
+    root.addEventListener('keydown', (e) => {
+      const k = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+      if (!k || !e.target.matches('.dsel')) return;
+      e.preventDefault();
+      const rows = this._geo.rows;
+      this._select(rows[rows.indexOf(this._pick(rows)) + k]);
     });
     // Mouse and pen hover; a touch counts only as a tap, so a drag stays the browser's scroll.
     root.addEventListener('pointermove', (e) => e.pointerType !== 'touch' && this._point(this._locate(e)));
@@ -390,9 +458,9 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   // The hour row under a point of the card, by its time on the column the point is in.
-  _hit(at) {
+  _hit(at, box = '.chart') {
     const card = this.shadowRoot.querySelector('ha-card');
-    const chart = card.querySelector('.chart');
+    const chart = card.querySelector(box);
     const g = this._geo;
     if (!chart || !g) return null;
     const b = card.getBoundingClientRect();
@@ -448,24 +516,13 @@ class SmartgridPowerCard extends HTMLElement {
     if (p !== null) s += row('Price', `${eur(p, 3)}/kWh`);
     if (imp !== null) s += row('Import', `${imp.toFixed(2)} kWh${cost(imp)}${gc > 0.05 ? ` (${gc.toFixed(2)} to battery)` : ''}`);
     if (out !== null) s += row('Export', `${out.toFixed(2)} kWh${cost(out)}`);
-    const w = r.why;
-    if (w && w.kind && num(w.keep_eur) !== null && num(w.use_eur) !== null) {
-      const kind = w.kind;
-      const f = w.kept_for || {};
-      const kept = kind === 'hold' || kind === 'charge';
-      const later = [kind === 'charge' ? 'Worth later' : !kept && f.kind === 'refill' ? 'Refill later' : 'Keep for later', w.keep_eur];
-      const now = [{ export: 'Sell now', charge: 'Costs now' }[kind] || 'Use for the house now', w.use_eur];
-      const mx = Math.max(w.keep_eur, w.use_eur) * 1.05;
+    const dc = decision(r.why, tz);
+    if (dc) {
+      const mx = Math.max(dc.win[1], dc.lose[1]) * 1.05;
       const opt = ([label, v], win) =>
         `<div class="opt${win ? ' win' : ''}"><i>${win ? '✓' : ''}</i><span class="ol">${label}</span><span class="tr"><b style="width:${mx > 0 ? r1(Math.max(0, Math.min(100, (v / mx) * 100))) : 0}%"></b></span><span class="v">${eur(v, 3)}</span></div>`;
-      s += `<div class="k per">per stored kWh</div><div class="dec">${opt(kept ? later : now, true)}${opt(kept ? now : later, false)}</div>`;
-      const a = Date.parse(f.start);
-      const b = Date.parse(f.end);
-      const what = { export: 'export', house: 'house use' }[f.kind];
-      const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
-      const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
-      if (f.kind === 'refill' && when_) s += `<div class="note">${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.</div>`;
-      else if (target) s += `<div class="note">${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.</div>`;
+      s += `<div class="k per">per stored kWh</div><div class="dec">${opt(dc.win, true)}${opt(dc.lose, false)}</div>`;
+      if (dc.note) s += `<div class="note">${dc.note}</div>`;
     }
     const use = num(r.use_kwh);
     if (use === null) return s;
@@ -500,11 +557,11 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg) return;
-    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg };
+    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel) return;
+    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg, sel: this._sel };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
-    const refocus = !!ae && ae.matches('[role=switch]');
+    const refocus = ae && ['[role=switch]', '.dsel'].find((q) => ae.matches(q));
     try {
       card.innerHTML = this._body(width);
       // The 30-day line gives up its sun figure, then itself, before the battery text is clipped.
@@ -522,8 +579,8 @@ class SmartgridPowerCard extends HTMLElement {
       console.error(TAG, e);
       card.innerHTML = `${this._battery(null, this._swState(), false)}<div class="empty">The planner has no data yet.</div>`;
     }
-    const sw = refocus && card.querySelector('[role=switch]');
-    if (sw) sw.focus();
+    const el = refocus && card.querySelector(refocus);
+    if (el) el.focus();
     if (this._at) this._point(this._at);
   }
 
@@ -784,29 +841,36 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     return s + `<rect class="gd" data-k="p" y="0" width="0" height="${PANEL_H - 14}"/></svg>`;
   }
 
-  // The day's first plan over the past hours: level, grid bars, use against its forecast, and today's totals.
+  // The day's first plan over the past hours: level, grid bars, use against its forecast, today's totals, and one hour inspected.
   _debug(rows, geo, nowX, nowP) {
     const { err, data } = this._dbg;
     if (err) return '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
     const { dates, today, cx, cw, W, tz } = geo;
+    const refs = (data && Array.isArray(data.reference) ? data.reference : [])
+      .map((x) => [Date.parse(x && x.start), x])
+      .filter(([t]) => Number.isFinite(t))
+      .sort((a, b) => a[0] - b[0]);
+    let step = H;
+    for (let k = 1; k < refs.length; k++) if (refs[k][0] > refs[k - 1][0]) step = Math.min(step, refs[k][0] - refs[k - 1][0]);
     const ref = new Map();
-    for (const x of data && Array.isArray(data.reference) ? data.reference : []) {
-      const t = Date.parse(x && x.start);
-      if (!Number.isFinite(t)) continue;
+    for (const [t, x] of refs) {
       const p = parts(t, tz);
       const k = t - (p.minute * 60 + p.second) * 1e3;
       let a = ref.get(k);
-      // An hour the plan joins mid-way would set part of its forecast against the whole hour.
-      if (!a && t !== k) continue;
-      if (!a) ref.set(k, (a = { load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
+      if (!a) ref.set(k, (a = { n: 0, load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
       const v = (key) => num(x[key]) ?? 0;
+      a.n++;
       a.load_kwh += v('load_kwh');
       a.pv_kwh += v('pv_kwh');
       a.up_kwh += v('grid_charge_kwh') + Math.max(v('load_kwh') - v('pv_kwh'), 0);
       a.out_kwh += v('grid_export_kwh');
       if (num(x.soc) !== null) a.ref_soc = x.soc;
     }
+    // An hour the plan only partly covers (joined mid-way, or a slot missing) would set part of its forecast against the whole hour.
+    for (const [k, a] of ref) if (a.n * step < H) ref.delete(k);
     const past = rows.filter((r) => !r.plan && ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
+    const sel = this._pick(rows);
+    const band = (a, b, h) => (sel ? `<rect x="${r1(a)}" y="0" width="${r1(b - a)}" height="${h}" class="dsb"/>` : '');
 
     const at = new Map(rows.map((r) => [r.t, r]));
     const pts = (a) => a.map(([x, soc]) => `${r1(x)},${r1(ly(soc))}`).join(' ');
@@ -827,7 +891,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       run.f.push([r.x1, r.ref_soc]);
       run.t = r.t;
     }
-    const lv = runs.map(({ m, f }) => `<polygon points="${pts(m)} ${pts([...f].reverse())}" class="dgap"/><polyline points="${pts(f)}" class="dl"/>`).join('');
+    const lv = runs.map(({ m, f }) => `<polygon points="${pts(m)} ${pts([...f].reverse())}" class="dgap"/><polyline points="${pts(f)}" class="dl"/>`).join('') + band(sel?.x0, sel?.x1, LEVEL_H);
 
     // The panels' grid band without the price lines above it, then the strip and the time axis.
     const dy = Z - CUT * KWH_PX - 4;
@@ -852,7 +916,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     }
     for (let i = 0; i < cx.length; i++) s += ticks(dates[i], i, geo, cx[i] + PAD, sy + 21);
     if (nowP !== null) s += `<line x1="${r1(nowP)}" y1="0" x2="${r1(nowP)}" y2="${sy + 8}" class="now"/>`;
-    s += '</svg>';
+    s += `${band(sel?.p0, sel?.p1, sy + 8)}</svg>`;
 
     const tp = past.filter((r) => dates[r.i] === today);
     const diff = (a, b) => {
@@ -866,7 +930,62 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       [kwh(diff('solar_kwh', 'pv_kwh')), 'sun against forecast today'],
       [lvl ? `${signed(lvl.soc - lvl.ref_soc, '', 0)}%` : DASH, 'level against plan now'],
     ];
-    return `<div class="dbg">${this._level(rows, geo, nowX, lv)}${s}${DEBUG_LEGEND}<div class="dsum dm">${sum.map(([v, l]) => `<div><b>${v}</b>${l}</div>`).join('')}</div></div>`;
+    const slider = `<div class="dsel" tabindex="0" role="slider" aria-label="Hour to inspect" aria-valuemin="0" aria-valuemax="${rows.length - 1}" aria-valuenow="${rows.indexOf(sel)}"${sel ? ` aria-valuetext="${when(sel.t, sel.t + H, tz)}"` : ''}>`;
+    return (
+      `<div class="dbg">${slider}${this._level(rows, geo, nowX, lv)}${s}</div>${DEBUG_LEGEND}<div class="dsum dm">${sum.map(([v, l]) => `<div><b>${v}</b>${l}</div>`).join('')}</div>` +
+      `${data && sel ? this._inspect(sel, data, tz) : ''}</div>`
+    );
+  }
+
+  // The hour the inspector shows: the one picked, else the running one.
+  _pick(rows) {
+    const now = Date.now();
+    return rows.find((r) => r.t === this._sel) || rows.find((r) => now >= r.t && now < r.t + H);
+  }
+
+  _select(r) {
+    if (!r) return;
+    this._sel = r.t;
+    this._render();
+  }
+
+  // One hour's tariff slots against the day's first plan, the planner's reason, and the settings of its last build.
+  _inspect(r, { slots, reference, internals }, tz) {
+    const byStart = (a) => new Map((Array.isArray(a) ? a : []).map((x) => [Date.parse(x && x.start), x]));
+    const ref = byStart(reference);
+    const cell = (m, f, d, floor) => {
+      if (f === null) return `<td>${fx(m, d)}</td>`;
+      const off = m !== null && Math.abs(m - f) > Math.max(0.25 * Math.abs(f), floor);
+      return `<td${off ? ' class="neg"' : ''}>${f.toFixed(d)} → ${fx(m, d)}</td>`;
+    };
+    const trs = [...byStart(slots)]
+      .filter(([t]) => t >= r.t && t < r.t + H)
+      .map(([t, x]) => {
+        const f = (!x.plan && ref.get(t)) || {};
+        const sp = num(x.setpoint_w);
+        const bw = num(x.batt_w);
+        const off = sp !== null && Math.round(sp) !== 0 && bw !== null && Math.abs(bw - sp) > 0.15 * Math.abs(sp);
+        return (
+          `<tr><td>${clock(t, tz)}</td><td>${eur(x.price, 3)}</td><td>${STATE_TEXT[x.state] || DASH}</td><td class="sp">${watts(sp)}</td><td${off ? ' class="neg"' : ''}>${watts(bw)}</td>` +
+          `${cell(num(x.use_kwh), num(f.load_kwh), 2, 0.05)}${cell(num(x.solar_kwh), num(f.pv_kwh), 2, 0.05)}${cell(num(x.soc), num(f.soc), 0, 5)}</tr>`
+        );
+      });
+    const head = ['time', 'price', 'action', 'setpoint', 'battery', 'use kWh', 'sun kWh', 'level %'].map((h) => `<th>${h}</th>`).join('');
+    const table = trs.length ? `<div class="dtw"><table><tr>${head}</tr>${trs.join('')}</table></div>` : '<div class="dwhy">No data for this hour</div>';
+    const dc = r.plan && decision(r.why, tz);
+    const why = !r.plan
+      ? 'No reason stored for past hours.'
+      : dc
+        ? `<span class="pos">✓</span> <b>${dc.win[0]} ${eur(dc.win[1], 3)}</b> · ${dc.lose[0]} ${eur(dc.lose[1], 3)} per stored kWh.${dc.note && ` ${dc.note}`}`
+        : 'No reason given for this hour.';
+    const kv = Object.entries(internals && typeof internals === 'object' ? internals : {}).map(([k, v]) => {
+      const [label, f] = INTERNALS.get(k) || [esc(k), (x) => esc(typeof x === 'string' ? x : JSON.stringify(x))];
+      return `<span>${label} <b>${f(v, tz)}</b></span>`;
+    });
+    return (
+      `<div class="din dm"><div class="dcap"><span><b>${when(r.t, r.t + H, tz)}</b> · ${r.plan ? 'planned' : 'measured'}</span><span>click an hour</span></div>` +
+      `${table}<div class="dwhy">${why}</div>${kv.length ? `<div class="dkv">${kv.join('')}</div>` : ''}</div>`
+    );
   }
 }
 

@@ -4,8 +4,9 @@
 <title>smartgrid-power-card harness</title>
 <!--
   Fixture page for the power card, not served by Home Assistant.
-  ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
-  ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan (debug-empty: no plan stored, debug-fail: the call fails)
+  ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail|debug-gap  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan (debug-empty: no plan stored, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan)
+  ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
@@ -211,6 +212,7 @@
       const k = day < TODAY ? -1 : 1;
       const f = 1 + 0.3 * Math.sin(hh * 1.3 + k);
       for (let q = k < 0 && hh === 0 ? 2 : 0; q < 4; q++) {
+        if (CASE === 'debug-gap' && k > 0 && hh === 11 && q === 2) continue;
         reference.push({
           start: iso(t + q * 900e3),
           soc: h.soc === null ? null : Math.max(5, Math.min(100, h.soc + k * (2 + hh * 0.6) - (3 - q) * 2)),
@@ -223,7 +225,44 @@
         });
       }
     }
-    return { slots: hours.map((h) => ({ ...h, setpoint_w: null, batt_w: null })), reference, internals: {} };
+    // Quarter rows that add up to the hours; today 06:00 and 05:15 have no samples, and 02:15 delivers 70% of its setpoint.
+    const slots = [];
+    hours.forEach((h, n) => {
+      const { why, ...base } = h;
+      const t = Date.parse(h.start);
+      const s0 = n ? hours[n - 1].soc : h.soc;
+      const sp = h.state === 'charge_grid' ? h.grid_in_charge_kwh * 1000 : h.state === 'export' ? -h.grid_out_kwh * 1000 : 0;
+      for (let q = 0; q < 4; q++) {
+        const at = iso(t + q * 900e3);
+        if (at.startsWith(`${TODAY}T06`) || at.startsWith(`${TODAY}T05:15`)) continue;
+        const quarter = (key) => (h[key] == null ? h[key] : r3(h[key] / 4));
+        const measured = t + q * 900e3 < NOW;
+        const batt = h.state === 'house' ? -(h.batt_house_kwh || 0) * 1000 : sp * (at.startsWith(`${TODAY}T02:15`) ? 0.7 : 0.97);
+        slots.push({
+          ...base,
+          start: at,
+          price: h.price === null ? null : r3(h.price + (q - 1.5) * 0.004),
+          soc: h.soc === null || s0 === null ? h.soc : Math.round((s0 + ((h.soc - s0) * (q + 1)) / 4) * 10) / 10,
+          plan: t + (q + 1) * 900e3 > NOW,
+          ...Object.fromEntries(['use_kwh', 'solar_kwh', 'batt_house_kwh', 'grid_in_house_kwh', 'grid_in_charge_kwh', 'grid_out_kwh'].map((key) => [key, quarter(key)])),
+          setpoint_w: h.price === null ? null : sp,
+          batt_w: measured ? Math.round(batt) : null,
+        });
+      }
+    });
+    const internals = {
+      built_at: iso(NOW - 5 * 60e3),
+      forecast_source: 'remote',
+      load_correction_ratio: 0.86,
+      reserve_soc: 12.4,
+      target_soc: 100,
+      end_value_eur_per_kwh: 0.21,
+      cycle_cost_eur_per_kwh: 0.03,
+      charge_margin_eur_per_kwh: 0.04,
+      idle_drain_w: 100,
+      solver: 'dp <wv> & co',
+    };
+    return { slots, reference, internals };
   }
 
   const states = {};
@@ -250,6 +289,7 @@
   window.TITLE = !!q.get('title');
   window.WIDTH = q.get('w');
   window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender') };
+  window.PICK = q.get('pick');
 
   customElements.define('ha-card', class extends HTMLElement {
     connectedCallback() {
@@ -287,7 +327,25 @@
       STATUS.ws = window.DEBUG ? `callWS ${WS.length}` : WS.length ? 'callWS CALLED WITH DEBUG OFF' : '';
       showStatus();
       if (HOVER.at) point(card);
+      if (window.DEBUG && PICK) pick(card);
     }));
+  }
+  function pick(card) {
+    const root = card.shadowRoot;
+    const cap = () => root.querySelector('.dcap b');
+    // The inspector draws once the debug answer is in.
+    if (!cap() || !card._geo) return requestAnimationFrame(() => pick(card));
+    const r = card._geo.rows.find((h) => h.start.startsWith(PICK));
+    const before = cap().textContent;
+    if (r) {
+      // In the strip, where the hours sit PAD inside the column.
+      const b = root.querySelector('.dsel').getBoundingClientRect();
+      const x = b.left + (r.p0 + r.p1) / 2;
+      const y = b.bottom - 25;
+      root.elementFromPoint(x, y).dispatchEvent(new MouseEvent('click', { clientX: x, clientY: y, bubbles: true, composed: true }));
+    }
+    STATUS.ws += !r ? ' · pick: NO SUCH HOUR' : cap().textContent !== before ? ' · pick: caption changed' : ' · pick: CAPTION UNCHANGED';
+    showStatus();
   }
   function point(card) {
     // The card draws on its first resize callback, which can land after these frames.
