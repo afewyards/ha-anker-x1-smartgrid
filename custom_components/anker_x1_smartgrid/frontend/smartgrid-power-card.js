@@ -330,9 +330,19 @@ class SmartgridPowerCard extends HTMLElement {
   _tip(r) {
     const { rows, tz } = this._geo;
     const st = STATE_TEXT[r.state];
-    const facts = [!r.plan ? 'measured' : num(r.price) === null && num(r.grid_in_house_kwh) === null && num(r.grid_in_charge_kwh) === null ? 'estimated' : 'planned', num(r.price) !== null && `${eur(r.price, 3)}/kWh`].filter(Boolean);
+    const facts = [!r.plan ? 'measured' : num(r.price) === null && num(r.grid_in_house_kwh) === null && num(r.grid_in_charge_kwh) === null ? 'estimated' : 'planned'];
     let s = st ? `<div class="hd">${st[0].toUpperCase()}${st.slice(1)}</div>` : '';
     s += `<div><b>${when(r.t, r.t + H, tz)}</b> <span class="k">· ${facts.join(' · ')}</span></div>`;
+    const p = num(r.price);
+    const gh = num(r.grid_in_house_kwh);
+    const gc = num(r.grid_in_charge_kwh);
+    const imp = gh === null && gc === null ? null : (gh ?? 0) + (gc ?? 0);
+    const out = num(r.grid_out_kwh);
+    const row = (label, text) => `<div><span class="k">${label}</span> ${text}</div>`;
+    const cost = (kwh) => (p === null ? '' : ` · ${eur(kwh * p)}`);
+    if (p !== null) s += row('Price', `${eur(p, 3)}/kWh`);
+    if (imp !== null) s += row('Import', `${imp.toFixed(2)} kWh${cost(imp)}${gc > 0.05 ? ` (${gc.toFixed(2)} to battery)` : ''}`);
+    if (out !== null) s += row('Export', `${out.toFixed(2)} kWh${cost(out)}`);
     const w = r.why;
     if (w && w.kind && num(w.keep_eur) !== null && num(w.use_eur) !== null) {
       const kind = w.kind;
@@ -367,8 +377,6 @@ class SmartgridPowerCard extends HTMLElement {
       batt !== null && `${batt.toFixed(2)} battery`,
       sun !== null && `${sun.toFixed(2)} sun`,
       s1 !== null && `battery ${s0 === null ? '' : `${s0.toFixed(0)}→`}${s1.toFixed(0)}%`,
-      num(r.grid_in_charge_kwh) > 0.05 && `charged ${r.grid_in_charge_kwh.toFixed(2)}`,
-      num(r.grid_out_kwh) > 0.05 && `exported ${r.grid_out_kwh.toFixed(2)}`,
     ].filter(Boolean);
     const seg = [[grid, 'g'], [batt, 'b'], [sun, 's']].filter(([v]) => v > 0);
     const bar = grid !== null && use > 0 ? `<div class="split">${seg.map(([v, c]) => `<i class="${c}" style="width:${r1((v / use) * 100)}%"></i>`).join('')}</div>` : '';
