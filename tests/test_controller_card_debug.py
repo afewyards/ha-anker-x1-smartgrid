@@ -49,6 +49,7 @@ async def test_debug_payload_hour_sums_match_card(tmp_path):
     out = await ctrl.power_card_debug()
     assert out["slots"] and out["reference"] and out["internals"]["built_at"] == NOW.isoformat()
     assert {"export_price", "plan_eur", "real_eur"} <= set(out["slots"][0])
+    assert out["hour_costs"] and set(out["hour_costs"]) <= {s["start"] for s in out["slots"]}
     assert out["internals"]["battery_sample_age_s"] == 60 and "pv_forecast_age_s" not in out["internals"]
     for hour in ctrl.power_card["hours"]:
         mine = [s for s in out["slots"] if s["start"][:13] == hour["start"][:13]]
@@ -58,7 +59,13 @@ async def test_debug_payload_hour_sums_match_card(tmp_path):
 
 async def test_debug_payload_empty_before_first_build():
     ctrl, _act = make_controller()
-    assert await ctrl.power_card_debug() == {"slots": [], "reference": [], "internals": {}, "reasons": {}}
+    assert await ctrl.power_card_debug() == {
+        "slots": [],
+        "hour_costs": {},
+        "reference": [],
+        "internals": {},
+        "reasons": {},
+    }
 
 
 async def test_card_payload_unchanged(tmp_path):

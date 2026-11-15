@@ -98,6 +98,15 @@ def test_merge_reference_empty():
     assert carddebug.merge_reference([], AMS) == []
 
 
+def test_merge_reference_keeps_each_rows_width_in_its_own_plan():
+    a = _horizon(60, hours=24, start=datetime(2026, 11, 13, 23, 0, tzinfo=UTC))
+    b = _horizon(15, hours=6, start=datetime(2026, 11, 14, 5, 15, tzinfo=UTC))
+    out = {r["start"]: r["minutes"] for r in carddebug.merge_reference([("2026-11-13", a), ("2026-11-14", b)], AMS)}
+    assert out[datetime(2026, 11, 14, 5, 0, tzinfo=UTC).isoformat()] == 60
+    assert out[datetime(2026, 11, 14, 6, 0, tzinfo=UTC).isoformat()] == 15
+    assert out[b[-1]["start"]] == 15 and out[a[-1]["start"]] == 60
+
+
 def test_slot_series_hourly_tariff_one_row_per_hour():
     out = carddebug.slot_series(_samples(), _horizon(60), AMS, NOW, _delivered)
     starts = [datetime.fromisoformat(r["start"]) for r in out]
@@ -173,11 +182,23 @@ def test_internals_omits_missing():
     assert full["reserve_soc"] == 12.0 and full["end_value_eur_per_kwh"] == 0.2 and full["eta_charge"] == 0.93
 
 
-def _past_reference(hours=6, now=NOW):
-    rows = _horizon(15, hours=hours, start=now - timedelta(hours=hours))
+def _past_reference(hours=6, now=NOW, step=15):
+    rows = _horizon(step, hours=hours, start=now - timedelta(hours=hours))
     for k, r in enumerate(rows):
-        r["load_kwh"] = 0.1 + k * 0.001
+        r["load_kwh"] = (0.1 + k * 0.001) * step / 15
+    return carddebug.merge_reference([("", rows)], AMS)
+
+
+def _priced(hours=6):
+    # The import price steps each quarter hour, so an hour's mean is no single slot's price.
+    rows = _samples(hours, p1_w=600.0)
+    for k, r in enumerate(rows):
+        r["import_price"] = 0.2 + 0.02 * (k // 15 % 4)
     return rows
+
+
+def _hour(start):
+    return datetime.fromisoformat(start).astimezone(AMS).isoformat()
 
 
 def _by_start(out):
@@ -266,3 +287,70 @@ def test_internals_say_how_fresh_the_inputs_are():
     assert out["pv_forecast_age_s"] == 2400
     out = carddebug.internals({"plan": {"horizon": horizon[:2]}}, _cfg(), NOW.isoformat(), {}, rows)
     assert out["tomorrow_estimated"] is False and "pv_forecast_age_s" not in out
+
+
+def test_an_hourly_saved_plan_prices_whole_hours_and_no_quarter():
+    ref = _past_reference(step=60)
+    slots = carddebug.slot_series(_priced(), _horizon(15), AMS, NOW, _delivered, ref, 0.02)
+    assert all(s["plan_eur"] is None and s["real_eur"] is None for s in slots)
+    costs = carddebug.hour_costs(slots, ref, AMS, 15)
+    for r in ref:
+        mine = [s for s in slots if s["start"][:13] == _hour(r["start"])[:13]]
+        assert len(mine) == 4
+        mean = sum(s["price"] for s in mine) / 4
+        real = sum(round((s["grid_in_house_kwh"] + s["grid_in_charge_kwh"]) * s["price"], 4) for s in mine)
+        assert costs[_hour(r["start"])] == {
+            "plan_eur": pytest.approx(r["load_kwh"] * mean, abs=1e-4),
+            "real_eur": pytest.approx(real, abs=1e-4),
+        }
+
+
+def test_quarter_hour_saved_plan_against_hourly_slots_prices_the_hour():
+    ref = _past_reference()
+    slots = carddebug.slot_series(_priced(), _horizon(60), AMS, NOW, _delivered, ref, 0.02)
+    assert all(s["plan_eur"] is None for s in slots)
+    costs = carddebug.hour_costs(slots, ref, AMS, 60)
+    for s in (s for s in slots if not s["plan"]):
+        mine = [r for r in ref if _hour(r["start"])[:13] == s["start"][:13]]
+        assert len(mine) == 4
+        assert costs[s["start"]]["plan_eur"] == pytest.approx(sum(r["load_kwh"] for r in mine) * s["price"], abs=1e-4)
+
+
+def test_hour_costs_add_up_the_slots_when_the_saved_plan_has_their_width():
+    ref = _past_reference()
+    slots = carddebug.slot_series(_priced(), _horizon(15), AMS, NOW, _delivered, ref, 0.02)
+    costs = carddebug.hour_costs(slots, ref, AMS, 15)
+    assert len(costs) == 6
+    for hour, cost in costs.items():
+        mine = [s for s in slots if s["start"][:13] == hour[:13]]
+        assert cost["plan_eur"] == pytest.approx(sum(s["plan_eur"] for s in mine), abs=1e-4)
+        assert cost["real_eur"] == pytest.approx(sum(s["real_eur"] for s in mine), abs=1e-4)
+
+
+def test_hour_costs_are_none_for_an_hour_missing_a_slot_or_a_saved_row():
+    ref = _past_reference(step=60)
+    gap = NOW - timedelta(hours=3)
+    rows = [r for r in _priced() if not gap <= datetime.fromisoformat(r["ts"]) < gap + timedelta(minutes=15)]
+    costs = carddebug.hour_costs(carddebug.slot_series(rows, _horizon(15), AMS, NOW, _delivered, ref), ref, AMS, 15)
+    assert costs[_hour(gap.isoformat())] == {"plan_eur": None, "real_eur": None}
+    assert costs[_hour((gap + timedelta(hours=1)).isoformat())]["plan_eur"] is not None
+    ref = _past_reference()
+    hour = _hour(ref[4]["start"])
+    del ref[5]
+    costs = carddebug.hour_costs(
+        carddebug.slot_series(_priced(), _horizon(15), AMS, NOW, _delivered, ref), ref, AMS, 15
+    )
+    assert costs[hour] == {"plan_eur": None, "real_eur": None}
+    assert sum(c["plan_eur"] is not None for c in costs.values()) == 5
+
+
+def test_hour_costs_keep_both_hours_of_a_fall_back_night():
+    now = datetime(2026, 10, 25, 3, 0, tzinfo=UTC)
+    t0 = now - timedelta(hours=4)
+    rows = [{**_samples(1)[0], "ts": (t0 + timedelta(minutes=k)).isoformat(), "p1_w": 600.0} for k in range(4 * 60)]
+    ref = _past_reference(4, now, step=60)
+    slots = carddebug.slot_series(rows, _horizon(15, hours=4, start=now), AMS, now, _delivered, ref, 0.02)
+    costs = carddebug.hour_costs(slots, ref, AMS, 15)
+    assert len([k for k in costs if k.startswith("2026-10-25T02:")]) == 2
+    for r in ref:
+        assert costs[_hour(r["start"])]["plan_eur"] == round(r["load_kwh"] * 0.25, 4)

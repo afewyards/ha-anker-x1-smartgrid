@@ -2716,7 +2716,7 @@ class Controller:
     async def power_card_debug(self) -> dict:
         card, args = self.power_card, self._card_args
         if card is None or args is None:
-            return {"slots": [], "reference": [], "internals": {}, "reasons": {}}
+            return {"slots": [], "hour_costs": {}, "reference": [], "internals": {}, "reasons": {}}
         horizon, _export_price_at, delivered_at = args
         tz = dt_util.DEFAULT_TIME_ZONE
         now = dt_util.parse_datetime(card["built_at"])
@@ -2751,9 +2751,10 @@ class Controller:
             for day, _ts, _rj, reasons_json in stored:
                 if reasons_json and day >= start.date().isoformat():
                     reasons |= json.loads(reasons_json)
-            fee = cfg.export_fee_eur_per_kwh
+            slots = carddebug.slot_series(rows, horizon, tz, now, delivered_at, reference, cfg.export_fee_eur_per_kwh)
             return {
-                "slots": carddebug.slot_series(rows, horizon, tz, now, delivered_at, reference, fee),
+                "slots": slots,
+                "hour_costs": carddebug.hour_costs(slots, reference, tz, carddebug.slot_minutes(horizon)),
                 "reference": reference,
                 "internals": carddebug.internals(status, cfg, card["built_at"], eta, rows, pv_at),
                 "reasons": reasons | live,

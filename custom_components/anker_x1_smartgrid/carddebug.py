@@ -36,16 +36,16 @@ def snapshot_rows(horizon: list[dict] | None, now: datetime) -> list[dict]:
 
 
 def merge_reference(snapshots: list[tuple[str, list[dict]]], tz: tzinfo) -> list[dict]:
-    """One row per start: the slot's own day's snapshot when it holds it, else the latest earlier one."""
+    """One row per start: the slot's own day's snapshot when it holds it, else the latest earlier one.
+
+    Each row gains ``minutes``, its width in the snapshot it comes from.
+    """
     chosen: dict[datetime, dict] = {}
     for day, rows in snapshots:
-        for row in rows:
-            start = _parse(row["start"])
-            if start is None:
-                continue
+        for start, row, h in _slots(rows):
             own = start.astimezone(tz).date().isoformat() == day
             if own or start not in chosen or not chosen[start]["own"]:
-                chosen[start] = {"row": row, "own": own}
+                chosen[start] = {"row": row | {"minutes": round(h * 60)}, "own": own}
     return [chosen[start]["row"] for start in sorted(chosen)]
 
 
@@ -53,6 +53,18 @@ def _grid_eur(kwh: tuple[float, float] | None, price: float | None, export_price
     if kwh is None or price is None or (kwh[1] > 1e-6 and export_price is None):
         return None
     return round(kwh[0] * price - kwh[1] * (export_price or 0.0), 4)
+
+
+def _measured(slot: dict) -> tuple[float, float] | None:
+    if slot["plan"] or slot["grid_out_kwh"] is None:
+        return None
+    return slot["grid_in_house_kwh"] + slot["grid_in_charge_kwh"], slot["grid_out_kwh"]
+
+
+def _time_mean(spans: list[tuple[float, dict]], key: str) -> float | None:
+    if not spans or any(slot[key] is None for _w, slot in spans):
+        return None
+    return sum(w * slot[key] for w, slot in spans) / sum(w for w, _slot in spans)
 
 
 def slot_series(
@@ -67,9 +79,9 @@ def slot_series(
     """``hourly_series`` at the plan's slot width, plus charge-positive ``setpoint_w`` and ``batt_w`` (W).
 
     ``export_price`` is the recorded tariff less ``export_fee``. ``plan_eur`` and
-    ``real_eur`` are the slot's grid cost under its ``reference`` row and as
-    measured, both at the slot's recorded prices; ``None`` for both when either
-    side or a price it needs is missing, and for slots not yet over.
+    ``real_eur`` are the slot's grid cost under the ``reference`` row of the same
+    start and width and as measured, both at the slot's recorded prices; ``None``
+    for both when either side or a price it needs is missing, and for slots not yet over.
     """
     width = slot_minutes(horizon)
     pts = sorted(((ts, r) for r in rows if (ts := _parse(r.get("ts"))) is not None), key=lambda p: p[0])
@@ -94,8 +106,9 @@ def slot_series(
         for start, row, _h, _l in _ahead(horizon, now)
         if not row.get("estimated")
     }
-    # shortcut: matched by start only, so a saved plan at another slot width prices only the slots it shares.
-    planned = {_parse(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference}
+    planned = {
+        _parse(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference if r.get("minutes") == width
+    }
     out = []
     for row in hourly_series(rows, horizon, tz, now, delivered_at, width):
         key = _parse(row["start"]).astimezone(UTC)
@@ -103,11 +116,8 @@ def slot_series(
         setpoint = a[1] / a[0] if a and a[0] else plan.get(key)
         batt = a[3] / a[2] if a and a[2] else None
         export_price = round(a[5] / a[4] - export_fee, 4) if a and a[4] else None
-        measured = None
-        if not row["plan"] and row["grid_out_kwh"] is not None:
-            measured = (row["grid_in_house_kwh"] + row["grid_in_charge_kwh"], row["grid_out_kwh"])
         plan_eur = _grid_eur(planned.get(key), row["price"], export_price)
-        real_eur = _grid_eur(measured, row["price"], export_price)
+        real_eur = _grid_eur(_measured(row), row["price"], export_price)
         if plan_eur is None or real_eur is None:
             plan_eur = real_eur = None
         out.append(
@@ -115,6 +125,44 @@ def slot_series(
             | {"setpoint_w": setpoint, "batt_w": batt, "export_price": export_price}
             | {"plan_eur": plan_eur, "real_eur": real_eur}
         )
+    return out
+
+
+def hour_costs(slots: list[dict], reference: Sequence[dict], tz: tzinfo, width: int) -> dict[str, dict]:
+    """Per local hour with a slot over, keyed by its start: ``plan_eur`` and ``real_eur`` as in :func:`slot_series`.
+
+    Works at any ``reference`` width: each reference row is priced at the time
+    mean of the prices of the ``width``-minute slots it spans. ``None`` for both
+    unless every slot of the hour is over and priced, and the hour's reference
+    rows cover it end to end.
+    """
+    step = timedelta(minutes=width)
+    over = {_parse(s["start"]).astimezone(UTC): s for s in slots if not s["plan"]}
+    ref = sorted(((_parse(r["start"]).astimezone(UTC), r) for r in reference), key=lambda p: p[0])
+    out = {}
+    for hour in sorted({_hour_key(start, tz) for start in over}):
+        end = hour + timedelta(hours=1)
+        mine = [(hour + k * step, over.get(hour + k * step)) for k in range(60 // width)]
+        real = [_grid_eur(_measured(s), s["price"], s["export_price"]) if s else None for _t, s in mine]
+        rows = [(start, start + timedelta(minutes=r["minutes"]), r) for start, r in ref if hour <= start < end]
+        tiled = bool(rows) and rows[0][0] == hour and rows[-1][1] == end
+        tiled = tiled and all(a[1] == b[0] for a, b in pairwise(rows))
+        key = hour.astimezone(tz).isoformat()
+        out[key] = {"plan_eur": None, "real_eur": None}
+        if not tiled or None in real:
+            continue
+        plan = []
+        for start, stop, r in rows:
+            spans = [
+                ((min(stop, t + step) - max(start, t)).total_seconds(), s)
+                for t, s in mine
+                if t < stop and t + step > start
+            ]
+            plan.append(
+                _grid_eur(planned_house_flows(r), _time_mean(spans, "price"), _time_mean(spans, "export_price"))
+            )
+        if None not in plan:
+            out[key] = {"plan_eur": round(sum(plan), 4), "real_eur": round(sum(real), 4)}
     return out
 
 
