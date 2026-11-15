@@ -161,7 +161,7 @@
               "static_offpeak_hours": "Comma-separated local-time ranges HH:MM-HH:MM (e.g. 01:30-07:30,12:30-14:30); a range may span midnight. Empty = flat.",
               "static_price_export": "Constant feed-in price in static mode. 0 = no export credit. Does not mirror the import price. Default 0.",
               "price_history_days": "Days of realized prices kept for the price prior. Default 8.",
-              "price_blend_weight_today": "Weight of today's prices versus same-weekday-last-week in the morning estimate (0–1). Default 0.5.",
+              "price_blend_weight_today": "Weight of today's prices versus the median of recent days in the morning estimate (0–1). Default 0.5.",
               "anticipation_confidence_haircut": "Discount applied to the estimated morning price before comparing with tonight (0–1). Default 0.15.",
               "anticipation_margin_eur_per_kwh": "The morning estimate must beat tonight's price by this much before charging is deferred. Default 0.02."
             }

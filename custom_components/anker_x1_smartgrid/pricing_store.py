@@ -10,6 +10,7 @@ per-hour ride-out reserve, applied by controller._apply_price_prior.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from statistics import median
 
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -96,13 +97,14 @@ def blend_price_prior(
     *,
     weight_today: float,
 ) -> list[float] | None:
-    """estimated_tomorrow[h] = w·today[h] + (1−w)·same_weekday_last_week[h].
+    """estimated_tomorrow[h] = w·today[h] + (1−w)·typical[h].
 
     `target_date` is tomorrow (the day being estimated).  Fallbacks: today incomplete
-    → most-recent full day as the `today` term; same-weekday missing → today-only
-    (w=1).  Alignment is by LOCAL hour (DST 23/25-h days degrade via the 24-key
-    completeness check).  Returns a 24-length local-hour-indexed list, or None when no
-    usable full base day exists.
+    → most-recent full day as the `today` term.  `typical[h]` is the per-hour median over
+    all full days in the history when there are at least 3 (one spike day cannot skew it);
+    with fewer, the same weekday last week if present, else today-only (w=1).
+    Alignment is by LOCAL hour (DST 23/25-h days degrade via the 24-key completeness check).
+    Returns a 24-length local-hour-indexed list, or None when no usable full base day exists.
     """
     today = history.get((target_date - timedelta(days=1)).isoformat())
     if today is None or len(today) < 24:
@@ -111,6 +113,11 @@ def blend_price_prior(
         today = _most_recent_full_day(history)
     if today is None or len(today) < 24:
         return None
+    full = [d for d in history.values() if len(d) >= 24]
+    if len(full) >= 3:
+        return [
+            weight_today * today[str(h)] + (1.0 - weight_today) * median(d[str(h)] for d in full) for h in range(24)
+        ]
     same_wd = history.get((target_date - timedelta(days=7)).isoformat())
     if same_wd is not None and len(same_wd) >= 24:
         return [weight_today * today[str(h)] + (1.0 - weight_today) * same_wd[str(h)] for h in range(24)]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, UTC
 
+import statistics
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import pricing_store
@@ -424,3 +426,15 @@ def test_held_extra_eta_curve_lower_export_eta_raises_held():
     held_curve = pricing_store.compute_anticipation_held_extra(**kwargs, eta_curve=curve)
     assert held_default > 0.0
     assert held_curve == pytest.approx(2 * held_default)
+
+
+def test_blend_uses_median_so_one_spike_day_is_ignored():
+    tomorrow = _date(2026, 11, 16)
+    history = {f"2026-11-{d:02d}": _full_day(0.40 + 0.01 * (d % 3)) for d in range(8, 16)}
+    history["2026-11-09"] = _full_day(0.88)  # spike, exactly 7 days before target
+    est = pricing_store.blend_price_prior(history, tomorrow, weight_today=0.5)
+    today = history["2026-11-15"]
+    for h in range(24):
+        med = statistics.median(d[str(h)] for d in history.values())
+        assert est[h] == pytest.approx(0.5 * today[str(h)] + 0.5 * med)
+    assert max(est) < 0.5 * today["23"] + 0.5 * 0.88 - 0.1

@@ -268,7 +268,7 @@ DEFAULT_EXPORT_DRAIN_WINDOW_H = 0.0
 
 # Persistence price prior defaults (Plan B)
 DEFAULT_PRICE_HISTORY_DAYS = 8  # rolling realized-price store depth (days)
-DEFAULT_PRICE_BLEND_WEIGHT_TODAY = 0.5  # today vs same-weekday-last-week blend weight
+DEFAULT_PRICE_BLEND_WEIGHT_TODAY = 0.5  # today vs recent-days median blend weight
 DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT = 0.15  # discount on the estimated morning price
 DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH = 0.02  # estimate must beat tonight by this (€/kWh)
 
