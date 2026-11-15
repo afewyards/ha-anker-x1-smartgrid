@@ -151,6 +151,12 @@ class StubRecorder:
     def purge_decisions_older_than(self, cutoff_iso):
         return 0
 
+    def write_plan_snapshot(self, day, ts, rows_json):
+        return True
+
+    def purge_plan_snapshots_older_than(self, day):
+        return 0
+
     def rollup_hours(self, now_iso):
         return 0
 

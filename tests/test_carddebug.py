@@ -119,6 +119,18 @@ def test_slot_series_gap_gives_none():
     assert gap["setpoint_w"] is None and gap["batt_w"] is None
 
 
+def test_slot_series_skips_samples_without_house_load():
+    rows = _samples(setpoint_w=3000.0, batt_w=-2900.0)
+    bad = {"load_w": None, "p1_w": None, "pv_w": None}
+    start = NOW - timedelta(hours=3)
+    for r in rows:
+        if start <= datetime.fromisoformat(r["ts"]) < start + timedelta(minutes=30):
+            r.update(bad, setpoint_w=0.0, batt_w=0.0)
+    out = carddebug.slot_series(rows, _horizon(60), AMS, NOW, _delivered)
+    row = next(r for r in out if datetime.fromisoformat(r["start"]) == start)
+    assert row["setpoint_w"] == 3000 and row["batt_w"] == 2900
+
+
 def test_slot_series_dst():
     now = datetime(2026, 10, 25, 3, 0, tzinfo=UTC)
     t0 = now - timedelta(hours=8)
@@ -134,7 +146,7 @@ def test_internals_omits_missing():
         cycle_cost_eur_per_kwh=0.03, charge_margin_eur_per_kwh=0.0, idle_drain_w=100.0, soc_target=100.0
     )
     assert carddebug.internals({}, cfg, None) == {
-        "ceiling_soc": 100.0,
+        "target_soc": 100.0,
         "cycle_cost_eur_per_kwh": 0.03,
         "charge_margin_eur_per_kwh": 0.0,
         "idle_drain_w": 100.0,

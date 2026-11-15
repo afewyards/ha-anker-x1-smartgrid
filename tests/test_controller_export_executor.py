@@ -74,6 +74,12 @@ class _StubRecorder:
     def append_decision(self, **kwargs) -> None:
         self.decision_rows.append(kwargs)
 
+    def write_plan_snapshot(self, day, ts, rows_json) -> bool:
+        return True
+
+    def purge_plan_snapshots_older_than(self, day) -> int:
+        return 0
+
     def purge_older_than(self, ts, days) -> None:
         pass
 

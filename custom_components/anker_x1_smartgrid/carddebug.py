@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
 from itertools import pairwise
 
+from .dataquality import house_load_w
 from .margin import _MAX_DT_S
 from .usecost import _ahead, _hour_key, _nothing_delivered, _parse, _slots, hourly_series
 
@@ -61,6 +62,8 @@ def slot_series(
         dt = (nxt - ts).total_seconds()
         if not 0 < dt <= _MAX_DT_S:
             continue
+        if house_load_w(r) is None:
+            continue
         a = acc.setdefault(_hour_key(ts, tz, width), [0.0, 0.0, 0.0, 0.0])
         a[0] += dt
         a[1] += (float(r.get("setpoint_w") or 0.0) - float(r.get("export_setpoint_w") or 0.0)) * dt
@@ -92,7 +95,7 @@ def internals(status: dict, cfg, built_at: str | None) -> dict:
         "forecast_source": status.get("active_model"),
         "load_correction_ratio": status.get("load_adapt_ratio"),
         "reserve_soc": reserve,
-        "ceiling_soc": getattr(cfg, "soc_target", None),
+        "target_soc": getattr(cfg, "soc_target", None),
         "end_value_eur_per_kwh": status.get("terminal_v_hi") if stored is None else stored,
         "cycle_cost_eur_per_kwh": cfg.cycle_cost_eur_per_kwh,
         "charge_margin_eur_per_kwh": cfg.charge_margin_eur_per_kwh,

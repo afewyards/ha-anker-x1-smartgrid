@@ -18,7 +18,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
 from . import backtest as bt
-from . import calibration
+from . import calibration, carddebug
 from .anker_resolver import apply_anker_resolution, resolve_anker_config
 from . import (
     const,
@@ -365,6 +365,8 @@ class Controller:
         self.power_card: dict | None = None
         self._card_rows: list[dict] | None = None
         self._card_failed = False
+        self._card_args: tuple | None = None
+        self._snapshot_day: str | None = None
         self._why_failed = False
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
@@ -2207,6 +2209,8 @@ class Controller:
             # decisions table grows at ~1440 rows/day indefinitely.
             _cutoff = (now - timedelta(days=self.cfg.retention_days)).isoformat()
             await self._hass.async_add_executor_job(self._recorder.purge_decisions_older_than, _cutoff)
+            _snap_cutoff = (dt_util.as_local(now).date() - timedelta(days=3)).isoformat()
+            await self._hass.async_add_executor_job(self._recorder.purge_plan_snapshots_older_than, _snap_cutoff)
         required_kwh = max(0.0, (self.cfg.soc_target - inputs.soc) / 100.0 * self.cfg.capacity_kwh)
         # Full kWh required to reach soc_target from current SoC. Used as the
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
@@ -2620,14 +2624,16 @@ class Controller:
             if rebuild is not None and self._card_rows is not None:
                 rows, self._card_rows = self._card_rows, None
                 kept = self.last_status.get("hold_stored_value_eur_per_kwh")
+                self._card_args = rebuild()
                 self.power_card = await self._hass.async_add_executor_job(
                     self._build_power_card_sync,
                     rows,
                     now,
-                    *rebuild(),
+                    *self._card_args,
                     self._planner_curve(),
                     self.last_status.get("terminal_v_hi") if kept is None else kept,
                 )
+                await self._snapshot_plan(now, self._card_args[0])
             card = self.power_card
             if card is None:
                 return
@@ -2655,6 +2661,42 @@ class Controller:
                 _LOGGER.warning("power card: build failed", exc_info=True)
             self._card_failed = True
             self.power_card = None
+
+    async def _snapshot_plan(self, now, horizon) -> None:
+        day = dt_util.as_local(now).date().isoformat()
+        if day == self._snapshot_day:
+            return
+        rows = carddebug.snapshot_rows(horizon, now)
+        if rows:
+            await self._hass.async_add_executor_job(
+                self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
+            )
+            self._snapshot_day = day
+
+    async def power_card_debug(self) -> dict:
+        card, args = self.power_card, self._card_args
+        if card is None or args is None:
+            return {"slots": [], "reference": [], "internals": {}}
+        horizon, _export_price_at, delivered_at = args
+        tz = dt_util.DEFAULT_TIME_ZONE
+        now = dt_util.parse_datetime(card["built_at"])
+        status = self.last_status
+
+        def _build() -> dict:
+            rows = [
+                r
+                for r in self._recorder.read_feature_rows((now - timedelta(days=2)).isoformat())
+                if (ts := dt_util.parse_datetime(r["ts"])) is not None and ts <= now
+            ]
+            since = (dt_util.as_local(now).date() - timedelta(days=2)).isoformat()
+            snaps = [(day, json.loads(rj)) for day, _ts, rj in self._recorder.read_plan_snapshots(since)]
+            return {
+                "slots": carddebug.slot_series(rows, horizon, tz, now, delivered_at),
+                "reference": carddebug.merge_reference(snaps, tz),
+                "internals": carddebug.internals(status, self.cfg, card["built_at"]),
+            }
+
+        return await self._hass.async_add_executor_job(_build)
 
     def _seed_house_ledger_if_cold(self, today: date) -> None:
         """One-shot: fill today's WHOLE-HOUSE ledger legs from recorded samples.
