@@ -2631,17 +2631,17 @@ class Controller:
             if rebuild is not None and self._card_rows is not None:
                 rows, self._card_rows = self._card_rows, None
                 kept = self.last_status.get("hold_stored_value_eur_per_kwh")
-                self._card_args = rebuild()
+                args = self._card_args = rebuild()
                 self._card_rows_end = rows[-1]["ts"] if rows else None
                 self.power_card = await self._hass.async_add_executor_job(
                     self._build_power_card_sync,
                     rows,
                     now,
-                    *self._card_args,
+                    *args,
                     self._planner_curve(),
                     self.last_status.get("terminal_v_hi") if kept is None else kept,
                 )
-                await self._snapshot_plan(now, self._card_args[0])
+                await self._snapshot_plan(now, args[0])
             card = self.power_card
             if card is None:
                 return
