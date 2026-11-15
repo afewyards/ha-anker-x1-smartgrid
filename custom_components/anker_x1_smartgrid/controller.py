@@ -2683,7 +2683,7 @@ class Controller:
             self.power_card = None
 
     async def _snapshot_plan(self, now, horizon) -> None:
-        """Save the day's first plan once, and on every call the reasons of the day's hours not yet over."""
+        """Save the day's first plan once, and on every call the reasons of the day's hours not yet started."""
         day = dt_util.as_local(now).date().isoformat()
         try:
             if day != self._snapshot_day:
@@ -2693,9 +2693,15 @@ class Controller:
                         self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
                     )
                     self._snapshot_day = day
-            # Reasons only cover hours not over at ``now``, so an hour that has ended keeps its last one.
+            # The running hour's plan covers only its remaining minutes, so its reason freezes when it starts.
+            snaps = await self._hass.async_add_executor_job(self._recorder.read_plan_snapshots, day)
+            held = json.loads(next((rj for d, _ts, _rows, rj in snaps if d == day), None) or "{}")
             at = now.isoformat()
-            todays = {start: r | {"at": at} for start, r in self._card_reasons.items() if start[:10] == day}
+            todays = {
+                start: r | {"at": at}
+                for start, r in self._card_reasons.items()
+                if start[:10] == day and (start not in held or dt_util.parse_datetime(start) > now)
+            }
             if todays:
                 await self._hass.async_add_executor_job(self._recorder.write_plan_reasons, day, json.dumps(todays))
             self._snapshot_failed = False
@@ -2751,6 +2757,8 @@ class Controller:
             for day, _ts, _rj, reasons_json in stored:
                 if reasons_json and day >= start.date().isoformat():
                     reasons |= json.loads(reasons_json)
+            # A planned hour's stored reason may be one the latest build dropped.
+            reasons = {s: r for s, r in reasons.items() if dt_util.parse_datetime(s) + timedelta(hours=1) <= now}
             slots = carddebug.slot_series(rows, horizon, tz, now, delivered_at, reference, cfg.export_fee_eur_per_kwh)
             return {
                 "slots": slots,

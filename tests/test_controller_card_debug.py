@@ -158,8 +158,8 @@ async def test_debug_internals_without_efficiencies_when_they_fail(tmp_path, mon
     assert not {"eta_charge", "eta_discharge"} & set(out["internals"])
 
 
-async def _reason_tick(ctrl, now):
-    ctrl.last_status["terminal_v_hi"] = 0.30
+async def _reason_tick(ctrl, now, terminal=0.30):
+    ctrl.last_status["terminal_v_hi"] = terminal
     ctrl._battery_margin_at = None
     await ctrl._refresh_battery_margin(now)
     await ctrl._publish_power_card(now, card_inputs(48.0), "hold", False, _charge_then_export())
@@ -186,6 +186,35 @@ async def test_each_rebuild_stores_the_reasons_of_todays_hours_not_yet_over(tmp_
     assert out["reasons"][held] == stored[held]
     assert any(start[:10] > day for start in out["reasons"])
     assert set(out["reasons"]) <= hour_starts
+
+
+async def test_debug_shows_a_stored_reason_only_once_its_hour_is_over(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+    await _reason_tick(ctrl, NOW)
+    await _reason_tick(ctrl, NOW + timedelta(minutes=70), terminal=None)
+    over, planned = (dt_util.as_local(NOW + timedelta(hours=h)).isoformat() for h in (0, 2))
+    assert planned in _stored(ctrl)[dt_util.as_local(NOW).date().isoformat()]
+    reasons = (await ctrl.power_card_debug())["reasons"]
+    assert planned not in reasons
+    assert reasons[over]["at"] == NOW.isoformat()
+
+
+async def test_a_reason_stored_before_its_hour_starts_is_kept_through_the_hour(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+    await _reason_tick(ctrl, NOW)
+    for mins in (70, 100):
+        await _reason_tick(ctrl, NOW + timedelta(minutes=mins))
+    stored = _stored(ctrl)[dt_util.as_local(NOW).date().isoformat()]
+    assert stored[dt_util.as_local(NOW + timedelta(hours=1)).isoformat()]["at"] == NOW.isoformat()
+
+
+async def test_the_running_hours_first_reason_is_stored_once_and_kept(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+    first = NOW + timedelta(minutes=10)
+    for at in (first, NOW + timedelta(minutes=40)):
+        await _reason_tick(ctrl, at)
+    stored = _stored(ctrl)[dt_util.as_local(NOW).date().isoformat()]
+    assert stored[dt_util.as_local(NOW).isoformat()]["at"] == first.isoformat()
 
 
 async def test_stored_reasons_survive_a_restart(tmp_path):
