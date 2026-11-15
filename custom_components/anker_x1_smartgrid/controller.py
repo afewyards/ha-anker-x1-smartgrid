@@ -367,6 +367,7 @@ class Controller:
         self._card_failed = False
         self._card_args: tuple | None = None
         self._snapshot_day: str | None = None
+        self._snapshot_failed = False
         self._why_failed = False
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
@@ -2209,8 +2210,7 @@ class Controller:
             # decisions table grows at ~1440 rows/day indefinitely.
             _cutoff = (now - timedelta(days=self.cfg.retention_days)).isoformat()
             await self._hass.async_add_executor_job(self._recorder.purge_decisions_older_than, _cutoff)
-            _snap_cutoff = (dt_util.as_local(now).date() - timedelta(days=3)).isoformat()
-            await self._hass.async_add_executor_job(self._recorder.purge_plan_snapshots_older_than, _snap_cutoff)
+            await self._purge_plan_snapshots(now)
         required_kwh = max(0.0, (self.cfg.soc_target - inputs.soc) / 100.0 * self.cfg.capacity_kwh)
         # Full kWh required to reach soc_target from current SoC. Used as the
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
@@ -2666,12 +2666,27 @@ class Controller:
         day = dt_util.as_local(now).date().isoformat()
         if day == self._snapshot_day:
             return
-        rows = carddebug.snapshot_rows(horizon, now)
-        if rows:
-            await self._hass.async_add_executor_job(
-                self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
-            )
-            self._snapshot_day = day
+        try:
+            rows = carddebug.snapshot_rows(horizon, now)
+            if rows:
+                await self._hass.async_add_executor_job(
+                    self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
+                )
+                self._snapshot_day = day
+            self._snapshot_failed = False
+        except Exception:
+            if not self._snapshot_failed:
+                _LOGGER.warning("power card: plan snapshot failed", exc_info=True)
+            self._snapshot_failed = True
+
+    async def _purge_plan_snapshots(self, now) -> None:
+        cutoff = (dt_util.as_local(now).date() - timedelta(days=3)).isoformat()
+        try:
+            await self._hass.async_add_executor_job(self._recorder.purge_plan_snapshots_older_than, cutoff)
+        except Exception:
+            if not self._snapshot_failed:
+                _LOGGER.warning("power card: plan snapshot purge failed", exc_info=True)
+            self._snapshot_failed = True
 
     async def power_card_debug(self) -> dict:
         card, args = self.power_card, self._card_args

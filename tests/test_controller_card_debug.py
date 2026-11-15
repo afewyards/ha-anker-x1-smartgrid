@@ -57,3 +57,24 @@ async def test_card_payload_unchanged(tmp_path):
     card = ctrl.power_card
     assert set(card) == {"built_at", "battery", "days", "hours", "stored_cost_eur_per_kwh"}
     assert not {"setpoint_w", "batt_w"} & set(card["hours"][0])
+
+
+async def test_failing_snapshot_write_keeps_the_card(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+
+    def _boom(*_a):
+        raise OSError("disk full")
+
+    ctrl._recorder.write_plan_snapshot = _boom
+    await _tick(ctrl, NOW)
+    assert ctrl.power_card is not None and ctrl._snapshot_day is None
+
+
+async def test_failing_snapshot_purge_does_not_raise(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+
+    def _boom(*_a):
+        raise OSError("locked")
+
+    ctrl._recorder.purge_plan_snapshots_older_than = _boom
+    await ctrl._purge_plan_snapshots(NOW)
