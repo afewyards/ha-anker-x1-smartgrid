@@ -151,7 +151,7 @@ def hour_reasons(
                 options.append(next_day)
             keep, kept_for = max(options, key=lambda o: o[0])
         if use[i] >= keep if releasing else keep >= use[i]:
-            b, keep = hours[key], round(keep, 3)
+            b = hours[key]
             price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
             sell_at = (keep + cycle_cost) / eta_discharge + export_fee
             selling = {"kept": keep, "wear": cycle_cost, "conversion": None, "fee": export_fee}
@@ -174,7 +174,7 @@ def hour_reasons(
                     beats[-1]["blocked"] = "reserve" if b["under"] else "rule"
             out[_iso(key, tz)] = {
                 "kind": kinds[i],
-                "keep_eur": keep,
+                "keep_eur": round(keep, 3),
                 "use_eur": round(use[i], 3),
                 "kept_for": kept_for,
                 "beats": [x for x in beats if not math.isnan(x["price"])],

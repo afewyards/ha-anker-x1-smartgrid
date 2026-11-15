@@ -173,7 +173,7 @@ svg { display: block; }
 .dsum { display: flex; flex-wrap: wrap; column-gap: 14px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
 .dsum b { display: block; color: var(--sg-ink); font-size: 14px; }
 .dsel { cursor: pointer; }
-.chart, .dsel { touch-action: pan-y; }
+.chart, .dsel { touch-action: pan-y pinch-zoom; }
 .dsel:focus-visible { outline: 2px solid var(--sg-debug); outline-offset: 1px; }
 .dsb { fill: var(--sg-debug); fill-opacity: .3; }
 .din { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--sg-rule); line-height: 1.35; color: var(--sg-dim); }

@@ -276,10 +276,11 @@ def test_each_build_up_is_priced_where_using_it_equals_keeping_it():
     assert {b["q"] for r in why.values() for b in r["beats"]} == set(VALUE)
     for row in why.values():
         for b in row["beats"]:
-            assert VALUE[b["q"]](b["beat_eur"], 500.0) == pytest.approx(row["keep_eur"], abs=1e-6)
+            keep = b["parts"][0]["eur"]
+            assert VALUE[b["q"]](b["beat_eur"], 500.0) == pytest.approx(keep, abs=1e-6)
             assert sum(p["eur"] for p in b["parts"]) == pytest.approx(b["beat_eur"], abs=1e-9)
             assert [p["key"] for p in b["parts"]] == PARTS[b["q"]]
-            assert b["parts"][0]["eur"] == row["keep_eur"]
+            assert keep == pytest.approx(row["keep_eur"], abs=5e-4)
 
 
 def test_each_kind_gets_its_build_ups_against_its_own_price():
@@ -311,3 +312,11 @@ def test_a_hold_whose_export_price_clears_the_selling_bar_says_what_held_it():
     assert sell(0.90, 50.0)["blocked"] == "reserve"
     assert sell(0.90, 20.0)["blocked"] == "rule"
     assert "blocked" not in sell(0.30, 50.0)
+
+
+def test_a_price_that_clears_the_unrounded_bar_by_a_hair_beats_it():
+    terminal = 0.1996
+    bar = (terminal + 0.03) / 1.0 + 0.02
+    why = _why([_row(0, bar + 0.0003, 60, export=2.0, mode="export")], terminal=terminal)
+    (sell,) = why[_at(0)]["beats"]
+    assert sell["price"] >= sell["beat_eur"]

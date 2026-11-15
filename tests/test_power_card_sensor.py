@@ -163,13 +163,15 @@ async def test_the_build_ups_price_the_kept_value_with_the_planners_figures(monk
     rows = {r["kind"]: r for r in reversed(built[-1].values())}
     (charge,), (sell,), (house, _) = (rows[k]["beats"] for k in ("charge", "export", "hold"))
     assert sell["price"] == round(0.60 + fee, 4)
-    assert (sell["beat_eur"] - fee) * eta_d - wear == pytest.approx(rows["export"]["keep_eur"], abs=1e-6)
+    assert (sell["beat_eur"] - fee) * eta_d - wear == pytest.approx(sell["parts"][0]["eur"], abs=1e-6)
     assert charge["beat_eur"] / eta_c + cfg.charge_margin_eur_per_kwh == pytest.approx(
-        rows["charge"]["keep_eur"], abs=1e-6
+        charge["parts"][0]["eur"], abs=1e-6
     )
     assert optimize.discharge_value(house["beat_eur"], 400.0, cfg, curve) == pytest.approx(
-        rows["hold"]["keep_eur"], abs=1e-6
+        house["parts"][0]["eur"], abs=1e-6
     )
+    for b, kind in ((sell, "export"), (charge, "charge"), (house, "hold")):
+        assert b["parts"][0]["eur"] == pytest.approx(rows[kind]["keep_eur"], abs=5e-4)
     assert not any("beats" in h.get("why", {}) for h in hours)
 
 
