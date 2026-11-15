@@ -124,6 +124,22 @@ def blend_price_prior(
     return [today[str(h)] for h in range(24)]
 
 
+def estimate_day_after_horizon(
+    history: dict[str, dict[str, float]],
+    slots: list[PriceSlot],
+    tomorrow: date,
+    *,
+    weight_today: float,
+) -> list[float] | None:
+    # Published tomorrow joins the (unpersisted) history as the freshest base day.
+    published = extract_realized_day(slots, tomorrow)
+    if len(published) >= 24:
+        return blend_price_prior(
+            {**history, tomorrow.isoformat(): published}, tomorrow + timedelta(days=1), weight_today=weight_today
+        )
+    return blend_price_prior(history, tomorrow, weight_today=weight_today)
+
+
 # ── B3: estimated slots — SEPARATE list, bounded to the pre-solar window ──────
 
 

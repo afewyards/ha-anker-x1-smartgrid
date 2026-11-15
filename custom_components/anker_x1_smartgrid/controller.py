@@ -1819,10 +1819,10 @@ class Controller:
         # so parity/telemetry paths are byte-identical.
         _estimated_tomorrow = None
         if self._price_store is not None:
-            _tom = (dt_util.as_local(now) + timedelta(days=1)).date()
-            _estimated_tomorrow = pricing_store.blend_price_prior(
+            _estimated_tomorrow = pricing_store.estimate_day_after_horizon(
                 self._price_store.history,
-                _tom,
+                slots,
+                (dt_util.as_local(now) + timedelta(days=1)).date(),
                 weight_today=self.cfg.price_blend_weight_today,
             )
         # Two granularities, one recorder read: hourly for load_adapt (which is

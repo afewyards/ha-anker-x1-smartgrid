@@ -438,3 +438,29 @@ def test_blend_uses_median_so_one_spike_day_is_ignored():
         med = statistics.median(d[str(h)] for d in history.values())
         assert est[h] == pytest.approx(0.5 * today[str(h)] + 0.5 * med)
     assert max(est) < 0.5 * today["23"] + 0.5 * 0.88 - 0.1
+
+
+def _estimate(history, slots, tomorrow):
+    from unittest.mock import patch
+
+    with patch("homeassistant.util.dt.as_local", side_effect=lambda d: d):
+        return pricing_store.estimate_day_after_horizon(history, slots, tomorrow, weight_today=0.5)
+
+
+def test_estimate_uses_published_tomorrow_as_base_day():
+    tomorrow = _date(2026, 11, 16)
+    start = datetime(2026, 11, 16, tzinfo=UTC)
+    slots = [PriceSlot(start + timedelta(hours=h), 0.26) for h in range(24)]
+    history = {"2026-11-15": _full_day(0.38), "2026-11-14": _full_day(0.38), "2026-11-13": _full_day(0.38)}
+    est = _estimate(history, slots, tomorrow)
+    # median over 4 full days (0.38 x3, 0.26) = 0.38; 0.5*0.26 + 0.5*0.38
+    assert est[0] == pytest.approx(0.32)
+    assert "2026-11-16" not in history
+
+
+def test_estimate_unchanged_when_tomorrow_incomplete():
+    tomorrow = _date(2026, 11, 16)
+    start = datetime(2026, 11, 16, tzinfo=UTC)
+    slots = [PriceSlot(start + timedelta(hours=h), 0.26) for h in range(10)]
+    history = {"2026-11-15": _full_day(0.38)}
+    assert _estimate(history, slots, tomorrow) == pricing_store.blend_price_prior(history, tomorrow, weight_today=0.5)
