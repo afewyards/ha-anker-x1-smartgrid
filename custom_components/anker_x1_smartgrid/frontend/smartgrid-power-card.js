@@ -13,10 +13,10 @@ function num(v) {
 function fx(v, d) {
   return num(v) === null ? DASH : v.toFixed(d);
 }
-function signed(v, cur = '') {
+function signed(v, cur = '', d = 2) {
   if (num(v) === null) return DASH;
-  const s = Math.abs(v).toFixed(2);
-  return (v < 0 && s !== '0.00' ? '−' : '+') + cur + s;
+  const s = Math.abs(v).toFixed(d);
+  return (v < 0 && +s !== 0 ? '−' : '+') + cur + s;
 }
 function eur(v, d = 2) {
   return num(v) === null ? DASH : (v < 0 ? '−€' : '€') + Math.abs(v).toFixed(d);
@@ -100,6 +100,7 @@ const STYLE = `<style>
   --sg-sun: var(--smartgrid-power-solar-color, #f2b134);
   --sg-pos: var(--success-color, #6dbf8b);
   --sg-neg: var(--warning-color, #e8743b);
+  --sg-debug: var(--smartgrid-power-debug-color, #b48cf2);
 }
 ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size: 11px; }
 .title { font-size: 16px; font-weight: 500; padding: 4px 0 6px; }
@@ -165,6 +166,14 @@ svg { display: block; }
 .tip .hu { border-top: 1px solid var(--sg-rule); margin-top: 6px; padding-top: 4px; }
 .tip .split { display: flex; height: 7px; border-radius: 3px; overflow: hidden; background: var(--sg-rule); margin: 2px 0; }
 .tip .split .g { background: var(--sg-dim); } .tip .split .b { background: var(--sg-pos); } .tip .split .s { background: var(--sg-sun); }
+.dt { display: flex; align-items: center; gap: 8px; }
+.chip { font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 1.5; color: var(--sg-debug); border: 1px solid var(--sg-debug); border-radius: 9px; padding: 0 7px; }
+.dbg { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sg-rule); }
+.dl, .dpl { fill: none; stroke: var(--sg-debug); stroke-width: 1.2; stroke-dasharray: 3 2; }
+.dpl { stroke-width: 1; }
+.dgap { fill: var(--sg-debug); fill-opacity: .2; }
+.dsum { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 8px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
+.dsum b { display: block; color: var(--sg-ink); font-size: 14px; }
 </style>`;
 
 const LEVEL_H = 48;
@@ -186,10 +195,87 @@ function stroke(cls) {
 function cuts(x, y, w) {
   return `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(w)}" height="1.2" class="cut"/><rect x="${r1(x)}" y="${r1(y + 3.2)}" width="${r1(w)}" height="1.2" class="cut"/>`;
 }
+function kh(v) {
+  return Math.min(Math.max(0, v), CUT) * KWH_PX;
+}
+function barBox(r) {
+  const w = Math.max(1, (r.p1 - r.p0) * 0.72);
+  return [r.p0 + (r.p1 - r.p0 - w) / 2, w];
+}
+// A key's hourly kWh as stepped outlines, one path per run of hours.
+function outline(rows, key, cls) {
+  let o = '';
+  let d = '';
+  let prev = null;
+  const flush = () => {
+    if (d) o += `<path d="${d} V${Z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
+    d = '';
+  };
+  for (const r of rows) {
+    const v = num(r[key]);
+    if (v === null || v < 0.005) {
+      flush();
+      prev = null;
+      continue;
+    }
+    if (!prev || prev.t + H !== r.t || prev.i !== r.i || prev.plan !== r.plan) {
+      flush();
+      d = `M${r1(r.p0)},${Z}`;
+    }
+    d += ` V${r1(Z - kh(v))} H${r1(r.p1)}`;
+    prev = r;
+  }
+  flush();
+  return o;
+}
+// Sun behind the grid bars, use over them; also returns the bar boxes.
+function gridBars(rows) {
+  let s = outline(rows, 'solar_kwh', 'so');
+  const bars = [];
+  for (const r of rows) {
+    const house = num(r.grid_in_house_kwh);
+    const charge = num(r.grid_in_charge_kwh);
+    const out = num(r.grid_out_kwh);
+    if (house === null && charge === null && out === null) continue;
+    const [bx, w] = barBox(r);
+    const nw = w * 0.65;
+    const nx = bx + (w - nw) / 2;
+    const fed = Math.max(0, house || 0) + Math.max(0, num(r.batt_house_kwh) || 0);
+    const inn = fed + Math.max(0, charge || 0);
+    const hh = kh(house || 0);
+    const hb = kh(fed);
+    const up = kh(inn);
+    const dn = kh(out || 0);
+    let b = '';
+    if (hh > 0) b += `<rect x="${r1(bx)}" y="${r1(Z - hh)}" width="${r1(w)}" height="${r1(hh)}" class="gh"/>`;
+    if (hb > hh) b += `<rect x="${r1(bx)}" y="${r1(Z - hb)}" width="${r1(w)}" height="${r1(hb - hh)}" class="gb"/>`;
+    if (up > hb) b += `<rect x="${r1(nx)}" y="${r1(Z - up)}" width="${r1(nw)}" height="${r1(up - hb)}" class="gc"/>`;
+    if (inn > CUT) b += up > hb ? cuts(nx, Z - up + 2.5, nw) : cuts(bx, Z - up + 2.5, w);
+    if (dn > 0) b += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
+    if ((out || 0) > CUT) b += cuts(bx, Z + dn - 6.9, w);
+    if (b) s += r.plan ? `<g opacity=".5">${b}</g>` : b;
+    if (up + dn > 0) bars.push({ x: bx, y: Z - up, w, h: up + dn });
+  }
+  return [s + outline(rows, 'use_kwh', 'uo'), bars];
+}
+function ticks(date, i, { X, tz }, lo, y) {
+  let s = `<text x="${r1(lo)}" y="${y}" font-size="11" class="ink">${weekday(localTime(date, 12, tz), tz)}</text>`;
+  for (const hr of [6, 12, 18]) {
+    const x = X(i, localTime(date, hr, tz), PAD);
+    // Room for the weekday name; on narrow columns the 06 tick would run into it.
+    if (x - 7 < lo + 26) continue;
+    s += `<text x="${r1(x)}" y="${y}" font-size="11" text-anchor="middle" class="dim">${pad2(hr)}</text>`;
+  }
+  return s;
+}
 const LEGEND = `<div class="lg dm">
 <span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
 <span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
+</div>`;
+const DEBUG_LEGEND = `<div class="lg dm">
+<span>first plan of the day${stroke('dl')}level<svg width="10" height="9"><rect x=".5" y=".5" width="9" height="8" class="dpl"/></svg>grid kWh${stroke('dl')}use</span>
+<span>use against its forecast${swatch('go', 9)}more${swatch('gc', 9)}less</span>
 </div>`;
 
 // What stored solar earned over exporting it; left out while it rounds to zero.
@@ -242,11 +328,29 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', ...config };
+    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', debug: false, ...config };
     this._state = this._hass ? this._hass.states[this._cfg.entity] : null;
     this._sw = this._hass ? this._hass.states[this._cfg.switch] : null;
+    this._dbg = { for: null, data: null, err: null };
+    if (this._cfg.debug) this._fetch();
     this._drawn = null;
     this._render();
+  }
+
+  // Once per card state (its build time); an answer for an older state is dropped.
+  _fetch() {
+    const key = this._state && this._state.state;
+    const hass = this._hass;
+    if (!key || !hass || key === this._dbg.for) return;
+    this._dbg.for = key;
+    const done = (data, err) => {
+      if (this._dbg.for !== key) return;
+      this._dbg = { for: key, data, err };
+      this._render();
+    };
+    Promise.resolve()
+      .then(() => hass.callWS({ type: 'anker_x1_smartgrid/power_card_debug' }))
+      .then((data) => done(data, null), (e) => done(null, String((e && e.message) || e)));
   }
 
   set hass(hass) {
@@ -261,6 +365,7 @@ class SmartgridPowerCard extends HTMLElement {
     }
     this._state = s;
     this._sw = sw;
+    if (this._cfg.debug) this._fetch();
     this._render();
   }
 
@@ -395,8 +500,8 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width) return;
-    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width };
+    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg) return;
+    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
     const refocus = !!ae && ae.matches('[role=switch]');
@@ -434,7 +539,8 @@ class SmartgridPowerCard extends HTMLElement {
     const a = st && st.state !== 'unavailable' && st.state !== 'unknown' ? st.attributes || {} : {};
     const days = Array.isArray(a.days) ? a.days : [];
     const hours = Array.isArray(a.hours) ? a.hours : [];
-    const title = cfg.title ? `<div class="title">${esc(typeof cfg.title === 'string' ? cfg.title : 'Power')}</div>` : '';
+    const name = cfg.title ? esc(typeof cfg.title === 'string' ? cfg.title : 'Power') : '';
+    const title = cfg.debug ? `<div class="title dt">${name}<span class="chip">DEBUG</span></div>` : cfg.title ? `<div class="title">${name}</div>` : '';
     const sw = this._swState();
     const off = sw ? sw.state === 'off' : !!a.battery && a.battery.state === 'disabled';
     if (!days.length && !hours.length) {
@@ -478,6 +584,7 @@ class SmartgridPowerCard extends HTMLElement {
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
+      (cfg.debug ? this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null, nowCol >= 0 ? X(nowCol, now, PAD) : null) : '') +
       '<div class="tip" hidden></div></div>'
     );
   }
@@ -504,7 +611,7 @@ class SmartgridPowerCard extends HTMLElement {
     return `<div class="bat"><span class="b1"><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}${this._control(sw)}</div>`;
   }
 
-  _level(rows, { cx, W }, nowX) {
+  _level(rows, { cx, W }, nowX, over = '') {
     let s = `<svg class="dm" width="${W}" height="${LEVEL_H}"><defs><pattern id="sgh" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" class="hs"/></pattern></defs>`;
     s += `<line x1="0" y1="4" x2="${W}" y2="4" class="rule" stroke-dasharray="2 3"/><line x1="0" y1="46" x2="${W}" y2="46" class="rule"/>`;
     const groups = [];
@@ -534,6 +641,7 @@ class SmartgridPowerCard extends HTMLElement {
       s += `<polygon points="${r1(gr.pts[0][0])},46 ${pts} ${r1(gr.pts[gr.pts.length - 1][0])},46" class="lvlf"${op}/>`;
       s += `<polyline points="${pts}" class="lvl"${op}/>`;
     }
+    s += over;
     for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${LEVEL_H}" class="rule"/>`;
     if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="0" x2="${r1(nowX)}" y2="46" class="now"/>`;
     // Extremes are labelled so the graph does not rely on colour alone.
@@ -602,63 +710,8 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const pmax = Math.max(...priced.map((r) => r.price));
     const pmin = Math.min(...priced.map((r) => r.price));
     const py = (p) => (pmax > pmin ? 14 + ((pmax - p) / (pmax - pmin)) * 27 : 28);
-    const kh = (v) => Math.min(Math.max(0, v), CUT) * KWH_PX;
-
-    // House use and sun as stepped outlines, one path per run of hours: sun behind the bars, use over them.
-    const outline = (key, cls) => {
-      let o = '';
-      let d = '';
-      let prev = null;
-      const flush = () => {
-        if (d) o += `<path d="${d} V${Z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
-        d = '';
-      };
-      for (const r of rows) {
-        const v = num(r[key]);
-        if (v === null || v < 0.005) {
-          flush();
-          prev = null;
-          continue;
-        }
-        if (!prev || prev.t + H !== r.t || prev.i !== r.i || prev.plan !== r.plan) {
-          flush();
-          d = `M${r1(r.p0)},${Z}`;
-        }
-        d += ` V${r1(Z - kh(v))} H${r1(r.p1)}`;
-        prev = r;
-      }
-      flush();
-      return o;
-    };
-    s += outline('solar_kwh', 'so');
-
-    const bars = [];
-    for (const r of rows) {
-      const house = num(r.grid_in_house_kwh);
-      const charge = num(r.grid_in_charge_kwh);
-      const out = num(r.grid_out_kwh);
-      if (house === null && charge === null && out === null) continue;
-      const w = Math.max(1, (r.p1 - r.p0) * 0.72);
-      const bx = r.p0 + (r.p1 - r.p0 - w) / 2;
-      const nw = w * 0.65;
-      const nx = bx + (w - nw) / 2;
-      const fed = Math.max(0, house || 0) + Math.max(0, num(r.batt_house_kwh) || 0);
-      const inn = fed + Math.max(0, charge || 0);
-      const hh = kh(house || 0);
-      const hb = kh(fed);
-      const up = kh(inn);
-      const dn = kh(out || 0);
-      let b = '';
-      if (hh > 0) b += `<rect x="${r1(bx)}" y="${r1(Z - hh)}" width="${r1(w)}" height="${r1(hh)}" class="gh"/>`;
-      if (hb > hh) b += `<rect x="${r1(bx)}" y="${r1(Z - hb)}" width="${r1(w)}" height="${r1(hb - hh)}" class="gb"/>`;
-      if (up > hb) b += `<rect x="${r1(nx)}" y="${r1(Z - up)}" width="${r1(nw)}" height="${r1(up - hb)}" class="gc"/>`;
-      if (inn > CUT) b += up > hb ? cuts(nx, Z - up + 2.5, nw) : cuts(bx, Z - up + 2.5, w);
-      if (dn > 0) b += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
-      if ((out || 0) > CUT) b += cuts(bx, Z + dn - 6.9, w);
-      if (b) s += r.plan ? `<g opacity=".5">${b}</g>` : b;
-      if (up + dn > 0) bars.push({ x: bx, y: Z - up, w, h: up + dn });
-    }
-    s += outline('use_kwh', 'uo');
+    const [gb, bars] = gridBars(rows);
+    s += gb;
 
     let prev = null;
     for (const r of rows) {
@@ -691,13 +744,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         s += lab(top, py(top.price) - 5);
         if (bot.price < top.price) s += lab(bot, py(bot.price) + 14);
       }
-      s += `<text x="${r1(lo)}" y="122" font-size="11" class="ink">${weekday(localTime(date, 12, tz), tz)}</text>`;
-      for (const hr of [6, 12, 18]) {
-        const x = X(i, localTime(date, hr, tz), PAD);
-        // Room for the weekday name; on narrow columns the 06 tick would run into it.
-        if (x - 7 < lo + 26) continue;
-        s += `<text x="${r1(x)}" y="122" font-size="11" text-anchor="middle" class="dim">${pad2(hr)}</text>`;
-      }
+      s += ticks(date, i, { X, tz }, lo, 122);
 
       // Each charge and export block gets its total beside it, or nothing if that would overlap.
       for (const [key, sign] of [['grid_in_charge_kwh', '+'], ['grid_out_kwh', '−']]) {
@@ -735,6 +782,91 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     }
     if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="4" x2="${r1(nowX)}" y2="${Z + CUT * KWH_PX}" class="now"/>`;
     return s + `<rect class="gd" data-k="p" y="0" width="0" height="${PANEL_H - 14}"/></svg>`;
+  }
+
+  // The day's first plan over the past hours: level, grid bars, use against its forecast, and today's totals.
+  _debug(rows, geo, nowX, nowP) {
+    const { err, data } = this._dbg;
+    if (err) return '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
+    const { dates, today, cx, cw, W, tz } = geo;
+    const ref = new Map();
+    for (const x of data && Array.isArray(data.reference) ? data.reference : []) {
+      const t = Date.parse(x && x.start);
+      if (!Number.isFinite(t)) continue;
+      const p = parts(t, tz);
+      const k = t - (p.minute * 60 + p.second) * 1e3;
+      let a = ref.get(k);
+      // An hour the plan joins mid-way would set part of its forecast against the whole hour.
+      if (!a && t !== k) continue;
+      if (!a) ref.set(k, (a = { load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
+      const v = (key) => num(x[key]) ?? 0;
+      a.load_kwh += v('load_kwh');
+      a.pv_kwh += v('pv_kwh');
+      a.up_kwh += v('grid_charge_kwh') + Math.max(v('load_kwh') - v('pv_kwh'), 0);
+      a.out_kwh += v('grid_export_kwh');
+      if (num(x.soc) !== null) a.ref_soc = x.soc;
+    }
+    const past = rows.filter((r) => !r.plan && ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
+
+    const at = new Map(rows.map((r) => [r.t, r]));
+    const pts = (a) => a.map(([x, soc]) => `${r1(x)},${r1(ly(soc))}`).join(' ');
+    const runs = [];
+    let run = null;
+    for (const r of past) {
+      if (num(r.soc) === null || num(r.ref_soc) === null) {
+        run = null;
+        continue;
+      }
+      if (!run || run.t + H !== r.t) {
+        // Both lines start where the level graph's does, at the previous hour's level.
+        const m0 = num(at.get(r.t - H)?.soc);
+        const f0 = num(ref.get(r.t - H)?.ref_soc);
+        runs.push((run = { m: [[r.x0, m0 ?? r.soc]], f: [[r.x0, f0 ?? r.ref_soc]] }));
+      }
+      run.m.push([r.x1, r.soc]);
+      run.f.push([r.x1, r.ref_soc]);
+      run.t = r.t;
+    }
+    const lv = runs.map(({ m, f }) => `<polygon points="${pts(m)} ${pts([...f].reverse())}" class="dgap"/><polyline points="${pts(f)}" class="dl"/>`).join('');
+
+    // The panels' grid band without the price lines above it, then the strip and the time axis.
+    const dy = Z - CUT * KWH_PX - 4;
+    const sy = Z + CUT * KWH_PX + 7 - dy;
+    let s = `<svg class="dm" width="${W}" height="${sy + 25}">`;
+    for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${sy + 8}" class="rule"/>`;
+    s += `<g transform="translate(0,${-dy})">`;
+    for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
+    s += gridBars(rows)[0];
+    for (const r of past) {
+      const [bx, w] = barBox(r);
+      const up = kh(r.up_kwh);
+      const dn = kh(r.out_kwh);
+      if (up > 0) s += `<rect x="${r1(bx)}" y="${r1(Z - up)}" width="${r1(w)}" height="${r1(up)}" class="dpl"/>`;
+      if (dn > 0) s += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="dpl"/>`;
+    }
+    s += `${outline(past, 'load_kwh', 'dl')}</g>`;
+    const miss = past.filter((r) => num(r.use_kwh) !== null).map((r) => [r, r.use_kwh - r.load_kwh]);
+    const mx = Math.max(0.1, ...miss.map(([, d]) => Math.abs(d)));
+    for (const [r, d] of miss) {
+      s += `<rect x="${r1(r.p0)}" y="${sy}" width="${r1(Math.max(0.5, r.p1 - r.p0 - 0.6))}" height="8" class="${d > 0 ? 'go' : 'gc'}" fill-opacity="${(0.15 + (0.85 * Math.abs(d)) / mx).toFixed(2)}"/>`;
+    }
+    for (let i = 0; i < cx.length; i++) s += ticks(dates[i], i, geo, cx[i] + PAD, sy + 21);
+    if (nowP !== null) s += `<line x1="${r1(nowP)}" y1="0" x2="${r1(nowP)}" y2="${sy + 8}" class="now"/>`;
+    s += '</svg>';
+
+    const tp = past.filter((r) => dates[r.i] === today);
+    const diff = (a, b) => {
+      const v = tp.filter((r) => num(r[a]) !== null);
+      return v.length ? v.reduce((t, r) => t + r[a] - r[b], 0) : null;
+    };
+    const kwh = (v) => (v === null ? DASH : `${signed(v, '', 1)} kWh`);
+    const lvl = tp.filter((r) => num(r.soc) !== null && num(r.ref_soc) !== null).pop();
+    const sum = [
+      [kwh(diff('use_kwh', 'load_kwh')), 'use against forecast today'],
+      [kwh(diff('solar_kwh', 'pv_kwh')), 'sun against forecast today'],
+      [lvl ? `${signed(lvl.soc - lvl.ref_soc, '', 0)}%` : DASH, 'level against plan now'],
+    ];
+    return `<div class="dbg">${this._level(rows, geo, nowX, lv)}${s}${DEBUG_LEGEND}<div class="dsum dm">${sum.map(([v, l]) => `<div><b>${v}</b>${l}</div>`).join('')}</div></div>`;
   }
 }
 
