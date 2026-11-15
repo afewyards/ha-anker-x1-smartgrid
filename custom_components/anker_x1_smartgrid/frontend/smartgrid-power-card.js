@@ -995,10 +995,11 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const ref = hourly(
       data && data.reference,
       tz,
-      () => ({ load_kwh: 0, pv_kwh: 0 }),
+      () => ({ load_kwh: 0, pv_kwh: 0, xs: [] }),
       (a, x) => {
         a.load_kwh += num(x.load_kwh) ?? 0;
         a.pv_kwh += num(x.pv_kwh) ?? 0;
+        a.xs.push(x);
       },
     );
     const cov = rows.filter((r) => ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
@@ -1014,19 +1015,10 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     let sum;
     if (view === 'cost') {
       // Per hour over, what the grid cost against what the first plan would have: dearer up, cheaper down.
-      const cost = hourly(
-        data && data.slots,
-        tz,
-        () => ({ eur: 0, miss: false }),
-        (a, x) => {
-          if (x.plan) return;
-          if (num(x.real_eur) === null || num(x.plan_eur) === null) a.miss = true;
-          else a.eur += x.real_eur - x.plan_eur;
-        },
-      );
+      const cost = new Map(Object.entries((data && data.hour_costs) || {}).map(([k, c]) => [Date.parse(k), c]));
       const costOf = (r) => {
-        const a = cost.get(r.t);
-        return a && !a.miss ? a.eur : null;
+        const c = cost.get(r.t);
+        return c && num(c.real_eur) !== null && num(c.plan_eur) !== null ? c.real_eur - c.plan_eur : null;
       };
       const mid = (top + base) / 2;
       const mx = Math.max(0.05, ...past.map((r) => Math.abs(costOf(r) ?? 0)));
@@ -1039,12 +1031,25 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         if (d === null) v += `<rect x="${r1(bx)}" y="${r1(mid - 5)}" width="${r1(w)}" height="10" fill="url(#sgh)"/>`;
         else if (h >= 0.5) v += `<rect x="${r1(bx)}" y="${r1(d > 0 ? mid - h : mid)}" width="${r1(w)}" height="${r1(h)}" class="${d > 0 ? 'dn' : 'dp'}"/>`;
       }
-      // The day's gap split by cause; sun that would have been sold is valued at the import price, so its difference lands in the rest.
+      // The day's gap split by cause: each slot at its own import price, each saved-plan row at the mean price of the slots it spans.
+      // Sun that would have been sold is valued at the import price, so its difference lands in the rest.
       const known = tp.filter((r) => costOf(r) !== null);
-      const by = (f) => (known.length ? known.reduce((t, r) => t + (num(r.price) === null ? 0 : f(r) * r.price), 0) : null);
+      const slots = hourly(data && data.slots, tz, () => ({ ss: [] }), (a, x) => a.ss.push(x));
+      const miss = (got, planned) =>
+        known.reduce((t, r) => {
+          const { ss } = slots.get(r.t);
+          const w = H / ss.length;
+          const priceOf = (x) => {
+            const t0 = Date.parse(x.start);
+            const on = ss.filter((s) => Date.parse(s.start) < t0 + x.minutes * 60e3 && Date.parse(s.start) + w > t0);
+            return on.reduce((a, s) => a + s.price, 0) / on.length;
+          };
+          const real = ss.reduce((a, s) => a + (num(s[got]) ?? 0) * s.price, 0);
+          return t + real - r.xs.reduce((a, x) => a + (num(x[planned]) ?? 0) * priceOf(x), 0);
+        }, 0);
       const total = known.length ? known.reduce((t, r) => t + costOf(r), 0) : null;
-      const use = by((r) => (num(r.use_kwh) ?? r.load_kwh) - r.load_kwh);
-      const sun = by((r) => r.pv_kwh - (num(r.solar_kwh) ?? r.pv_kwh));
+      const use = known.length ? miss('use_kwh', 'load_kwh') : null;
+      const sun = known.length ? -miss('solar_kwh', 'pv_kwh') : null;
       const money = (x) => (x === null ? DASH : `<span${Math.abs(x) < 0.005 ? '' : ` class="${x > 0 ? 'neg' : 'pos'}"`}>${signed(x, '€')}</span>`);
       sum = [
         [money(total), total === null || Math.abs(total) < 0.005 ? 'against plan today' : `${total > 0 ? 'dearer' : 'cheaper'} than planned today`],

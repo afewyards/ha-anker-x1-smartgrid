@@ -219,6 +219,7 @@
         if (CASE === 'debug-gap' && k > 0 && hh === 11 && q === 2) continue;
         reference.push({
           start: iso(t + (n > 1 ? 0 : q) * 900e3),
+          minutes: n > 1 ? 60 : 15,
           soc: h.soc === null ? null : Math.max(5, Math.min(100, h.soc + k * (2 + hh * 0.6) - (3 - q) * 2)),
           load_kwh: r3((h.use_kwh * f * n) / 4),
           pv_kwh: r3((h.solar_kwh * 1.25 * n) / 4),
@@ -230,9 +231,12 @@
       }
     }
     // Quarter rows that add up to the hours; today 06:00 and 05:15 have no samples, and 02:15 delivers 70% of its setpoint.
-    // Grid cost under the plan row of the same start and as measured; debug-gap has no export price in export hours.
+    // Grid cost under the plan row of the same start and width and as measured; debug-gap has no export price in export hours.
     const planned = new Map(reference.map((x) => [x.start, x]));
     const r4 = (v) => Math.round(v * 1e4) / 1e4;
+    const cost = (inn, out, price, ep) => (price === null || (out > 1e-6 && ep === null) ? null : r4(inn * price - out * (ep || 0)));
+    const flows = (f) => [f.grid_charge_kwh + Math.max(f.load_kwh - f.pv_kwh, 0), f.grid_export_kwh];
+    const paid = new Map();
     const slots = [];
     hours.forEach((h, n) => {
       const { why, ...base } = h;
@@ -248,10 +252,10 @@
         const price = h.price === null ? null : r3(h.price + (q - 1.5) * 0.004);
         const plan = t + (q + 1) * 900e3 > NOW;
         const ep = price === null || (CASE === 'debug-gap' && h.state === 'export') ? null : r3(price - 0.05);
-        const grid = (inn, out) => (price === null || (out > 1e-6 && ep === null) ? null : r4(inn * price - out * (ep || 0)));
         const f = planned.get(at);
-        const pe = plan || !f ? null : grid(f.grid_charge_kwh + Math.max(f.load_kwh - f.pv_kwh, 0), f.grid_export_kwh);
-        const re = plan || !f ? null : grid(quarter('grid_in_house_kwh') + quarter('grid_in_charge_kwh'), quarter('grid_out_kwh'));
+        const pe = plan || !f || f.minutes !== 15 ? null : cost(...flows(f), price, ep);
+        const re = plan ? null : cost(quarter('grid_in_house_kwh') + quarter('grid_in_charge_kwh'), quarter('grid_out_kwh'), price, ep);
+        paid.set(t + q * 900e3, { re, price, ep });
         slots.push({
           ...base,
           start: at,
@@ -267,6 +271,23 @@
         });
       }
     });
+    // Per hour with a quarter over: its plan rows, each at the mean price of the quarters it spans, against what was paid.
+    const hour_costs = {};
+    for (const h of hours) {
+      const t = Date.parse(h.start);
+      const qs = [0, 1, 2, 3].map((q) => paid.get(t + q * 900e3));
+      if (!qs.some((c) => c && c.re !== null)) continue;
+      const rows = reference.filter((x) => Date.parse(x.start) - t >= 0 && Date.parse(x.start) - t < H);
+      const tiled = rows.reduce((end, x) => (end === Date.parse(x.start) ? end + x.minutes * 60e3 : NaN), t) === t + H;
+      const mean = (on, key) => (on.some((c) => c[key] === null) ? null : on.reduce((a, c) => a + c[key], 0) / on.length);
+      const plan = rows.map((x) => {
+        const d = Date.parse(x.start) - t;
+        const on = qs.filter((c, q) => c && q * 900e3 >= d && q * 900e3 < d + x.minutes * 60e3);
+        return cost(...flows(x), mean(on, 'price'), mean(on, 'ep'));
+      });
+      const ok = tiled && qs.every((c) => c && c.re !== null) && !plan.includes(null);
+      hour_costs[h.start] = ok ? { plan_eur: r4(plan.reduce((a, v) => a + v, 0)), real_eur: r4(qs.reduce((a, c) => a + c.re, 0)) } : { plan_eur: null, real_eur: null };
+    }
     const stale = CASE === 'debug-stale';
     const built = iso(NOW - 5 * 60e3);
     const internals = {
@@ -325,7 +346,7 @@
       }
       reasons[h.start] = { kind, keep_eur: keep, use_eur: r3(kind === 'charge' ? p / EC : p * 0.9 - 0.03), kept_for, beats, at: h.plan ? built : iso(t - 10 * 60e3) };
     });
-    return { slots, reference, internals, reasons };
+    return { slots, hour_costs, reference, internals, reasons };
   }
 
   const states = {};
