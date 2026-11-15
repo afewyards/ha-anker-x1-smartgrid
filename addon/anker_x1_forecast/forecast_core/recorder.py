@@ -220,6 +220,10 @@ _SCHEMA_DAILY_REGRET = (
     "realized_kwh REAL, realized_eur REAL, infeasible INTEGER, computed_ts TEXT)"
 )
 
+_SCHEMA_PLAN_SNAPSHOTS = (
+    "CREATE TABLE IF NOT EXISTS plan_snapshots (day TEXT PRIMARY KEY, ts TEXT, rows_json TEXT)"
+)
+
 _DAILY_REGRET_COLUMNS = [
     "day",
     "regret_eur",
@@ -238,7 +242,7 @@ _DAILY_REGRET_COLUMNS = [
 ]
 
 # Increment this when adding new migration steps.
-_VERSION_TARGET = 10
+_VERSION_TARGET = 11
 
 # v9 energy deltas: clamp dt so a restart/stall undercounts (honest, visible
 # as a gap) instead of crediting one giant tick. 2 × TICK_SECONDS.
@@ -472,6 +476,12 @@ class DataRecorder:
                 )
             self._conn.execute("PRAGMA user_version = 10")
 
+        if version < 11:
+            # v10 → v11: plan_snapshots. CREATE TABLE IF NOT EXISTS keeps a
+            # crash before the user_version bump safely retried.
+            self._conn.execute(_SCHEMA_PLAN_SNAPSHOTS)
+            self._conn.execute("PRAGMA user_version = 11")
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -577,6 +587,32 @@ class DataRecorder:
         """Delete decision rows with ts < cutoff_iso.  Returns deleted count."""
         with self._lock:
             cur = self._conn.execute("DELETE FROM decisions WHERE ts < ?", (cutoff_iso,))
+            self._conn.commit()
+            return cur.rowcount
+
+    def write_plan_snapshot(self, day: str, ts: str, rows_json: str) -> bool:
+        """Store the day's first snapshot; True when inserted, False if the day exists."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO plan_snapshots (day, ts, rows_json) VALUES (?, ?, ?)",
+                (day, ts, rows_json),
+            )
+            self._conn.commit()
+            return cur.rowcount == 1
+
+    def read_plan_snapshots(self, since_day: str) -> list[tuple[str, str, str]]:
+        with self._lock:
+            return [
+                tuple(r)
+                for r in self._conn.execute(
+                    "SELECT day, ts, rows_json FROM plan_snapshots WHERE day >= ? ORDER BY day",
+                    (since_day,),
+                )
+            ]
+
+    def purge_plan_snapshots_older_than(self, day: str) -> int:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM plan_snapshots WHERE day < ?", (day,))
             self._conn.commit()
             return cur.rowcount
 

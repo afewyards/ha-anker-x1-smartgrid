@@ -1476,3 +1476,36 @@ def test_append_decision_normalizes_ts(tmp_path):
     stored = rec._conn.execute("SELECT ts FROM decisions").fetchone()[0]
     assert stored == "2026-07-08T10:00:00+00:00"
     rec.close()
+
+
+def test_plan_snapshot_written_once_per_day(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    assert rec.write_plan_snapshot("2026-11-15", "2026-11-15T00:05:00+01:00", "[1]") is True
+    assert rec.write_plan_snapshot("2026-11-15", "2026-11-15T09:00:00+01:00", "[2]") is False
+    assert rec.read_plan_snapshots("2026-11-15") == [("2026-11-15", "2026-11-15T00:05:00+01:00", "[1]")]
+    rec.close()
+
+
+def test_plan_snapshot_purge(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    for d in ("2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15", "2026-11-11"):
+        rec.write_plan_snapshot(d, f"{d}T00:00:00+01:00", "[]")
+    assert rec.purge_plan_snapshots_older_than("2026-11-13") == 2
+    assert [r[0] for r in rec.read_plan_snapshots("2026-11-01")] == ["2026-11-13", "2026-11-14", "2026-11-15"]
+    rec.close()
+
+
+def test_migrates_v10_db_to_v11(tmp_path):
+    db = str(tmp_path / "t.db")
+    DataRecorder(db).close()
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE plan_snapshots")
+    conn.execute("PRAGMA user_version = 10")
+    conn.commit()
+    conn.close()
+    DataRecorder(db).close()
+    conn = sqlite3.connect(db)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "plan_snapshots" in tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    conn.close()
