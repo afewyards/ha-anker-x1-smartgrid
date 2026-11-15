@@ -37,10 +37,10 @@ def test_v10_fresh_db_has_kwh_sum_columns_and_version(tmp_path):
     db = str(tmp_path / "t.db")
     rec = DataRecorder(db)
     rec.close()
-    assert _VERSION_TARGET == 10
+    assert _VERSION_TARGET >= 10
     assert _hourly_columns(db) >= KWH_SUM_COLS
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET
     conn.close()
 
 
@@ -56,7 +56,7 @@ def test_v10_crash_idempotent_rerun(tmp_path):
     rec = DataRecorder(db)  # must not raise "duplicate column name"
     rec.close()
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET
     conn.close()
 
 
