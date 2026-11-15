@@ -355,12 +355,16 @@ def merge_days(
     return out
 
 
+def _hour_key(ts: datetime, tz: tzinfo) -> datetime:
+    """The start in UTC of the local clock hour holding ``ts``."""
+    loc = ts.astimezone(tz)
+    return ts.astimezone(UTC) - timedelta(minutes=loc.minute, seconds=loc.second, microseconds=loc.microsecond)
+
+
 def _hour(hours: dict, ts: datetime, tz: tzinfo) -> dict:
     """The bucket of the local clock hour holding ``ts``, keyed by its start in UTC."""
-    loc = ts.astimezone(tz)
-    key = ts.astimezone(UTC) - timedelta(minutes=loc.minute, seconds=loc.second, microseconds=loc.microsecond)
     return hours.setdefault(
-        key,
+        _hour_key(ts, tz),
         {"price_eur_h": 0.0, "price_h": 0.0, "soc": None, "use_kwh": 0.0, "solar_kwh": 0.0, "held_h": 0.0, "grid": None}
         | dict.fromkeys(_ACTIONS, 0.0),
     )
@@ -466,6 +470,7 @@ def hourly_series(
                 "state": state,
                 "use_kwh": round(b["use_kwh"], 3),
                 "solar_kwh": round(b["solar_kwh"], 3),
+                "batt_house_kwh": round(b["house"], 2),
                 "plan": key + timedelta(hours=1) > now,
             }
             | dict(zip(_GRID_KEYS, [round(v, 2) for v in b["grid"]] if b["grid"] else (None,) * 3, strict=True))

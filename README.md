@@ -141,7 +141,7 @@ A second card, [`lovelace/daily-stats-card.yaml`](lovelace/daily-stats-card.yaml
 
 ![Power card](custom_components/anker_x1_smartgrid/frontend/power-card.png)
 
-The integration ships its own card for yesterday, today and tomorrow: the battery line and level on top (held hours hatched), and per day what the house's use cost and what the battery saved (today also what stored solar earned, the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. House use and solar are thin outlines behind the bars. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
+The integration ships its own card for yesterday, today and tomorrow: the battery line and level on top (held hours hatched), and per day what the house's use cost and what the battery saved (today also what stored solar earned, the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. What the battery gave the house is a green segment on the grey import bar. House use is a bold line over the bars, solar a thin outline behind them. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
 
 ```yaml
 type: custom:smartgrid-power-card
@@ -151,6 +151,8 @@ switch: switch.smartgrid_enabled    # optional, this is the default; no such ent
 ```
 
 House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what grid-charged energy earned: its value when used, less what it cost to buy, so its conversion losses and standby drain land in saved. Sun is what stored solar earned over exporting it, shown only when it isn't zero.
+
+Hover over an hour, or tap it on a touch screen, to see what the battery did or plans to do: for planned hours the two options the planner weighed per stored kWh and what the energy is kept for, then how the house's use split between grid, battery and sun.
 
 Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
 

@@ -112,6 +112,86 @@ async def test_controller_builds_the_card_from_one_sample_read():
     assert ctrl.power_card["battery"]["soc"] == 47.5
 
 
+def _charge_then_export(export=0.60):
+    horizon = _horizon()
+    for k in range(4):
+        horizon[k] |= {"mode": "grid", "grid_charge_kwh": 1.0, "soc": 45.0 + 5 * k}
+        horizon[4 + k] |= {"mode": "export", "grid_export_kwh": 0.5, "soc": 55.0 - 5 * k}
+    return lambda: (horizon, lambda _s, _p: export, lambda _s: 0.0)
+
+
+async def _card_with_reasons(terminal_v_hi, hold_stored=None, export=0.60):
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller()
+    ctrl._recorder.read_feature_rows = lambda since: _samples()
+    ctrl.last_status["terminal_v_hi"] = terminal_v_hi
+    ctrl.last_status["hold_stored_value_eur_per_kwh"] = hold_stored
+    await ctrl._refresh_battery_margin(NOW)
+    await ctrl._publish_power_card(NOW, _inputs(48.0), "hold", False, _charge_then_export(export))
+    return ctrl, ctrl.power_card["hours"]
+
+
+async def test_planned_hours_carry_the_planners_reason():
+    from custom_components.anker_x1_smartgrid import optimize
+
+    ctrl, hours = await _card_with_reasons(0.30)
+    cfg, curve = ctrl.cfg, ctrl._planner_curve()
+    sell = 0.60 * optimize._eta_discharge_at(cfg.max_export_w, cfg, curve) - cfg.cycle_cost_eur_per_kwh
+    cost = 0.25 / optimize._eta_charge_at(cfg.max_charge_w, cfg, curve) + cfg.charge_margin_eur_per_kwh
+    charge, export, *rest = [h for h in hours if h["plan"]]
+    assert all("why" not in h for h in hours if not h["plan"])
+    assert charge["why"] == {
+        "kind": "charge",
+        "keep_eur": round(sell, 3),
+        "use_eur": round(cost, 3),
+        "kept_for": {"start": export["start"], "end": rest[0]["start"], "kind": "export"},
+    }
+    assert export["why"]["use_eur"] == round(sell, 3) and export["why"]["kept_for"]["kind"] == "next_day"
+    use = round(optimize.discharge_value(0.25, 400.0, cfg, curve), 3)
+    held = {"kind": "hold", "keep_eur": 0.3, "use_eur": use, "kept_for": export["why"]["kept_for"]}
+    assert all(h["why"] == held for h in rest)
+
+
+async def test_the_kept_value_is_the_one_the_hold_compares_with():
+    _ctrl, hours = await _card_with_reasons(0.30, hold_stored=0.35)
+    _charge, export, hold, *_ = [h for h in hours if h["plan"]]
+    assert export["why"]["keep_eur"] == hold["why"]["keep_eur"] == 0.35
+
+
+async def test_no_terminal_value_leaves_the_hours_without_reasons():
+    _ctrl, hours = await _card_with_reasons(None)
+    assert not any("why" in h for h in hours)
+
+
+async def test_an_export_hour_without_an_export_price_has_no_reason():
+    ctrl, hours = await _card_with_reasons(0.30, export=None)
+    _charge, export, *_ = [h for h in hours if h["plan"]]
+    assert export["state"] == "export" and "why" not in export
+    assert len(ctrl.power_card["days"]) == 3
+
+
+async def test_failing_reasons_leave_the_card_and_warn_once(monkeypatch, caplog):
+    from custom_components.anker_x1_smartgrid import why
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller()
+    ctrl._recorder.read_feature_rows = lambda since: _samples()
+    ctrl.last_status["terminal_v_hi"] = 0.30
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("unhappy")
+
+    monkeypatch.setattr(why, "hour_reasons", _boom)
+    with caplog.at_level(logging.WARNING):
+        for minutes in (0, 6):
+            await ctrl._refresh_battery_margin(NOW + timedelta(minutes=minutes))
+            await ctrl._publish_power_card(NOW + timedelta(minutes=minutes), _inputs(48.0), "idle", False, _rebuild())
+    card = ctrl.power_card
+    assert len(card["days"]) == 3 and card["hours"] and not any("why" in h for h in card["hours"])
+    assert sum("power card" in r.getMessage() for r in caplog.records) == 1
+
+
 @pytest.mark.parametrize("stage", ["replay", "roll_plan", "merge_days", "hourly_series"])
 async def test_a_failing_build_clears_the_card_and_warns_once(monkeypatch, caplog, stage):
     from tests.helpers import make_controller

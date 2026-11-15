@@ -5,6 +5,7 @@
 <!--
   Fixture page for the power card, not served by Home Assistant.
   ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
 <style>
@@ -117,7 +118,49 @@
         grid_in_house_kwh: est ? null : state === 'house' || state === 'export' ? 0.03 : r2(Math.max(use - sun, 0)),
         grid_in_charge_kwh: est ? null : state === 'charge_grid' ? r2((delta / 100) * 20.48 / 0.95) : 0,
         grid_out_kwh: est ? null : state === 'export' ? r2((-delta / 100) * 20.48 * 0.95) : r2(Math.max(sun - use - (state === 'charge_solar' ? 0.8 : 0), 0)),
+        batt_house_kwh: !est && (state === 'house' || state === 'export') ? r2(Math.max(use - sun - 0.03, 0)) : 0,
       });
+    }
+    // One row as an older backend sends it, without the battery-to-house figure.
+    delete hours.find((h) => h.start.startsWith(`${dates[1]}T07`)).batt_house_kwh;
+    // Planner reasons as the backend builds them: the richest later release, kept only when it agrees with the action.
+    const value = (h) => (h.state === 'export' ? h.price - 0.05 : h.price * 0.9 - 0.03);
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    hours.forEach((h, n) => {
+      if (!h.plan || h.price === null) return;
+      let best = -1;
+      for (let j = n + 1; j < hours.length; j++) {
+        const x = hours[j];
+        if (x.price !== null && (x.state === 'export' || x.state === 'house') && (best < 0 || value(x) > value(hours[best]))) best = j;
+      }
+      const keep = best < 0 ? 0.3 : value(hours[best]);
+      const use = h.state === 'charge_grid' ? h.price / 0.9 : value(h);
+      if (h.state === 'export' || h.state === 'house' ? use < keep : keep < use) return;
+      let [a, b] = [best, best];
+      while (best >= 0 && a - 1 > n && hours[a - 1].state === hours[best].state) a--;
+      while (best >= 0 && b + 1 < hours.length && hours[b + 1].state === hours[best].state) b++;
+      const release = h.state === 'export' || h.state === 'house';
+      const nextDay = { start: iso(until), end: null, kind: 'next_day' };
+      let kept_for = best < 0 ? nextDay : { start: hours[a].start, end: iso(Date.parse(hours[b].start) + H), kind: hours[best].state };
+      if (release) {
+        // A release hour is weighed against refilling in the next grid-charge run.
+        const c = hours.findIndex((x, j) => j > n && x.state === 'charge_grid');
+        let e = c;
+        while (c >= 0 && hours[e + 1] && hours[e + 1].state === 'charge_grid') e++;
+        kept_for = c < 0 ? nextDay : { start: hours[c].start, end: iso(Date.parse(hours[e].start) + H), kind: 'refill' };
+      }
+      const kind = h.state === 'charge_grid' ? 'charge' : release ? h.state : 'hold';
+      h.why = { keep_eur: r3(keep), use_eur: r3(use), kind, kept_for };
+    });
+    // A house hour whose energy is planned to be bought back in a later grid-charge run.
+    const rf = hours.findIndex((h) => h.state === 'house' && h.start.startsWith(`${dates[1]}T18`));
+    const rc = hours.findIndex((h, n) => n > rf && h.state === 'charge_grid');
+    if (rf >= 0 && rc >= 0) {
+      let e = rc;
+      while (hours[e + 1] && hours[e + 1].state === 'charge_grid') e++;
+      hours[rf].why = { kind: 'house', use_eur: 0.38, keep_eur: 0.18, kept_for: { start: hours[rc].start, end: iso(Date.parse(hours[e].start) + H), kind: 'refill' } };
+      // A held hour just before that run: using it now means buying it back there.
+      if (hours[rc - 1].state === 'idle') hours[rc - 1].why = { kind: 'hold', use_eur: 0.24, keep_eur: 0.31, kept_for: hours[rf].why.kept_for };
     }
     const days = dates.map((date, k) => {
       const rows = hours.filter((h) => h.start.startsWith(date));
@@ -169,6 +212,7 @@
   window.THEME = q.get('theme') === 'light' ? 'light' : 'dark';
   window.TITLE = !!q.get('title');
   window.WIDTH = q.get('w');
+  window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender') };
 
   customElements.define('ha-card', class extends HTMLElement {
     connectedCallback() {
@@ -203,6 +247,27 @@
       card.hass = { ...window.HASS };
       STATUS.rerender = inner() === before ? 'same state: no re-render' : 'same state: RE-RENDERED';
       showStatus();
+      if (HOVER.at) point(card);
     }));
+  }
+  function point(card) {
+    // The card draws on its first resize callback, which can land after these frames.
+    if (!card._geo) return requestAnimationFrame(() => point(card));
+    const r = card._geo.rows.find((h) => h.start.startsWith(HOVER.at));
+    if (!r) return;
+    const root = card.shadowRoot;
+    const y = card.getBoundingClientRect().top + HOVER.py;
+    // The level graph spans the full column, the panels sit PAD inside it.
+    const lv = y < root.querySelector('.lv').getBoundingClientRect().bottom;
+    const x = root.querySelector('.chart').getBoundingClientRect().left + (lv ? r.x0 + r.x1 : r.p0 + r.p1) / 2;
+    const target = root.elementFromPoint(x, y);
+    const pointerType = HOVER.touch ? 'touch' : 'mouse';
+    for (const type of HOVER.touch ? ['pointerdown', 'pointerup'] : ['pointermove']) {
+      target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerType, pointerId: 1, bubbles: true, composed: true }));
+    }
+    if (HOVER.rerender) {
+      const st = window.HASS.states['sensor.smartgrid_power_card'];
+      card.hass = { ...window.HASS, states: { ...window.HASS.states, 'sensor.smartgrid_power_card': { ...st } } };
+    }
   }
 </script>

@@ -45,6 +45,7 @@ from . import (
     snapshot,
     soc_drift,
     usecost,
+    why,
 )
 from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch_forecast, fetch_health
 from .actuator import Actuator
@@ -210,6 +211,7 @@ class Controller:
     power_card: dict | None = None
     _card_rows: list[dict] | None = None
     _card_failed = False
+    _why_failed = False
 
     def __init__(
         self,
@@ -363,6 +365,7 @@ class Controller:
         self.power_card: dict | None = None
         self._card_rows: list[dict] | None = None
         self._card_failed = False
+        self._why_failed = False
         # N2: last known COMPUTED house load (W) — fallback cache used whenever
         # pv/batt sensors are unavailable (skips the compute for that tick).
         # NOT persisted.  Recorder load_w / metered-net PnL / last_status all use
@@ -2542,11 +2545,39 @@ class Controller:
         rows = self._recorder.read_feature_rows(since_iso)
         return margin_mod.battery_margin_by_day(rows, self.cfg.capacity_kwh, tz, self.cfg.export_fee_eur_per_kwh), rows
 
-    def _build_power_card_sync(self, rows: list[dict], now: datetime, horizon, export_price_at, delivered_at) -> dict:
+    def _build_power_card_sync(
+        self, rows: list[dict], now: datetime, horizon, export_price_at, delivered_at, curve, terminal_value
+    ) -> dict:
         _tz, _cap, _fee = dt_util.DEFAULT_TIME_ZONE, self.cfg.capacity_kwh, self.cfg.export_fee_eur_per_kwh
         days, inv = usecost.replay(rows, _cap, _tz, _fee)
         planned = usecost.roll_plan(horizon, inv, _cap, _tz, now, export_price_at, _fee, delivered_at)
         hours = usecost.hourly_series(rows, horizon, _tz, now, delivered_at)
+        cfg = self.cfg
+        # The DP's own export gate and terminal-refill prices, per stored kWh.
+        eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve)
+        eta_c = optimize_mod._eta_charge_at(cfg.max_charge_w, cfg, curve)
+        try:
+            reasons = why.hour_reasons(
+                horizon,
+                now,
+                _tz,
+                soc=next((float(r["soc"]) for r in reversed(rows) if r.get("soc") is not None), None),
+                use_value=lambda p, w: optimize_mod.discharge_value(p, w, cfg, curve),
+                export_value=lambda s, p: (
+                    None if (x := export_price_at(s, p)) is None else x * eta_d - cfg.cycle_cost_eur_per_kwh
+                ),
+                charge_cost=lambda p: p / eta_c + cfg.charge_margin_eur_per_kwh,
+                terminal_value=terminal_value,
+            )
+            self._why_failed = False
+        except Exception:
+            if not self._why_failed:
+                _LOGGER.warning("power card: hour reasons failed", exc_info=True)
+            self._why_failed = True
+            reasons = {}
+        for h in hours:
+            if h["start"] in reasons:
+                h["why"] = reasons[h["start"]]
         return {
             "built_at": now.isoformat(),
             "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,
@@ -2588,8 +2619,14 @@ class Controller:
         try:
             if rebuild is not None and self._card_rows is not None:
                 rows, self._card_rows = self._card_rows, None
+                kept = self.last_status.get("hold_stored_value_eur_per_kwh")
                 self.power_card = await self._hass.async_add_executor_job(
-                    self._build_power_card_sync, rows, now, *rebuild()
+                    self._build_power_card_sync,
+                    rows,
+                    now,
+                    *rebuild(),
+                    self._planner_curve(),
+                    self.last_status.get("terminal_v_hi") if kept is None else kept,
                 )
             card = self.power_card
             if card is None:

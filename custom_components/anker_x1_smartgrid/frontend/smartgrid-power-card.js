@@ -18,8 +18,8 @@ function signed(v, cur = '') {
   const s = Math.abs(v).toFixed(2);
   return (v < 0 && s !== '0.00' ? '−' : '+') + cur + s;
 }
-function eur(v) {
-  return num(v) === null ? DASH : (v < 0 ? '−€' : '€') + Math.abs(v).toFixed(2);
+function eur(v, d = 2) {
+  return num(v) === null ? DASH : (v < 0 ? '−€' : '€') + Math.abs(v).toFixed(d);
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -67,6 +67,24 @@ function addDays(date, k) {
   const [y, m, d] = date.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + k)).toISOString().slice(0, 10);
 }
+function weekday(t, tz) {
+  return new Date(t).toLocaleDateString('en', { weekday: 'short', timeZone: tz || undefined });
+}
+function clock(t, tz) {
+  const p = parts(t, tz);
+  return `${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+function when(a, b, tz) {
+  let start = clock(a, tz);
+  let end = clock(b, tz);
+  if (start === end) {
+    // The repeated hour of a DST fall-back reads the same at both ends without the zone.
+    const zone = (t) => new Intl.DateTimeFormat('en', { timeZone: tz || undefined, timeZoneName: 'short' }).formatToParts(t).find((p) => p.type === 'timeZoneName')?.value;
+    start += ` ${zone(a)}`;
+    end += ` ${zone(b)}`;
+  }
+  return `${weekday(a, tz)} ${start}${DASH}${end === '00:00' ? '24:00' : end}`;
+}
 
 
 const STYLE = `<style>
@@ -83,7 +101,7 @@ const STYLE = `<style>
   --sg-pos: var(--success-color, #6dbf8b);
   --sg-neg: var(--warning-color, #e8743b);
 }
-ha-card { padding: 6px 10px; color: var(--sg-ink); font-size: 11px; }
+ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size: 11px; }
 .title { font-size: 16px; font-weight: 500; padding: 4px 0 6px; }
 .bat { display: flex; align-items: center; column-gap: 8px; font-size: 11.5px; line-height: 1.45; margin-bottom: 3px; white-space: nowrap; }
 .bat b { color: var(--sg-charge); }
@@ -125,10 +143,28 @@ svg { display: block; }
 .p { stroke-width: 3; } .p.charge { stroke: var(--sg-charge); } .p.house { stroke: var(--sg-house); }
 .p.export { stroke: var(--sg-export); } .p.idle { stroke: var(--sg-dim); stroke-width: 1.5; }
 .conn { stroke: var(--sg-dim); stroke-opacity: .45; }
-.gh { fill: var(--sg-dim); } .gc { fill: var(--sg-charge); } .go { fill: var(--sg-export); } .cut { fill: var(--sg-bg); }
+.gh { fill: var(--sg-dim); fill-opacity: .5; } .gb { fill: var(--sg-pos); } .gc { fill: var(--sg-charge); } .go { fill: var(--sg-export); } .cut { fill: var(--sg-bg); }
 .uo, .so { fill: none; stroke-width: 1; stroke-linejoin: round; }
-.uo { stroke: var(--sg-ink); stroke-opacity: .55; } .so { stroke: var(--sg-sun); }
+.uo { stroke: var(--sg-ink); stroke-width: 1.8; } .so { stroke: var(--sg-sun); }
+.gd { fill: var(--sg-ink); fill-opacity: .14; pointer-events: none; }
 .sw.charge { fill: var(--sg-charge); } .sw.house { fill: var(--sg-house); } .sw.export { fill: var(--sg-export); } .sw.idle { fill: var(--sg-dim); }
+.tip { position: absolute; z-index: 1; width: 256px; box-sizing: border-box; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--sg-rule); background: var(--primary-background-color, var(--sg-bg)); box-shadow: 0 4px 14px rgba(0, 0, 0, .4); line-height: 1.45; pointer-events: none; }
+.tip .hd { font-size: 13px; font-weight: 600; }
+.tip .k { color: var(--sg-dim); }
+.tip .per { margin-top: 5px; }
+.tip .dec { display: grid; grid-template-columns: 9px auto 1fr auto; align-items: center; column-gap: 5px; color: var(--sg-dim); }
+.tip .opt { display: contents; }
+.tip .opt.win { color: var(--sg-ink); }
+.tip .opt i { font-style: normal; color: var(--sg-pos); }
+.tip .ol { white-space: nowrap; }
+.tip .tr { height: 6px; border-radius: 3px; background: var(--sg-rule); overflow: hidden; }
+.tip .tr b { display: block; height: 100%; background: var(--sg-dim); }
+.tip .win .tr b { background: var(--sg-pos); }
+.tip .opt .v { font-weight: 600; }
+.tip .note { color: var(--sg-pos); margin-top: 3px; }
+.tip .hu { border-top: 1px solid var(--sg-rule); margin-top: 6px; padding-top: 4px; }
+.tip .split { display: flex; height: 7px; border-radius: 3px; overflow: hidden; background: var(--sg-rule); margin: 2px 0; }
+.tip .split .g { background: var(--sg-dim); } .tip .split .b { background: var(--sg-pos); } .tip .split .s { background: var(--sg-sun); }
 </style>`;
 
 const LEVEL_H = 48;
@@ -152,7 +188,7 @@ function cuts(x, y, w) {
 }
 const LEGEND = `<div class="lg dm">
 <span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
-<span>grid kWh${swatch('gh', 9)}house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
+<span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
 
@@ -169,11 +205,24 @@ function saved(v, prefix = '') {
 class SmartgridPowerCard extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' }).innerHTML = STYLE + '<ha-card></ha-card>';
-    this.shadowRoot.addEventListener('click', (e) => {
+    const root = this.attachShadow({ mode: 'open' });
+    root.innerHTML = STYLE + '<ha-card></ha-card>';
+    root.addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]');
       if (b) this._act(b.dataset.act);
     });
+    // Mouse and pen hover; a touch counts only as a tap, so a drag stays the browser's scroll.
+    root.addEventListener('pointermove', (e) => e.pointerType !== 'touch' && this._point(this._locate(e)));
+    this.addEventListener('pointerleave', (e) => e.pointerType !== 'touch' && this._point(null));
+    root.addEventListener('pointerdown', (e) => (this._tapId = e.pointerType === 'touch' ? e.pointerId : null));
+    root.addEventListener('pointercancel', () => (this._tapId = null));
+    root.addEventListener('pointerup', (e) => {
+      if (e.pointerType !== 'touch' || e.pointerId !== this._tapId) return;
+      const at = this._locate(e);
+      const r = this._hit(at);
+      this._point(r && r.t !== this._row ? at : null);
+    });
+    this._away = (e) => this._at && !e.composedPath().includes(this) && this._point(null);
   }
 
   _act(act) {
@@ -219,10 +268,111 @@ class SmartgridPowerCard extends HTMLElement {
     // Rendering changes the card's height; doing it inside the observer callback trips the ResizeObserver loop error.
     if (!this._ro) this._ro = new ResizeObserver(() => requestAnimationFrame(() => this._render()));
     this._ro.observe(this);
+    window.addEventListener('pointerdown', this._away, true);
   }
 
   disconnectedCallback() {
     if (this._ro) this._ro.disconnect();
+    window.removeEventListener('pointerdown', this._away, true);
+    this._at = null;
+    this._row = null;
+  }
+
+  _locate(e) {
+    const card = this.shadowRoot.querySelector('ha-card');
+    const b = card.getBoundingClientRect();
+    return { x: e.clientX - b.left - card.clientLeft, y: e.clientY - b.top - card.clientTop };
+  }
+
+  // The hour row under a point of the card, by its time on the column the point is in.
+  _hit(at) {
+    const card = this.shadowRoot.querySelector('ha-card');
+    const chart = card.querySelector('.chart');
+    const g = this._geo;
+    if (!chart || !g) return null;
+    const b = card.getBoundingClientRect();
+    const c = chart.getBoundingClientRect();
+    const x = at.x - (c.left - b.left - card.clientLeft);
+    const y = at.y - (c.top - b.top - card.clientTop);
+    if (y < 0 || y >= c.height) return null;
+    const i = g.cx.findIndex((l, k) => x >= l && x < l + g.cw[k]);
+    if (i < 0) return null;
+    // The level graph spans the full column, the panels below sit inside PAD.
+    const pad = y < LEVEL_H ? 0 : PAD;
+    const t = g.starts[i] + ((x - g.cx[i] - pad) / (g.cw[i] - 2 * pad)) * (g.ends[i] - g.starts[i]);
+    const u = Math.min(Math.max(t, g.starts[i]), g.ends[i] - 1);
+    return g.rows.find((r) => r.i === i && u >= r.t && u < r.t + H) || null;
+  }
+
+  _point(at) {
+    const card = this.shadowRoot.querySelector('ha-card');
+    const tip = card.querySelector('.tip');
+    const r = at && tip ? this._hit(at) : null;
+    this._at = r ? at : null;
+    this._row = r ? r.t : null;
+    for (const gd of card.querySelectorAll('.gd')) {
+      const [a, b] = !r ? [0, 0] : gd.dataset.k === 'x' ? [r.x0, r.x1] : [r.p0, r.p1];
+      gd.setAttribute('x', r1(a));
+      gd.setAttribute('width', r1(b - a));
+    }
+    if (!tip) return;
+    tip.hidden = !r;
+    if (!r) return;
+    tip.innerHTML = this._tip(r);
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const left = at.x + 12 + tw <= card.clientWidth ? at.x + 12 : at.x - 12 - tw;
+    const top = at.y + 16 + th <= card.clientHeight ? at.y + 16 : at.y - 16 - th;
+    tip.style.left = `${Math.max(0, Math.min(card.clientWidth - tw, left))}px`;
+    tip.style.top = `${Math.max(0, Math.min(card.clientHeight - th, top))}px`;
+  }
+
+  _tip(r) {
+    const { rows, tz } = this._geo;
+    const st = STATE_TEXT[r.state];
+    const facts = [!r.plan ? 'measured' : num(r.price) === null && num(r.grid_in_house_kwh) === null && num(r.grid_in_charge_kwh) === null ? 'estimated' : 'planned', num(r.price) !== null && `${eur(r.price, 3)}/kWh`].filter(Boolean);
+    let s = st ? `<div class="hd">${st[0].toUpperCase()}${st.slice(1)}</div>` : '';
+    s += `<div><b>${when(r.t, r.t + H, tz)}</b> <span class="k">· ${facts.join(' · ')}</span></div>`;
+    const w = r.why;
+    if (w && w.kind && num(w.keep_eur) !== null && num(w.use_eur) !== null) {
+      const kind = w.kind;
+      const f = w.kept_for || {};
+      const kept = kind === 'hold' || kind === 'charge';
+      const later = [kind === 'charge' ? 'Worth later' : !kept && f.kind === 'refill' ? 'Refill later' : 'Keep for later', w.keep_eur];
+      const now = [{ export: 'Sell now', charge: 'Costs now' }[kind] || 'Use for the house now', w.use_eur];
+      const mx = Math.max(w.keep_eur, w.use_eur) * 1.05;
+      const opt = ([label, v], win) =>
+        `<div class="opt${win ? ' win' : ''}"><i>${win ? '✓' : ''}</i><span class="ol">${label}</span><span class="tr"><b style="width:${mx > 0 ? r1(Math.max(0, Math.min(100, (v / mx) * 100))) : 0}%"></b></span><span class="v">${eur(v, 3)}</span></div>`;
+      s += `<div class="k per">per stored kWh</div><div class="dec">${opt(kept ? later : now, true)}${opt(kept ? now : later, false)}</div>`;
+      const a = Date.parse(f.start);
+      const b = Date.parse(f.end);
+      const what = { export: 'export', house: 'house use' }[f.kind];
+      const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
+      const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
+      if (f.kind === 'refill' && when_) s += `<div class="note">${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.</div>`;
+      else if (target) s += `<div class="note">${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.</div>`;
+    }
+    const use = num(r.use_kwh);
+    if (use === null) return s;
+    const gi = num(r.grid_in_house_kwh);
+    const bh = num(r.batt_house_kwh);
+    const grid = gi === null ? null : Math.min(Math.max(gi, 0), use);
+    const batt = grid === null || bh === null ? null : Math.min(Math.max(bh, 0), use - grid);
+    const sun = batt === null ? null : Math.min(Math.max(use - grid - batt, 0), num(r.solar_kwh) ?? Infinity);
+    const prev = rows.find((x) => x.t === r.t - H);
+    const s0 = prev ? num(prev.soc) : null;
+    const s1 = num(r.soc);
+    const line = [
+      grid !== null && `${grid.toFixed(2)} grid`,
+      batt !== null && `${batt.toFixed(2)} battery`,
+      sun !== null && `${sun.toFixed(2)} sun`,
+      s1 !== null && `battery ${s0 === null ? '' : `${s0.toFixed(0)}→`}${s1.toFixed(0)}%`,
+      num(r.grid_in_charge_kwh) > 0.05 && `charged ${r.grid_in_charge_kwh.toFixed(2)}`,
+      num(r.grid_out_kwh) > 0.05 && `exported ${r.grid_out_kwh.toFixed(2)}`,
+    ].filter(Boolean);
+    const seg = [[grid, 'g'], [batt, 'b'], [sun, 's']].filter(([v]) => v > 0);
+    const bar = grid !== null && use > 0 ? `<div class="split">${seg.map(([v, c]) => `<i class="${c}" style="width:${r1((v / use) * 100)}%"></i>`).join('')}</div>` : '';
+    return `${s}<div class="hu"><span class="k">House ${use.toFixed(2)} kWh</span>${bar}${line.length ? `<span class="k">${line.join(' · ')}</span>` : ''}</div>`;
   }
 
   getCardSize() {
@@ -261,6 +411,7 @@ class SmartgridPowerCard extends HTMLElement {
     }
     const sw = refocus && card.querySelector('[role=switch]');
     if (sw) sw.focus();
+    if (this._at) this._point(this._at);
   }
 
   _swState() {
@@ -308,16 +459,18 @@ class SmartgridPowerCard extends HTMLElement {
     }
     const nowCol = colOf(now);
     const geo = { dates, today, cx, cw, W, tz, X };
+    this._geo = { rows, cx, cw, starts, ends, tz };
 
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
       this._battery(a.battery, sw, off) +
-      `<div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
+      `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
       this._headers(days, fr, geo) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
+      '</div>' +
       LEGEND +
-      '</div>'
+      '<div class="tip" hidden></div></div>'
     );
   }
 
@@ -395,7 +548,7 @@ class SmartgridPowerCard extends HTMLElement {
         s += `<text x="${r1(bx + 15)}" y="${r1(base)}" font-size="11" text-anchor="middle" class="ink">${r.soc.toFixed(0)}%</text>`;
       }
     }
-    return s + '</svg>';
+    return s + `<rect class="gd" data-k="x" y="0" width="0" height="${LEVEL_H}"/></svg>`;
   }
 
   _cheap(c, tz) {
@@ -443,12 +596,13 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const py = (p) => (pmax > pmin ? 14 + ((pmax - p) / (pmax - pmin)) * 27 : 28);
     const kh = (v) => Math.min(Math.max(0, v), CUT) * KWH_PX;
 
-    // House use and sun as stepped outlines behind the bars, one path per run of hours.
-    for (const [key, cls] of [['use_kwh', 'uo'], ['solar_kwh', 'so']]) {
+    // House use and sun as stepped outlines, one path per run of hours: sun behind the bars, use over them.
+    const outline = (key, cls) => {
+      let o = '';
       let d = '';
       let prev = null;
       const flush = () => {
-        if (d) s += `<path d="${d} V${Z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
+        if (d) o += `<path d="${d} V${Z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
         d = '';
       };
       for (const r of rows) {
@@ -466,7 +620,9 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         prev = r;
       }
       flush();
-    }
+      return o;
+    };
+    s += outline('solar_kwh', 'so');
 
     const bars = [];
     for (const r of rows) {
@@ -476,19 +632,25 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       if (house === null && charge === null && out === null) continue;
       const w = Math.max(1, (r.p1 - r.p0) * 0.72);
       const bx = r.p0 + (r.p1 - r.p0 - w) / 2;
-      const inn = Math.max(0, house || 0) + Math.max(0, charge || 0);
+      const nw = w * 0.65;
+      const nx = bx + (w - nw) / 2;
+      const fed = Math.max(0, house || 0) + Math.max(0, num(r.batt_house_kwh) || 0);
+      const inn = fed + Math.max(0, charge || 0);
       const hh = kh(house || 0);
+      const hb = kh(fed);
       const up = kh(inn);
       const dn = kh(out || 0);
       let b = '';
       if (hh > 0) b += `<rect x="${r1(bx)}" y="${r1(Z - hh)}" width="${r1(w)}" height="${r1(hh)}" class="gh"/>`;
-      if (up > hh) b += `<rect x="${r1(bx)}" y="${r1(Z - up)}" width="${r1(w)}" height="${r1(up - hh)}" class="gc"/>`;
-      if (inn > CUT) b += cuts(bx, Z - up + 2.5, w);
+      if (hb > hh) b += `<rect x="${r1(bx)}" y="${r1(Z - hb)}" width="${r1(w)}" height="${r1(hb - hh)}" class="gb"/>`;
+      if (up > hb) b += `<rect x="${r1(nx)}" y="${r1(Z - up)}" width="${r1(nw)}" height="${r1(up - hb)}" class="gc"/>`;
+      if (inn > CUT) b += up > hb ? cuts(nx, Z - up + 2.5, nw) : cuts(bx, Z - up + 2.5, w);
       if (dn > 0) b += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
       if ((out || 0) > CUT) b += cuts(bx, Z + dn - 6.9, w);
       if (b) s += r.plan ? `<g opacity=".5">${b}</g>` : b;
       if (up + dn > 0) bars.push({ x: bx, y: Z - up, w, h: up + dn });
     }
+    s += outline('use_kwh', 'uo');
 
     let prev = null;
     for (const r of rows) {
@@ -521,7 +683,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         s += lab(top, py(top.price) - 5);
         if (bot.price < top.price) s += lab(bot, py(bot.price) + 14);
       }
-      s += `<text x="${r1(lo)}" y="122" font-size="11" class="ink">${new Date(localTime(date, 12, tz)).toLocaleDateString('en', { weekday: 'short', timeZone: tz || undefined })}</text>`;
+      s += `<text x="${r1(lo)}" y="122" font-size="11" class="ink">${weekday(localTime(date, 12, tz), tz)}</text>`;
       for (const hr of [6, 12, 18]) {
         const x = X(i, localTime(date, hr, tz), PAD);
         // Room for the weekday name; on narrow columns the 06 tick would run into it.
@@ -564,7 +726,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       }
     }
     if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="4" x2="${r1(nowX)}" y2="${Z + CUT * KWH_PX}" class="now"/>`;
-    return s + '</svg>';
+    return s + `<rect class="gd" data-k="p" y="0" width="0" height="${PANEL_H - 14}"/></svg>`;
   }
 }
 

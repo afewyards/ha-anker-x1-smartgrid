@@ -568,6 +568,12 @@ class TestHourlySeries:
         starts = [r["start"] for r in self._past(rows)]
         assert starts[0] == "2026-11-09T00:00:00+01:00"
 
+    def test_hour_rows_carry_battery_to_house(self):
+        assert self._past(_phase(T0, 60, 50, 47.5, 500, 0.3, load=500), _end(H1, 47.5))[0]["batt_house_kwh"] == 0.5
+        assert self._past(_phase(T0, 60, 50, 40, 3_000, 0.3, load=500), _end(H1, 40))[0]["batt_house_kwh"] == 0.0
+        (row,) = hourly_series([], [_slot(NOW, 40, 0.3, load=0.4, house=0.3)], AMS, NOW)
+        assert row["batt_house_kwh"] == 0.3
+
     def test_estimated_rows_carry_use_and_solar_only(self):
         (row,) = hourly_series([], [_slot(NOW, 40, 0.3, load=1.0, pv=0.5, house=1.0, est=True)], AMS, NOW)
         assert (row["price"], row["soc"], row["state"]) == (None, None, "idle")
