@@ -355,16 +355,18 @@ def merge_days(
     return out
 
 
-def _hour_key(ts: datetime, tz: tzinfo) -> datetime:
-    """The start in UTC of the local clock hour holding ``ts``."""
+def _hour_key(ts: datetime, tz: tzinfo, slot_min: int = 60) -> datetime:
+    """The start in UTC of the local ``slot_min``-minute clock slot holding ``ts``."""
     loc = ts.astimezone(tz)
-    return ts.astimezone(UTC) - timedelta(minutes=loc.minute, seconds=loc.second, microseconds=loc.microsecond)
+    return ts.astimezone(UTC) - timedelta(
+        minutes=loc.minute % slot_min, seconds=loc.second, microseconds=loc.microsecond
+    )
 
 
-def _hour(hours: dict, ts: datetime, tz: tzinfo) -> dict:
-    """The bucket of the local clock hour holding ``ts``, keyed by its start in UTC."""
+def _hour(hours: dict, ts: datetime, tz: tzinfo, slot_min: int = 60) -> dict:
+    """The bucket of the local clock slot holding ``ts``, keyed by its start in UTC."""
     return hours.setdefault(
-        _hour_key(ts, tz),
+        _hour_key(ts, tz, slot_min),
         {"price_eur_h": 0.0, "price_h": 0.0, "soc": None, "use_kwh": 0.0, "solar_kwh": 0.0, "held_h": 0.0, "grid": None}
         | dict.fromkeys(_ACTIONS, 0.0),
     )
@@ -376,8 +378,9 @@ def hourly_series(
     tz: tzinfo,
     now: datetime,
     delivered_at: Callable[[datetime], float] = _nothing_delivered,
+    slot_min: int = 60,
 ) -> list[dict]:
-    """One row per local hour from yesterday 00:00 local to the end of the horizon.
+    """One row per local hour (or ``slot_min`` slot) from yesterday 00:00 local to the end of the horizon.
 
     Past hours come from samples, the rest from the plan from ``now`` (cut
     as in :func:`roll_plan`); the running hour merges both. ``soc`` is the level at the
@@ -403,7 +406,7 @@ def hourly_series(
     hours: dict[datetime, dict] = {}
     level = None
     for i, (ts, row) in enumerate(pts):
-        b = _hour(hours, ts, tz)
+        b = _hour(hours, ts, tz, slot_min)
         if row.get("soc") is not None:
             b["soc"] = level = float(row["soc"])
         dt_s = (pts[i + 1][0] - ts).total_seconds() if i + 1 < len(pts) else 0.0
@@ -432,7 +435,7 @@ def hourly_series(
             b["export" if float(row.get("p1_w") or 0.0) < 0 else "house"] += batt * h / 1000.0
 
     for start, row, h, left in _ahead(horizon, now):
-        b = _hour(hours, start, tz)
+        b = _hour(hours, start, tz, slot_min)
         load = float(row.get("load_kwh") or 0.0) * left
         pv = float(row.get("pv_kwh") or 0.0) * left
         b["use_kwh"] += load
@@ -461,7 +464,7 @@ def hourly_series(
     for key in sorted(hours):
         b = hours[key]
         moved = max(_ACTIONS, key=b.__getitem__)
-        state = moved if b[moved] > _MOVED_KWH else "hold" if b["held_h"] > 0.5 else "idle"
+        state = moved if b[moved] > _MOVED_KWH else "hold" if b["held_h"] > slot_min / 120 else "idle"
         out.append(
             {
                 "start": key.astimezone(tz).isoformat(),
@@ -471,7 +474,7 @@ def hourly_series(
                 "use_kwh": round(b["use_kwh"], 3),
                 "solar_kwh": round(b["solar_kwh"], 3),
                 "batt_house_kwh": round(b["house"], 2),
-                "plan": key + timedelta(hours=1) > now,
+                "plan": key + timedelta(minutes=slot_min) > now,
             }
             | dict(zip(_GRID_KEYS, [round(v, 2) for v in b["grid"]] if b["grid"] else (None,) * 3, strict=True))
         )

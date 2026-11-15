@@ -628,6 +628,35 @@ class TestHourlySeries:
         assert row["grid_in_house_kwh"] == pytest.approx(0.1 + 0.3)
 
 
+class TestSlotSeries:
+    KEYS = ("use_kwh", "solar_kwh", "batt_house_kwh", "grid_in_house_kwh", "grid_in_charge_kwh", "grid_out_kwh")
+
+    def test_slot_series_sums_to_hour_rows(self):
+        rows = _phase(T0, 60, 50, 60, -2_000, 0.20, pv=500, load=700) + _phase(
+            H1, 60, 60, 50, 1_500, 0.40, load=900, p1=-300
+        )
+        horizon = [
+            _slot(NOW + timedelta(minutes=15 * k), 70 - k, 0.3, load=0.25, pv=0.1, grid=0.5, house=0.1, mode="grid")
+            for k in range(8)
+        ]
+        h = hourly_series(rows, horizon, AMS, NOW)
+        q = hourly_series(rows, horizon, AMS, NOW, slot_min=15)
+        assert len(q) == 4 * len(h)
+        for i, hour in enumerate(h):
+            slots = q[4 * i : 4 * i + 4]
+            for key in self.KEYS:
+                assert sum(s[key] or 0.0 for s in slots) == pytest.approx(hour[key] or 0.0, abs=0.02)
+            assert slots[-1]["soc"] == hour["soc"]
+
+    def test_slot_series_dst_fallback_keeps_both_hours(self):
+        now = datetime(2026, 10, 25, 14, 0, tzinfo=UTC)  # 15:00 local, after the fall-back
+        rows = _phase(datetime(2026, 10, 24, 22, 0, tzinfo=UTC), 16 * 60, 50, 50, 0.0, 0.3, load=100)
+        horizon = [_slot(now + timedelta(minutes=15 * k), 50, 0.3, load=0.1) for k in range(40)]
+        q = hourly_series(rows + _end(now, 50), horizon, AMS, now, slot_min=15)
+        day = [r["start"] for r in q if r["start"].startswith("2026-10-25")]
+        assert len(day) == len(set(day)) == 100
+
+
 @pytest.mark.parametrize(
     ("recorded", "exporting", "batt", "p1", "state"),
     [
