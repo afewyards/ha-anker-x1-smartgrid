@@ -11,7 +11,7 @@ import logging
 import math
 from collections import deque
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -366,6 +366,7 @@ class Controller:
         self._card_rows: list[dict] | None = None
         self._card_failed = False
         self._card_args: tuple | None = None
+        self._card_rows_end: str | None = None
         self._snapshot_day: str | None = None
         self._snapshot_failed = False
         self._why_failed = False
@@ -2625,6 +2626,7 @@ class Controller:
                 rows, self._card_rows = self._card_rows, None
                 kept = self.last_status.get("hold_stored_value_eur_per_kwh")
                 self._card_args = rebuild()
+                self._card_rows_end = rows[-1]["ts"] if rows else None
                 self.power_card = await self._hass.async_add_executor_job(
                     self._build_power_card_sync,
                     rows,
@@ -2680,7 +2682,7 @@ class Controller:
             self._snapshot_failed = True
 
     async def _purge_plan_snapshots(self, now) -> None:
-        cutoff = (dt_util.as_local(now).date() - timedelta(days=3)).isoformat()
+        cutoff = (dt_util.as_local(now).date() - timedelta(days=2)).isoformat()
         try:
             await self._hass.async_add_executor_job(self._recorder.purge_plan_snapshots_older_than, cutoff)
         except Exception:
@@ -2695,13 +2697,16 @@ class Controller:
         horizon, _export_price_at, delivered_at = args
         tz = dt_util.DEFAULT_TIME_ZONE
         now = dt_util.parse_datetime(card["built_at"])
+        end = dt_util.parse_datetime(self._card_rows_end) if self._card_rows_end else None
         status = self.last_status
 
         def _build() -> dict:
+            start = datetime.combine(dt_util.as_local(now).date() - timedelta(days=1), time(), tzinfo=tz)
+            # samples.ts is compared as UTC text.
             rows = [
                 r
-                for r in self._recorder.read_feature_rows((now - timedelta(days=2)).isoformat())
-                if (ts := dt_util.parse_datetime(r["ts"])) is not None and ts <= now
+                for r in self._recorder.read_feature_rows(start.astimezone(UTC).isoformat())
+                if (ts := dt_util.parse_datetime(r["ts"])) is not None and (ts <= end if end else ts < now)
             ]
             since = (dt_util.as_local(now).date() - timedelta(days=2)).isoformat()
             snaps = [(day, json.loads(rj)) for day, _ts, rj in self._recorder.read_plan_snapshots(since)]

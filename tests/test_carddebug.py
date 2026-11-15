@@ -59,6 +59,10 @@ def test_slot_minutes():
     assert carddebug.slot_minutes(_horizon(60)) == 60
     assert carddebug.slot_minutes(None) == 60
     assert carddebug.slot_minutes(_horizon(15)[:1]) == 60
+    assert carddebug.slot_minutes(_horizon(45)) == 60
+    assert carddebug.slot_minutes(_horizon(120, hours=12)) == 60
+    rows = _horizon(15)
+    assert carddebug.slot_minutes([rows[0], rows[0], *rows[1:]]) == 60
 
 
 def test_snapshot_rows_skip_estimated_and_past():

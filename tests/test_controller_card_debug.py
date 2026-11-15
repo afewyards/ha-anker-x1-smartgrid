@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 from tests.helpers import make_controller
+from tests.test_carddebug import _horizon
 from tests.test_power_card_sensor import NOW, _inputs, _rebuild, _samples
 
 
-async def _ctrl(tmp_path):
+async def _ctrl(tmp_path, rows=None):
     ctrl, _act = make_controller()
     ctrl._recorder = DataRecorder(str(tmp_path / "t.db"))
-    ctrl._recorder.read_feature_rows = lambda since: _samples()
+    for row in _samples() if rows is None else rows:
+        ctrl._recorder.append(row)
     return ctrl
 
 
@@ -78,3 +82,41 @@ async def test_failing_snapshot_purge_does_not_raise(tmp_path):
 
     ctrl._recorder.purge_plan_snapshots_older_than = _boom
     await ctrl._purge_plan_snapshots(NOW)
+
+
+async def test_purge_keeps_today_and_the_two_days_before(tmp_path):
+    ctrl = await _ctrl(tmp_path, [])
+    today = dt_util.as_local(NOW).date()
+    days = [(today - timedelta(days=n)).isoformat() for n in (4, 3, 2, 1, 0)]
+    for day in days:
+        ctrl._recorder.write_plan_snapshot(day, NOW.isoformat(), "[]")
+    await ctrl._purge_plan_snapshots(NOW)
+    assert [day for day, _ts, _rows in ctrl._recorder.read_plan_snapshots("2000-01-01")] == days[2:]
+
+
+async def test_debug_reads_from_yesterday_local_midnight_after_fall_back(tmp_path, hass):
+    await hass.config.async_set_time_zone("Europe/Amsterdam")
+    ams = ZoneInfo("Europe/Amsterdam")
+    now = datetime(2026, 10, 25, 23, 30, tzinfo=ams).astimezone(UTC)
+    midnight = datetime(2026, 10, 24, tzinfo=ams)
+    t0 = midnight.astimezone(UTC)
+    rows = [s | {"ts": (t0 + timedelta(minutes=k)).isoformat()} for k, s in enumerate(_samples(49)[:2910])]
+    ctrl = await _ctrl(tmp_path, rows)
+    await ctrl._refresh_battery_margin(now)
+    await ctrl._publish_power_card(now, _inputs(48.0), "hold", False, _rebuild(_horizon(start=now)))
+    out = await ctrl.power_card_debug()
+    hour = next(h for h in ctrl.power_card["hours"] if h["start"] == midnight.isoformat())
+    mine = [s for s in out["slots"] if s["start"][:13] == "2026-10-24T00"]
+    assert len(mine) == 4 and hour["use_kwh"] == pytest.approx(0.4, abs=0.01)
+    for key in ("use_kwh", "solar_kwh", "batt_house_kwh"):
+        assert sum(s[key] for s in mine) == pytest.approx(hour[key], abs=0.02)
+
+
+async def test_debug_leaves_out_samples_newer_than_the_card(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+    await _tick(ctrl, NOW)
+    before = await ctrl.power_card_debug()
+    for ts in (NOW - timedelta(seconds=30), NOW):
+        ctrl._recorder.append(_samples()[0] | {"ts": ts.isoformat(), "soc": 99.0, "load_w": 5000.0})
+    assert (await ctrl.power_card_debug())["slots"] == before["slots"]
+

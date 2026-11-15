@@ -24,7 +24,8 @@ SNAPSHOT_KEYS = (
 
 def slot_minutes(horizon: list[dict] | None) -> int:
     real = [start for start, row, _h in _slots(horizon) if not row.get("estimated")]
-    return round((real[1] - real[0]).total_seconds() / 60) if len(real) > 1 else 60
+    width = round((real[1] - real[0]).total_seconds() / 60) if len(real) > 1 else 60
+    return width if 0 < width <= 60 and 60 % width == 0 else 60
 
 
 def snapshot_rows(horizon: list[dict] | None, now: datetime) -> list[dict]:
