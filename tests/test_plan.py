@@ -1578,6 +1578,15 @@ class TestEstimatedTail:
         assert socs[2] >= const.FIRMWARE_SOC_FLOOR
         assert all(a >= b for a, b in itertools.pairwise(socs))  # monotone non-increasing
 
+    def test_no_self_discharge_booked_at_firmware_floor(self):
+        """A pack pinned at the firmware floor discharges nothing: the deficit is the grid's."""
+        cfg = Config(capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0, max_charge_w=3000.0, eta_charge=1.0)
+        intervals = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=500.0, dt_h=1.0) for i in range(2)]
+        out = plan.build_plan_horizon(_slots(2), intervals, [], 5.0, BASE + timedelta(hours=2), cfg)
+        assert [r["mode"] for r in out] == ["idle", "idle"]
+        assert [r["soc"] for r in out] == [5.0, 5.0]
+        assert [r["self_discharge_kwh"] for r in out] == [0.0, 0.0]
+
     def test_est_reserve_soc_shows_need_line(self):
         """terminal_need_kwh=2.0 at 20 kWh capacity -> est reserve_soc == firmware floor (5) + 10 = 15.0."""
         cfg = Config(capacity_kwh=20.0, soc_target=100.0)

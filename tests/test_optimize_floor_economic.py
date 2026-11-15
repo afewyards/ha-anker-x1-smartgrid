@@ -139,6 +139,7 @@ def test_no_morning_force_charge_rides_to_floor():
     assert schedule[trough_idx] > 0.0, "expected a grid charge at the cheap trough"
 
 
+@pytest.mark.usefixtures("uniform_discharge")
 def test_below_floor_drain_priced_as_load_import():
     """All-expensive drain crossing the floor: served by priced direct import.
 

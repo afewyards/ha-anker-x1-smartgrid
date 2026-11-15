@@ -3,12 +3,12 @@
 Integrates `expected_passive_ΔSoC − measured_ΔSoC` since the local-day reset: how far the REAL
 pack fell short of what the raw pv/load forecast implied a passive battery would do. Positive =
 running BELOW the morning plan; the hedge debits the forward SoC curve by a fraction so the DP
-books the cheapest recovery. Measured SoC is ground truth, so a deliberate grid-charge recovery
-(SoC ↑) yields a negative per-step and shrinks the accumulator next tick — the loop
-self-stabilizes. `expected_soc_delta` is reality-anchored (÷eta_discharge on a deficit),
+books the cheapest recovery. Measured SoC is ground truth, but the caller adds back the grid
+charge the ledger booked, so a deliberate recovery charge does not shrink the accumulator; only
+decay and later forecast steps do. `expected_soc_delta` is reality-anchored (÷eta_discharge on a deficit),
 deliberately ≠ the DP's own 1:1 load discharge. The caller passes deliberate battery→grid export
-(duration-scaled) for add-back, GATES the step at the SoC rails / dt anomalies, and supplies the
-forecast via `forecast_rate_at` over the SAME intervals the DP consumes.
+minus booked grid charge (both duration-scaled) for add-back, GATES the step at the SoC rails / dt
+anomalies, and supplies the forecast via `forecast_rate_at` over the SAME intervals the DP consumes.
 """
 
 from __future__ import annotations

@@ -697,6 +697,7 @@ def test_held_step_expects_a_flat_pack(monkeypatch, holding, soc_now, drifts):
     ctrl._soc_drift_day = ctrl_mod.dt_util.as_local(T).date().isoformat()
     ctrl._soc_drift_last_soc_pct = 50.0
     ctrl._soc_drift_last_update = T - timedelta(minutes=1)
+    ctrl._soc_drift_last_grid_charge_kwh = ctrl.today_grid_charge_kwh
     ctrl._soc_drift_last_intervals = [ForecastInterval(T - timedelta(minutes=30), 0.0, 1000.0, 1.0)]
     ctrl.hold_state = ExportState(engaged=holding, state_since=T - timedelta(hours=1))
     # 600 W for one minute = 0.01 kWh = 0.1 % of 10 kWh: a held pack that really

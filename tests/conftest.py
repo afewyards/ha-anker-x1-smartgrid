@@ -40,3 +40,9 @@ def recorder_db(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     yield rec
     rec.close()
+
+
+@pytest.fixture
+def uniform_discharge(monkeypatch):
+    """No loss in the 5-10% band, for goldens hand-derived at one discharge efficiency."""
+    monkeypatch.setattr(const, "DISCHARGE_DERATE_5_10", 1.0)

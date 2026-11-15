@@ -399,6 +399,76 @@ async def test_grid_recovery_shrinks_drift(monkeypatch):
     assert ctrl._soc_drift_kwh < drift_before
 
 
+@pytest.mark.asyncio
+async def test_booked_grid_charge_is_not_drift(monkeypatch):
+    """A SoC rise explained by ledger-booked grid charge leaves the accumulator on the forecast step only."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg())
+    ivs = [ForecastInterval(BASE, 3000.0, 500.0, 3.0)]
+
+    for soc_str, t in [("60.0", BASE), ("60.0", BASE + timedelta(minutes=5))]:
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda _t=t: _t)
+        _seed_inputs(hass, soc=soc_str, now=t)
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+        await ctrl.tick()
+    drift_before = ctrl._soc_drift_kwh
+
+    # One 60-s ledger booking, extrapolated over the 5-min step → 1.0 kWh.
+    ctrl.today_grid_charge_kwh = 0.2
+    t3 = BASE + timedelta(minutes=10)
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: t3)
+    _seed_inputs(hass, soc="70.0", now=t3)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    # measured +1.0 kWh fully booked as grid charge → step = expected (~+0.208), not -0.79
+    assert ctrl._soc_drift_kwh == pytest.approx(drift_before + 2500.0 * (5 / 60) / 1000.0, abs=0.01)
+
+
+async def _two_ticks(monkeypatch, hass, ctrl, ivs, soc_to, minutes, booked_ac_kwh, prev_state):
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    _seed_inputs(hass, soc="60.0", now=BASE)
+    await ctrl.tick()
+    ctrl.plan = PlanState(prev_state, BASE, ())
+    ctrl.today_grid_charge_kwh += booked_ac_kwh
+    t2 = BASE + timedelta(minutes=minutes)
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: t2)
+    _seed_inputs(hass, soc=soc_to, now=t2)
+    await ctrl.tick()
+
+
+@pytest.mark.asyncio
+async def test_stalled_step_scales_booked_grid_charge(monkeypatch):
+    """The ledger books 60 s per tick: a 5-min step at 3 kW carries one 0.05 kWh booking
+    but measures +0.25 kWh. The add-back is extrapolated like the export field."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg())
+    ivs = [ForecastInterval(BASE, 0.0, 0.0, 2.0)]  # expected 0
+    await _two_ticks(monkeypatch, hass, ctrl, ivs, "62.5", 5, 0.05, ControllerState.FORCING)
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=0.005)
+
+
+@pytest.mark.asyncio
+async def test_forcing_step_expects_no_house_drain(monkeypatch):
+    """While FORCING the grid serves the house deficit: the pack gains only the booked charge."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg())
+    ivs = [ForecastInterval(BASE, 0.0, 3000.0, 2.0)]  # a passive pack would drain 0.05 kWh/min
+    await _two_ticks(monkeypatch, hass, ctrl, ivs, "60.5", 1, 0.05, ControllerState.FORCING)
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=0.005)
+
+
+@pytest.mark.asyncio
+async def test_forcing_step_keeps_pv_surplus_expectation(monkeypatch):
+    """PV surplus still reaches the pack while FORCING: a flat SoC beside it is still drift."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg())
+    ivs = [ForecastInterval(BASE, 3500.0, 500.0, 2.0)]  # +0.05 kWh/min of surplus
+    await _two_ticks(monkeypatch, hass, ctrl, ivs, "60.0", 1, 0.0, ControllerState.FORCING)
+    assert ctrl._soc_drift_kwh == pytest.approx(0.05, abs=0.005)
+
+
 # ---------------------------------------------------------------------------
 # 5. Export add-back: neutral case + real-shortfall case; re-zero assertion
 # ---------------------------------------------------------------------------
@@ -846,3 +916,76 @@ async def test_idle_drain_absorbs_standby_debit_from_drift(monkeypatch):
 
     # Idle-modeled expectation matches the real drain exactly -> no spurious drift.
     assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=0.005)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("soc_from", "soc_to"),
+    [
+        (9.0, 9.0 - 1.5 / const.DISCHARGE_DERATE_5_10),  # bottom band: the gauge falls 1/f faster
+        (60.0, 58.5),
+    ],
+)
+async def test_bottom_band_drain_is_not_drift(monkeypatch, soc_from, soc_to):
+    """An on-model discharge step drifts ~0 whether or not it sits in the bottom band."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg(soc_floor=5.0))  # rail gate at 6%, not 11%
+    ivs = [ForecastInterval(BASE, 0.0, 600.0, 2.0)]  # 600 W * 15 min = 1.5% of 10 kWh at eta 1
+
+    for soc, t in [(soc_from, BASE), (soc_to, BASE + timedelta(minutes=15))]:
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda _t=t: _t)
+        _seed_inputs(hass, soc=str(soc), now=t)
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+        await ctrl.tick()
+
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=0.005)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("soc_from", "soc_to"),
+    [
+        (9.0, 9.0 - 0.5 / const.DISCHARGE_DERATE_5_10),  # in the band the gauge falls 1/f faster
+        (60.0, 59.5),
+    ],
+)
+async def test_on_model_export_step_is_not_drift_in_band(monkeypatch, soc_from, soc_to):
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg(soc_floor=5.0))
+    ivs = [ForecastInterval(BASE, 0.0, 0.0, 2.0)]
+
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    _seed_inputs(hass, soc=str(soc_from), now=BASE)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    ctrl._soc_drift_last_export_kwh_dc = 0.05  # 0.5% of 10 kWh
+    t2 = BASE + timedelta(minutes=1)
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: t2)
+    _seed_inputs(hass, soc=str(soc_to), now=t2)
+    monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+    await ctrl.tick()
+
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0, abs=1e-4)
+
+
+@pytest.mark.asyncio
+async def test_restored_anchor_without_grid_charge_marker_is_gated(monkeypatch):
+    """The charge marker is in-memory only: without it a booked charge could read as drift."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg())
+    ctrl._soc_drift_last_soc_pct = 60.0
+    ctrl._soc_drift_last_update = BASE - timedelta(minutes=1)
+    ctrl._soc_drift_last_intervals = [ForecastInterval(BASE, 5000.0, 100.0, 3.0)]
+    ctrl._soc_drift_day = ctrl_mod.dt_util.as_local(BASE).date().isoformat()
+    assert ctrl._soc_drift_last_grid_charge_kwh is None
+
+    monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
+    _seed_inputs(hass, soc="60.0", now=BASE)
+    monkeypatch.setattr(
+        ctrl_mod, "compute_decision", _make_stub(intervals=[ForecastInterval(BASE, 5000.0, 100.0, 3.0)])
+    )
+    await ctrl.tick()
+
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0)
+    assert ctrl._soc_drift_last_grid_charge_kwh is not None

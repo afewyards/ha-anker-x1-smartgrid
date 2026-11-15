@@ -69,7 +69,11 @@ from .regret import (
     _apply_solar_load,
     _eta_charge_at,
     _eta_discharge_at,
+    _load_eta_d,
     _max_grid_dc,
+    band_shortfall_dc,
+    band_top_kwh,
+    grid_floor_kwh,
 )
 
 
@@ -245,7 +249,7 @@ def overnight_terminal_segments(
 
     # Cap Σ dc_h at the hard energy ceiling, trimming lowest-value segments
     # first (partial trim of the boundary segment allowed).
-    cap = max(0.0, cfg.capacity_kwh - cfg.firmware_floor_kwh)
+    cap = max(0.0, cfg.capacity_kwh - grid_floor_kwh(cfg.firmware_floor_kwh))
     total_dc = sum(seg[0] for seg in raw_segments)
     if total_dc > cap:
         excess = total_dc - cap
@@ -781,8 +785,11 @@ def optimize_grid(
     # physical wall the pack sags to.  cfg.soc_floor is a pure DECISION margin
     # above this (export floor + terminal water-value credit anchor); it no
     # longer forces a fake physical clamp.  Byte-identical to floor_kwh when
-    # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default).
-    firmware_floor_kwh = cfg.firmware_floor_kwh
+    # cfg.soc_floor == const.FIRMWARE_SOC_FLOOR (the default) on an on-grid floor.
+    # Snapped up onto the SoC grid (5% of 20.48 kWh: 1.024 -> 1.05) so the floor
+    # the import is measured against is the floor the state bins to.
+    firmware_floor_kwh = grid_floor_kwh(cfg.firmware_floor_kwh)
+    band_top = band_top_kwh(cfg)
     target_kwh = cfg.target_kwh
     eta = cfg.eta_charge_safe()
 
@@ -839,7 +846,9 @@ def optimize_grid(
     # ------------------------------------------------------------------
     # dp[b] = minimum cost to reach SoC bin b at the current hour boundary.
     dp: list[float] = [INF] * n_states
-    init_b = to_bin(cfg.pct_to_kwh(soc_start))
+    soc0 = cfg.pct_to_kwh(soc_start)
+    # A start at the real floor must not bin below the snapped one.
+    init_b = to_bin(firmware_floor_kwh if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh else soc0)
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_credit_eur, export_dc_kwh,
@@ -860,6 +869,7 @@ def optimize_grid(
         par_h: list[tuple[int, float, float, float, float, float, float] | None] = [None] * n_states
         price_h = price[h]
         net = window_pv[h] - window_load[h]
+        eta_load = _load_eta_d(net, cfg, dt_h, eta_curve)
 
         # Hoist the feed_in lookup and discount product out of the per-state
         # loop — both are invariant within a given hour h.
@@ -972,6 +982,14 @@ def optimize_grid(
                 # for every step and new_soc == soc_after + g_dc (floor never
                 # binds => byte parity preserved).
                 n_steps = round(max_grid_dc / bin_kwh)
+                # Bottom-band shortfall of the load leg, bought from the meter. Measured to the
+                # binned state, so a drain too small to move it books none (no gain in buying a
+                # bin to park above the band); the charge leaves it alone, a held pack has none.
+                band_kwh = (
+                    0.0
+                    if held_kwh
+                    else band_shortfall_dc(soc, from_bin(to_bin(soc_pass)), firmware_floor_kwh, band_top) * eta_load
+                )
 
                 for step in range(n_steps + 1):
                     g_dc = step * bin_kwh
@@ -985,7 +1003,8 @@ def optimize_grid(
                     # occurs — below const.FIRMWARE_SOC_FLOOR — not below the
                     # soft cfg.soc_floor margin.  Zero whenever new_soc_pre >=
                     # firmware_floor_kwh.
-                    floor_import_cost = (held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre)) * price_h
+                    floor_import_kwh_step = held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre) + band_kwh
+                    floor_import_cost = floor_import_kwh_step * price_h
                     new_soc = max(new_soc_pre, firmware_floor_kwh)
                     new_b = to_bin(new_soc)
                     eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
@@ -1005,7 +1024,6 @@ def optimize_grid(
                         # backtracking can accumulate the exact values the DP used for routing,
                         # ensuring reported eur == best_cost exactly — even when hedge_drain_kwh
                         # sags a state below floor (MAJOR-1: no unhedged recompute in backtrack).
-                        floor_import_kwh_step = held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre)
                         par_h[new_b] = (b, g_ac, hour_credit, 0.0, floor_import_cost, floor_import_kwh_step, held_kwh)
 
             # Action class B: export discharge (e_dc > 0). Mutually exclusive with
@@ -1031,6 +1049,8 @@ def optimize_grid(
                     batt_dc_cap = batt_ac_headroom / eta_d if eta_d > 1e-9 else batt_ac_headroom
                     max_e_dc = min(export_headroom_dc, max_export_dc_h, batt_dc_cap)
                     n_exp_steps = round(max_e_dc / bin_kwh)
+                    soc_after_b = from_bin(to_bin(soc_after))
+                    band_load_kwh = band_shortfall_dc(soc, soc_after_b, firmware_floor_kwh, band_top) * eta_load
                     for exp_step in range(1, n_exp_steps + 1):  # start at 1: e_dc > 0
                         e_dc = exp_step * bin_kwh
                         if e_dc > max_e_dc + 1e-9:
@@ -1050,12 +1070,19 @@ def optimize_grid(
                         # floor_import_export is computed on the raw soc_after for
                         # this hour; it is 0 whenever export is admissible
                         # (export requires soc_after > export_floor_h >= floor).
-                        new_cost = cost - (export_revenue - degradation) - hour_credit + floor_import_export
+                        # Bottom band: the load leg's shortfall is bought, the export leg's is not sold.
+                        band_eur = (
+                            band_load_kwh * price_h
+                            + band_shortfall_dc(soc_after_b, from_bin(new_b), firmware_floor_kwh, band_top)
+                            * eta_d_step
+                            * ep_h
+                        )
+                        new_cost = cost - (export_revenue - degradation) - hour_credit + floor_import_export + band_eur
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
-                            # Export requires soc_after > export_floor_h >= floor, so
-                            # floor-import is always 0 for export transitions.
-                            par_h[new_b] = (b, 0.0, hour_credit, e_dc, 0.0, 0.0, 0.0)
+                            # Export requires soc_after > export_floor_h >= floor, so the
+                            # floor import is 0 here; the fi slots carry the band shortfall.
+                            par_h[new_b] = (b, 0.0, hour_credit, e_dc, band_eur, band_load_kwh, 0.0)
 
         parent.append(par_h)
         dp = dp_next
@@ -1074,6 +1101,7 @@ def optimize_grid(
         from_bin=from_bin,
         n_states=n_states,
         terminal_segments=terminal_segments,
+        band_top_kwh=band_top,
     )
 
     if best_end_b == -1:

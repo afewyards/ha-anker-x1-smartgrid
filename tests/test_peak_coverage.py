@@ -279,6 +279,7 @@ class TestFlatExpensiveRidesFloor:
             f"Non-zero entry in schedule: {result['schedule']}"
         )
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_no_fill_full_into_peak_behavior(self):
         """Explicitly assert the 'fill full into peak' anti-pattern is absent.
 

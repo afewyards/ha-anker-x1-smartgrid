@@ -91,6 +91,7 @@ class TestFloorEqualsFirmwareGolden:
             round_trip_eff=1.0,
         )
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_golden_hand_derived(self):
         # soc_start=20% (2.0 kWh); 1.0 kWh/h load, no PV, 4 hours, flat price.
         # Hand trace (eta=1, no-charge, discharge 1:1):
@@ -175,6 +176,7 @@ class TestFloor10DeficitNight:
         price = [0.20] * 8
         return pv, load, price
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_no_phantom_floor_import_above_firmware_floor(self):
         pv, load, price = self._scenario()
         cfg = self._cfg()
@@ -358,6 +360,7 @@ class TestRealizedGridCostFirmwareFloor:
     imports at const.FIRMWARE_SOC_FLOOR (5%), mirroring the D1 DP/oracle
     transition semantics — NOT at cfg.soc_floor (a pure decision margin)."""
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_forced_imports_start_at_firmware_floor_not_soft_floor(self):
         """soc_floor=10 (1.0 kWh soft floor); soc_start=15% (1.5 kWh); the
         battery drains straight through the soft floor down to the firmware
@@ -392,6 +395,7 @@ class TestRealizedGridCostFirmwareFloor:
         assert result["kwh"] == pytest.approx(3.0, abs=1e-9)
         assert result["eur"] == pytest.approx(0.60, abs=1e-9)
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_drain_above_firmware_floor_books_zero_forced_imports(self):
         """soc_floor=10 (1.0 kWh); a single hour drains 20% -> 7% (2.0 kWh ->
         0.7 kWh) — below the soft floor but strictly above the firmware floor
@@ -419,3 +423,59 @@ class TestRealizedGridCostFirmwareFloor:
         assert result["forced_import_kwh"] == pytest.approx([0.0], abs=1e-9)
         assert result["kwh"] == pytest.approx(0.0, abs=1e-9)
         assert result["eur"] == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# (f) Off-grid firmware floor: 5% of 20.48 kWh = 1.024 kWh sits between the
+# DP's 0.05 kWh SoC bins.
+# ---------------------------------------------------------------------------
+
+
+class TestOffGridFirmwareFloor:
+    """A pack parked at the firmware floor with no load deficit buys nothing,
+    however many slots it sits there — in both DPs, at 15- and 60-min slots."""
+
+    def _cfg(self) -> Config:
+        return Config(
+            capacity_kwh=20.48,
+            soc_floor=10.0,
+            soc_target=50.0,
+            max_charge_w=0.0,  # no charging: isolates the floor-import booking
+            eta_charge=1.0,
+            round_trip_eff=1.0,
+        )
+
+    def _both(self, load, soc_start, dt_h):
+        n = len(load)
+        cfg = self._cfg()
+        kwargs = dict(terminal_mode="water_value", water_value=0.0, dt_h=dt_h)
+        day = DayData(pv_kwh=(0.0,) * n, load_kwh=tuple(load), price=(0.30,) * n, soc_start=soc_start)
+        hind = hindsight_optimal_grid(day, cfg, **kwargs)
+        opt = optimize_grid(
+            [0.0] * n,
+            list(load),
+            [0.30] * n,
+            soc_start=soc_start,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=n,
+            slots_per_day=round(24 / dt_h),
+            **kwargs,
+        )
+        return opt, hind
+
+    @pytest.mark.parametrize("dt_h", [0.25, 1.0])
+    def test_parked_at_floor_books_no_import(self, dt_h):
+        for res in self._both([0.0] * 8, soc_start=const.FIRMWARE_SOC_FLOOR, dt_h=dt_h):
+            assert res["kwh"] == pytest.approx(0.0, abs=1e-9)
+            assert res["eur"] == pytest.approx(0.0, abs=1e-9)
+
+    @pytest.mark.parametrize("dt_h", [0.25, 1.0])
+    def test_floor_import_does_not_grow_while_parked(self, dt_h):
+        # One slot drains the pack through the floor; the slots after it sit there.
+        short = self._both([0.5, 0.0], soc_start=7.0, dt_h=dt_h)
+        long = self._both([0.5] + [0.0] * 7, soc_start=7.0, dt_h=dt_h)
+        for s, lng in zip(short, long):
+            assert s["kwh"] > 0.0
+            assert lng["kwh"] == pytest.approx(s["kwh"], abs=1e-9)
+            assert lng["eur"] == pytest.approx(s["eur"], abs=1e-9)

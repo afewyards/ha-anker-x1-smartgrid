@@ -13,7 +13,7 @@ here we just spot-check the noop contract).
 import pytest
 
 from custom_components.anker_x1_smartgrid.optimize import optimize_grid
-from custom_components.anker_x1_smartgrid.regret import _BIN_KWH, _apply_solar_load
+from custom_components.anker_x1_smartgrid.regret import _BIN_KWH, _apply_solar_load, band_shortfall_dc, band_top_kwh
 from tests.helpers import make_config as make_cfg
 
 
@@ -50,6 +50,8 @@ def _resim(schedule, hedge, pv, load, price, soc_start, cfg):
     same order as the HEDGED forward DP pass (MAJOR-1 fix).  This is the black-box
     consistency check: the backtrack must agree with these forward floor-import values.
 
+    The load leg's bottom-band shortfall is bought from the meter alongside the floor import.
+
     Uses the same bin-quantized SoC progression as the forward pass so that
     ``from_bin(prev_b)`` in the backtrack matches what we compute here.
     """
@@ -82,7 +84,9 @@ def _resim(schedule, hedge, pv, load, price, soc_start, cfg):
         g_ac = schedule[h]
         g_dc = g_ac * eta
         new_soc_pre = soc_after + g_dc
-        floor_import_kwh_h = max(0.0, floor_kwh - new_soc_pre)
+        floor_import_kwh_h = max(0.0, floor_kwh - new_soc_pre) + band_shortfall_dc(
+            soc, from_bin(to_bin(soc_after)), cfg.firmware_floor_kwh, band_top_kwh(cfg)
+        )
         floor_import_cost_h = floor_import_kwh_h * price[h]
         new_soc = max(new_soc_pre, floor_kwh)
 

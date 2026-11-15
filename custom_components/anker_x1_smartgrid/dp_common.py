@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from . import const
 from .models import Config
 
 
@@ -49,6 +50,10 @@ def soc_bins(
     return n_states, to_bin, from_bin
 
 
+# Equal-value end states must not be picked by float rounding: ties go to the higher SoC.
+TIE_EPS_EUR = 1e-9
+
+
 def select_end_state(
     dp: list[float],
     *,
@@ -61,6 +66,7 @@ def select_end_state(
     from_bin: Callable[[int], float],
     n_states: int,
     terminal_segments: list[tuple[float, float]] | None = None,
+    band_top_kwh: float = 0.0,
 ) -> tuple[int, float, bool]:
     """Select the DP terminal end state: ``(best_end_b, best_cost, infeasible)``.
 
@@ -94,6 +100,11 @@ def select_end_state(
     the original single-rate formula, anchored at ``floor_kwh``,
     byte-identical to the pre-piecewise-credit behaviour.
 
+    Either way, energy left below ``band_top_kwh`` (the derated bottom band)
+    is credited at ``const.DISCHARGE_DERATE_5_10`` of its rate; the band is
+    the first energy the walk credits, so end states above it all shift by
+    the same amount. ``0.0`` disables this.
+
     ``terminal_mode="reserve"`` (default): select the minimum-cost end state
     with SoC >= soc_target; if unreachable, fall back to the best achievable
     end state and mark ``infeasible``.
@@ -102,19 +113,25 @@ def select_end_state(
     if terminal_mode == "water_value":
         v = water_value if water_value is not None else 0.0
         _segs = sorted(terminal_segments, key=lambda s: -s[1]) if terminal_segments is not None else None
+        band_loss = 1.0 - const.DISCHARGE_DERATE_5_10
+
+        def _walk(avail: float) -> float:
+            credit = 0.0
+            for seg_kwh, seg_v in _segs:
+                take = min(avail, seg_kwh)
+                credit += take * seg_v
+                avail -= take
+                if avail <= 0.0:
+                    break
+            return credit + max(0.0, avail) * v
 
         def _credit(end_b: int) -> float:
+            x = from_bin(end_b)
             if _segs is not None:
-                avail = max(0.0, from_bin(end_b) - firmware_floor_kwh)
-                credit = 0.0
-                for seg_kwh, seg_v in _segs:
-                    take = min(avail, seg_kwh)
-                    credit += take * seg_v
-                    avail -= take
-                    if avail <= 0.0:
-                        break
-                return credit + max(0.0, avail) * v
-            return max(0.0, from_bin(end_b) - floor_kwh) * v
+                return _walk(
+                    max(0.0, x - firmware_floor_kwh) - band_loss * max(0.0, min(x, band_top_kwh) - firmware_floor_kwh)
+                )
+            return (max(0.0, x - floor_kwh) - band_loss * max(0.0, min(x, band_top_kwh) - floor_kwh)) * v
 
         # Scan from the firmware floor (widened): sub-soft-floor end states
         # are reachable (transition clamp sags to firmware_floor_kwh, not
@@ -123,28 +140,21 @@ def select_end_state(
         # penalty -- unless water_value_hi shifts the anchor (see _credit).
         floor_b = to_bin(firmware_floor_kwh)
         target_b = to_bin(target_kwh)
-        best_score = INF
-        best_end_b = -1
-        for end_b in range(floor_b, target_b + 1):
-            if dp[end_b] == INF:
-                continue
-            score = dp[end_b] - _credit(end_b)
-            if score < best_score:
-                best_score = score
-                best_end_b = end_b
+
+        def _pick(hi: int) -> int:
+            scores = {b: dp[b] - _credit(b) for b in range(floor_b, hi) if dp[b] != INF}
+            if not scores:
+                return -1
+            best = min(scores.values())
+            return max(b for b, sc in scores.items() if sc <= best + TIE_EPS_EUR)
+
+        best_end_b = _pick(target_b + 1)
         # Fallback (M2 fix): soc_start > soc_target means [floor_b, target_b]
         # states are unreachable via charging.  Scan the full [floor_b,
         # n_states) range for the lowest net-cost reachable state (still
         # infeasible=False — the survival floor is satisfied).
         if best_end_b == -1:
-            best_score = INF
-            for end_b in range(floor_b, n_states):
-                if dp[end_b] == INF:
-                    continue
-                score = dp[end_b] - _credit(end_b)
-                if score < best_score:
-                    best_score = score
-                    best_end_b = end_b
+            best_end_b = _pick(n_states)
         best_cost = dp[best_end_b] if best_end_b != -1 else INF
         infeasible = False
     else:

@@ -396,6 +396,7 @@ class Controller:
         self._soc_drift_last_soc_pct: float | None = None
         self._soc_drift_engaged: bool = False
         self._soc_drift_last_export_kwh_dc: float = 0.0
+        self._soc_drift_last_grid_charge_kwh: float | None = None
         # Previous tick's P50 intervals (for forecast_rate_at on the NEXT tick's accumulator step).
         # Intervals are built inside compute_decision, so we cache the result to use next tick.
         # Not persisted — rebuilt from DP output every successful tick.
@@ -1163,10 +1164,17 @@ class Controller:
                 else 0.0
             )
             _soc_now = inputs.soc
+            # Planned grid charging is not forecast drift: add back what the ledger booked since
+            # the last tick (AC→DC at eta_charge). Marker advances every tick, gated or not.
+            _gc_prev = self._soc_drift_last_grid_charge_kwh
+            _gc_now = self.today_grid_charge_kwh
+            _charge_ac_booked = max(0.0, _gc_now - _gc_prev) if _gc_prev is not None else 0.0
+            self._soc_drift_last_grid_charge_kwh = _gc_now
             _gated = (
                 not (0.0 < _dt_h <= soc_drift.MAX_DRIFT_STEP_H)
                 or self._soc_drift_last_soc_pct is None
                 or self._soc_drift_last_intervals is None
+                or _gc_prev is None
                 or _soc_now >= self.cfg.soc_target - 1.0
                 or _soc_now <= self.cfg.soc_floor + 1.0
             )
@@ -1196,6 +1204,15 @@ class Controller:
                         idle_drain_w=self.cfg.idle_drain_w,
                     )
                 )
+                if self.plan.state is ControllerState.FORCING:
+                    # The grid served the house deficit; only PV surplus still reached the pack.
+                    _expected_dc = max(0.0, _expected_dc)
+                _in_band = self._soc_drift_last_soc_pct < const.DISCHARGE_DERATE_TOP_PCT
+                if _expected_dc < 0.0 and _in_band:
+                    # The gauge falls 1/DISCHARGE_DERATE_5_10 faster inside the bottom band.
+                    # shortcut: tested at the start of the step; fine at 1-min ticks, split the
+                    # step at the band top if steps ever get long.
+                    _expected_dc /= const.DISCHARGE_DERATE_5_10
                 _measured_dc = soc_drift.measured_soc_delta_kwh(
                     _soc_now,
                     self._soc_drift_last_soc_pct,
@@ -1205,9 +1222,13 @@ class Controller:
                 # Duration-scale the export add-back: _last_export_kwh_dc is sized over
                 # TICK_SECONDS but this step integrates _dt_h (may differ on missed ticks).
                 _export_dc_step = self._soc_drift_last_export_kwh_dc * _dt_h / _tick_h if _tick_h > 0 else 0.0
+                if _in_band:
+                    _export_dc_step /= const.DISCHARGE_DERATE_5_10
+                # The ledger books TICK_SECONDS per tick too: scale its charge the same way.
+                _charge_dc_step = _charge_ac_booked * self.cfg.eta_charge * _dt_h / _tick_h if _tick_h > 0 else 0.0
                 self._soc_drift_kwh = soc_drift.accumulate(
                     self._soc_drift_kwh,
-                    soc_drift.per_step_drift_kwh(_expected_dc, _measured_dc, _export_dc_step),
+                    soc_drift.per_step_drift_kwh(_expected_dc, _measured_dc, _export_dc_step - _charge_dc_step),
                     dt_h=_dt_h,
                     halflife_h=self.cfg.soc_drift_decay_halflife_h,
                 )

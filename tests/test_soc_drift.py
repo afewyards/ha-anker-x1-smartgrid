@@ -130,3 +130,7 @@ def test_forecast_rate_at_picks_covering_interval():
 def test_forecast_rate_at_no_cover_returns_zero():
     assert soc_drift.forecast_rate_at([], datetime(2026, 6, 29, 10, tzinfo=UTC)) == (0.0, 0.0)
     assert soc_drift.forecast_rate_at(None, datetime(2026, 6, 29, 10, tzinfo=UTC)) == (0.0, 0.0)
+
+
+def test_per_step_grid_charge_subtraction_is_neutral():
+    assert soc_drift.per_step_drift_kwh(0.0, 0.5, -0.5) == 0.0

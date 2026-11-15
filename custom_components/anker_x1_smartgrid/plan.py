@@ -421,26 +421,30 @@ def build_plan_horizon(
                     ceil_headroom_w - solar_charge_w,
                 ),
             )
-        elif iv is not None and iv.load_w > iv.pv_w and not held:
+        elif iv is not None and iv.load_w > iv.pv_w and not held and soc_sim > const.FIRMWARE_SOC_FLOOR:
             self_discharge_w = min(iv.load_w - iv.pv_w, cfg.max_charge_w)
         total_w = solar_charge_w + grid_charge_w
         if cap_wh > 0:
+            # The gauge falls 1/DISCHARGE_DERATE_5_10 faster inside the bottom band.
+            # shortcut: tested at the start of the step, so a step crossing 10% drains at one
+            # rate throughout; split the step at the band top if the card ever needs it.
+            _band = const.DISCHARGE_DERATE_5_10 if soc_sim < const.DISCHARGE_DERATE_TOP_PCT else 1.0
             # eta_curve (measured, power-dependent) overrides the static scalars
             # when supplied; eta_curve=None keeps this byte-identical to before.
             _eta_c = cfg.eta_charge if eta_curve is None else eta_curve.eta_charge(total_w)
             soc_sim += total_w * _eta_c * model_h / cap_wh * 100.0
             # max_charge_w is used as an approximate discharge cap by design (no separate max_discharge_w config).
             _eta_d = eta_discharge if eta_curve is None else eta_curve.eta_discharge(self_discharge_w)
-            soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * model_h / cap_wh * 100.0
+            soc_sim -= (self_discharge_w / max(_eta_d, 1e-6)) * model_h / cap_wh * 100.0 / _band
             if self_discharge_w > 0:
                 # Constant inverter-standby DC drain (cfg.idle_drain_w, ~130 W live) paid
                 # whenever the battery passively discharges to cover a net AC deficit.
                 # DC-side term: NOT divided by eta_discharge. Not paid on charge slots,
                 # nor on a held one (a held pack measures flat). idle_drain_w=0.0 -> no-op.
-                soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * model_h / 1000.0)
+                soc_sim -= cfg.kwh_to_pct(cfg.idle_drain_w * model_h / 1000.0) / _band
             # Export drains the SoC simulation (must happen after charge credits).
             _eta_de = eta_discharge if eta_curve is None else eta_curve.eta_discharge(grid_export_w)
-            soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * model_h / cap_wh * 100.0
+            soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * model_h / cap_wh * 100.0 / _band
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
         unhedged_soc = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)

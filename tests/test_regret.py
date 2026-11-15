@@ -580,6 +580,7 @@ class TestRealizedGridCost:
 
     # -- (a) Under-charge → forced floor import ---------------------------------
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_under_charge_forced_floor_import_appears(self):
         """No deliberate charges; evening load drains battery below firmware floor.
 
@@ -611,6 +612,7 @@ class TestRealizedGridCost:
         assert result["grid_kwh"] == pytest.approx(2.0, abs=1e-6)
         assert result["eur"] == pytest.approx(1.00, abs=1e-6)
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_under_charge_forced_import_at_peak_price(self):
         """Forced import is charged at the hour it occurs (peak price)."""
         cfg = make_cfg()
@@ -919,6 +921,7 @@ class TestRealizedGridCostEta:
     to guard against regressions in the /eta path.
     """
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_eta_0_9_forced_import_is_1_to_1_not_divided_by_eta(self):
         """0.5 kWh DC shortfall at eta=0.9 must give forced_import=0.5, eur=0.25.
 
@@ -1144,6 +1147,7 @@ class TestRealizedGridCostExport:
 
     # -- (g) Export drains SoC in the simulation loop -------------------------
 
+    @pytest.mark.usefixtures("uniform_discharge")
     def test_export_drains_soc_and_triggers_forced_import(self):
         """Change B: realized_grid_cost subtracts exported DC from SoC each hour.
 

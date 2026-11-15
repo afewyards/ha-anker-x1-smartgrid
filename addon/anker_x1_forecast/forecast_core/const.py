@@ -83,6 +83,12 @@ DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
 DEFAULT_SOC_TARGET = 97.0
 FIRMWARE_SOC_FLOOR = 5.0  # X1 hardware floor (%): discharge stops here regardless of cfg.soc_floor
+# Discharging the bottom of the pack (firmware floor up to the band top) delivers only
+# this fraction of the gauge drop, measured on the lab box against the model's own eta
+# curve + idle drain (30 days to 2026-11-14). Charging is unaffected, and 10-20% is not
+# derated: its discharge gap is mirrored on charge, i.e. gauge scale, not loss.
+DISCHARGE_DERATE_5_10 = 0.61
+DISCHARGE_DERATE_TOP_PCT = 10.0
 # Device-derived (X1 nominal charge ceiling): forced at setup in __init__.py,
 # never a UI option.
 DEFAULT_MAX_CHARGE_W = 6000.0

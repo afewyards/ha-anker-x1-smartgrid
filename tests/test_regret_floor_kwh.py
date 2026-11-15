@@ -72,6 +72,7 @@ def _drain_to_floor_day() -> DayData:
     )
 
 
+@pytest.mark.usefixtures("uniform_discharge")
 def test_oracle_kwh_folds_floor_import_no_phantom_over_buy():
     cfg = _make_cfg()
     day = _drain_to_floor_day()
