@@ -149,6 +149,30 @@ async def test_planned_hours_carry_the_planners_reason():
     assert all(h["why"] == held for h in rest)
 
 
+async def test_the_build_ups_price_the_kept_value_with_the_planners_figures(monkeypatch):
+    from custom_components.anker_x1_smartgrid import optimize, why
+
+    built = []
+    real = why.hour_reasons
+    monkeypatch.setattr(why, "hour_reasons", lambda *a, **k: built.append(real(*a, **k)) or built[-1])
+    ctrl, hours = await _card_with_reasons(0.30)
+    cfg, curve = ctrl.cfg, ctrl._planner_curve()
+    eta_d = optimize._eta_discharge_at(cfg.max_export_w, cfg, curve)
+    eta_c = optimize._eta_charge_at(cfg.max_charge_w, cfg, curve)
+    fee, wear = cfg.export_fee_eur_per_kwh, cfg.cycle_cost_eur_per_kwh
+    rows = {r["kind"]: r for r in reversed(built[-1].values())}
+    (charge,), (sell,), (house, _) = (rows[k]["beats"] for k in ("charge", "export", "hold"))
+    assert sell["price"] == round(0.60 + fee, 4)
+    assert (sell["beat_eur"] - fee) * eta_d - wear == pytest.approx(rows["export"]["keep_eur"], abs=1e-6)
+    assert charge["beat_eur"] / eta_c + cfg.charge_margin_eur_per_kwh == pytest.approx(
+        rows["charge"]["keep_eur"], abs=1e-6
+    )
+    assert optimize.discharge_value(house["beat_eur"], 400.0, cfg, curve) == pytest.approx(
+        rows["hold"]["keep_eur"], abs=1e-6
+    )
+    assert not any("beats" in h.get("why", {}) for h in hours)
+
+
 async def test_the_kept_value_is_the_one_the_hold_compares_with():
     _ctrl, hours = await _card_with_reasons(0.30, hold_stored=0.35)
     _charge, export, hold, *_ = [h for h in hours if h["plan"]]

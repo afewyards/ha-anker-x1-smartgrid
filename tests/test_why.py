@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from custom_components.anker_x1_smartgrid.why import hour_reasons
 
 AMS = ZoneInfo("Europe/Amsterdam")
@@ -30,7 +32,7 @@ def _at(k):
     return (NOW + k * H).astimezone(AMS).isoformat()
 
 
-def _reasons(horizon, terminal=0.2, **kw):
+def _why(horizon, terminal=0.2, **kw):
     return hour_reasons(
         horizon,
         NOW,
@@ -41,9 +43,19 @@ def _reasons(horizon, terminal=0.2, **kw):
             "export_value": lambda _s, p: p - 0.05,
             "charge_cost": lambda p: p / 0.9,
             "terminal_value": terminal,
+            "export_price": lambda _s, p: p,
+            "export_fee": 0.02,
+            "eta_charge": 0.9,
+            "eta_discharge": 1.0,
+            "cycle_cost": 0.03,
+            "charge_margin": 0.0,
         }
         | kw,
     )
+
+
+def _reasons(horizon, terminal=0.2, **kw):
+    return {k: {f: v for f, v in r.items() if f != "beats"} for k, r in _why(horizon, terminal, **kw).items()}
 
 
 def test_a_hold_is_kept_for_the_later_export():
@@ -218,3 +230,84 @@ def test_an_unknown_value_gives_that_hour_no_reason():
     why = _reasons(horizon, terminal=0.35, export_value=lambda _s, _p: None)
     assert list(why) == [_at(0)] and why[_at(0)]["kept_for"]["kind"] == "next_day"
     assert list(_reasons(horizon, terminal=0.35, use_value=lambda _p, _w: None)) == [_at(1)]
+
+
+ETA_D, ETA_C, FEE, WEAR, MARGIN, DRAIN_W = 0.92, 0.95, 0.02, 0.03, 0.04, 100.0
+
+
+def _house_value(p, w):
+    return p * (w + DRAIN_W) / (w / ETA_D + DRAIN_W) - WEAR
+
+
+PRICED = {
+    "use_value": _house_value,
+    "export_value": lambda _s, p: (p + 0.01 - FEE) * ETA_D - WEAR,
+    "charge_cost": lambda p: p / ETA_C + MARGIN,
+    "export_price": lambda _s, p: p + 0.01,
+    "export_fee": FEE,
+    "eta_charge": ETA_C,
+    "eta_discharge": ETA_D,
+    "cycle_cost": WEAR,
+    "charge_margin": MARGIN,
+}
+VALUE = {
+    "sell": lambda x, _w: (x - FEE) * ETA_D - WEAR,
+    "charge": lambda p, _w: p / ETA_C + MARGIN,
+    "house": _house_value,
+}
+PARTS = {
+    "sell": ["kept", "wear", "conversion", "fee"],
+    "charge": ["kept", "margin", "conversion"],
+    "house": ["kept", "wear", "conversion"],
+}
+
+
+def _day():
+    return [
+        _row(0, 0.20, 60, grid=2.0, mode="grid"),
+        _row(1, 0.30, 60, mode="hold"),
+        _row(2, 0.34, 55, house=0.5),
+        _row(3, 0.60, 40, export=2.0, mode="export"),
+    ]
+
+
+def test_each_build_up_is_priced_where_using_it_equals_keeping_it():
+    why = _why(_day(), terminal=0.1, **PRICED)
+    assert {b["q"] for r in why.values() for b in r["beats"]} == set(VALUE)
+    for row in why.values():
+        for b in row["beats"]:
+            assert VALUE[b["q"]](b["beat_eur"], 500.0) == pytest.approx(row["keep_eur"], abs=1e-6)
+            assert sum(p["eur"] for p in b["parts"]) == pytest.approx(b["beat_eur"], abs=1e-9)
+            assert [p["key"] for p in b["parts"]] == PARTS[b["q"]]
+            assert b["parts"][0]["eur"] == row["keep_eur"]
+
+
+def test_each_kind_gets_its_build_ups_against_its_own_price():
+    why = _why(_day(), terminal=0.1, **PRICED)
+    assert [why[_at(k)]["kind"] for k in range(4)] == ["charge", "hold", "house", "export"]
+    assert [[b["q"] for b in why[_at(k)]["beats"]] for k in range(4)] == [
+        ["charge"],
+        ["house", "sell"],
+        ["house", "sell"],
+        ["sell"],
+    ]
+    assert [[b["price"] for b in why[_at(k)]["beats"]] for k in range(4)] == [
+        [0.20],
+        [0.30, 0.31],
+        [0.34, 0.35],
+        [0.61],
+    ]
+    unpriced = _why(_day(), terminal=0.1, **PRICED | {"export_price": lambda s, p: p if s == NOW + 3 * H else None})
+    assert [[b["q"] for b in unpriced[_at(k)]["beats"]] for k in (1, 2)] == [["house"], ["house"]]
+
+
+def test_a_hold_whose_export_price_clears_the_selling_bar_says_what_held_it():
+    def sell(export_now, reserve):
+        horizon = [_row(0, 0.30, 50, mode="hold") | {"reserve_soc": reserve}, _row(1, 0.46, 30, export=2.0)]
+        why = _why(horizon, export_price=lambda s, p: export_now if s == NOW else p)
+        return why[_at(0)]["beats"][1]
+
+    assert sell(0.90, 50.0)["beat_eur"] == pytest.approx(0.46)
+    assert sell(0.90, 50.0)["blocked"] == "reserve"
+    assert sell(0.90, 20.0)["blocked"] == "rule"
+    assert "blocked" not in sell(0.30, 50.0)

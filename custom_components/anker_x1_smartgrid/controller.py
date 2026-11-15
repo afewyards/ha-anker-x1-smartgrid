@@ -2579,6 +2579,12 @@ class Controller:
                 ),
                 charge_cost=lambda p: p / eta_c + cfg.charge_margin_eur_per_kwh,
                 terminal_value=terminal_value,
+                export_price=lambda s, p: None if (x := export_price_at(s, p)) is None else x + _fee,
+                export_fee=_fee,
+                eta_charge=eta_c,
+                eta_discharge=eta_d,
+                cycle_cost=cfg.cycle_cost_eur_per_kwh,
+                charge_margin=cfg.charge_margin_eur_per_kwh,
             )
             self._why_failed = False
         except Exception:
@@ -2588,7 +2594,8 @@ class Controller:
             reasons = {}
         for h in hours:
             if h["start"] in reasons:
-                h["why"] = reasons[h["start"]]
+                # Build-ups would push the sensor past its 16 KB attribute budget.
+                h["why"] = {k: v for k, v in reasons[h["start"]].items() if k != "beats"}
         return {
             "built_at": now.isoformat(),
             "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,

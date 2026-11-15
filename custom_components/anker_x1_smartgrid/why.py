@@ -14,7 +14,7 @@ from .const import FIRMWARE_SOC_FLOOR
 from .usecost import _MOVED_KWH, _ahead, _battery_kwh, _hour_key
 
 _H = timedelta(hours=1)
-_SUMS = ("h", "price", "deficit", "export", "eur", "house", "charge", "solar", "top")
+_SUMS = ("h", "price", "deficit", "export", "eur", "house", "charge", "solar", "top", "sell_h", "sell_kwh", "under")
 
 
 def hour_reasons(
@@ -27,8 +27,14 @@ def hour_reasons(
     export_value: Callable[[datetime, float], float | None],
     charge_cost: Callable[[float], float | None],
     terminal_value: float | None,
+    export_price: Callable[[datetime, float], float | None],
+    export_fee: float,
+    eta_charge: float,
+    eta_discharge: float,
+    cycle_cost: float,
+    charge_margin: float,
 ) -> dict[str, dict]:
-    """``{kind, keep_eur, use_eur, kept_for}`` per planned hour, keyed by the hour's
+    """``{kind, keep_eur, use_eur, kept_for, beats}`` per planned hour, keyed by the hour's
     start as :func:`usecost.hourly_series` emits it.
 
     ``kind`` is how the hour is priced: ``export`` (over 0.05 kWh exported),
@@ -52,6 +58,15 @@ def hour_reasons(
     whose action the comparison contradicts gets no reason, nor any hour
     without ``terminal_value`` or a value a callable returns as ``None``.
     Estimated slots count as not planned.
+
+    ``beats`` turns the comparison into the tariff the hour would have to
+    reach: ``{q, price, beat_eur, parts}``, where ``price`` is the hour's raw
+    tariff (``export_price`` before ``export_fee`` for ``sell``) and ``parts``
+    sum to ``beat_eur``, ``conversion`` being the remainder. An export sells, a
+    charge charges, a hold or house hour uses it for the house and, when the
+    hour has an export price, sells; a ``sell`` the price clears in such an
+    hour is ``blocked`` by the ``reserve`` when its level is at or under the
+    row's ``reserve_soc``, else by a ``rule``.
     """
     if terminal_value is None:
         return {}
@@ -68,13 +83,18 @@ def hour_reasons(
             continue
         b = hours.setdefault(_hour_key(start, tz), dict.fromkeys(_SUMS, 0.0))
         b["top"] = max(b["top"], *(math.inf if x is None else x for x in (before, level)))
+        raw = math.nan if (x := export_price(start, price)) is None else x
+        reserve = row.get("reserve_soc")
+        b["under"] = max(b["under"], float(reserve is not None and level is not None and level <= reserve))
         b["h"] += h * left
         b["price"] += price * h * left
+        b["sell_h"] += raw * h * left
         b["deficit"] += (float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)) * left * 1000.0
         if kwh["export"] > 0.0:
             b["export"] += kwh["export"]
             sell = export_value(start, price)
             b["eur"] += math.nan if sell is None else sell * kwh["export"]
+            b["sell_kwh"] += raw * kwh["export"]
         b["house"] += kwh["house"]
         b["charge"] += kwh["charge_grid"]
         b["solar"] += kwh["charge_solar"]
@@ -131,13 +151,47 @@ def hour_reasons(
                 options.append(next_day)
             keep, kept_for = max(options, key=lambda o: o[0])
         if use[i] >= keep if releasing else keep >= use[i]:
+            b, keep = hours[key], round(keep, 3)
+            price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
+            sell_at = (keep + cycle_cost) / eta_discharge + export_fee
+            selling = {"kept": keep, "wear": cycle_cost, "conversion": None, "fee": export_fee}
+            if kinds[i] == "export":
+                beats = [_beat("sell", b["sell_kwh"] / b["export"], sell_at, selling)]
+            elif kinds[i] == "charge":
+                charging = {"kept": keep, "margin": -charge_margin, "conversion": None}
+                beats = [_beat("charge", price, eta_charge * (keep - charge_margin), charging)]
+            else:
+                # use_value is linear in price, so its values at 0 and 1 €/kWh invert it.
+                v0, v1 = use_value(0.0, deficit_w), use_value(1.0, deficit_w)
+                using = {"kept": keep, "wear": cycle_cost, "conversion": None}
+                beats = (
+                    []
+                    if v0 is None or v1 is None or v1 <= v0
+                    else [_beat("house", price, (keep - v0) / (v1 - v0), using)]
+                )
+                beats.append(_beat("sell", b["sell_h"] / b["h"], sell_at, selling))
+                if beats[-1]["price"] > beats[-1]["beat_eur"]:
+                    beats[-1]["blocked"] = "reserve" if b["under"] else "rule"
             out[_iso(key, tz)] = {
                 "kind": kinds[i],
-                "keep_eur": round(keep, 3),
+                "keep_eur": keep,
                 "use_eur": round(use[i], 3),
                 "kept_for": kept_for,
+                "beats": [x for x in beats if not math.isnan(x["price"])],
             }
     return out
+
+
+def _beat(q: str, price: float, beat: float, parts: dict[str, float | None]) -> dict:
+    """A build-up whose ``None`` part is what ``beat`` leaves after the others."""
+    beat = round(beat, 6)
+    rest = beat - sum(round(eur, 6) for eur in parts.values() if eur is not None)
+    return {
+        "q": q,
+        "price": round(price, 4),
+        "beat_eur": beat,
+        "parts": [{"key": key, "eur": round(rest if eur is None else eur, 6)} for key, eur in parts.items()],
+    }
 
 
 def _run(marks: list, keys: list[datetime], i: int, j: int, tz: tzinfo) -> dict:
