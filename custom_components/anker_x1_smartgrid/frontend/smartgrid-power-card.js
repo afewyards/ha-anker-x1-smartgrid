@@ -966,7 +966,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         const bw = num(x.batt_w);
         const off = sp !== null && Math.round(sp) !== 0 && bw !== null && Math.abs(bw - sp) > 0.15 * Math.abs(sp);
         return (
-          `<tr><td>${clock(t, tz)}</td><td>${eur(x.price, 3)}</td><td>${STATE_TEXT[x.state] || DASH}</td><td class="sp">${watts(sp)}</td><td${off ? ' class="neg"' : ''}>${watts(bw)}</td>` +
+          `<tr><td>${clock(t, tz)}</td><td>${eur(x.price, 3)}</td><td>${Object.hasOwn(STATE_TEXT, x.state) ? STATE_TEXT[x.state] : x.state ? esc(x.state) : DASH}</td><td class="sp">${watts(sp)}</td><td${off ? ' class="neg"' : ''}>${watts(bw)}</td>` +
           `${cell(num(x.use_kwh), num(f.load_kwh), 2, 0.05)}${cell(num(x.solar_kwh), num(f.pv_kwh), 2, 0.05)}${cell(num(x.soc), num(f.soc), 0, 5)}</tr>`
         );
       });
