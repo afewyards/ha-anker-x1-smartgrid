@@ -155,13 +155,13 @@ House cost is what the house's use cost: grid power at the import price, plus ba
 
 Hover over an hour, or tap it on a touch screen, to see what the battery did or plans to do: for planned hours the two options the planner weighed per stored kWh and what the energy is kept for, then how the house's use split between grid, battery and sun.
 
-With `debug: true` the card adds a panel under it: the day's first plan drawn over what happened, with forecast use against measured use. Click an hour to see its quarters, the commanded and measured battery power, and the planner's settings. Nothing extra is fetched or drawn when it is off. The comparison fills in from the first day after upgrading.
+With `debug: true` the card adds a panel under it: the day's first plan drawn over what happened, with forecast use against measured use. Click an hour to see its tariff slots, the commanded and measured battery power, and the planner's settings. Nothing extra is fetched or drawn when it is off. The comparison fills in from the first day after upgrading.
 
 Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
 
 The switch at the top right turns the planner on and off. While it is off the battery is held idle (no charge, no discharge) and the card dims below the top line and shows "SmartGrid disabled" over the battery level.
 
-Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color` and `--smartgrid-power-solar-color`; saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
+Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color`, `--smartgrid-power-solar-color` and `--smartgrid-power-debug-color` (the debug panel); saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
 
 ## Add-on
 

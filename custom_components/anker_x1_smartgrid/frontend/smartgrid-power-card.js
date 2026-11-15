@@ -292,6 +292,7 @@ const LEGEND = `<div class="lg dm">
 <span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
+const DEBUG_FAIL = '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
 const DEBUG_LEGEND = `<div class="lg dm">
 <span>first plan of the day${stroke('dl')}level<svg width="10" height="9"><rect x=".5" y=".5" width="9" height="8" class="dpl"/></svg>grid kWh${stroke('dl')}use</span>
 <span>use against its forecast${swatch('go', 9)}more${swatch('gc', 9)}less</span>
@@ -633,6 +634,15 @@ class SmartgridPowerCard extends HTMLElement {
     const nowCol = colOf(now);
     const geo = { dates, today, cx, cw, W, tz, X };
     this._geo = { rows, cx, cw, starts, ends, tz };
+    let dbg = '';
+    if (cfg.debug) {
+      try {
+        dbg = this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null, nowCol >= 0 ? X(nowCol, now, PAD) : null);
+      } catch (e) {
+        console.error(TAG, e);
+        dbg = DEBUG_FAIL;
+      }
+    }
 
     return (
       `<div class="${off ? 'off' : ''}">` +
@@ -643,7 +653,7 @@ class SmartgridPowerCard extends HTMLElement {
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
-      (cfg.debug ? this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null, nowCol >= 0 ? X(nowCol, now, PAD) : null) : '') +
+      dbg +
       '<div class="tip" hidden></div></div>'
     );
   }
@@ -846,30 +856,32 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
   // The day's first plan over the past hours: level, grid bars, use against its forecast, today's totals, and one hour inspected.
   _debug(rows, geo, nowX, nowP) {
     const { err, data } = this._dbg;
-    if (err) return '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
+    if (err) return DEBUG_FAIL;
     const { dates, today, cx, cw, W, tz } = geo;
     const refs = (data && Array.isArray(data.reference) ? data.reference : [])
       .map((x) => [Date.parse(x && x.start), x])
       .filter(([t]) => Number.isFinite(t))
       .sort((a, b) => a[0] - b[0]);
-    let step = H;
-    for (let k = 1; k < refs.length; k++) if (refs[k][0] > refs[k - 1][0]) step = Math.min(step, refs[k][0] - refs[k - 1][0]);
     const ref = new Map();
-    for (const [t, x] of refs) {
+    refs.forEach(([t, x], j) => {
       const p = parts(t, tz);
       const k = t - (p.minute * 60 + p.second) * 1e3;
       let a = ref.get(k);
-      if (!a) ref.set(k, (a = { n: 0, load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
+      if (!a) ref.set(k, (a = { n: 0, step: H, load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
       const v = (key) => num(x[key]) ?? 0;
+      // A slot lasts until the next one starts, an hour at most; the last one as long as the one before it.
+      const span = j + 1 < refs.length ? refs[j + 1][0] - t : j ? t - refs[j - 1][0] : H;
       a.n++;
+      a.step = Math.min(a.step, span);
       a.load_kwh += v('load_kwh');
       a.pv_kwh += v('pv_kwh');
       a.up_kwh += v('grid_charge_kwh') + Math.max(v('load_kwh') - v('pv_kwh'), 0);
       a.out_kwh += v('grid_export_kwh');
       if (num(x.soc) !== null) a.ref_soc = x.soc;
-    }
+    });
     // An hour the plan only partly covers (joined mid-way, or a slot missing) would set part of its forecast against the whole hour.
-    for (const [k, a] of ref) if (a.n * step < H) ref.delete(k);
+    // Its narrowest slot sets how many it needs, so hourly and quarter-hour plans can sit side by side.
+    for (const [k, a] of ref) if (a.n * a.step < H) ref.delete(k);
     const past = rows.filter((r) => !r.plan && ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
     const sel = this._pick(rows);
     const band = (a, b, h) => (sel ? `<rect x="${r1(a)}" y="0" width="${r1(b - a)}" height="${h}" class="dsb"/>` : '');
@@ -968,7 +980,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
         const bw = num(x.batt_w);
         const off = sp !== null && Math.round(sp) !== 0 && bw !== null && Math.abs(bw - sp) > 0.15 * Math.abs(sp);
         return (
-          `<tr><td>${clock(t, tz)}</td><td>${eur(x.price, 3)}</td><td>${Object.hasOwn(STATE_TEXT, x.state) ? STATE_TEXT[x.state] : x.state ? esc(x.state) : DASH}</td><td class="sp">${watts(sp)}</td><td${off ? ' class="neg"' : ''}>${watts(bw)}</td>` +
+          `<tr><td>${clock(t, tz)}</td><td>${eur(x.price, 3)}</td><td>${Object.prototype.hasOwnProperty.call(STATE_TEXT, x.state) ? STATE_TEXT[x.state] : x.state ? esc(x.state) : DASH}</td><td class="sp">${watts(sp)}</td><td${off ? ' class="neg"' : ''}>${watts(bw)}</td>` +
           `${cell(num(x.use_kwh), num(f.load_kwh), 2, 0.05)}${cell(num(x.solar_kwh), num(f.pv_kwh), 2, 0.05)}${cell(num(x.soc), num(f.soc), 0, 5)}</tr>`
         );
       });
