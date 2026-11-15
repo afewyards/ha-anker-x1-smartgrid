@@ -497,6 +497,8 @@ def hindsight_optimal_grid(
             # Solar/load contribution — shared conventions via _apply_solar_load.
             # eta_curve=None (default) is the byte-identical parity path.
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
+            # Wear on the battery->house leg — MUST mirror optimize.optimize_grid.
+            house_wear = max(0.0, soc - max(soc_after, firmware_floor_kwh)) * cfg.cycle_cost_eur_per_kwh
 
             # Solar spill (AC kWh) that cannot be stored — mirror of
             # optimize.optimize_grid:603-608.  Used by the export leg's
@@ -551,7 +553,7 @@ def hindsight_optimal_grid(
                 new_b = to_bin(new_soc)
                 eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                 g_ac = g_dc / eta_g
-                new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh
+                new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh + house_wear
 
                 if new_cost < dp_next[new_b]:
                     dp_next[new_b] = new_cost
@@ -610,7 +612,7 @@ def hindsight_optimal_grid(
                             * eta_d_step
                             * ep_h
                         )
-                        new_cost = cost - (export_revenue - degradation) + floor_import_export + band_eur
+                        new_cost = cost - (export_revenue - degradation) + floor_import_export + band_eur + house_wear
 
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
@@ -726,12 +728,11 @@ def hindsight_optimal_grid(
 
     # eur = import cost minus net export revenue (may be negative on profitable arb
     # days) plus below-floor direct-import cost (A1).  The charge_margin_eur_per_kwh
-    # hurdle is ROUTING-ONLY (steers the transition-cost argmin above) and is
-    # deliberately NOT billed here: reported eur must stay actual grid cash so
-    # score_regret (the surviving inline DP-regret scorer) is not biased by the
-    # synthetic margin (realized_grid_cost carries none).  eur == best_cost -
-    # Σ g_dc*margin; forward/oracle eur parity still holds (both reconstruct the
-    # same margin-free cash).
+    # hurdle and house_wear are ROUTING-ONLY (steer the transition-cost argmin
+    # above) and deliberately NOT billed here: reported eur is grid cash less
+    # export wear, exactly what realized_grid_cost books, so score_regret (the
+    # surviving inline DP-regret scorer) is not biased.  eur == best_cost -
+    # Σ g_dc*margin - Σ house_wear; forward/oracle eur parity still holds.
     total_eur = import_cost_eur - net_export_rev + floor_import_eur
 
     result: dict = {

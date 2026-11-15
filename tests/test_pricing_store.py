@@ -156,6 +156,14 @@ def test_build_estimated_slots_bounds_to_presolar_window():
     assert slots[7].price == pytest.approx(est[7])
 
 
+def test_build_estimated_slots_never_repeats_the_estimated_day():
+    """A sunless multi-day gap gets one estimated day, not the same day five times."""
+    real_end = datetime(2026, 11, 15, 23, 0, tzinfo=UTC)
+    pickup = real_end + timedelta(hours=132)
+    slots = pricing_store.build_estimated_slots([0.30] * 24, real_end, pickup)
+    assert [s.start for s in slots] == [real_end + timedelta(hours=i) for i in range(24)]
+
+
 def test_build_estimated_slots_empty_post_publication():
     est = [0.20] * 24
     # Real prices already extend PAST tomorrow's pickup -> nothing to estimate.

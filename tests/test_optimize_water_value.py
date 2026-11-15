@@ -1,12 +1,23 @@
+from types import SimpleNamespace
+
 import pytest
 
+from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.models import Config
-from custom_components.anker_x1_smartgrid.optimize import compute_water_value, optimize_grid
+from custom_components.anker_x1_smartgrid.optimize import compute_water_value, eta_discharge, optimize_grid
 
 
 def test_compute_water_value_divides_by_eta_and_scales():
     cfg = Config(eta_charge=0.92, water_value_factor=1.0, clamp_water_value_nonneg=True)
     assert compute_water_value(0.10, cfg) == pytest.approx(0.10 / 0.92)
+
+
+def test_compute_water_value_uses_the_measured_charge_eta_at_full_rate():
+    cfg = Config(eta_charge=0.95, max_charge_w=6000.0, water_value_factor=1.0)
+    seen = []
+    curve = SimpleNamespace(eta_charge=lambda w: seen.append(w) or 0.80)
+    assert compute_water_value(0.10, cfg, curve) == pytest.approx(0.10 / 0.80)
+    assert seen == [6000.0]
 
 
 def test_compute_water_value_clamps_negative_to_zero():
@@ -85,3 +96,40 @@ def test_reserve_mode_is_default_and_unchanged():
     )
     # Reserve mode forces SoC >= target: must fill the full 8.0 kWh.
     assert sum(res["schedule"]) == pytest.approx(8.0, abs=0.1)
+
+
+def test_export_slot_feeding_the_house_pays_wear_once_per_dc_kwh(monkeypatch):
+    """The house leg and the export leg each pay wear on their own DC kWh, never on each other's."""
+    best = {}
+    real = optimize.select_end_state
+
+    def _spy(*a, **k):
+        out = real(*a, **k)
+        best["cost"] = out[1]
+        return out
+
+    monkeypatch.setattr(optimize, "select_end_state", _spy)
+
+    def run(cc):
+        cfg = Config(capacity_kwh=10.0, soc_floor=10.0, soc_target=90.0, cycle_cost_eur_per_kwh=cc)
+        res = optimize_grid(
+            [0.0],
+            [0.5],
+            [0.30],
+            soc_start=80.0,
+            cfg=cfg,
+            window_start_h=0,
+            window_len=1,
+            chargeable=[False],
+            export_price=[2.0],
+            terminal_mode="water_value",
+            water_value=0.0,
+        )
+        return res, best["cost"], eta_discharge(cfg)
+
+    free, cost_free, eta_d = run(0.0)
+    worn, cost_worn, _ = run(0.05)
+    assert worn["export_kwh"] > 0.0
+    assert worn["export_kwh"] == pytest.approx(free["export_kwh"])
+    export_dc = worn["export_kwh"] / eta_d
+    assert cost_worn - cost_free == pytest.approx(0.05 * (0.5 + export_dc))  # house DC is 1:1 without a curve

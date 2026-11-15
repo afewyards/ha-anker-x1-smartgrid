@@ -456,7 +456,7 @@ def _dp_select_slots(
                 and optimize_mod.holds_at(
                     window_price[h],
                     (window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0,
-                    water_value,
+                    optimize_mod.hold_stored_value(water_value, terminal_segments),
                     cfg,
                     eta_curve,
                 )
@@ -969,7 +969,7 @@ def compute_decision(
     _last_slot = max((s.start for s in slots), default=now_h)
     horizon_edge = resolution.hour_floor(_last_slot) + timedelta(hours=1)
     terminal_mode = "water_value"
-    water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg)
+    water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg, eta_curve)
 
     # --- Water-value curve/interval build over [now, horizon_edge] ---
     # build_display_intervals emits one interval per price-slot hour >= now_h

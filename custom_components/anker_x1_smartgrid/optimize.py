@@ -77,14 +77,15 @@ from .regret import (
 )
 
 
-def compute_water_value(trough_price: float, cfg: Config) -> float:
+def compute_water_value(trough_price: float, cfg: Config, eta_curve=None) -> float:
     """Terminal water value v (€/DC-kWh) for the water-value end selection.
 
-    ``v = (trough_price / eta) * water_value_factor``.  When
+    ``v = (trough_price / eta) * water_value_factor``, ``eta`` being the DP's own
+    full-rate grid-charge efficiency (the measured curve when one is given).  When
     ``clamp_water_value_nonneg`` is True a negative or zero trough price clamps
     v to 0.0, pushing the optimal end SoC down toward the survival floor.
     """
-    eta = cfg.eta_charge_safe()
+    eta = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
     v = (trough_price / eta) * cfg.water_value_factor
     if cfg.clamp_water_value_nonneg:
         v = max(0.0, v)
@@ -92,19 +93,20 @@ def compute_water_value(trough_price: float, cfg: Config) -> float:
 
 
 def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None) -> float:
-    """€ a DC kWh saves when discharged now to cover ``deficit_w`` of house load at ``price``.
+    """€ a DC kWh nets when discharged now to cover ``deficit_w`` of house load at ``price``.
 
-    Discharging spends ``deficit_w/η_d + idle_drain_w`` of DC and buys nothing.
+    Discharging spends ``deficit_w/η_d + idle_drain_w`` of DC, buys nothing and
+    pays ``cycle_cost_eur_per_kwh`` of wear on each of those DC kWh.
     Holding spends no DC but buys ``deficit_w + idle_drain_w`` from the grid —
     the standby does not go away while held, the meter pays it instead of the
     pack (measured: a held night imports ~90 W more than the house uses). So
     the standby sits on BOTH sides and barely dilutes the stored kWh;
-    ``idle_drain_w=0`` → ``price·η_d``.
+    ``idle_drain_w=0`` → ``price·η_d − cycle_cost``.
     """
     if deficit_w <= 0.0:
         return 0.0
     dc_w = deficit_w / _eta_discharge_at(deficit_w, cfg, eta_curve) + cfg.idle_drain_w
-    return price * (deficit_w + cfg.idle_drain_w) / dc_w
+    return price * (deficit_w + cfg.idle_drain_w) / dc_w - cfg.cycle_cost_eur_per_kwh
 
 
 def smooth_hold_runs(held: list[bool], min_run: int) -> list[bool]:
@@ -154,6 +156,11 @@ def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, et
     return deficit_w > 0.0 and discharge_value(price, deficit_w, cfg, eta_curve) < water_value
 
 
+def hold_stored_value(water_value: float, terminal_segments: list[tuple[float, float]] | None) -> float:
+    """€/DC-kWh the hold weighs a kept kWh at: never below the richest terminal segment it could earn."""
+    return max([water_value, *(v for _, v in terminal_segments or ())])
+
+
 def overnight_terminal_segments(
     gap_start: datetime,
     pickup: datetime,
@@ -186,14 +193,20 @@ def overnight_terminal_segments(
       (``η_d`` from ``eta_curve.eta_discharge(load_w)`` when a curve is
       given, else the static ``cfg.eta_discharge_static()``; missing
       hour-of-day load falls back to ``const.DEFAULT_FALLBACK_LOAD_W``).
-      The segment's raw value is the avoided-import value per DC kWh,
-      ``raw_v_h = (load_w·dt_h/1000 · p_h) / dc_h`` — idle drain dilutes
-      this naturally (it draws DC energy but serves no load). There is
-      **no** ``-cycle_cost`` term here (unlike the legacy scalar v_hi): the
-      export leg already pays wear in the DP transition, so subtracting it
-      again here would double-count it against the hold side.
-    * ``seg_v = max(v_lo, raw_v_h)`` — a per-segment floor at the horizon-min
-      refill anchor, never a global clamp.
+      The segment's raw value is the avoided-import value per DC kWh less the
+      wear the discharge pays, ``raw_v_h = (load_w·dt_h/1000 · p_h) / dc_h −
+      cycle_cost`` — idle drain dilutes this naturally (it draws DC energy but
+      serves no load). The DP charges the same wear on its in-horizon
+      battery→house leg, so a kWh is worth the same net of wear either side of
+      the horizon edge.
+    * ``seg_v = max(v_lo, min(raw_v_h, refill_h))`` — a per-segment floor at the
+      horizon-min refill anchor, never a global clamp, and a cap at
+      ``refill_h``: the cheapest estimated price earlier in the gap divided by
+      the DP's full-rate charge efficiency, plus ``charge_margin_eur_per_kwh``.
+      A stored kWh is never worth more than re-buying it before it is needed.
+
+    Only the first 24 h of the gap are priced (one estimated day, see
+    :func:`pricing_store.build_estimated_slots`).
 
     Total ``Σ dc_h`` is capped at ``capacity_kwh - firmware_floor_kwh``
     (mirrors the hard energy ceiling ``select_end_state`` can ever credit),
@@ -218,6 +231,9 @@ def overnight_terminal_segments(
         return ([], 0.0, v_lo)
 
     eta_d_static = cfg.eta_discharge_static()
+    eta_c = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
+    # shortcut: the first gap hour has no earlier hour so stays uncapped; seed from the horizon tail if it drives holds.
+    refill = float("inf")
 
     # Chronological walk: one candidate segment per priced hour, as
     # [dc_h, seg_v, raw_v_h] so the cap-trim step below can mutate dc_h
@@ -238,10 +254,12 @@ def overnight_terminal_segments(
                 raw_v_h = (
                     discharge_value(p_h, load_w, cfg, eta_curve)
                     if cfg.low_power_hold
-                    else (load_w * dt_h / 1000.0 * p_h) / dc_h
+                    else (load_w * dt_h / 1000.0 * p_h) / dc_h - cfg.cycle_cost_eur_per_kwh
                 )
-                seg_v = max(v_lo, raw_v_h)
+                seg_v = max(v_lo, min(raw_v_h, refill))
                 raw_segments.append([dc_h, seg_v, raw_v_h])
+            # shortcut: ignores how much this hour can recharge; budget by max_charge_w·dt_h if it over-caps.
+            refill = min(refill, p_h / eta_c + cfg.charge_margin_eur_per_kwh)
         cur += timedelta(hours=1)
 
     if not raw_segments:
@@ -883,6 +901,7 @@ def optimize_grid(
 
             # Solar/load step — physics imported from regret.py (shared).
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
+            house_wear = max(0.0, soc - max(soc_after, firmware_floor_kwh)) * cfg.cycle_cost_eur_per_kwh
 
             # SoC drift-hedge: synthetic forward DC-kWh debit that sags the projected
             # trajectory so the DP books the cheapest in-range recovery (or trims export).
@@ -1013,7 +1032,13 @@ def optimize_grid(
                     # direct-import cost.  When feed_in=None, hour_credit=0.0; when the
                     # floor does not bind, floor_import_cost=0.0 -> new_cost unchanged.
                     new_cost = (
-                        cost + g_ac * price_h - hour_credit + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh
+                        cost
+                        + g_ac * price_h
+                        - hour_credit
+                        + floor_import_cost
+                        + g_dc * cfg.charge_margin_eur_per_kwh
+                        # Charge slots still feed the house from the pack, so wear is constant across g_dc.
+                        + (0.0 if held_kwh else house_wear)
                     )
 
                     # Strict < mirrors hindsight tie-breaking — do not change to <=
@@ -1077,7 +1102,14 @@ def optimize_grid(
                             * eta_d_step
                             * ep_h
                         )
-                        new_cost = cost - (export_revenue - degradation) - hour_credit + floor_import_export + band_eur
+                        new_cost = (
+                            cost
+                            - (export_revenue - degradation)
+                            - hour_credit
+                            + floor_import_export
+                            + band_eur
+                            + house_wear
+                        )
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
                             # Export requires soc_after > export_floor_h >= floor, so the
@@ -1173,12 +1205,12 @@ def optimize_grid(
         total_export_kwh = 0.0
         net_export_rev = 0.0
 
-    # charge_margin_eur_per_kwh is a ROUTING-ONLY hurdle: it steers the DP argmin
-    # (added to the per-step transition cost above) but is deliberately NOT billed
-    # into the reported eur.  eur must stay actual grid cash so it does not bias the
-    # regret score / HGBR promotion gate (realized_grid_cost carries no synthetic
-    # margin).  So eur == best_cost - Σ g_dc*margin, and forward/oracle eur parity
-    # still holds byte-exactly (both reconstruct the same margin-free cash).
+    # charge_margin_eur_per_kwh and house_wear are ROUTING-ONLY: they steer the DP
+    # argmin (added to the per-step transition cost above) but are deliberately NOT
+    # billed into the reported eur.  eur is grid cash less export wear, exactly what
+    # realized_grid_cost books, so it does not bias the regret score / HGBR
+    # promotion gate.  So eur == best_cost - Σ g_dc*margin - Σ house_wear, and
+    # forward/oracle eur parity still holds byte-exactly (both reconstruct it).
     total_eur = import_eur - export_credit - net_export_rev + floor_import_eur
     result = {"schedule": schedule_ac, "kwh": total_kwh, "eur": total_eur}
     if hold is not None:

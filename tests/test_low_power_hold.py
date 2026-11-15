@@ -43,7 +43,7 @@ class _Curve:
 
 
 def test_rule_holds_below_stored_value_not_at_boundary():
-    cfg = Config()
+    cfg = Config(cycle_cost_eur_per_kwh=0.0)
     # 0.35 × 0.6 = 0.21 €/DC-kWh
     assert optimize.discharge_value(0.35, 250.0, cfg, _Curve()) == pytest.approx(0.21)
     assert optimize.holds_at(0.35, 250.0, 0.22, cfg, _Curve())
@@ -63,15 +63,22 @@ def test_rule_counts_the_standby_on_both_sides():
     the standby keeps running and the meter covers it. So a stored kWh is worth
     350/394.1 of the price -- the standby barely dilutes it."""
     curve = SimpleNamespace(eta_discharge=lambda _w: 0.85, eta_charge=lambda _w: 1.0)
-    v = optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0), curve)
+    v = optimize.discharge_value(1.0, 250.0, Config(idle_drain_w=100.0, cycle_cost_eur_per_kwh=0.0), curve)
     assert v == pytest.approx(350.0 / (250.0 / 0.85 + 100.0), abs=1e-6)
     assert v == pytest.approx(0.888, abs=5e-4)
     # No modeled drain -> the bare conversion eta, as before.
-    assert optimize.discharge_value(1.0, 250.0, Config(), curve) == pytest.approx(0.85)
+    assert optimize.discharge_value(1.0, 250.0, Config(cycle_cost_eur_per_kwh=0.0), curve) == pytest.approx(0.85)
+
+
+def test_rule_nets_the_wear_of_discharging():
+    """Discharging pays wear on every DC kWh it draws; holding pays none."""
+    cfg = Config(cycle_cost_eur_per_kwh=0.03)
+    assert optimize.discharge_value(0.35, 250.0, cfg, _Curve()) == pytest.approx(0.21 - 0.03)
+    assert optimize.holds_at(0.35, 250.0, 0.19, cfg, _Curve())
 
 
 def test_live_rule_and_dp_read_the_same_value():
-    cfg = Config(low_power_hold=True, soc_floor=5.0, idle_drain_w=100.0)
+    cfg = Config(low_power_hold=True, soc_floor=5.0, idle_drain_w=100.0, cycle_cost_eur_per_kwh=0.0)
     boundary = optimize.discharge_value(0.35, 250.0, cfg, _Curve())
     assert boundary == pytest.approx(0.35 * 350.0 / (250.0 / 0.6 + 100.0))
     assert _values(_gate_ctrl(cfg=cfg), dp_out={"water_value": boundary, "held_slots": frozenset({T})})[
@@ -151,7 +158,7 @@ _SLOTS = [PriceSlot(T, 0.35)]
 
 def _gate_ctrl(**over):
     c = SimpleNamespace(
-        cfg=Config(low_power_hold=True, soc_floor=5.0),
+        cfg=Config(low_power_hold=True, soc_floor=5.0, cycle_cost_eur_per_kwh=0.0),
         export_state=ExportState(engaged=False, state_since=T - timedelta(hours=1)),
         _hold_deficit_w=[(T - timedelta(minutes=2), 250.0), (T, 250.0)],
         _planner_curve=lambda: _Curve(),
@@ -240,6 +247,7 @@ def _exec_ctrl(act=None, **cfg_over):
         enable_export=False,
         round_trip_eff=0.6,  # static eta_d 0.6 with eta_charge 1.0
         eta_charge=1.0,
+        cycle_cost_eur_per_kwh=0.0,
         **cfg_over,
     )
     ctrl._house_load_fresh = True
@@ -363,8 +371,8 @@ async def test_actuator_engage_hold_writes_zero_under_vpp(hass_stub):
 # ── simulation: DP ──────────────────────────────────────────────────────────
 
 
-def _dp(hold, *, water_value=0.20, soc=50.0, idle_drain_w=0.0, **kw):
-    cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=idle_drain_w)
+def _dp(hold, *, water_value=0.20, soc=50.0, idle_drain_w=0.0, cycle_cost=0.0, **kw):
+    cfg = make_config(soc_floor=5.0, soc_target=100.0, idle_drain_w=idle_drain_w, cycle_cost_eur_per_kwh=cycle_cost)
     n = 4
     return optimize.optimize_grid(
         [0.0] * n,
@@ -405,6 +413,15 @@ def test_dp_takes_a_hold_that_pays():
     base = _dp(None, water_value=0.60, chargeable=[False] * 4)
     assert out["kwh"] == pytest.approx(base["kwh"] + 0.5)
     assert out["eur"] == pytest.approx(base["eur"] + 0.5 * 0.30)
+
+
+def test_dp_holds_where_discharging_would_cycle_the_pack_twice():
+    """Covering 0.30 from a kWh worth 0.25 at the horizon end saves 0.05, but pays 0.10 of
+    wear now that a refilled kWh pays again later: with wear the hold wins."""
+    mask = [True, True, False, False]
+    assert _dp(mask, water_value=0.25, chargeable=[False] * 4)["hold_schedule"] == [False] * 4
+    worn = _dp(mask, water_value=0.25, chargeable=[False] * 4, cycle_cost=0.10)
+    assert worn["hold_schedule"] == [True, True, False, False]
 
 
 def test_dp_never_holds_above_the_solar_reservation():
@@ -737,7 +754,7 @@ def _tick_ctrl(monkeypatch, **cfg_over):
 
 
 async def test_tick_records_hold_and_publishes_both_values(monkeypatch):
-    ctrl, act = _tick_ctrl(monkeypatch)
+    ctrl, act = _tick_ctrl(monkeypatch, cycle_cost_eur_per_kwh=0.0)
     await ctrl.tick()
     assert ("engage_hold",) in act.calls
     assert ctrl._recorder.rows[-1]["state"] == "hold"
@@ -807,7 +824,7 @@ def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch, e
     slots = [PriceSlot(T + timedelta(hours=i), p) for i, p in enumerate([0.35, 0.60, 0.35])]
     loads = [250.0, 250.0, 2000.0]
     ivs = [ForecastInterval(s.start, 0.0, w, 1.0) for s, w in zip(slots, loads, strict=True)]
-    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, low_power_hold=enabled)
+    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, low_power_hold=enabled, cycle_cost_eur_per_kwh=0.0)
     ctrl_mod._dp_select_slots(
         inputs=PlantInputs(soc=50.0, meter_w=0.0, now=T),
         slots=slots,
@@ -820,3 +837,37 @@ def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch, e
     )
     # static eta_d is 0.6 at every power: €0.35 slots hold (0.21 < 0.25), €0.60 does not (0.36)
     assert captured["hold"] == ([True, False, True] if enabled else None)
+
+
+def test_hold_weighs_the_kept_kwh_at_its_terminal_credit(monkeypatch):
+    """A kWh the terminal credits at 0.40 is worth keeping over a 0.36 discharge, even
+    though the water value says 0.25: the DP is offered that hold, and the live rule
+    reads the same stored value."""
+    captured = {}
+    real = ctrl_mod.optimize_mod.optimize_grid
+
+    def _spy(*a, **k):
+        captured["hold"] = k.get("hold")
+        return real(*a, **k)
+
+    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _spy)
+    slots = [PriceSlot(T + timedelta(hours=i), p) for i, p in enumerate([0.35, 0.60, 0.70])]
+    ivs = [ForecastInterval(s.start, 0.0, 250.0, 1.0) for s in slots]
+    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, low_power_hold=True, cycle_cost_eur_per_kwh=0.0)
+    segs = [(5.0, 0.40), (1.0, 0.30)]
+    ctrl_mod._dp_select_slots(
+        inputs=PlantInputs(soc=50.0, meter_w=0.0, now=T),
+        slots=slots,
+        deadline=T + timedelta(hours=3),
+        ceiling=0.20,
+        cfg=cfg,
+        export_price=None,
+        terminal_mode="water_value",
+        water_value=0.25,
+        intervals=ivs,
+        terminal_segments=segs,
+    )
+    # eta_d 0.6: 0.21 and 0.36 sit below the richest segment, 0.42 does not
+    assert captured["hold"] == [True, True, False]
+    dp_out = {"water_value": 0.25, "terminal_segments": segs, "held_slots": frozenset({T})}
+    assert _values(dp_out=dp_out)[1] == pytest.approx(0.40)

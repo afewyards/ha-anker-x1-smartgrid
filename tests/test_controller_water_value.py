@@ -196,9 +196,9 @@ def test_terminal_water_value_anchored_to_horizon_min(monkeypatch):
     real_compute_water_value = dec_mod.optimize_mod.compute_water_value
     captured: dict = {}
 
-    def _spy(trough_price, cfg_arg):
+    def _spy(trough_price, cfg_arg, eta_curve=None):
         captured["price"] = trough_price
-        return real_compute_water_value(trough_price, cfg_arg)
+        return real_compute_water_value(trough_price, cfg_arg, eta_curve)
 
     monkeypatch.setattr(dec_mod.optimize_mod, "compute_water_value", _spy)
 

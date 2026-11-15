@@ -260,7 +260,7 @@ def replay(
     intervals_reserve = list(intervals)
 
     remaining_prices = [s.price for s in real_slots if s.start >= now_h]
-    water_value = optimize_mod.compute_water_value(min(remaining_prices), cfg)
+    water_value = optimize_mod.compute_water_value(min(remaining_prices), cfg, eta_curve)
 
     # Est-widened is_cheap map + terminal pickup (decision.py:1047-1068): pickup
     # and the estimated-tail slot list are built BEFORE is_cheap so the reserve

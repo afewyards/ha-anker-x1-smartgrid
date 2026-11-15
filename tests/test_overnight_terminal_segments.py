@@ -4,18 +4,20 @@ overnight terminal-credit builder; spec rev-3).
 Replaces the retired scalar two-segment terminal-credit builder with a
 chronological per-hour walk over the post-horizon gap: every *priced* gap
 hour becomes its own ``(dc_kwh, value_eur_per_dc_kwh)`` segment, valued
-independently — no cross-hour averaging, no ``-cycle_cost`` term, no
-is_cheap early break, no global upper clamp. See
+independently — no cross-hour averaging, no is_cheap early break, no
+global upper clamp; each value is net of wear and capped at the cost of
+refilling from the grid earlier in the gap. See
 ``docs/superpowers/specs/2026-08-01-terminal-piecewise-credit-design.md``
 section B for the normative formulas.
 """
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from custom_components.anker_x1_smartgrid.models import Config
-from custom_components.anker_x1_smartgrid.optimize import overnight_terminal_segments
+from custom_components.anker_x1_smartgrid.optimize import hold_stored_value, overnight_terminal_segments
 
 ETA_D = min(0.90 / 0.95, 1.0)  # eta_discharge_static for the default test cfg
 
@@ -25,7 +27,7 @@ def _cfg(**kw) -> Config:
         eta_charge=0.95,
         round_trip_eff=0.90,
         capacity_kwh=10.0,
-        cycle_cost_eur_per_kwh=0.10,
+        cycle_cost_eur_per_kwh=0.0,
         idle_drain_w=0.0,
         reserve_cheap_band=0.20,
     )
@@ -71,7 +73,7 @@ def test_no_priced_hours_returns_empty_segments_and_v_lo():
 
 
 # ---------------------------------------------------------------------------
-# Idle dilution / no cycle-cost term
+# Idle dilution / wear
 # ---------------------------------------------------------------------------
 
 
@@ -94,8 +96,8 @@ def test_idle_drain_dilutes_raw_value_below_price_times_eta():
     assert v_no_idle == pytest.approx(0.30 * ETA_D)
 
 
-def test_seg_v_independent_of_cycle_cost():
-    # No "- cycle_cost" term anywhere: seg_v is unchanged across cycle_cost values.
+def test_seg_v_nets_out_cycle_cost():
+    # Covering the gap hour from the pack pays wear on every DC kWh drawn.
     pickup = T0 + timedelta(hours=1)
     prices = _hours(T0, [0.30])
     load = {T0.hour: 800.0}
@@ -104,12 +106,12 @@ def test_seg_v_independent_of_cycle_cost():
         T0, pickup, prices, load, v_lo=0.0, cfg=_cfg(cycle_cost_eur_per_kwh=0.0)
     )
     segs_high, _, _ = overnight_terminal_segments(
-        T0, pickup, prices, load, v_lo=0.0, cfg=_cfg(cycle_cost_eur_per_kwh=0.50)
+        T0, pickup, prices, load, v_lo=0.0, cfg=_cfg(cycle_cost_eur_per_kwh=0.05)
     )
     assert len(segs_low) == len(segs_high) == 1
     assert segs_low[0][0] == pytest.approx(segs_high[0][0])
-    assert segs_low[0][1] == pytest.approx(segs_high[0][1])
     assert segs_low[0][1] == pytest.approx(0.30 * ETA_D)
+    assert segs_high[0][1] == pytest.approx(0.30 * ETA_D - 0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -224,11 +226,68 @@ def test_eta_curve_honored():
 
 
 # ---------------------------------------------------------------------------
-# Glitch hour only inflates its own segment (no global clamp)
+# Refill cap: a kWh is never worth more than re-buying it earlier in the gap
 # ---------------------------------------------------------------------------
 
 
-def test_glitch_hour_only_inflates_own_segment():
+def test_segment_capped_at_refilling_earlier_in_the_gap():
+    cfg = _cfg(charge_margin_eur_per_kwh=0.03)
+    pickup = T0 + timedelta(hours=3)
+    prices = _hours(T0, [0.60, 0.20, 0.60])
+    load = {h: 800.0 for h in range(24)}
+
+    segs, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.10, cfg=cfg)
+
+    (_, v0), (_, v1), (_, v2) = segs
+    assert v0 == pytest.approx(0.60 * ETA_D)  # nothing cheaper before it
+    assert v1 == pytest.approx(0.20 * ETA_D)
+    assert v2 == pytest.approx(0.20 / 0.95 + 0.03)  # refill at 0.20 beats 0.60·η_d
+
+    # The charge efficiency is the DP's own: the measured curve when one is given.
+    curve = SimpleNamespace(eta_charge=lambda _w: 0.80, eta_discharge=lambda _w: ETA_D)
+    segs_c, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.10, cfg=cfg, eta_curve=curve)
+    assert segs_c[2][1] == pytest.approx(0.20 / 0.80 + 0.03)
+
+
+def test_refill_below_v_lo_keeps_segment_at_v_lo():
+    pickup = T0 + timedelta(hours=3)
+    prices = _hours(T0, [0.60, 0.05, 0.60])
+    load = {h: 800.0 for h in range(24)}
+
+    segs, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.20, cfg=_cfg())
+
+    assert [v for _, v in segs] == pytest.approx([0.60 * ETA_D, 0.20, 0.20])  # refill 0.05/0.95 < v_lo
+
+
+def test_negative_estimated_price_never_drops_a_segment_below_v_lo():
+    pickup = T0 + timedelta(hours=3)
+    prices = _hours(T0, [0.40, -0.10, 0.40])
+    load = {h: 800.0 for h in range(24)}
+
+    segs, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.15, cfg=_cfg())
+
+    assert [v for _, v in segs] == pytest.approx([0.40 * ETA_D, 0.15, 0.15])
+
+
+def test_first_gap_hour_is_left_uncapped():
+    # Nothing earlier in the gap to refill from, so a spiked first hour keeps its full
+    # value and becomes the stored value the hold weighs against.
+    pickup = T0 + timedelta(hours=2)
+    prices = _hours(T0, [2.0, 0.10])
+    load = {h: 800.0 for h in range(24)}
+
+    segs, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.10, cfg=_cfg())
+
+    assert segs[0][1] == pytest.approx(2.0 * ETA_D)
+    assert hold_stored_value(0.25, segs) == pytest.approx(2.0 * ETA_D)
+
+
+# ---------------------------------------------------------------------------
+# Glitch hour is capped at refilling before it, other segments untouched
+# ---------------------------------------------------------------------------
+
+
+def test_glitch_hour_capped_at_earlier_refill_others_untouched():
     cfg = _cfg()
     pickup = T0 + timedelta(hours=3)
     prices = _hours(T0, [0.30, 0.30, 2.0])
@@ -240,7 +299,7 @@ def test_glitch_hour_only_inflates_own_segment():
     (_, v0), (_, v1), (_, v2) = segs
     assert v0 == pytest.approx(0.30 * ETA_D)
     assert v1 == pytest.approx(0.30 * ETA_D)  # untouched by the glitch hour
-    assert v2 == pytest.approx(2.0 * ETA_D)  # no upper clamp — inflates only itself
+    assert v2 == pytest.approx(0.30 / 0.95)  # capped at refilling in the 0.30 hours before it
 
     per_hour_dc = 800.0 / ETA_D / 1000.0
     expected_mean = (v0 + v1 + v2) * per_hour_dc / (3 * per_hour_dc)

@@ -127,6 +127,8 @@ def build_estimated_slots(
 ) -> list[PriceSlot]:
     """Estimated PriceSlots covering ONLY [real_horizon_end, tomorrow_solar_pickup).
 
+    Never more than 24 h past ``real_horizon_end``: the estimate is a single day,
+    and repeating it across a multi-day sunless gap would invent prices.
     Empty (the deferral case) when there is no estimate, no pickup, or real prices
     already extend past tonight (real_horizon_end >= pickup).  These slots are NEVER
     merged into the DP's `slots` and never reach `_dp_select_slots`; the display
@@ -137,7 +139,7 @@ def build_estimated_slots(
         return []
     out: list[PriceSlot] = []
     h = real_horizon_end
-    while h < tomorrow_solar_pickup:
+    while h < min(tomorrow_solar_pickup, real_horizon_end + timedelta(hours=24)):
         out.append(PriceSlot(h, estimated_tomorrow[dt_util.as_local(h).hour]))
         h += timedelta(hours=1)
     return out

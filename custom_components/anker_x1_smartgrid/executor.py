@@ -173,6 +173,8 @@ def hold_values(
     """
     cfg = controller.cfg
     stored = _dp_out.get("water_value")
+    if stored is not None:
+        stored = optimize_mod.hold_stored_value(stored, _dp_out.get("terminal_segments"))
     price = resolution.price_at(slots, now, _slot_minutes)
     window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
     deficits = [w for t, w in controller._hold_deficit_w if now - t < window]
@@ -357,6 +359,7 @@ async def run_forcing_and_export(
                 _keep_value = optimize_mod.compute_water_value(
                     min(_remaining_prices_keep) if _remaining_prices_keep else 0.0,
                     controller.cfg,
+                    controller._planner_curve(),
                 )
             # Economic decision (which hours, how much) = the DP's committed plan.
             # Read the committed export RATE (W) for the current clock-hour; plan
