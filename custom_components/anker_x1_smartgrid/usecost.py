@@ -385,8 +385,8 @@ def hourly_series(
     Past hours come from samples, the rest from the plan from ``now`` (cut
     as in :func:`roll_plan`); the running hour merges both. ``soc`` is the level at the
     end of the hour, ``price`` the time mean. The state is the battery action
-    that moved the most energy; with nothing above 0.05 kWh it is ``hold`` when
-    held for over half the hour, else ``idle``. A sample is held when its
+    that moved the most energy; with nothing above 0.05 kWh an hour (scaled by
+    the slot) it is ``hold`` when held for over half the slot, else ``idle``. A sample is held when its
     recorded state is ``hold``, otherwise classified by ``batt_w`` with a 50 W
     dead band: discharge into an exporting meter is export, charge splits into
     solar and grid by the PV surplus as in ``margin.py``. Estimated-tail rows
@@ -464,7 +464,7 @@ def hourly_series(
     for key in sorted(hours):
         b = hours[key]
         moved = max(_ACTIONS, key=b.__getitem__)
-        state = moved if b[moved] > _MOVED_KWH else "hold" if b["held_h"] > slot_min / 120 else "idle"
+        state = moved if b[moved] > _MOVED_KWH * slot_min / 60 else "hold" if b["held_h"] > slot_min / 120 else "idle"
         out.append(
             {
                 "start": key.astimezone(tz).isoformat(),

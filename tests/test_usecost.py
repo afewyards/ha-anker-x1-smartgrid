@@ -748,3 +748,14 @@ class TestMergeDaysCheap:
         planned = {DAY: self._rec(), DAY + timedelta(days=1): self._rec(est=True)}
         _y, t, tm = merge_days({DAY: self._rec()}, planned, DAY, self._hours())
         assert t["cheap"] is not None and tm["cheap"] is None
+
+
+def test_a_steady_house_discharge_reads_house_at_every_slot_width():
+    rows = _phase(T0, 120, 50.0, 49.0, 150.0, 0.25, load=150.0, p1=0.0)
+    now = T0 + timedelta(hours=2)
+    hour = hourly_series(rows, [], AMS, now)
+    quarters = hourly_series(rows, [], AMS, now, slot_min=15)
+    first = [r for r in hour if r["start"].startswith("2026-11-10T09")]
+    assert [r["state"] for r in first] == ["house"]
+    q = [r for r in quarters if r["start"].startswith("2026-11-10T09")]
+    assert len(q) == 4 and {r["state"] for r in q} == {"house"}
