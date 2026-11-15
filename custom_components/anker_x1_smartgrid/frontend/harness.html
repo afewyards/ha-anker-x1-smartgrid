@@ -9,6 +9,8 @@
   ?view=cost|use|sun  with debug, presses that panel switch (cost is the default) and checks it reads pressed
   ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed (today 14 and 15: selling blocked by the reserve, a rule; past hours: a stored reason)
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
+    &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
+    &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
 <style>
@@ -372,7 +374,7 @@
   window.THEME = q.get('theme') === 'light' ? 'light' : 'dark';
   window.TITLE = !!q.get('title');
   window.WIDTH = q.get('w');
-  window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender') };
+  window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender'), slide: q.get('slide'), drag: q.get('drag') };
   window.PICK = q.get('pick');
   window.VIEW = q.get('view');
 
@@ -443,19 +445,50 @@
     showStatus();
   }
   function point(card) {
-    // The card draws on its first resize callback, which can land after these frames.
-    if (!card._geo) return requestAnimationFrame(() => point(card));
-    const r = card._geo.rows.find((h) => h.start.startsWith(HOVER.at));
-    if (!r) return;
     const root = card.shadowRoot;
+    // The card draws on its first resize callback, which can land after these frames; the inspector once the debug answer is in.
+    if (!card._geo || (window.DEBUG && (HOVER.slide || HOVER.drag) && !root.querySelector('.dcap b'))) return requestAnimationFrame(() => point(card));
+    const hour = (at) => card._geo.rows.find((h) => h.start.startsWith(at));
+    const r = hour(HOVER.at);
+    if (!r) return;
     const y = card.getBoundingClientRect().top + HOVER.py;
     // The level graph spans the full column, the panels sit PAD inside it.
     const lv = y < root.querySelector('.lv').getBoundingClientRect().bottom;
-    const x = root.querySelector('.chart').getBoundingClientRect().left + (lv ? r.x0 + r.x1 : r.p0 + r.p1) / 2;
+    const xOf = (h) => root.querySelector('.chart').getBoundingClientRect().left + (lv ? h.x0 + h.x1 : h.p0 + h.p1) / 2;
+    const x = xOf(r);
     const target = root.elementFromPoint(x, y);
     const pointerType = HOVER.touch ? 'touch' : 'mouse';
-    for (const type of HOVER.touch ? ['pointerdown', 'pointerup'] : ['pointermove']) {
-      target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerType, pointerId: 1, bubbles: true, composed: true }));
+    const fire = (el, type, px, py) => el.dispatchEvent(new PointerEvent(type, { clientX: px, clientY: py, pointerType, pointerId: 1, bubbles: true, composed: true }));
+    const cap = () => root.querySelector('.dcap b')?.textContent;
+    const tipRow = () => (root.querySelector('.tip').hidden ? null : card._row);
+    const say = (text) => {
+      STATUS.ws = STATUS.ws ? `${STATUS.ws} · ${text}` : text;
+      showStatus();
+    };
+    const to = hour(HOVER.slide);
+    if (HOVER.touch && to) {
+      // Steps of 6 px, so the first does not yet count as a slide; each step goes to what is under the finger, as the card redraws under it.
+      const before = cap();
+      const end = xOf(to);
+      const under = (type, px) => fire(root.elementFromPoint(px, y + 1), type, px, y + 1);
+      fire(target, 'pointerdown', x, y);
+      for (let px = x; Math.abs(px - x) < Math.abs(end - x); px += Math.sign(end - x) * 6) under('pointermove', px);
+      under('pointermove', end);
+      under('pointerup', end);
+      say(`slide: ${tipRow() === to.t ? 'tooltip followed' : 'TOOLTIP DID NOT FOLLOW'}${window.DEBUG ? (cap() !== before ? ', caption changed' : ', CAPTION UNCHANGED') : ''}`);
+    } else {
+      for (const type of HOVER.touch ? ['pointerdown', 'pointerup'] : ['pointermove']) fire(target, type, x, y);
+    }
+    const on = hour(HOVER.drag);
+    if (HOVER.touch && on) {
+      const row = tipRow();
+      const before = cap();
+      const x2 = xOf(on);
+      const el = root.elementFromPoint(x2, y);
+      fire(el, 'pointerdown', x2, y);
+      for (const dy of [4, 12, 30]) fire(el, 'pointermove', x2 + 1, y - dy);
+      fire(el, 'pointercancel', x2 + 1, y - 30);
+      say(`drag: ${row !== null && tipRow() === row ? 'tooltip stayed' : 'TOOLTIP MOVED'}${window.DEBUG ? (cap() === before ? ', caption stayed' : ', CAPTION CHANGED') : ''}`);
     }
     if (HOVER.rerender) {
       const st = window.HASS.states['sensor.smartgrid_power_card'];

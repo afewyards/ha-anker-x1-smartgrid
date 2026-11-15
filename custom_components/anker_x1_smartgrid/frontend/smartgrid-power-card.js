@@ -173,6 +173,7 @@ svg { display: block; }
 .dsum { display: flex; flex-wrap: wrap; column-gap: 14px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
 .dsum b { display: block; color: var(--sg-ink); font-size: 14px; }
 .dsel { cursor: pointer; }
+.chart, .dsel { touch-action: pan-y; }
 .dsel:focus-visible { outline: 2px solid var(--sg-debug); outline-offset: 1px; }
 .dsb { fill: var(--sg-debug); fill-opacity: .3; }
 .din { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--sg-rule); line-height: 1.35; color: var(--sg-dim); }
@@ -490,13 +491,36 @@ class SmartgridPowerCard extends HTMLElement {
       const rows = this._geo.rows;
       this._select(rows[rows.indexOf(this._pick(rows)) + k]);
     });
-    // Mouse and pen hover; a touch counts only as a tap, so a drag stays the browser's scroll.
-    root.addEventListener('pointermove', (e) => e.pointerType !== 'touch' && this._hover(this._locate(e)));
+    // Mouse and pen hover. A touch hovers too once it slides sideways on a chart, where the browser keeps only vertical
+    // pans (and cancels the touch when it takes one); a touch that never slides is a tap.
+    root.addEventListener('pointermove', (e) => {
+      const t = this._touch;
+      if (e.pointerType === 'touch') {
+        if (!t || t.id !== e.pointerId || !t.chart) return;
+        if (!t.slide) {
+          const dx = Math.abs(e.clientX - t.x);
+          if (dx < 8 || dx <= Math.abs(e.clientY - t.y)) return;
+          t.slide = true;
+          // Selecting an hour redraws the inside of the card, the touched element too, so the card takes the rest of the slide.
+          try {
+            root.querySelector('ha-card').setPointerCapture(e.pointerId);
+          } catch (err) {
+            console.debug(TAG, err);
+          }
+        }
+      }
+      this._hover(this._locate(e));
+    });
     this.addEventListener('pointerleave', (e) => e.pointerType !== 'touch' && this._point(null));
-    root.addEventListener('pointerdown', (e) => (this._tapId = e.pointerType === 'touch' ? e.pointerId : null));
-    root.addEventListener('pointercancel', () => (this._tapId = null));
+    root.addEventListener('pointerdown', (e) => {
+      const chart = !!e.target.closest('.chart, .dsel');
+      this._touch = e.pointerType === 'touch' ? { id: e.pointerId, x: e.clientX, y: e.clientY, chart, slide: false } : null;
+    });
+    root.addEventListener('pointercancel', () => (this._touch = null));
     root.addEventListener('pointerup', (e) => {
-      if (e.pointerType !== 'touch' || e.pointerId !== this._tapId) return;
+      const t = this._touch;
+      this._touch = null;
+      if (e.pointerType !== 'touch' || !t || t.id !== e.pointerId || t.slide) return;
       const at = this._locate(e);
       const r = this._hit(at);
       this._point(r && r.t !== this._row ? at : null);
