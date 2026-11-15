@@ -50,6 +50,17 @@ def test_extract_realized_day_buckets_by_local_hour():
     assert "24" not in got  # hour 0 of the NEXT day is a different date, excluded
 
 
+def test_extract_realized_day_means_quarter_hour_slots():
+    from unittest.mock import patch
+
+    day = datetime(2026, 6, 25, 0, 0, tzinfo=UTC)
+    slots = [PriceSlot(day + timedelta(minutes=15 * i), 0.10 + 0.01 * (i % 4)) for i in range(96)]
+    with patch("homeassistant.util.dt.as_local", side_effect=lambda d: d):
+        got = pricing_store.extract_realized_day(slots, day.date())
+    assert len(got) == 24
+    assert got["7"] == pytest.approx(0.115)
+
+
 @pytest.mark.asyncio
 async def test_store_snapshot_is_date_keyed_idempotent_and_pruned():
     store = pricing_store.PriceHistoryStore(_FakeStore(), max_days=2)

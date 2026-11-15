@@ -32,19 +32,19 @@ def prune_history(history: dict[str, dict[str, float]], max_days: int) -> dict[s
 
 
 def extract_realized_day(slots: list[PriceSlot], target_date: date) -> dict[str, float]:
-    """Bucket one local date's realized import prices by local hour.
+    """Bucket one local date's realized import prices by local hour (mean of the hour's slots).
 
     `slots` may carry elapsed hours (the Zonneplan `forecast` attribute spans ~24 h
     back and `parse_price_curve` has no now-filter), so the just-finished day is
     present at the local-day rollover.  Returns {str(local_hour): price_eur_per_kwh};
     may hold < 24 keys when hours are missing (completeness judged by the consumer).
     """
-    out: dict[str, float] = {}
+    by_hour: dict[str, list[float]] = {}
     for s in slots:
         local = dt_util.as_local(s.start)
         if local.date() == target_date:
-            out[str(local.hour)] = s.price
-    return out
+            by_hour.setdefault(str(local.hour), []).append(s.price)
+    return {h: sum(p) / len(p) for h, p in by_hour.items()}
 
 
 class PriceHistoryStore:
