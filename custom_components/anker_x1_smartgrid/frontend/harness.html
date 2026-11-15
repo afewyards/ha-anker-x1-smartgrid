@@ -4,9 +4,10 @@
 <title>smartgrid-power-card harness</title>
 <!--
   Fixture page for the power card, not served by Home Assistant.
-  ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail|debug-gap|debug-mixed|debug-throw  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
-  ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan (debug-empty: no plan stored, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan, debug-mixed: yesterday's plan in hourly slots, debug-throw: an answer the inspector cannot format)
-  ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed
+  ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail|debug-gap|debug-mixed|debug-stale|debug-throw  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan, each hour's reason and the slots' grid cost (debug-empty: no plan stored, no past reasons, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan and no export price in export hours, debug-mixed: yesterday's plan in hourly slots, debug-stale: stale inputs, debug-throw: an answer the inspector cannot format)
+  ?view=cost|use|sun  with debug, presses that panel switch (cost is the default) and checks it reads pressed
+  ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed (today 14 and 15: selling blocked by the reserve, a rule; past hours: a stored reason)
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
@@ -229,6 +230,9 @@
       }
     }
     // Quarter rows that add up to the hours; today 06:00 and 05:15 have no samples, and 02:15 delivers 70% of its setpoint.
+    // Grid cost under the plan row of the same start and as measured; debug-gap has no export price in export hours.
+    const planned = new Map(reference.map((x) => [x.start, x]));
+    const r4 = (v) => Math.round(v * 1e4) / 1e4;
     const slots = [];
     hours.forEach((h, n) => {
       const { why, ...base } = h;
@@ -241,20 +245,37 @@
         const quarter = (key) => (h[key] == null ? h[key] : r3(h[key] / 4));
         const measured = t + q * 900e3 < NOW;
         const batt = h.state === 'house' ? -(h.batt_house_kwh || 0) * 1000 : sp * (at.startsWith(`${TODAY}T02:15`) ? 0.7 : 0.97);
+        const price = h.price === null ? null : r3(h.price + (q - 1.5) * 0.004);
+        const plan = t + (q + 1) * 900e3 > NOW;
+        const ep = price === null || (CASE === 'debug-gap' && h.state === 'export') ? null : r3(price - 0.05);
+        const grid = (inn, out) => (price === null || (out > 1e-6 && ep === null) ? null : r4(inn * price - out * (ep || 0)));
+        const f = planned.get(at);
+        const pe = plan || !f ? null : grid(f.grid_charge_kwh + Math.max(f.load_kwh - f.pv_kwh, 0), f.grid_export_kwh);
+        const re = plan || !f ? null : grid(quarter('grid_in_house_kwh') + quarter('grid_in_charge_kwh'), quarter('grid_out_kwh'));
         slots.push({
           ...base,
           start: at,
-          price: h.price === null ? null : r3(h.price + (q - 1.5) * 0.004),
+          price,
           soc: h.soc === null || s0 === null ? h.soc : Math.round((s0 + ((h.soc - s0) * (q + 1)) / 4) * 10) / 10,
-          plan: t + (q + 1) * 900e3 > NOW,
+          plan,
           ...Object.fromEntries(['use_kwh', 'solar_kwh', 'batt_house_kwh', 'grid_in_house_kwh', 'grid_in_charge_kwh', 'grid_out_kwh'].map((key) => [key, quarter(key)])),
           setpoint_w: h.price === null ? null : sp,
           batt_w: measured ? Math.round(batt) : null,
+          export_price: ep,
+          plan_eur: pe === null || re === null ? null : pe,
+          real_eur: pe === null || re === null ? null : re,
         });
       }
     });
+    const stale = CASE === 'debug-stale';
+    const built = iso(NOW - 5 * 60e3);
     const internals = {
-      built_at: iso(NOW - 5 * 60e3),
+      built_at: built,
+      // debug-stale: prices end tonight, tomorrow estimated, a 2 h old sun forecast and a 7 min old battery reading.
+      prices_until: iso(midnight(addDays(TODAY, stale ? 1 : 2))),
+      tomorrow_estimated: stale,
+      battery_sample_age_s: stale ? 420 : 8,
+      pv_forecast_age_s: stale ? 7300 : 1260,
       forecast_source: 'remote',
       load_correction_ratio: 0.86,
       reserve_soc: 12.4,
@@ -269,7 +290,42 @@
       // JSON.stringify throws on a BigInt, so the unknown-key chip fails to format.
       ...(CASE === 'debug-throw' && { broken: 1n }),
     };
-    return { slots, reference, internals };
+    // Each hour's last reason, built so the build-ups agree with the action; past hours as stored 10 min before they ran.
+    // Today 14:00 and 15:00 hold although selling clears the bar: the reserve, then a planning rule.
+    const EC = 0.93, ED = 0.91, CC = 0.03, M = 0.04, FEE = 0.02;
+    const beat = (q, price, b, parts) => ({ q, price: r4(price), beat_eur: r4(b), parts: Object.entries(parts).map(([key, eur]) => ({ key, eur: r4(eur) })) });
+    const sell = (price, keep) => {
+      const b = (keep + CC) / ED + FEE;
+      return beat('sell', price, b, { kept: keep, wear: CC, conversion: b - keep - CC - FEE, fee: FEE });
+    };
+    const house = (price, keep) => {
+      const b = (keep + 0.03) / 0.9;
+      return beat('house', price, b, { kept: keep, wear: CC, conversion: b - keep - CC });
+    };
+    const reasons = {};
+    hours.forEach((h, n) => {
+      const kind = { export: 'export', charge_grid: 'charge', house: 'house', hold: 'hold' }[h.state];
+      const t = Date.parse(h.start);
+      const p = h.price;
+      if (!kind || p === null || (CASE === 'debug-empty' && !h.plan)) return;
+      const next = hours.findIndex((x, j) => j > n && x.state === (kind === 'export' || kind === 'house' ? 'charge_grid' : 'export'));
+      const kept_for = next < 0 ? { start: iso(midnight(addDays(TODAY, 2))), end: null, kind: 'next_day' } : { start: hours[next].start, end: iso(Date.parse(hours[next].start) + H), kind: kind === 'export' || kind === 'house' ? 'refill' : 'export' };
+      let keep;
+      let beats;
+      if (kind === 'export') beats = [sell(p, (keep = r3((p - FEE) * ED - CC - 0.02)))];
+      else if (kind === 'charge') {
+        keep = r3((p + 0.03) / EC + M);
+        const b = EC * (keep - M);
+        beats = [beat('charge', p, b, { kept: keep, margin: -M, conversion: b - keep + M })];
+      } else {
+        keep = r3(0.9 * (p + (kind === 'house' ? -0.02 : 0.03)) - 0.03);
+        beats = [house(p, keep), sell(r3(kind === 'house' ? p - 0.05 : p), keep)];
+        const blocked = { [`${TODAY}T14`]: 'reserve', [`${TODAY}T15`]: 'rule' }[h.start.slice(0, 13)];
+        if (blocked) beats[1] = { ...sell(beats[1].beat_eur + 0.03, keep), blocked };
+      }
+      reasons[h.start] = { kind, keep_eur: keep, use_eur: r3(kind === 'charge' ? p / EC : p * 0.9 - 0.03), kept_for, beats, at: h.plan ? built : iso(t - 10 * 60e3) };
+    });
+    return { slots, reference, internals, reasons };
   }
 
   const states = {};
@@ -297,6 +353,7 @@
   window.WIDTH = q.get('w');
   window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender') };
   window.PICK = q.get('pick');
+  window.VIEW = q.get('view');
 
   customElements.define('ha-card', class extends HTMLElement {
     connectedCallback() {
@@ -334,8 +391,18 @@
       STATUS.ws = window.DEBUG ? `callWS ${WS.length}` : WS.length ? 'callWS CALLED WITH DEBUG OFF' : '';
       showStatus();
       if (HOVER.at) point(card);
-      if (window.DEBUG && PICK) pick(card);
+      if (window.DEBUG && VIEW) view(card, () => PICK && pick(card));
+      else if (window.DEBUG && PICK) pick(card);
     }));
+  }
+  function view(card, then) {
+    const root = card.shadowRoot;
+    const button = () => root.querySelector(`[data-view="${VIEW}"]`);
+    if (!button() || !root.querySelector('.dcap')) return requestAnimationFrame(() => view(card, then));
+    button().click();
+    STATUS.ws += button() && button().getAttribute('aria-pressed') === 'true' ? ` · view: ${VIEW}` : ' · view: NOT PRESSED';
+    showStatus();
+    then();
   }
   function pick(card) {
     const root = card.shadowRoot;
@@ -345,7 +412,7 @@
     const r = card._geo.rows.find((h) => h.start.startsWith(PICK));
     const before = cap().textContent;
     if (r) {
-      // In the strip, where the hours sit PAD inside the column.
+      // Above the time axis of the debug chart, where the hours sit PAD inside the column.
       const b = root.querySelector('.dsel').getBoundingClientRect();
       const x = b.left + (r.p0 + r.p1) / 2;
       const y = b.bottom - 25;

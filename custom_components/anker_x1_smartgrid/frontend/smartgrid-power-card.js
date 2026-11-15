@@ -169,10 +169,8 @@ svg { display: block; }
 .dt { display: flex; align-items: center; gap: 8px; }
 .chip { font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 1.5; color: var(--sg-debug); border: 1px solid var(--sg-debug); border-radius: 9px; padding: 0 7px; }
 .dbg { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sg-rule); }
-.dl, .dpl { fill: none; stroke: var(--sg-debug); stroke-width: 1.2; stroke-dasharray: 3 2; }
-.dpl { stroke-width: 1; }
-.dgap { fill: var(--sg-debug); fill-opacity: .2; }
-.dsum { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 8px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
+.dl { fill: none; stroke: var(--sg-debug); stroke-width: 1.2; stroke-dasharray: 3 2; }
+.dsum { display: flex; flex-wrap: wrap; column-gap: 14px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
 .dsum b { display: block; color: var(--sg-ink); font-size: 14px; }
 .dsel { cursor: pointer; }
 .dsel:focus-visible { outline: 2px solid var(--sg-debug); outline-offset: 1px; }
@@ -193,6 +191,32 @@ svg { display: block; }
 .dkv { display: flex; flex-wrap: wrap; gap: 4px 5px; margin-top: 6px; }
 .dkv span { border: 1px solid var(--sg-rule); border-radius: 9px; padding: 0 7px; white-space: nowrap; }
 .dkv b { color: var(--sg-ink); font-weight: 600; }
+.dkv .old { border-color: var(--sg-neg); }
+.dkv .old b, .dkv .old i { color: var(--sg-neg); }
+.dkv i { font-style: normal; font-weight: 700; }
+.dvh { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; margin-bottom: 4px; }
+.dvh .dvt { color: var(--sg-debug); font-weight: 700; margin-right: 4px; }
+.dvg { display: flex; column-gap: 4px; }
+.dvb { font: inherit; color: var(--sg-dim); background: none; border: 0; padding: 0; cursor: pointer; height: 28px; margin: -5px 0; display: flex; align-items: center; }
+.dvb span { border: 1px solid var(--sg-rule); border-radius: 9px; padding: 0 8px; line-height: 1.5; }
+.dvb[aria-pressed=true] span { border-color: var(--sg-debug); color: var(--sg-ink); }
+.dvb:focus-visible { outline: none; }
+.dvb:focus-visible span { outline: 2px solid var(--sg-debug); outline-offset: 1px; }
+.dvw .so { stroke-width: 1.8; }
+.dn { fill: var(--sg-neg); } .dp { fill: var(--sg-pos); }
+.dbus { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px 12px; align-items: start; }
+.dbu { border-left: 2px solid var(--sg-debug); padding-left: 7px; min-width: 0; }
+.dbu .dq { color: var(--sg-debug); font-weight: 700; }
+.dld { display: grid; grid-template-columns: auto 1fr auto; column-gap: 6px; align-items: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dld .t { color: var(--sg-ink); font-weight: 600; }
+.dld .v { text-align: right; color: var(--sg-ink); }
+.dld .v.pos { color: var(--sg-pos); } .dld .v.neg { color: var(--sg-neg); }
+.dtr { position: relative; height: 7px; }
+.dtr b { position: absolute; top: 0; height: 100%; border-radius: 2px; background: var(--sg-house); }
+.dtr b.tot { background: var(--sg-ink); } .dtr b.dp { background: var(--sg-pos); } .dtr b.dn { background: var(--sg-neg); }
+.dans { margin-top: 2px; }
+.dans b { font-weight: 600; }
+.dans b.pos { color: var(--sg-pos); } .dans b.neg { color: var(--sg-neg); }
 </style>`;
 
 const LEVEL_H = 48;
@@ -222,12 +246,12 @@ function barBox(r) {
   return [r.p0 + (r.p1 - r.p0 - w) / 2, w];
 }
 // A key's hourly kWh as stepped outlines, one path per run of hours.
-function outline(rows, key, cls) {
+function outline(rows, key, cls, h = kh, z = Z) {
   let o = '';
   let d = '';
   let prev = null;
   const flush = () => {
-    if (d) o += `<path d="${d} V${Z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
+    if (d) o += `<path d="${d} V${z}" class="${cls}"${prev.plan ? ' opacity=".5"' : ''}/>`;
     d = '';
   };
   for (const r of rows) {
@@ -239,9 +263,9 @@ function outline(rows, key, cls) {
     }
     if (!prev || prev.t + H !== r.t || prev.i !== r.i || prev.plan !== r.plan) {
       flush();
-      d = `M${r1(r.p0)},${Z}`;
+      d = `M${r1(r.p0)},${z}`;
     }
-    d += ` V${r1(Z - kh(v))} H${r1(r.p1)}`;
+    d += ` V${r1(z - h(v))} H${r1(r.p1)}`;
     prev = r;
   }
   flush();
@@ -293,10 +317,59 @@ const LEGEND = `<div class="lg dm">
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
 const DEBUG_FAIL = '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
-const DEBUG_LEGEND = `<div class="lg dm">
-<span>first plan of the day${stroke('dl')}level<svg width="10" height="9"><rect x=".5" y=".5" width="9" height="8" class="dpl"/></svg>grid kWh${stroke('dl')}use</span>
-<span>use against its forecast${swatch('go', 9)}more${swatch('gc', 9)}less</span>
-</div>`;
+const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'sun']];
+const DEBUG_LEGEND = {
+  use: `<span>first plan of the day${stroke('dl')}forecast${stroke('uo')}measured house use</span>`,
+  sun: `<span>first plan of the day${stroke('dl')}forecast${stroke('so')}measured sun</span>`,
+  cost: `<span>grid cost against the first plan of the day${swatch('dn', 9)}dearer${swatch('dp', 9)}cheaper<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>unknown</span>`,
+};
+
+// The price an hour has to beat before selling, charging or using the battery pays, per question.
+const ASK = {
+  sell: ['sell', 'export', 'Sell above', 'Export price'],
+  charge: ['charge', 'charge', 'Charge below', 'Import price'],
+  house: ['use it for the house', 'house', 'Use above', 'Import price'],
+};
+const PART = { wear: 'Wear', conversion: 'Conversion', fee: 'Export fee', margin: 'Charge margin' };
+function stamp(a, t, tz) {
+  return dateOf(a, tz) === dateOf(t, tz) ? clock(a, tz) : `${weekday(a, tz)} ${clock(a, tz)}`;
+}
+function buildups(w, t, tz) {
+  const bs = (w && Array.isArray(w.beats) ? w.beats : []).filter((b) => b && ASK[b.q] && num(b.price) !== null && num(b.beat_eur) !== null);
+  if (!bs.length) return '';
+  const f = w.kept_for || {};
+  const a = Date.parse(f.start);
+  const kept = f.kind === 'next_day' ? 'Worth next day' : Number.isFinite(a) ? `${f.kind === 'refill' ? 'Refill' : 'Worth'} at ${stamp(a, t, tz)}` : 'Worth later';
+  const ups = bs.map((b) => {
+    let s = 0;
+    const steps = (Array.isArray(b.parts) ? b.parts : []).filter((p) => p && num(p.eur) !== null && Math.abs(p.eur) >= 0.0005).map((p) => [p, s, (s += p.eur)]);
+    return [b, steps];
+  });
+  // One scale for both build-ups, so their bars compare.
+  const vals = ups.flatMap(([b, st]) => [b.price, b.beat_eur, ...st.flatMap(([, x, y]) => [x, y])]);
+  const lo = Math.min(0, ...vals);
+  const span = Math.max(0, ...vals) - lo || 1;
+  const bar = (x, y, cls) => {
+    const wd = (Math.abs(y - x) / span) * 100;
+    return `<span class="dtr">${wd >= 0.5 ? `<b${cls ? ` class="${cls}"` : ''} style="left:${r1(((Math.min(x, y) - lo) / span) * 100)}%;width:${r1(wd)}%"></b>` : ''}</span>`;
+  };
+  const one = ([b, steps]) => {
+    const [verb, does, above, gets] = ASK[b.q];
+    // Above zero the hour's price pays: selling and house use above the bar, charging below it.
+    const d = b.q === 'charge' ? b.beat_eur - b.price : b.price - b.beat_eur;
+    const ok = d >= 0 ? 'pos' : 'neg';
+    const rows = steps.map(([p, x, y]) => `<span>${p.key === 'kept' ? kept : PART[p.key] || esc(p.key)}</span>${bar(x, y)}<span class="v">${p.key === 'kept' ? eur(p.eur, 3) : signed(p.eur, '€', 3)}</span>`);
+    const end = b.blocked
+      ? `The price clears it, but ${b.blocked === 'reserve' ? 'the reserve holds this energy back' : 'a planning rule holds it back'}.`
+      : `${d >= 0 ? 'Clears it' : 'Short'} by <b class="${ok}">${eur(Math.abs(d), 3)} per kWh</b>.`;
+    return (
+      `<div class="dbu"><div class="dq">Why ${w.kind === does ? '' : 'not '}${verb} now</div><div class="dld">${rows.join('')}` +
+      `<span class="t">${above}</span>${bar(0, b.beat_eur, 'tot')}<span class="v t">${eur(b.beat_eur, 3)}</span>` +
+      `<span>${gets}</span>${bar(0, b.price, ok === 'pos' ? 'dp' : 'dn')}<span class="v ${ok}">${eur(b.price, 3)}</span></div><div class="dans">${end}</div></div>`
+    );
+  };
+  return `<div class="dbus">${ups.map(one).join('')}</div>`;
+}
 
 // What stored solar earned over exporting it; left out while it rounds to zero.
 function sun(v, cur = '') {
@@ -340,7 +413,22 @@ function per(v) {
 function pct(v) {
   return `${fx(v, 0)}%`;
 }
+function ago(s) {
+  return s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
+}
+function until(v, tz, today) {
+  const t = Date.parse(v);
+  if (!Number.isFinite(t)) return esc(v);
+  const d = dateOf(t - 1, tz);
+  const c = clock(t, tz);
+  return `${d === today ? 'today' : d === addDays(today, 1) ? 'tomorrow' : weekday(t - 1, tz)} ${c === '00:00' ? '24:00' : c}`;
+}
+// Label, value, and when the value is stale; inputs first. A value of null leaves its chip out.
 const INTERNALS = new Map([
+  ['prices_until', ['prices to', until, (v, tz, today) => !(Date.parse(v) >= localTime(addDays(today, 2), 0, tz))]],
+  ['tomorrow_estimated', ['tomorrow', (v) => (v === true ? 'estimated' : null), (v) => v === true]],
+  ['pv_forecast_age_s', ['sun forecast', (v) => `${num(v) === null ? DASH : ago(v)} old`, (v) => v > 5400]],
+  ['battery_sample_age_s', ['battery reading', (v) => `${num(v) === null ? DASH : ago(v)} ago`, (v) => v > 300]],
   ['built_at', ['plan built', (v, tz) => (Number.isFinite(Date.parse(v)) ? clock(Date.parse(v), tz) : esc(v))]],
   ['forecast_source', ['forecast', (v) => esc(v)]],
   ['load_correction_ratio', ['load correction', (v) => `×${fx(v, 2)}`]],
@@ -357,16 +445,43 @@ const INTERNALS = new Map([
 function watts(v) {
   return num(v) === null ? DASH : `${Math.round(v) ? signed(v, '', 0) : '0'} W`;
 }
+// Slot rows summed per local hour; an hour only partly covered (joined mid-way, or a slot missing) is left out.
+// Its narrowest slot sets how many it needs, so hourly and quarter-hour rows can sit side by side.
+function hourly(list, tz, init, add) {
+  const xs = (Array.isArray(list) ? list : [])
+    .map((x) => [Date.parse(x && x.start), x])
+    .filter(([t]) => Number.isFinite(t))
+    .sort((a, b) => a[0] - b[0]);
+  const out = new Map();
+  xs.forEach(([t, x], j) => {
+    const p = parts(t, tz);
+    const k = t - (p.minute * 60 + p.second) * 1e3;
+    let a = out.get(k);
+    if (!a) out.set(k, (a = { n: 0, step: H, ...init() }));
+    // A slot lasts until the next one starts, an hour at most; the last one as long as the one before it.
+    const span = j + 1 < xs.length ? xs[j + 1][0] - t : j ? t - xs[j - 1][0] : H;
+    a.n++;
+    a.step = Math.min(a.step, span);
+    add(a, x);
+  });
+  for (const [k, a] of out) if (a.n * a.step < H) out.delete(k);
+  return out;
+}
 
 class SmartgridPowerCard extends HTMLElement {
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
     root.innerHTML = STYLE + '<ha-card></ha-card>';
+    this._view = 'cost';
     root.addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]');
+      const v = e.target.closest('[data-view]');
       if (b) this._act(b.dataset.act);
-      else if (e.target.closest('.dsel')) this._select(this._hit(this._locate(e), '.dsel'));
+      else if (v) {
+        this._view = v.dataset.view;
+        this._render();
+      } else if (e.target.closest('.dsel')) this._select(this._hit(this._locate(e), '.dsel'));
     });
     root.addEventListener('keydown', (e) => {
       const k = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
@@ -376,7 +491,7 @@ class SmartgridPowerCard extends HTMLElement {
       this._select(rows[rows.indexOf(this._pick(rows)) + k]);
     });
     // Mouse and pen hover; a touch counts only as a tap, so a drag stays the browser's scroll.
-    root.addEventListener('pointermove', (e) => e.pointerType !== 'touch' && this._point(this._locate(e)));
+    root.addEventListener('pointermove', (e) => e.pointerType !== 'touch' && this._hover(this._locate(e)));
     this.addEventListener('pointerleave', (e) => e.pointerType !== 'touch' && this._point(null));
     root.addEventListener('pointerdown', (e) => (this._tapId = e.pointerType === 'touch' ? e.pointerId : null));
     root.addEventListener('pointercancel', () => (this._tapId = null));
@@ -480,11 +595,18 @@ class SmartgridPowerCard extends HTMLElement {
     if (y < 0 || y >= c.height) return null;
     const i = g.cx.findIndex((l, k) => x >= l && x < l + g.cw[k]);
     if (i < 0) return null;
-    // The level graph spans the full column, the panels below sit inside PAD.
-    const pad = y < LEVEL_H ? 0 : PAD;
+    // The level graph spans the full column, the panels below and the debug panel sit inside PAD.
+    const pad = y < LEVEL_H && box === '.chart' ? 0 : PAD;
     const t = g.starts[i] + ((x - g.cx[i] - pad) / (g.cw[i] - 2 * pad)) * (g.ends[i] - g.starts[i]);
     const u = Math.min(Math.max(t, g.starts[i]), g.ends[i] - 1);
     return g.rows.find((r) => r.i === i && u >= r.t && u < r.t + H) || null;
+  }
+
+  // In debug mode the hour pointed at on either chart is also the one inspected; off the charts the last one stays.
+  _hover(at) {
+    const r = this._cfg && this._cfg.debug && (this._hit(at) || this._hit(at, '.dsel'));
+    if (r && r.t !== this._sel) this._select(r);
+    this._point(at);
   }
 
   _point(at) {
@@ -555,8 +677,9 @@ class SmartgridPowerCard extends HTMLElement {
     return `${s}<div class="hu"><span class="k">House ${use.toFixed(2)} kWh</span>${bar}${line.length ? `<span class="k">${line.join(' · ')}</span>` : ''}</div>`;
   }
 
+  // In rows of 50 px: about 340 px, or about 940 px with the debug panel and two build-ups.
   getCardSize() {
-    return 7;
+    return this._cfg && this._cfg.debug ? 19 : 7;
   }
 
   static getStubConfig() {
@@ -567,11 +690,11 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel) return;
-    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg, sel: this._sel };
+    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel && d.view === this._view) return;
+    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg, sel: this._sel, view: this._view };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
-    const refocus = ae && ['[role=switch]', '.dsel'].find((q) => ae.matches(q));
+    const refocus = ae && (ae.dataset.view ? `[data-view="${ae.dataset.view}"]` : ['[role=switch]', '.dsel'].find((q) => ae.matches(q)));
     try {
       card.innerHTML = this._body(width);
       // The 30-day line gives up its sun figure, then itself, before the battery text is clipped.
@@ -647,7 +770,7 @@ class SmartgridPowerCard extends HTMLElement {
     let dbg = '';
     if (cfg.debug) {
       try {
-        dbg = this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null, nowCol >= 0 ? X(nowCol, now, PAD) : null);
+        dbg = this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null);
       } catch (e) {
         console.error(TAG, e);
         dbg = DEBUG_FAIL;
@@ -690,7 +813,7 @@ class SmartgridPowerCard extends HTMLElement {
     return `<div class="bat"><span class="b1"><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}${this._control(sw)}</div>`;
   }
 
-  _level(rows, { cx, W }, nowX, over = '') {
+  _level(rows, { cx, W }, nowX) {
     let s = `<svg class="dm" width="${W}" height="${LEVEL_H}"><defs><pattern id="sgh" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" class="hs"/></pattern></defs>`;
     s += `<line x1="0" y1="4" x2="${W}" y2="4" class="rule" stroke-dasharray="2 3"/><line x1="0" y1="46" x2="${W}" y2="46" class="rule"/>`;
     const groups = [];
@@ -720,7 +843,6 @@ class SmartgridPowerCard extends HTMLElement {
       s += `<polygon points="${r1(gr.pts[0][0])},46 ${pts} ${r1(gr.pts[gr.pts.length - 1][0])},46" class="lvlf"${op}/>`;
       s += `<polyline points="${pts}" class="lvl"${op}/>`;
     }
-    s += over;
     for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${LEVEL_H}" class="rule"/>`;
     if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="0" x2="${r1(nowX)}" y2="46" class="now"/>`;
     // Extremes are labelled so the graph does not rely on colour alone.
@@ -865,101 +987,89 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     return s + `<rect class="gd" data-k="p" y="0" width="0" height="${PANEL_H - 14}"/></svg>`;
   }
 
-  // The day's first plan over the past hours: level, grid bars, use against its forecast, today's totals, and one hour inspected.
-  _debug(rows, geo, nowX, nowP) {
+  // Against the day's first plan, the past hours' grid cost, house use or sun, today's sum, and one hour inspected.
+  _debug(rows, geo, nowP) {
     const { err, data } = this._dbg;
     if (err) return DEBUG_FAIL;
     const { dates, today, cx, cw, W, tz } = geo;
-    const refs = (data && Array.isArray(data.reference) ? data.reference : [])
-      .map((x) => [Date.parse(x && x.start), x])
-      .filter(([t]) => Number.isFinite(t))
-      .sort((a, b) => a[0] - b[0]);
-    const ref = new Map();
-    refs.forEach(([t, x], j) => {
-      const p = parts(t, tz);
-      const k = t - (p.minute * 60 + p.second) * 1e3;
-      let a = ref.get(k);
-      if (!a) ref.set(k, (a = { n: 0, step: H, load_kwh: 0, pv_kwh: 0, up_kwh: 0, out_kwh: 0, ref_soc: null }));
-      const v = (key) => num(x[key]) ?? 0;
-      // A slot lasts until the next one starts, an hour at most; the last one as long as the one before it.
-      const span = j + 1 < refs.length ? refs[j + 1][0] - t : j ? t - refs[j - 1][0] : H;
-      a.n++;
-      a.step = Math.min(a.step, span);
-      a.load_kwh += v('load_kwh');
-      a.pv_kwh += v('pv_kwh');
-      a.up_kwh += v('grid_charge_kwh') + Math.max(v('load_kwh') - v('pv_kwh'), 0);
-      a.out_kwh += v('grid_export_kwh');
-      if (num(x.soc) !== null) a.ref_soc = x.soc;
-    });
-    // An hour the plan only partly covers (joined mid-way, or a slot missing) would set part of its forecast against the whole hour.
-    // Its narrowest slot sets how many it needs, so hourly and quarter-hour plans can sit side by side.
-    for (const [k, a] of ref) if (a.n * a.step < H) ref.delete(k);
-    const past = rows.filter((r) => !r.plan && ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
-    const sel = this._pick(rows);
-    const band = (a, b, h) => (sel ? `<rect x="${r1(a)}" y="0" width="${r1(b - a)}" height="${h}" class="dsb"/>` : '');
-
-    const at = new Map(rows.map((r) => [r.t, r]));
-    const pts = (a) => a.map(([x, soc]) => `${r1(x)},${r1(ly(soc))}`).join(' ');
-    const runs = [];
-    let run = null;
-    for (const r of past) {
-      if (num(r.soc) === null || num(r.ref_soc) === null) {
-        run = null;
-        continue;
-      }
-      if (!run || run.t + H !== r.t) {
-        // Both lines start where the level graph's does, at the previous hour's level.
-        const m0 = num(at.get(r.t - H)?.soc);
-        const f0 = num(ref.get(r.t - H)?.ref_soc);
-        runs.push((run = { m: [[r.x0, m0 ?? r.soc]], f: [[r.x0, f0 ?? r.ref_soc]] }));
-      }
-      run.m.push([r.x1, r.soc]);
-      run.f.push([r.x1, r.ref_soc]);
-      run.t = r.t;
-    }
-    const lv = runs.map(({ m, f }) => `<polygon points="${pts(m)} ${pts([...f].reverse())}" class="dgap"/><polyline points="${pts(f)}" class="dl"/>`).join('') + band(sel?.x0, sel?.x1, LEVEL_H);
-
-    // The panels' grid band without the price lines above it, then the strip and the time axis.
-    const dy = Z - CUT * KWH_PX - 4;
-    const sy = Z + CUT * KWH_PX + 7 - dy;
-    let s = `<svg class="dm" width="${W}" height="${sy + 25}">`;
-    for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${sy + 8}" class="rule"/>`;
-    s += `<g transform="translate(0,${-dy})">`;
-    for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
-    s += gridBars(rows)[0];
-    for (const r of past) {
-      const [bx, w] = barBox(r);
-      const up = kh(r.up_kwh);
-      const dn = kh(r.out_kwh);
-      if (up > 0) s += `<rect x="${r1(bx)}" y="${r1(Z - up)}" width="${r1(w)}" height="${r1(up)}" class="dpl"/>`;
-      if (dn > 0) s += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="dpl"/>`;
-    }
-    s += `${outline(past, 'load_kwh', 'dl')}</g>`;
-    const miss = past.filter((r) => num(r.use_kwh) !== null).map((r) => [r, r.use_kwh - r.load_kwh]);
-    const mx = Math.max(0.1, ...miss.map(([, d]) => Math.abs(d)));
-    for (const [r, d] of miss) {
-      s += `<rect x="${r1(r.p0)}" y="${sy}" width="${r1(Math.max(0.5, r.p1 - r.p0 - 0.6))}" height="8" class="${d > 0 ? 'go' : 'gc'}" fill-opacity="${(0.15 + (0.85 * Math.abs(d)) / mx).toFixed(2)}"/>`;
-    }
-    for (let i = 0; i < cx.length; i++) s += ticks(dates[i], i, geo, cx[i] + PAD, sy + 21);
-    if (nowP !== null) s += `<line x1="${r1(nowP)}" y1="0" x2="${r1(nowP)}" y2="${sy + 8}" class="now"/>`;
-    s += `${band(sel?.p0, sel?.p1, sy + 8)}</svg>`;
-
+    const ref = hourly(
+      data && data.reference,
+      tz,
+      () => ({ load_kwh: 0, pv_kwh: 0 }),
+      (a, x) => {
+        a.load_kwh += num(x.load_kwh) ?? 0;
+        a.pv_kwh += num(x.pv_kwh) ?? 0;
+      },
+    );
+    const cov = rows.filter((r) => ref.has(r.t)).map((r) => ({ ...r, ...ref.get(r.t) }));
+    const past = cov.filter((r) => !r.plan);
     const tp = past.filter((r) => dates[r.i] === today);
-    const diff = (a, b) => {
-      const v = tp.filter((r) => num(r[a]) !== null);
-      return v.length ? v.reduce((t, r) => t + r[a] - r[b], 0) : null;
-    };
-    const kwh = (v) => (v === null ? DASH : `${signed(v, '', 1)} kWh`);
-    const lvl = tp.filter((r) => num(r.soc) !== null && num(r.ref_soc) !== null).pop();
-    const sum = [
-      [kwh(diff('use_kwh', 'load_kwh')), 'use against forecast today'],
-      [kwh(diff('solar_kwh', 'pv_kwh')), 'sun against forecast today'],
-      [lvl ? `${signed(lvl.soc - lvl.ref_soc, '', 0)}%` : DASH, 'level against plan now'],
-    ];
+    const sel = this._pick(rows);
+    const view = this._view;
+    const top = 12;
+    const base = 92;
+    const scale = (y, text) => `<line x1="0" y1="${r1(y)}" x2="${W}" y2="${r1(y)}" class="rule" stroke-dasharray="2 3"/><text x="${W - 2}" y="${r1(y - 2)}" font-size="10" text-anchor="end" class="dim">${text}</text>`;
+    let v = `<svg class="dm dvw" width="${W}" height="${base + 17}">`;
+    for (let i = 1; i < cx.length; i++) v += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${base}" class="rule"/>`;
+    let sum;
+    if (view === 'cost') {
+      // Per hour over, what the grid cost against what the first plan would have: dearer up, cheaper down.
+      const cost = hourly(
+        data && data.slots,
+        tz,
+        () => ({ eur: 0, miss: false }),
+        (a, x) => {
+          if (x.plan) return;
+          if (num(x.real_eur) === null || num(x.plan_eur) === null) a.miss = true;
+          else a.eur += x.real_eur - x.plan_eur;
+        },
+      );
+      const costOf = (r) => {
+        const a = cost.get(r.t);
+        return a && !a.miss ? a.eur : null;
+      };
+      const mid = (top + base) / 2;
+      const mx = Math.max(0.05, ...past.map((r) => Math.abs(costOf(r) ?? 0)));
+      v += scale(top, signed(mx, '€')) + scale(base, signed(-mx, '€'));
+      for (let i = 0; i < cx.length; i++) v += `<line x1="${r1(cx[i] + PAD)}" y1="${r1(mid)}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${r1(mid)}" class="rule"/>`;
+      for (const r of past) {
+        const d = costOf(r);
+        const [bx, w] = barBox(r);
+        const h = d === null ? 0 : (Math.abs(d) / mx) * (mid - top);
+        if (d === null) v += `<rect x="${r1(bx)}" y="${r1(mid - 5)}" width="${r1(w)}" height="10" fill="url(#sgh)"/>`;
+        else if (h >= 0.5) v += `<rect x="${r1(bx)}" y="${r1(d > 0 ? mid - h : mid)}" width="${r1(w)}" height="${r1(h)}" class="${d > 0 ? 'dn' : 'dp'}"/>`;
+      }
+      // The day's gap split by cause; sun that would have been sold is valued at the import price, so its difference lands in the rest.
+      const known = tp.filter((r) => costOf(r) !== null);
+      const by = (f) => (known.length ? known.reduce((t, r) => t + (num(r.price) === null ? 0 : f(r) * r.price), 0) : null);
+      const total = known.length ? known.reduce((t, r) => t + costOf(r), 0) : null;
+      const use = by((r) => (num(r.use_kwh) ?? r.load_kwh) - r.load_kwh);
+      const sun = by((r) => r.pv_kwh - (num(r.solar_kwh) ?? r.pv_kwh));
+      const money = (x) => (x === null ? DASH : `<span${Math.abs(x) < 0.005 ? '' : ` class="${x > 0 ? 'neg' : 'pos'}"`}>${signed(x, '€')}</span>`);
+      sum = [
+        [money(total), total === null || Math.abs(total) < 0.005 ? 'against plan today' : `${total > 0 ? 'dearer' : 'cheaper'} than planned today`],
+        [money(use), 'from house use'],
+        [money(sun), 'from sun'],
+        [money(total === null ? null : total - use - sun), 'from battery and timing'],
+      ];
+    } else {
+      const [key, fkey, cls, label] = view === 'use' ? ['use_kwh', 'load_kwh', 'uo', 'use'] : ['solar_kwh', 'pv_kwh', 'so', 'sun'];
+      const mx = Math.max(0.2, ...cov.map((r) => num(r[fkey]) ?? 0), ...past.map((r) => num(r[key]) ?? 0));
+      const k = (base - top) / mx;
+      v += scale(top, `${fx(mx, 1)} kWh`);
+      for (let i = 0; i < cx.length; i++) v += `<line x1="${r1(cx[i] + PAD)}" y1="${base}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${base}" class="rule"/>`;
+      v += outline(cov, fkey, 'dl', (x) => x * k, base) + outline(past, key, cls, (x) => x * k, base);
+      const m = tp.filter((r) => num(r[key]) !== null);
+      sum = [[m.length ? `${signed(m.reduce((t, r) => t + r[key] - r[fkey], 0), '', 1)} kWh` : DASH, `${label} against forecast today`]];
+    }
+    for (let i = 0; i < cx.length; i++) v += ticks(dates[i], i, geo, cx[i] + PAD, base + 13);
+    if (nowP !== null) v += `<line x1="${r1(nowP)}" y1="0" x2="${r1(nowP)}" y2="${base}" class="now"/>`;
+    if (sel) v += `<rect x="${r1(sel.p0)}" y="0" width="${r1(sel.p1 - sel.p0)}" height="${base}" class="dsb"/>`;
     const slider = `<div class="dsel" tabindex="0" role="slider" aria-label="Hour to inspect" aria-valuemin="0" aria-valuemax="${rows.length - 1}" aria-valuenow="${rows.indexOf(sel)}"${sel ? ` aria-valuetext="${when(sel.t, sel.t + H, tz)}"` : ''}>`;
+    const head = `<div class="dvh"><span class="dvt">Plan against reality</span><span role="group" aria-label="Panel" class="dvg">${VIEWS.map(([k, label]) => `<button type="button" class="dvb" data-view="${k}" aria-pressed="${k === view}"><span>${label}</span></button>`).join('')}</span></div>`;
     return (
-      `<div class="dbg">${slider}${this._level(rows, geo, nowX, lv)}${s}</div>${DEBUG_LEGEND}<div class="dsum dm">${sum.map(([v, l]) => `<div><b>${v}</b>${l}</div>`).join('')}</div>` +
-      `${data && sel ? this._inspect(sel, data, tz) : ''}</div>`
+      `<div class="dbg">${head}${slider}${v}</svg></div><div class="lg dm">${DEBUG_LEGEND[view]}</div><div class="dsum dm">${sum.map(([x, l]) => `<div><b>${x}</b>${l}</div>`).join('')}</div>` +
+      `${data && sel ? this._inspect(sel, data, tz, today) : ''}</div>`
     );
   }
 
@@ -976,7 +1086,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
   }
 
   // One hour's tariff slots against the day's first plan, the planner's reason, and the settings of its last build.
-  _inspect(r, { slots, reference, internals }, tz) {
+  _inspect(r, { slots, reference, internals, reasons }, tz, today) {
     const byStart = (a) => new Map((Array.isArray(a) ? a : []).map((x) => [Date.parse(x && x.start), x]));
     const ref = byStart(reference);
     const cell = (m, f, d, floor) => {
@@ -998,16 +1108,29 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       });
     const head = ['time', 'price', 'action', 'setpoint', 'battery', 'use kWh', 'sun kWh', 'level %'].map((h) => `<th>${h}</th>`).join('');
     const table = trs.length ? `<div class="dtw"><table><tr>${head}</tr>${trs.join('')}</table></div>` : '<div class="dwhy">No data for this hour</div>';
-    const dc = r.plan && decision(r.why, tz);
-    const why = !r.plan
-      ? 'No reason stored for past hours.'
+    // The last reason each hour had before it ran, keyed by hour start; planned hours fall back on the card's own.
+    const stored = new Map(Object.entries(reasons && typeof reasons === 'object' ? reasons : {}).map(([k, x]) => [Date.parse(k), x]));
+    const w = stored.get(r.t) || (r.plan ? r.why : null);
+    const ups = buildups(w, r.t, tz);
+    const from = !r.plan && w && Date.parse(w.at);
+    const dc = !ups && decision(w, tz);
+    const why = ups
+      ? `${Number.isFinite(from) ? `<div>Reason from <b>${stamp(from, r.t, tz)}</b></div>` : ''}${ups}`
       : dc
         ? `<span class="pos">✓</span> <b>${dc.win[0]} ${eur(dc.win[1], 3)}</b> · ${dc.lose[0]} ${eur(dc.lose[1], 3)} per stored kWh.${dc.note && ` ${dc.note}`}`
-        : 'No reason given for this hour.';
-    const kv = Object.entries(internals && typeof internals === 'object' ? internals : {}).map(([k, v]) => {
-      const [label, f] = INTERNALS.get(k) || [esc(k), (x) => esc(typeof x === 'string' ? x : JSON.stringify(x))];
-      return `<span>${label} <b>${f(v, tz)}</b></span>`;
-    });
+        : r.plan
+          ? 'No reason given for this hour.'
+          : 'No reason stored for this hour.';
+    const iv = internals && typeof internals === 'object' ? internals : {};
+    const own = Object.keys(iv);
+    const kv = [...[...INTERNALS.keys()].filter((k) => own.includes(k)), ...own.filter((k) => !INTERNALS.has(k))]
+      .map((k) => {
+        const [label, f, old] = INTERNALS.get(k) || [esc(k), (x) => esc(typeof x === 'string' ? x : JSON.stringify(x))];
+        const text = f(iv[k], tz, today);
+        if (text === null) return '';
+        return old && old(iv[k], tz, today) ? `<span class="old"><i>!</i> ${label} <b>${text}</b></span>` : `<span>${label} <b>${text}</b></span>`;
+      })
+      .filter(Boolean);
     return (
       `<div class="din dm"><div class="dcap"><span><b>${when(r.t, r.t + H, tz)}</b> · ${r.plan ? 'planned' : 'measured'}</span><span>click an hour</span></div>` +
       `${table}<div class="dwhy">${why}</div>${kv.length ? `<div class="dkv">${kv.join('')}</div>` : ''}</div>`
