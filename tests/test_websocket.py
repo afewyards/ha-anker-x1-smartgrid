@@ -16,7 +16,7 @@ def _no_pycares_thread(monkeypatch):
     monkeypatch.setattr(aiohttp.connector, "DefaultResolver", ThreadedResolver)
 
 
-PAYLOAD = {"slots": [1], "reference": [], "internals": {}}
+PAYLOAD = {"slots": [1], "reference": [], "internals": {}, "reasons": {}}
 
 
 async def _call(hass, hass_ws_client):

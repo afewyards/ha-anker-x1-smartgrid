@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import pytest
 from datetime import datetime, timezone, UTC
@@ -1482,7 +1483,7 @@ def test_plan_snapshot_written_once_per_day(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     assert rec.write_plan_snapshot("2026-11-15", "2026-11-15T00:05:00+01:00", "[1]") is True
     assert rec.write_plan_snapshot("2026-11-15", "2026-11-15T09:00:00+01:00", "[2]") is False
-    assert rec.read_plan_snapshots("2026-11-15") == [("2026-11-15", "2026-11-15T00:05:00+01:00", "[1]")]
+    assert rec.read_plan_snapshots("2026-11-15") == [("2026-11-15", "2026-11-15T00:05:00+01:00", "[1]", None)]
     rec.close()
 
 
@@ -1507,5 +1508,45 @@ def test_migrates_v10_db_to_v11(tmp_path):
     conn = sqlite3.connect(db)
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "plan_snapshots" in tables
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET
     conn.close()
+
+
+def test_migrates_v11_db_to_v12_keeping_the_snapshots(tmp_path):
+    db = str(tmp_path / "t.db")
+    DataRecorder(db).close()
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE plan_snapshots")
+    conn.execute("CREATE TABLE plan_snapshots (day TEXT PRIMARY KEY, ts TEXT, rows_json TEXT)")
+    conn.execute("INSERT INTO plan_snapshots VALUES ('2026-11-15', 't', '[1]')")
+    conn.execute("PRAGMA user_version = 11")
+    conn.commit()
+    conn.close()
+    rec = DataRecorder(db)
+    assert rec.read_plan_snapshots("2026-11-15") == [("2026-11-15", "t", "[1]", None)]
+    rec.close()
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET == 12
+    conn.close()
+
+
+def test_fresh_db_plan_snapshots_have_the_reasons_column(tmp_path):
+    db = str(tmp_path / "t.db")
+    DataRecorder(db).close()
+    conn = sqlite3.connect(db)
+    assert "reasons_json" in {r[1] for r in conn.execute("PRAGMA table_info(plan_snapshots)")}
+    conn.close()
+
+
+def test_plan_reasons_merge_into_the_days_row_and_purge_with_it(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    assert rec.write_plan_reasons("2026-11-15", json.dumps({"a": {"at": 1}})) is False
+    rec.write_plan_snapshot("2026-11-15", "t", "[]")
+    assert rec.write_plan_reasons("2026-11-15", json.dumps({"a": {"at": 1}, "b": {"at": 1, "x": 1}})) is True
+    rec.write_plan_reasons("2026-11-15", json.dumps({"b": {"at": 2}}))
+    ((_day, ts, rows, reasons),) = rec.read_plan_snapshots("2026-11-15")
+    assert (ts, rows) == ("t", "[]")
+    assert json.loads(reasons) == {"a": {"at": 1}, "b": {"at": 2}}
+    rec.purge_plan_snapshots_older_than("2026-11-16")
+    assert rec.read_plan_snapshots("2026-11-01") == []
+    rec.close()

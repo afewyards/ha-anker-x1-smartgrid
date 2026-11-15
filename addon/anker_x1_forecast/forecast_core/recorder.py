@@ -240,7 +240,7 @@ _DAILY_REGRET_COLUMNS = [
 ]
 
 # Increment this when adding new migration steps.
-_VERSION_TARGET = 11
+_VERSION_TARGET = 12
 
 # v9 energy deltas: clamp dt so a restart/stall undercounts (honest, visible
 # as a gap) instead of crediting one giant tick. 2 × TICK_SECONDS.
@@ -480,6 +480,12 @@ class DataRecorder:
             self._conn.execute(_SCHEMA_PLAN_SNAPSHOTS)
             self._conn.execute("PRAGMA user_version = 11")
 
+        if version < 12:
+            # v11 → v12: the last reason each hour had, beside the day's saved plan.
+            if "reasons_json" not in {row[1] for row in self._conn.execute("PRAGMA table_info(plan_snapshots)")}:
+                self._conn.execute("ALTER TABLE plan_snapshots ADD COLUMN reasons_json TEXT")
+            self._conn.execute("PRAGMA user_version = 12")
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -598,12 +604,23 @@ class DataRecorder:
             self._conn.commit()
             return cur.rowcount == 1
 
-    def read_plan_snapshots(self, since_day: str) -> list[tuple[str, str, str]]:
+    def write_plan_reasons(self, day: str, reasons_json: str) -> bool:
+        """Merge hour reasons into the day's snapshot row, each hour replacing its stored one; False without a row."""
+        with self._lock:
+            row = self._conn.execute("SELECT reasons_json FROM plan_snapshots WHERE day = ?", (day,)).fetchone()
+            if row is None:
+                return False
+            merged = json.loads(row[0] or "{}") | json.loads(reasons_json)
+            self._conn.execute("UPDATE plan_snapshots SET reasons_json = ? WHERE day = ?", (json.dumps(merged), day))
+            self._conn.commit()
+            return True
+
+    def read_plan_snapshots(self, since_day: str) -> list[tuple[str, str, str, str | None]]:
         with self._lock:
             return [
                 tuple(r)
                 for r in self._conn.execute(
-                    "SELECT day, ts, rows_json FROM plan_snapshots WHERE day >= ? ORDER BY day",
+                    "SELECT day, ts, rows_json, reasons_json FROM plan_snapshots WHERE day >= ? ORDER BY day",
                     (since_day,),
                 )
             ]

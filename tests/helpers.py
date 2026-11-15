@@ -155,6 +155,9 @@ class StubRecorder:
     def write_plan_snapshot(self, day, ts, rows_json):
         return True
 
+    def write_plan_reasons(self, day, reasons_json):
+        return True
+
     def purge_plan_snapshots_older_than(self, day):
         return 0
 

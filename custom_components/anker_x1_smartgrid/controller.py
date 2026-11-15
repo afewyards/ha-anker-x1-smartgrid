@@ -370,6 +370,7 @@ class Controller:
         self._card_failed = False
         self._card_args: tuple | None = None
         self._card_rows_end: str | None = None
+        self._card_reasons: dict[str, dict] = {}
         # The ledger total the card's balance counts from: set by restore(),
         # or on a fresh install by the first card publish.
         self.balance_base_eur: float | None = None
@@ -2592,6 +2593,7 @@ class Controller:
                 _LOGGER.warning("power card: hour reasons failed", exc_info=True)
             self._why_failed = True
             reasons = {}
+        self._card_reasons = reasons
         for h in hours:
             if h["start"] in reasons:
                 # Build-ups would push the sensor past its 16 KB attribute budget.
@@ -2681,16 +2683,21 @@ class Controller:
             self.power_card = None
 
     async def _snapshot_plan(self, now, horizon) -> None:
+        """Save the day's first plan once, and on every call the reasons of the day's hours not yet over."""
         day = dt_util.as_local(now).date().isoformat()
-        if day == self._snapshot_day:
-            return
         try:
-            rows = carddebug.snapshot_rows(horizon, now)
-            if rows:
-                await self._hass.async_add_executor_job(
-                    self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
-                )
-                self._snapshot_day = day
+            if day != self._snapshot_day:
+                rows = carddebug.snapshot_rows(horizon, now)
+                if rows:
+                    await self._hass.async_add_executor_job(
+                        self._recorder.write_plan_snapshot, day, now.isoformat(), json.dumps(rows)
+                    )
+                    self._snapshot_day = day
+            # Reasons only cover hours not over at ``now``, so an hour that has ended keeps its last one.
+            at = now.isoformat()
+            todays = {start: r | {"at": at} for start, r in self._card_reasons.items() if start[:10] == day}
+            if todays:
+                await self._hass.async_add_executor_job(self._recorder.write_plan_reasons, day, json.dumps(todays))
             self._snapshot_failed = False
         except Exception:
             if not self._snapshot_failed:
@@ -2709,7 +2716,7 @@ class Controller:
     async def power_card_debug(self) -> dict:
         card, args = self.power_card, self._card_args
         if card is None or args is None:
-            return {"slots": [], "reference": [], "internals": {}}
+            return {"slots": [], "reference": [], "internals": {}, "reasons": {}}
         horizon, _export_price_at, delivered_at = args
         tz = dt_util.DEFAULT_TIME_ZONE
         now = dt_util.parse_datetime(card["built_at"])
@@ -2725,6 +2732,9 @@ class Controller:
             }
         except Exception:
             _LOGGER.debug("power card debug: efficiencies unavailable", exc_info=True)
+        pv_ents = (*self._data.get(const.CONF_ENT_PV_TODAY, []), *self._data.get(const.CONF_ENT_PV_TOMORROW, []))
+        pv_at = min((st.last_updated for e in pv_ents if (st := self._hass.states.get(e)) is not None), default=None)
+        live = {start: r | {"at": card["built_at"]} for start, r in self._card_reasons.items()}
 
         def _build() -> dict:
             start = datetime.combine(dt_util.as_local(now).date() - timedelta(days=1), time(), tzinfo=tz)
@@ -2735,11 +2745,18 @@ class Controller:
                 if (ts := dt_util.parse_datetime(r["ts"])) is not None and (ts <= end if end else ts < now)
             ]
             since = (dt_util.as_local(now).date() - timedelta(days=2)).isoformat()
-            snaps = [(day, json.loads(rj)) for day, _ts, rj in self._recorder.read_plan_snapshots(since)]
+            stored = self._recorder.read_plan_snapshots(since)
+            reference = carddebug.merge_reference([(day, json.loads(rj)) for day, _ts, rj, _r in stored], tz)
+            reasons = {}
+            for day, _ts, _rj, reasons_json in stored:
+                if reasons_json and day >= start.date().isoformat():
+                    reasons |= json.loads(reasons_json)
+            fee = cfg.export_fee_eur_per_kwh
             return {
-                "slots": carddebug.slot_series(rows, horizon, tz, now, delivered_at),
-                "reference": carddebug.merge_reference(snaps, tz),
-                "internals": carddebug.internals(status, cfg, card["built_at"], eta),
+                "slots": carddebug.slot_series(rows, horizon, tz, now, delivered_at, reference, fee),
+                "reference": reference,
+                "internals": carddebug.internals(status, cfg, card["built_at"], eta, rows, pv_at),
+                "reasons": reasons | live,
             }
 
         return await self._hass.async_add_executor_job(_build)
