@@ -220,9 +220,7 @@ _SCHEMA_DAILY_REGRET = (
     "realized_kwh REAL, realized_eur REAL, infeasible INTEGER, computed_ts TEXT)"
 )
 
-_SCHEMA_PLAN_SNAPSHOTS = (
-    "CREATE TABLE IF NOT EXISTS plan_snapshots (day TEXT PRIMARY KEY, ts TEXT, rows_json TEXT)"
-)
+_SCHEMA_PLAN_SNAPSHOTS = "CREATE TABLE IF NOT EXISTS plan_snapshots (day TEXT PRIMARY KEY, ts TEXT, rows_json TEXT)"
 
 _DAILY_REGRET_COLUMNS = [
     "day",

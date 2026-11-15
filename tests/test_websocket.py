@@ -10,7 +10,6 @@ from custom_components.anker_x1_smartgrid.const import DOMAIN
 from custom_components.anker_x1_smartgrid.websocket import async_register
 
 
-
 @pytest.fixture(autouse=True)
 def _no_pycares_thread(monkeypatch):
     # pycares starts a thread HA's cleanup check rejects; loopback needs no async DNS.
