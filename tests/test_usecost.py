@@ -374,6 +374,7 @@ class TestMergeDays:
             "use_cost_eur": None,
             "saved_eur": None,
             "solar_gain_eur": None,
+            "batt_grid_eur": None,
             "avg_price": None,
             "solar_kwh": None,
             "planned": "none",
@@ -450,6 +451,59 @@ class TestMergeDays:
         y, _t, _tm = merge_days(actual, {}, date(2026, 10, 26), hours)
         assert y["date"] == "2026-10-25"
         assert y["grid_in_kwh"] == pytest.approx(25.0)
+
+
+class TestBatteryGridAmount:
+    def test_replay_books_grid_charge_and_battery_export(self):
+        rows = (
+            _phase(T0, 60, 50, 60, -2_000, 0.20)
+            + _phase(H1, 60, 60, 55, 1_000, 0.20, p1=-1_000, export=0.30)
+            + _end(H2, 55)
+        )
+        rec = replay(rows, CAP, AMS)[0][DAY]
+        assert rec["batt_grid_eur"] == pytest.approx(0.40 - 0.30, abs=0.01)
+
+    def test_replay_solar_charge_is_free(self):
+        rows = _phase(T0, 60, 50, 60, -2_000, 0.20, pv=3_000, load=1_000) + _end(H1, 60)
+        rec = replay(rows, CAP, AMS)[0][DAY]
+        assert rec["batt_grid_eur"] == pytest.approx(0, abs=0.005)
+
+    def test_replay_battery_to_house_is_not_a_sale(self):
+        rows = _phase(T0, 60, 50, 45, 1_000, 0.30, load=1_000, p1=0.0, export=0.10) + _end(H1, 45)
+        rec = replay(rows, CAP, AMS)[0][DAY]
+        assert rec["batt_grid_eur"] == pytest.approx(0, abs=0.005)
+
+    def test_roll_plan_books_planned_charge_and_export(self):
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
+        horizon = [
+            _slot(NOW, 55.0, 0.20, grid=1.0, mode="grid"),
+            _slot(NOW + timedelta(hours=1), 50.0, 0.40, export=1.0, mode="export"),
+        ]
+        planned = roll_plan(horizon, inv, CAP, AMS, NOW, lambda _s, _p: 0.30)
+        assert planned[DAY]["batt_grid_eur"] == pytest.approx(0.20 - 0.30)
+
+    def test_merge_days_today_sums_measured_and_planned(self):
+        # The running slot charged 1 kWh before NOW; the plan still lists its whole 2 kWh.
+        start = NOW - timedelta(minutes=30)
+        rows = _phase(start, 30, 50, 55, -2_000, 0.20) + _end(NOW, 55)
+        actual, inv = replay(rows, CAP, AMS)
+        horizon = [
+            _slot(start, 60.0, 0.20, grid=2.0, mode="grid"),
+            _slot(start + timedelta(hours=1), 55.0, 0.40, export=1.0, mode="export"),
+        ]
+        planned = roll_plan(horizon, inv, CAP, AMS, NOW, lambda _s, _p: 0.30, delivered_at=lambda _s: 1.0)
+        _y, t, _tm = merge_days(actual, planned, DAY)
+        assert t["batt_grid_eur"] == pytest.approx(0.20 + 0.20 - 0.30, abs=0.005)
+
+    def test_merge_days_unpriced_day_has_no_battery_amount(self):
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
+        tomorrow = datetime(2026, 11, 10, 23, 0, tzinfo=UTC)
+        horizon = [_slot(NOW, 50.0, 0.30, load=1.0)] + [
+            _slot(tomorrow + timedelta(hours=h), 45.0, 0.30, load=1.0, est=True) for h in range(24)
+        ]
+        y, t, tm = merge_days({}, roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at), DAY)
+        assert y["batt_grid_eur"] is None and tm["batt_grid_eur"] is None
+        assert t["batt_grid_eur"] == 0.0
 
 
 class TestHourlySeries:
@@ -729,8 +783,8 @@ class TestMergeDaysCheap:
     @staticmethod
     def _rec(est=False):
         return {
-            "use_kwh": 1.0, "use_cost_eur": 1.0, "saved_eur": 0.0, "solar_gain_eur": 0.0, "solar_kwh": 0.0,
-            "price_eur_h": 1.0, "price_h": 1.0, "estimated": est,
+            "use_kwh": 1.0, "use_cost_eur": 1.0, "saved_eur": 0.0, "solar_gain_eur": 0.0, "batt_grid_eur": 0.0,
+            "solar_kwh": 0.0, "price_eur_h": 1.0, "price_h": 1.0, "estimated": est,
         }  # fmt: skip
 
     def _hours(self):

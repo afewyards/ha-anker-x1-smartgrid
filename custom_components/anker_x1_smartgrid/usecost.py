@@ -50,6 +50,7 @@ def _day(out: dict, day: date) -> dict:
             "use_cost_eur": 0.0,
             "saved_eur": 0.0,
             "solar_gain_eur": 0.0,
+            "batt_grid_eur": 0.0,
             "solar_kwh": 0.0,
             "price_eur_h": 0.0,
             "price_h": 0.0,
@@ -156,12 +157,14 @@ def replay(
             solar = min(ac_in, max(pv - load, 0.0) * kwh_per_w)
             inv.c_free += (ac_in - solar) * imp
             inv.c_exp += (ac_in - solar) * imp + solar * exp
+            rec["batt_grid_eur"] += (ac_in - solar) * imp
             inv.grid_kwh += ac_in - solar
             inv.sun_kwh += solar
         elif batt > 0:
             dc_out = batt * kwh_per_w
             dc_house = min(dc_out, deficit)
             _earn(rec, inv, dc_house * imp + (dc_out - dc_house) * exp)
+            rec["batt_grid_eur"] -= (dc_out - dc_house) * exp
             p1 = row.get("p1_w")
             ac_out = dc_out if p1 is None else max(load - pv - float(p1), 0.0) * kwh_per_w
             house = min(ac_out, deficit)
@@ -267,6 +270,7 @@ def roll_plan(
             inv.e_kwh = e_mid
         # Output is valued by the stock it left, before this slot's own charge joins it.
         _earn(rec, inv, house * imp + export * exp)
+        rec["batt_grid_eur"] += kwh["charge_grid"] * imp - export * exp
         inv.c_free += kwh["charge_grid"] * imp
         inv.c_exp += kwh["charge_grid"] * imp + kwh["charge_solar"] * exp
         inv.grid_kwh += kwh["charge_grid"]
@@ -342,6 +346,7 @@ def merge_days(
                 "use_cost_eur": total("use_cost_eur") if priced else None,
                 "saved_eur": total("saved_eur") if priced else None,
                 "solar_gain_eur": total("solar_gain_eur") if priced else None,
+                "batt_grid_eur": total("batt_grid_eur") if priced else None,
                 "avg_price": round(sum(r["price_eur_h"] for r in parts) / price_h, 4) if priced and price_h else None,
                 "solar_kwh": total("solar_kwh") if parts else None,
                 "planned": "none" if p is None else "partial" if a is not None else "full",

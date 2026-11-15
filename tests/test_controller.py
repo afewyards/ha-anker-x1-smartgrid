@@ -698,6 +698,7 @@ async def test_persist_writes_wrapped_payload():
         "today_house_export_kwh",
         "today_house_cost_eur",
         "today_house_revenue_eur",
+        "balance_base_eur",
         "soc_drift_kwh",
         "soc_drift_day",
         "soc_drift_last_update",

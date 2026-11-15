@@ -170,6 +170,9 @@ _PERSIST_GROUPS = [
         ("today_house_cost_eur", "today_house_cost_eur", lambda v: v, float, False),
         ("today_house_revenue_eur", "today_house_revenue_eur", lambda v: v, float, False),
     ],
+    [
+        ("balance_base_eur", "balance_base_eur", lambda v: v, float, True),
+    ],
     # SoC drift-hedge accumulator: a restart must resume from the same
     # closed-loop state rather than re-accumulating from scratch; all six
     # fields share one try/except in the original.
@@ -367,6 +370,8 @@ class Controller:
         self._card_failed = False
         self._card_args: tuple | None = None
         self._card_rows_end: str | None = None
+        # The ledger total the card's balance counts from; captured at the first publish after restore().
+        self.balance_base_eur: float | None = None
         self._snapshot_day: str | None = None
         self._snapshot_failed = False
         self._why_failed = False
@@ -2640,6 +2645,8 @@ class Controller:
             if card is None:
                 return
             soc = inputs.soc if inputs is not None else None
+            if self.balance_base_eur is None:
+                self.balance_base_eur = self.total_net_eur
             # A new dict each tick: HA compares attributes against the previous state's
             # references, so mutating the published one in place would hide the change.
             card["battery"] = {
@@ -2656,6 +2663,7 @@ class Controller:
                 ),
                 "margin_30d_eur": (self.last_status.get("battery_margin_30d") or (None, None))[0],
                 "solar_gain_30d_eur": (self.last_status.get("battery_solar_gain_30d") or (None, None))[0],
+                "balance_eur": round(self.balance_base_eur - self.total_net_eur, 2),
             }
             self._card_failed = False
         except Exception:
