@@ -339,6 +339,8 @@ const INTERNALS = new Map([
   ['reserve_soc', ['reserve', pct]],
   ['target_soc', ['target', pct]],
   ['end_value_eur_per_kwh', ['end value', per]],
+  ['eta_charge', ['efficiency in', (v) => fx(v, 2)]],
+  ['eta_discharge', ['efficiency out', (v) => fx(v, 2)]],
   ['cycle_cost_eur_per_kwh', ['wear', per]],
   ['charge_margin_eur_per_kwh', ['charge margin', per]],
   ['idle_drain_w', ['standby', (v) => `${fx(v, 0)} W`]],

@@ -86,7 +86,7 @@ def slot_series(
     return out
 
 
-def internals(status: dict, cfg, built_at: str | None) -> dict:
+def internals(status: dict, cfg, built_at: str | None, eta: dict) -> dict:
     """Label to value for the figures the plan runs on; only those present."""
     horizon = (status.get("plan") or {}).get("horizon") or []
     reserve = next((r.get("reserve_soc") for r in horizon if r.get("mode") != "actual"), None)
@@ -98,6 +98,7 @@ def internals(status: dict, cfg, built_at: str | None) -> dict:
         "reserve_soc": reserve,
         "target_soc": getattr(cfg, "soc_target", None),
         "end_value_eur_per_kwh": status.get("terminal_v_hi") if stored is None else stored,
+        **eta,
         "cycle_cost_eur_per_kwh": cfg.cycle_cost_eur_per_kwh,
         "charge_margin_eur_per_kwh": cfg.charge_margin_eur_per_kwh,
         "idle_drain_w": cfg.idle_drain_w,

@@ -149,7 +149,7 @@ def test_internals_omits_missing():
     cfg = SimpleNamespace(
         cycle_cost_eur_per_kwh=0.03, charge_margin_eur_per_kwh=0.0, idle_drain_w=100.0, soc_target=100.0
     )
-    assert carddebug.internals({}, cfg, None) == {
+    assert carddebug.internals({}, cfg, None, {}) == {
         "target_soc": 100.0,
         "cycle_cost_eur_per_kwh": 0.03,
         "charge_margin_eur_per_kwh": 0.0,
@@ -165,6 +165,7 @@ def test_internals_omits_missing():
         },
         cfg,
         "t",
+        {"eta_charge": 0.93},
     )
     assert full["built_at"] == "t" and full["forecast_source"] == "remote"
-    assert full["reserve_soc"] == 12.0 and full["end_value_eur_per_kwh"] == 0.2
+    assert full["reserve_soc"] == 12.0 and full["end_value_eur_per_kwh"] == 0.2 and full["eta_charge"] == 0.93

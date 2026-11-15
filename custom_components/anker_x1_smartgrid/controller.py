@@ -2699,6 +2699,16 @@ class Controller:
         now = dt_util.parse_datetime(card["built_at"])
         end = dt_util.parse_datetime(self._card_rows_end) if self._card_rows_end else None
         status = self.last_status
+        cfg = self.cfg
+        eta = {}
+        try:
+            curve = self._planner_curve()
+            eta = {
+                "eta_charge": optimize_mod._eta_charge_at(cfg.max_charge_w, cfg, curve),
+                "eta_discharge": optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve),
+            }
+        except Exception:
+            _LOGGER.debug("power card debug: efficiencies unavailable", exc_info=True)
 
         def _build() -> dict:
             start = datetime.combine(dt_util.as_local(now).date() - timedelta(days=1), time(), tzinfo=tz)
@@ -2713,7 +2723,7 @@ class Controller:
             return {
                 "slots": carddebug.slot_series(rows, horizon, tz, now, delivered_at),
                 "reference": carddebug.merge_reference(snaps, tz),
-                "internals": carddebug.internals(status, self.cfg, card["built_at"]),
+                "internals": carddebug.internals(status, cfg, card["built_at"], eta),
             }
 
         return await self._hass.async_add_executor_job(_build)

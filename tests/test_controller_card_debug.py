@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from homeassistant.util import dt as dt_util
 
+from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder
 from tests.helpers import make_controller
 from tests.test_carddebug import _horizon
@@ -120,3 +121,26 @@ async def test_debug_leaves_out_samples_newer_than_the_card(tmp_path):
         ctrl._recorder.append(_samples()[0] | {"ts": ts.isoformat(), "soc": 99.0, "load_w": 5000.0})
     assert (await ctrl.power_card_debug())["slots"] == before["slots"]
 
+
+async def test_debug_internals_carry_the_planner_efficiencies(tmp_path):
+    ctrl = await _ctrl(tmp_path)
+    await _tick(ctrl, NOW)
+    internals = (await ctrl.power_card_debug())["internals"]
+    cfg, curve = ctrl.cfg, ctrl._planner_curve()
+    assert internals["eta_charge"] == optimize._eta_charge_at(cfg.max_charge_w, cfg, curve)
+    assert internals["eta_discharge"] == optimize._eta_discharge_at(cfg.max_export_w, cfg, curve)
+    keys = list(internals)
+    assert keys.index("eta_charge") + 2 == keys.index("eta_discharge") + 1 == keys.index("cycle_cost_eur_per_kwh")
+
+
+async def test_debug_internals_without_efficiencies_when_they_fail(tmp_path, monkeypatch):
+    ctrl = await _ctrl(tmp_path)
+    await _tick(ctrl, NOW)
+
+    def _boom(*_a):
+        raise ValueError("no curve")
+
+    monkeypatch.setattr(optimize, "_eta_charge_at", _boom)
+    out = await ctrl.power_card_debug()
+    assert out["slots"] and out["internals"]["built_at"] == NOW.isoformat()
+    assert not {"eta_charge", "eta_discharge"} & set(out["internals"])
