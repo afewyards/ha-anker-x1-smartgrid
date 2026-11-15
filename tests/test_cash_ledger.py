@@ -485,11 +485,11 @@ def test_restore_without_house_keys_keeps_the_other_cash_ledger_fields():
 
 class TestBalance:
     async def _publish(self, ctrl):
-        from tests.test_power_card_sensor import NOW, _inputs, _stale_card
+        from tests.helpers import card_inputs, stale_card
 
         if ctrl.power_card is None:
-            ctrl.power_card = _stale_card()
-        await ctrl._publish_power_card(NOW, _inputs(50.0), "idle", False)
+            ctrl.power_card = stale_card()
+        await ctrl._publish_power_card(datetime(2026, 11, 13, 9, 0, tzinfo=UTC), card_inputs(50.0), "idle", False)
         return ctrl.power_card["battery"]
 
     async def test_balance_starts_at_zero_on_upgrade(self):
@@ -517,10 +517,26 @@ class TestBalance:
         assert battery["balance_eur"] == pytest.approx(0.50)
         assert fresh.balance_base_eur == -42.0
 
-    async def test_balance_base_not_captured_before_restore(self):
+    async def test_restore_captures_the_base(self):
+        from tests.helpers import CapturingStore, make_controller
+
+        ctrl, _act = make_controller()
+        ctrl._store = CapturingStore()
+        ctrl.restore({"total_net_eur": -42.0})
+        assert ctrl.balance_base_eur == -42.0
+        ctrl.total_net_eur -= 1.0
+        await ctrl._persist()
+
+        again, _ = make_controller()
+        again.restore(ctrl._store.saved)
+        assert again.balance_base_eur == -42.0
+
+    async def test_a_fresh_install_captures_the_base_at_first_publish(self):
         from tests.helpers import make_controller
 
         ctrl, _act = make_controller()
         assert ctrl.balance_base_eur is None
-        ctrl.restore({"total_net_eur": -42.0, "balance_base_eur": None})
-        assert ctrl.balance_base_eur is None
+        ctrl.total_net_eur = -3.0
+        battery = await self._publish(ctrl)
+        assert ctrl.balance_base_eur == -3.0
+        assert battery["balance_eur"] == 0.0

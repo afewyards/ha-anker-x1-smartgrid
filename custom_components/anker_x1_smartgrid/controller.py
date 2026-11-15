@@ -370,7 +370,8 @@ class Controller:
         self._card_failed = False
         self._card_args: tuple | None = None
         self._card_rows_end: str | None = None
-        # The ledger total the card's balance counts from; captured at the first publish after restore().
+        # The ledger total the card's balance counts from: set by restore(),
+        # or on a fresh install by the first card publish.
         self.balance_base_eur: float | None = None
         self._snapshot_day: str | None = None
         self._snapshot_failed = False
@@ -3001,6 +3002,8 @@ class Controller:
                     setattr(self, attr_name, from_json(value))
             except (KeyError, ValueError, TypeError):
                 pass
+        if "total_net_eur" in saved and self.balance_base_eur is None:
+            self.balance_base_eur = self.total_net_eur
 
     async def _record_sample(
         self,

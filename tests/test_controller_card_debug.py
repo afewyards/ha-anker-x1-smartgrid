@@ -8,9 +8,9 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.recorder import DataRecorder
-from tests.helpers import make_controller
+from tests.helpers import card_inputs, make_controller
 from tests.test_carddebug import _horizon
-from tests.test_power_card_sensor import NOW, _inputs, _rebuild, _samples
+from tests.test_power_card_sensor import NOW, _rebuild, _samples
 
 
 async def _ctrl(tmp_path, rows=None):
@@ -24,7 +24,7 @@ async def _ctrl(tmp_path, rows=None):
 async def _tick(ctrl, now):
     ctrl._battery_margin_at = None
     await ctrl._refresh_battery_margin(now)
-    await ctrl._publish_power_card(now, _inputs(48.0), "hold", False, _rebuild())
+    await ctrl._publish_power_card(now, card_inputs(48.0), "hold", False, _rebuild())
 
 
 async def test_snapshot_written_once_per_day(tmp_path):
@@ -104,7 +104,7 @@ async def test_debug_reads_from_yesterday_local_midnight_after_fall_back(tmp_pat
     rows = [s | {"ts": (t0 + timedelta(minutes=k)).isoformat()} for k, s in enumerate(_samples(49)[:2910])]
     ctrl = await _ctrl(tmp_path, rows)
     await ctrl._refresh_battery_margin(now)
-    await ctrl._publish_power_card(now, _inputs(48.0), "hold", False, _rebuild(_horizon(start=now)))
+    await ctrl._publish_power_card(now, card_inputs(48.0), "hold", False, _rebuild(_horizon(start=now)))
     out = await ctrl.power_card_debug()
     hour = next(h for h in ctrl.power_card["hours"] if h["start"] == midnight.isoformat())
     mine = [s for s in out["slots"] if s["start"][:13] == "2026-10-24T00"]

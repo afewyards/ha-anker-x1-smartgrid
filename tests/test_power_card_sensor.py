@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from custom_components.anker_x1_smartgrid import usecost
 from custom_components.anker_x1_smartgrid.sensor import X1PowerCardSensor
+from tests.helpers import card_inputs, stale_card
 
 NOW = datetime(2026, 11, 13, 9, 0, tzinfo=UTC)
 
@@ -73,10 +73,6 @@ def _rebuild(horizon=None):
     return lambda: (horizon or _horizon(), lambda _s, _p: 0.08, lambda _s: 0.0)
 
 
-def _inputs(soc):
-    return SimpleNamespace(soc=soc, meter_w=0.0)
-
-
 async def test_controller_builds_the_card_from_one_sample_read():
     from tests.helpers import make_controller
 
@@ -85,7 +81,7 @@ async def test_controller_builds_the_card_from_one_sample_read():
     rows = _samples()
     ctrl._recorder.read_feature_rows = lambda since: reads.append(since) or rows
     await ctrl._refresh_battery_margin(NOW)
-    await ctrl._publish_power_card(NOW, _inputs(48.0), "hold", False, _rebuild())
+    await ctrl._publish_power_card(NOW, card_inputs(48.0), "hold", False, _rebuild())
 
     assert len(reads) == 1
     card = ctrl.power_card
@@ -106,7 +102,7 @@ async def test_controller_builds_the_card_from_one_sample_read():
 
     # A later tick without a fresh sample read keeps the series and refreshes the live line.
     days = card["days"]
-    await ctrl._publish_power_card(NOW + timedelta(minutes=1), _inputs(47.5), "forcing", False, _rebuild())
+    await ctrl._publish_power_card(NOW + timedelta(minutes=1), card_inputs(47.5), "forcing", False, _rebuild())
     assert ctrl.power_card["days"] is days
     assert ctrl.power_card["battery"]["state"] == "charge_grid"
     assert ctrl.power_card["battery"]["soc"] == 47.5
@@ -128,7 +124,7 @@ async def _card_with_reasons(terminal_v_hi, hold_stored=None, export=0.60):
     ctrl.last_status["terminal_v_hi"] = terminal_v_hi
     ctrl.last_status["hold_stored_value_eur_per_kwh"] = hold_stored
     await ctrl._refresh_battery_margin(NOW)
-    await ctrl._publish_power_card(NOW, _inputs(48.0), "hold", False, _charge_then_export(export))
+    await ctrl._publish_power_card(NOW, card_inputs(48.0), "hold", False, _charge_then_export(export))
     return ctrl, ctrl.power_card["hours"]
 
 
@@ -186,7 +182,9 @@ async def test_failing_reasons_leave_the_card_and_warn_once(monkeypatch, caplog)
     with caplog.at_level(logging.WARNING):
         for minutes in (0, 6):
             await ctrl._refresh_battery_margin(NOW + timedelta(minutes=minutes))
-            await ctrl._publish_power_card(NOW + timedelta(minutes=minutes), _inputs(48.0), "idle", False, _rebuild())
+            await ctrl._publish_power_card(
+                NOW + timedelta(minutes=minutes), card_inputs(48.0), "idle", False, _rebuild()
+            )
     card = ctrl.power_card
     assert len(card["days"]) == 3 and card["hours"] and not any("why" in h for h in card["hours"])
     assert sum("power card" in r.getMessage() for r in caplog.records) == 1
@@ -207,7 +205,9 @@ async def test_a_failing_build_clears_the_card_and_warns_once(monkeypatch, caplo
     with caplog.at_level(logging.WARNING):
         for minutes in (0, 6):
             await ctrl._refresh_battery_margin(NOW + timedelta(minutes=minutes))
-            await ctrl._publish_power_card(NOW + timedelta(minutes=minutes), _inputs(48.0), "idle", False, _rebuild())
+            await ctrl._publish_power_card(
+                NOW + timedelta(minutes=minutes), card_inputs(48.0), "idle", False, _rebuild()
+            )
     assert ctrl.power_card is None
     assert ctrl._battery_margin is not None, "the margin does not depend on the card"
     assert sum("power card" in r.getMessage() for r in caplog.records) == 1
@@ -316,14 +316,9 @@ async def test_the_card_is_built_after_the_tick_actuates(monkeypatch):
     assert order == ["actuate", "card"]
 
 
-def _stale_card():
-    battery = {"soc": 10.0, "stored_kwh": 1.0, "stored_cost_eur_per_kwh": 0.2, "state": "house", "margin_30d_eur": None}
-    return {"built_at": "x", "stored_cost_eur_per_kwh": 0.2, "battery": battery, "days": [], "hours": []}
-
-
 async def test_a_disabled_tick_keeps_the_battery_line_live(monkeypatch):
     ctrl, _act, _ = _tick_setup(monkeypatch, enabled=False)
-    ctrl.power_card = _stale_card()
+    ctrl.power_card = stale_card()
     await ctrl.tick()
     battery = ctrl.power_card["battery"]
     assert (battery["soc"], battery["state"]) == (50.0, "disabled")
@@ -332,6 +327,6 @@ async def test_a_disabled_tick_keeps_the_battery_line_live(monkeypatch):
 
 async def test_a_failsafe_tick_without_inputs_marks_the_battery_line_unknown(monkeypatch):
     ctrl, _act, _ = _tick_setup(monkeypatch, seed=False)
-    ctrl.power_card = _stale_card()
+    ctrl.power_card = stale_card()
     await ctrl.tick()
     assert ctrl.power_card["battery"]["state"] is None and ctrl.power_card["battery"]["soc"] is None

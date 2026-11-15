@@ -32,6 +32,7 @@ copies of the richest existing implementation, not new behavior):
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, UTC
+from types import SimpleNamespace
 
 from custom_components.anker_x1_smartgrid import const, controller
 from custom_components.anker_x1_smartgrid.models import Config
@@ -260,6 +261,16 @@ class StubHass:
 # ---------------------------------------------------------------------------
 # make_config — verbatim promotion of test_optimize_parity.py:make_cfg
 # ---------------------------------------------------------------------------
+
+
+def card_inputs(soc):
+    return SimpleNamespace(soc=soc, meter_w=0.0)
+
+
+def stale_card():
+    """A built power card, so a publish without a rebuild only refreshes its battery line."""
+    battery = {"soc": 10.0, "stored_kwh": 1.0, "stored_cost_eur_per_kwh": 0.2, "state": "house", "margin_30d_eur": None}
+    return {"built_at": "x", "stored_cost_eur_per_kwh": 0.2, "battery": battery, "days": [], "hours": []}
 
 
 def make_config(**overrides) -> Config:
