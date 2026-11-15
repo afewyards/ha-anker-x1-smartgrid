@@ -122,7 +122,7 @@ svg { display: block; }
 .ph { padding: 0 ${PAD}px; border-left: 1px solid var(--sg-rule); color: var(--sg-dim); line-height: 1.35; min-width: 0; }
 .ph:first-child { border-left-color: transparent; }
 .ph > div { display: flex; justify-content: space-between; align-items: baseline; column-gap: 4px; white-space: nowrap; }
-.cheap { min-height: 1.35em; overflow: hidden; text-overflow: ellipsis; }
+.cheap, .bl { min-height: 1.35em; overflow: hidden; text-overflow: ellipsis; }
 .ph .cost { color: var(--sg-ink); font-size: 18px; font-weight: 700; line-height: 1.2; }
 .ph.on .cost { font-size: 22px; line-height: 1.1; }
 .ph.on .cost .sv { font-size: 14px; }
@@ -306,6 +306,13 @@ function sun(v, cur = '') {
 function saved(v, prefix = '') {
   if (num(v) === null) return `<span class="sv">${DASH}</span>`;
   return `<span class="sv ${v < 0 ? 'neg' : 'pos'}">${prefix}${signed(v)}</span>`;
+}
+
+// Above zero the battery bought more than it sold, below zero it sold more; within a cent it reads dim.
+function owed(label, v) {
+  if (num(v) === null) return '';
+  const zero = Math.abs(v) < 0.005;
+  return `${label} <span${zero ? '' : ` class="${v < 0 ? 'pos' : 'neg'}"`}>${eur(zero ? 0 : v)}</span>`;
 }
 
 // The planner's reason for an hour: the winning and the losing option per stored kWh, and what the energy is kept for.
@@ -578,6 +585,9 @@ class SmartgridPowerCard extends HTMLElement {
       const info = card.querySelector('.ph.on .info');
       const avg = info && info.querySelector('.avg');
       if (avg && info.scrollWidth > info.clientWidth) avg.remove();
+      // Today's battery line gives up the balance before it clips the battery amount.
+      const bal = card.querySelector('.ph.on .bal');
+      if (bal && bal.parentNode.scrollWidth > bal.parentNode.clientWidth) bal.remove();
     } catch (e) {
       console.error(TAG, e);
       card.innerHTML = `${this._battery(null, this._swState(), false)}<div class="empty">The planner has no data yet.</div>`;
@@ -649,7 +659,7 @@ class SmartgridPowerCard extends HTMLElement {
       title +
       this._battery(a.battery, sw, off) +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
-      this._headers(days, fr, geo) +
+      this._headers(days, fr, geo, a.battery) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
@@ -742,7 +752,7 @@ class SmartgridPowerCard extends HTMLElement {
     return `<div class="cheap pos">cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}</div>`;
   }
 
-  _headers(days, fr, { dates, today, cw, tz }) {
+  _headers(days, fr, { dates, today, cw, tz }, b) {
     const cols = dates.map((date, i) => {
       const d = days.find((x) => x && x.date === date) || {};
       if (date === today) {
@@ -757,6 +767,7 @@ class SmartgridPowerCard extends HTMLElement {
         return `<div class="ph on">
 <div><span class="name">Today</span>${info}</div>
 <div class="cost"><span>${eur(d.use_cost_eur)}</span>${saved(d.saved_eur, 'saved ')}</div>
+<div class="bl"><span>${owed('battery', d.batt_grid_eur)}</span><span class="bal">${owed('balance', b && b.balance_eur)}</span></div>
 <div class="l3">${use.join(' · ')}</div>
 ${this._cheap(d.cheap, tz)}
 </div>`;
@@ -764,6 +775,7 @@ ${this._cheap(d.cheap, tz)}
       return `<div class="ph">
 <div><span class="name">${date < today ? 'Yesterday' : 'Tomorrow'}</span></div>
 <div class="cost"><span>${eur(d.use_cost_eur)}</span></div>
+<div class="bl"><span>${owed('battery', d.batt_grid_eur)}</span></div>
 <div><span>${fx(d.use_kwh, 1)} kWh</span>${saved(d.saved_eur, date > today ? 'plan ' : '')}</div>
 ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
 </div>`;
