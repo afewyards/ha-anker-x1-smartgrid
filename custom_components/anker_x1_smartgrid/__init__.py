@@ -35,6 +35,7 @@ from .const import (
 from .controller import Controller
 from .pricing_store import PriceHistoryStore
 from .recorder import DataRecorder
+from .websocket import async_register as async_register_websocket
 
 _STORE_VERSION = 1
 _LOGGER = logging.getLogger(__name__)
@@ -153,6 +154,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # so the controller picks up the new Config without a restart.
         entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
 
+        async_register_websocket(hass)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         history_days = int(data.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS))
         if history_days > 0:

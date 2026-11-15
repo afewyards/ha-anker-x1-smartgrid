@@ -4,7 +4,7 @@
   "after_dependencies": ["frontend", "recorder"],
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": ["http", "websocket_api"],
   "documentation": "https://github.com/afewyards/ha-anker-x1-smartgrid",
   "integration_type": "service",
   "iot_class": "local_polling",
