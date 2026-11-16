@@ -420,6 +420,8 @@ def _dp_select_slots(
     )
     _deficit_w = [(window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0 for h in range(window_len)]
     _eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
+    # Same refills kept_values counts: later slots the DP may charge in.
+    _refills = [p for p, ok in zip(window_price[1:], chargeable[1:], strict=True) if ok]
     _kept = (
         optimize_mod.kept_values(
             window_price,
@@ -427,11 +429,7 @@ def _dp_select_slots(
             # Estimated prices may lower the value past the horizon, never raise it above the real refill.
             min(
                 optimize_mod.hold_stored_value(water_value, terminal_segments),
-                optimize_mod.compute_water_value(
-                    min((p for p, ok in zip(window_price, _price_valid, strict=True) if ok), default=0.0),
-                    cfg,
-                    eta_curve,
-                ),
+                optimize_mod.compute_water_value(min(_refills), cfg, eta_curve) if _refills else float("inf"),
             ),
             cfg,
             eta_curve,

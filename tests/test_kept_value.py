@@ -229,3 +229,16 @@ def test_only_a_slot_the_dp_may_charge_in_caps_the_kept_value():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
     kept = optimize.kept_values([0.40, 0.20, 0.80], [500.0] * 3, 0.10, cfg, chargeable=[True, False, True])
     assert kept[0] == pytest.approx(0.80, abs=1e-5)
+
+
+def test_only_a_later_slot_the_dp_may_charge_in_caps_the_value_kept_past_the_horizon():
+    # A wide band, so the 0.355 last slot stays chargeable behind the cheap current one.
+    cfg = _cfg(charge_margin_eur_per_kwh=0.0, charge_window_price_band=1.0)
+    curve = EfficiencyCurve.static(cfg)
+    # The cheap current slot refills nothing kept through it; the 0.355 last slot is the refill.
+    out = _run(cfg, [0.10, *TODAY[1:]], est=0.80)
+    assert out["kept_by_slot"][LAST] == pytest.approx(optimize.compute_water_value(0.355, cfg, curve))
+    # Flat prices above the charge ceiling: no refill at all, so the DP's own terminal value stands.
+    flat = _run(_cfg(charge_margin_eur_per_kwh=0.0), [0.40] * len(TODAY), est=0.80)
+    stored = optimize.hold_stored_value(flat["water_value"], flat["terminal_segments"])
+    assert flat["kept_by_slot"][LAST] == pytest.approx(stored)
