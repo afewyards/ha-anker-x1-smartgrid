@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, tzinfo
 
 from .const import FIRMWARE_SOC_FLOOR
-from .usecost import _MOVED_KWH, _ahead, _battery_kwh, _hour_key
+from .usecost import _MOVED_KWH, _ahead, _battery_kwh, _hour_key, _slots
 
 _H = timedelta(hours=1)
 _SUMS = ("h", "price", "deficit", "export", "eur", "house", "charge", "solar", "top", "sell_h", "sell_kwh", "under")
@@ -34,6 +34,7 @@ def hour_reasons(
     cycle_cost: float,
     charge_margin: float,
     kept_value: Callable[[datetime], float | None] | None = None,
+    kept_source: Callable[[datetime], tuple[str, datetime | None] | None] | None = None,
 ) -> dict[str, dict]:
     """``{kind, keep_eur, use_eur, kept_for, beats}`` per planned hour, keyed by the hour's
     start as :func:`usecost.hourly_series` emits it.
@@ -59,7 +60,9 @@ def hour_reasons(
     whose action the comparison contradicts gets no reason, nor any hour
     without ``terminal_value`` or a value a callable returns as ``None``.
     A hold or house hour keeps for ``kept_value`` instead, when it gives one for
-    the hour's slots (their mean): the value the hold rule weighs a kept kWh at.
+    the hour's slots (their mean): the value the hold rule weighs a kept kWh at,
+    and ``kept_for`` is then the slot ``kept_source`` names for it, with its price
+    as ``kept_price`` and ``kept_estimated``. An export hour weighs it the same way.
     Estimated slots count as not planned.
 
     ``beats`` turns the comparison into the tariff the hour would have to
@@ -74,6 +77,7 @@ def hour_reasons(
     if terminal_value is None:
         return {}
     hours: dict[datetime, dict] = {}
+    rows_at = {start: row for start, row, _h in _slots(horizon)}
     level, edge = soc, None
     for start, row, h, left in _ahead(horizon, now):
         if row.get("estimated"):
@@ -84,7 +88,7 @@ def hour_reasons(
         edge = start + timedelta(hours=h)
         if (price := row.get("price")) is None:
             continue
-        b = hours.setdefault(_hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0))
+        b = hours.setdefault(_hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0) | {"src": None})
         b["top"] = max(b["top"], *(math.inf if x is None else x for x in (before, level)))
         raw = math.nan if (x := export_price(start, price)) is None else x
         reserve = row.get("reserve_soc")
@@ -93,6 +97,7 @@ def hour_reasons(
         if kept_value is not None and (k := kept_value(start)) is not None:
             b["kept"] += k * h * left
             b["kept_h"] += h * left
+            b["src"] = b["src"] or (kept_source(start) if kept_source else None)
         b["price"] += price * h * left
         b["sell_h"] += raw * h * left
         b["deficit"] += (float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)) * left * 1000.0
@@ -157,8 +162,21 @@ def hour_reasons(
                 options.append(next_day)
             keep, kept_for = max(options, key=lambda o: o[0])
         b = hours[key]
-        if kinds[i] in ("hold", "house") and b["kept_h"] > 0.0:
+        extra = {}
+        if kinds[i] in ("hold", "house", "export") and b["kept_h"] > 0.0:
             keep = b["kept"] / b["kept_h"]
+            if b["src"] is not None:
+                kind, at = b["src"]
+                if at is None:
+                    kept_for = next_day[1]
+                else:
+                    row = rows_at.get(at, {})
+                    price = row.get("price")
+                    if kind == "export" and price is not None:
+                        price = export_price(at, price)
+                    first = _hour_key(at, tz)
+                    kept_for = {"start": _iso(first, tz), "end": _iso(first + _H, tz), "kind": kind}
+                    extra = {"kept_price": None if kind == "house" else price, "kept_estimated": bool(row.get("estimated"))}
         if use[i] >= keep if releasing else keep >= use[i]:
             price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
             sell_at = (keep + cycle_cost) / eta_discharge + export_fee
@@ -186,7 +204,7 @@ def hour_reasons(
                 "use_eur": round(use[i], 3),
                 "kept_for": kept_for,
                 "beats": [x for x in beats if not math.isnan(x["price"])],
-            }
+            } | extra
     return out
 
 

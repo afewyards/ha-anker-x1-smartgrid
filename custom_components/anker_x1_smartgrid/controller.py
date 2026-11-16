@@ -370,6 +370,7 @@ class Controller:
         self._card_failed = False
         self._card_args: tuple | None = None
         self._kept_by_slot: dict[datetime, float] | None = None
+        self._kept_src_by_slot: dict[datetime, tuple[str, datetime | None]] | None = None
         self._card_rows_end: str | None = None
         self._card_reasons: dict[str, dict] = {}
         # The ledger total the card's balance counts from: set by restore(),
@@ -2249,6 +2250,7 @@ class Controller:
         self.last_status["hold_discharge_value_eur_per_kwh"] = self.last_hold_values[0]
         self.last_status["hold_stored_value_eur_per_kwh"] = self.last_hold_values[1]
         self._kept_by_slot = _dp_out.get("kept_by_slot")
+        self._kept_src_by_slot = _dp_out.get("kept_src_by_slot")
         # Task 4: surface the DP optimizer's terminal water-value artefacts for
         # dashboard/diagnostic observability only. Absent from _dp_out on DP
         # failure (dict left empty at declaration) → last_status carries None.
@@ -2590,6 +2592,7 @@ class Controller:
                 cycle_cost=cfg.cycle_cost_eur_per_kwh,
                 charge_margin=cfg.charge_margin_eur_per_kwh,
                 kept_value=(self._kept_by_slot or {}).get,
+                kept_source=(self._kept_src_by_slot or {}).get,
             )
             self._why_failed = False
         except Exception:
@@ -2601,7 +2604,7 @@ class Controller:
         for h in hours:
             if h["start"] in reasons:
                 # Build-ups would push the sensor past its 16 KB attribute budget.
-                h["why"] = {k: v for k, v in reasons[h["start"]].items() if k != "beats"}
+                h["why"] = {k: v for k, v in reasons[h["start"]].items() if k not in ("beats", "kept_price", "kept_estimated")}
         return {
             "built_at": now.isoformat(),
             "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,

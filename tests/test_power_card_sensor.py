@@ -356,3 +356,24 @@ async def test_a_failsafe_tick_without_inputs_marks_the_battery_line_unknown(mon
     ctrl.power_card = stale_card()
     await ctrl.tick()
     assert ctrl.power_card["battery"]["state"] is None and ctrl.power_card["battery"]["soc"] is None
+
+
+async def test_where_a_kept_value_is_earned_reaches_the_debug_reasons_not_the_sensor():
+    from datetime import datetime
+
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller()
+    ctrl._recorder.read_feature_rows = lambda since: _samples()
+    ctrl.last_status["terminal_v_hi"] = 0.30
+    rebuild = _charge_then_export()
+    starts = [datetime.fromisoformat(r["start"]) for r in rebuild()[0]]
+    ctrl._kept_by_slot = dict.fromkeys(starts, 0.5)
+    ctrl._kept_src_by_slot = dict.fromkeys(starts, ("refill", starts[-1]))
+    await ctrl._refresh_battery_margin(NOW)
+    await ctrl._publish_power_card(NOW, card_inputs(48.0), "hold", False, rebuild)
+    sensor = [h["why"] for h in ctrl.power_card["hours"] if h.get("why", {}).get("kind") == "hold"]
+    debug = [r for r in ctrl._card_reasons.values() if r["kind"] == "hold"]
+    assert sensor and debug
+    assert all("kept_price" not in w and "kept_estimated" not in w for w in sensor)
+    assert all(r["kept_for"]["kind"] == "refill" and "kept_price" in r for r in debug)

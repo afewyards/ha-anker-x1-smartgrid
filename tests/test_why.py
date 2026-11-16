@@ -330,3 +330,37 @@ def test_a_hold_or_house_hour_keeps_for_the_value_the_hold_rule_weighs():
     )
     assert why[_at(0)]["keep_eur"] == 0.5
     assert why[_at(1)]["keep_eur"] == 0.1
+
+
+def test_a_held_hour_names_the_slot_its_kept_value_comes_from():
+    horizon = [_row(0, 0.30, 80, mode="hold"), _row(1, 0.30, 80, mode="hold"), _row(2, 0.46, 60, export=2.0)]
+    why = _why(
+        horizon,
+        kept_value=lambda s: 0.40,
+        kept_source=lambda s: ("export", NOW + 2 * H),
+    )
+    assert why[_at(0)]["kept_for"] == {"start": _at(2), "end": _at(3), "kind": "export"}
+    assert why[_at(0)]["kept_price"] == 0.46
+    assert why[_at(0)]["kept_estimated"] is False
+
+
+def test_a_kept_value_bought_back_in_an_estimated_slot_says_so():
+    horizon = [_row(0, 0.30, 80, mode="hold"), _row(1, 0.25, 80, est=True)]
+    why = _why(horizon, kept_value=lambda s: 0.30, kept_source=lambda s: ("refill", NOW + H))
+    assert why[_at(0)]["kept_for"] == {"start": _at(1), "end": _at(2), "kind": "refill"}
+    assert (why[_at(0)]["kept_price"], why[_at(0)]["kept_estimated"]) == (0.25, True)
+
+
+def test_a_kept_value_past_the_horizon_is_the_next_day():
+    why = _why(
+        [_row(0, 0.30, 80, mode="hold")],
+        kept_value=lambda s: 0.30,
+        kept_source=lambda s: ("next_day", None),
+    )
+    assert why[_at(0)]["kept_for"]["kind"] == "next_day"
+
+
+def test_an_export_hour_is_weighed_against_its_own_kept_value():
+    horizon = [_row(0, 0.46, 60, export=2.0, mode="export")]
+    assert _at(0) not in _why(horizon, terminal=0.5)
+    assert _why(horizon, terminal=0.5, kept_value=lambda s: 0.20)[_at(0)]["beats"]
