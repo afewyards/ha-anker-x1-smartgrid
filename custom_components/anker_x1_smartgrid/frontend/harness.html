@@ -106,7 +106,7 @@
       else if (hh === 7 || (hh >= 17 && hh <= 21)) state = 'house';
       else if (hh >= 10 && hh <= 16) state = 'hold';
       if (k === 2 && hh >= 11 && hh <= 13) state = 'charge_solar';
-      const delta = { charge_grid: 22, charge_solar: 4, house: -9, export: -8 }[state] || 0;
+      const delta = { charge_grid: 24, charge_solar: 4, house: -9, export: -19 }[state] || 0;
       soc = Math.max(5, Math.min(100, soc + delta));
       const sun = hh >= 9 && hh <= 15 ? Math.round(0.6 * [0.4, 0.55, 0.85][k] * Math.sin((Math.PI * (hh - 8.5)) / 7.5) * 100) / 100 : 0;
       const use = Math.round(USE[hh] * (1 + 0.08 * Math.sin(hh * 3 + k)) * 100) / 100;

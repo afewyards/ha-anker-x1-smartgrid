@@ -145,6 +145,7 @@ svg { display: block; }
 .p.export { stroke: var(--sg-export); } .p.idle { stroke: var(--sg-dim); stroke-width: 1.5; }
 .conn { stroke: var(--sg-dim); stroke-opacity: .45; }
 .gh { fill: var(--sg-dim); fill-opacity: .5; } .gb { fill: var(--sg-pos); } .gc { fill: var(--sg-charge); } .go { fill: var(--sg-export); } .cut { fill: var(--sg-bg); }
+.pl { paint-order: stroke; stroke: var(--sg-bg); stroke-width: 3px; stroke-linejoin: round; }
 .uo, .so { fill: none; stroke-width: 1; stroke-linejoin: round; }
 .uo { stroke: var(--sg-ink); stroke-width: 1.8; } .so { stroke: var(--sg-sun); }
 .gd { fill: var(--sg-ink); fill-opacity: .14; pointer-events: none; }
@@ -221,11 +222,12 @@ svg { display: block; }
 </style>`;
 
 const LEVEL_H = 48;
-const PANEL_H = 125;
-// Grid bars: zero line, px per kWh, and the cut that keeps a night's charge from flattening the house hours.
-const Z = 84;
+// Lower chart: px per kWh, and the cut that keeps a heavy house hour from flattening the rest.
 const KWH_PX = 10;
 const CUT = 2.5;
+// The price line spans PRICE_PX; charge and export bars on it are at most BAR_PX tall.
+const PRICE_PX = 26;
+const BAR_PX = 30;
 const COLS = { 3: [0.26, 0.44, 0.3], 2: [0.58, 0.42] };
 function ly(soc) {
   return 46 - Math.max(0, Math.min(100, soc)) * 0.42;
@@ -247,7 +249,7 @@ function barBox(r) {
   return [r.p0 + (r.p1 - r.p0 - w) / 2, w];
 }
 // A key's hourly kWh as stepped outlines, one path per run of hours.
-function outline(rows, key, cls, h = kh, z = Z) {
+function outline(rows, key, cls, h, z) {
   let o = '';
   let d = '';
   let prev = null;
@@ -272,35 +274,42 @@ function outline(rows, key, cls, h = kh, z = Z) {
   flush();
   return o;
 }
-// Sun behind the grid bars, use over them; also returns the bar boxes.
-function gridBars(rows) {
-  let s = outline(rows, 'solar_kwh', 'so');
+// What a day's grid-export bar shows: a planned or made sale, not solar spilling over.
+function sold(r) {
+  return r.state === 'export' && (num(r.grid_out_kwh) || 0) > 0.3;
+}
+// Bar heights on the price line, px per kWh.
+function barPx(rows) {
+  const top = Math.max(6, ...rows.map((r) => Math.max(num(r.grid_in_charge_kwh) || 0, sold(r) ? num(r.grid_out_kwh) : 0)));
+  return BAR_PX / top;
+}
+// Charge rises from its hour's price level and export hangs from it; house use and sun sit on the lower baseline Z.
+function gridBars(rows, py, k, Z) {
+  let s = outline(rows, 'solar_kwh', 'so', kh, Z);
+  let pb = '';
   const bars = [];
   for (const r of rows) {
     const house = num(r.grid_in_house_kwh);
-    const charge = num(r.grid_in_charge_kwh);
-    const out = num(r.grid_out_kwh);
-    if (house === null && charge === null && out === null) continue;
     const [bx, w] = barBox(r);
-    const nw = w * 0.65;
-    const nx = bx + (w - nw) / 2;
     const fed = Math.max(0, house || 0) + Math.max(0, num(r.batt_house_kwh) || 0);
-    const inn = fed + Math.max(0, charge || 0);
     const hh = kh(house || 0);
     const hb = kh(fed);
-    const up = kh(inn);
-    const dn = kh(out || 0);
     let b = '';
     if (hh > 0) b += `<rect x="${r1(bx)}" y="${r1(Z - hh)}" width="${r1(w)}" height="${r1(hh)}" class="gh"/>`;
     if (hb > hh) b += `<rect x="${r1(bx)}" y="${r1(Z - hb)}" width="${r1(w)}" height="${r1(hb - hh)}" class="gb"/>`;
-    if (up > hb) b += `<rect x="${r1(nx)}" y="${r1(Z - up)}" width="${r1(nw)}" height="${r1(up - hb)}" class="gc"/>`;
-    if (inn > CUT) b += up > hb ? cuts(nx, Z - up + 2.5, nw) : cuts(bx, Z - up + 2.5, w);
-    if (dn > 0) b += `<rect x="${r1(bx)}" y="${Z}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
-    if ((out || 0) > CUT) b += cuts(bx, Z + dn - 6.9, w);
+    if (fed > CUT) b += cuts(bx, Z - hb + 2.5, w);
     if (b) s += r.plan ? `<g opacity=".5">${b}</g>` : b;
-    if (up + dn > 0) bars.push({ x: bx, y: Z - up, w, h: up + dn });
+    if (num(r.price) === null) continue;
+    const y0 = py(r.price);
+    const up = Math.max(0, num(r.grid_in_charge_kwh) || 0) * k;
+    const dn = sold(r) ? num(r.grid_out_kwh) * k : 0;
+    let p = '';
+    if (up > 0) p += `<rect x="${r1(bx)}" y="${r1(y0 - up)}" width="${r1(w)}" height="${r1(up)}" class="gc"/>`;
+    if (dn > 0) p += `<rect x="${r1(bx)}" y="${r1(y0)}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
+    if (p) pb += r.plan ? `<g opacity=".6">${p}</g>` : p;
+    if (up + dn > 0) bars.push({ x: bx, y: y0 - up, w, h: up + dn });
   }
-  return [s + outline(rows, 'use_kwh', 'uo'), bars];
+  return [pb + s + outline(rows, 'use_kwh', 'uo', kh, Z), bars];
 }
 function ticks(date, i, { X, tz }, lo, y) {
   let s = `<text x="${r1(lo)}" y="${y}" font-size="11" class="ink">${weekday(localTime(date, 12, tz), tz)}</text>`;
@@ -314,8 +323,9 @@ function ticks(date, i, { X, tz }, lo, y) {
 }
 const LEGEND = `<div class="lg dm">
 <span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
-<span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house${swatch('gc', 9)}charge${swatch('go', 9)}export</span>
-<span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gc"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
+<span>bars on the price line: kWh bought (up) and sold (down)</span>
+<span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house</span>
+<span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gb"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
 const DEBUG_FAIL = '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
 const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'sun']];
@@ -954,14 +964,26 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
   }
 
   _panels(rows, { dates, cx, cw, W, tz, X }, nowX) {
-    let s = `<svg class="dm" width="${W}" height="${PANEL_H}">`;
-    for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${PANEL_H - 2}" class="rule"/>`;
-    for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
     const priced = rows.filter((r) => num(r.price) !== null);
     const pmax = Math.max(...priced.map((r) => r.price));
     const pmin = Math.min(...priced.map((r) => r.price));
-    const py = (p) => (pmax > pmin ? 14 + ((pmax - p) / (pmax - pmin)) * 27 : 28);
-    const [gb, bars] = gridBars(rows);
+    const k = barPx(rows);
+    // The price chart takes just the room its tallest charge bar, deepest export bar, totals and min/max labels need.
+    const off = (p) => (pmax > pmin ? ((pmax - p) / (pmax - pmin)) * PRICE_PX : PRICE_PX / 2);
+    let upN = -Infinity;
+    let dnN = -Infinity;
+    for (const r of priced) {
+      if (num(r.grid_in_charge_kwh) > 0) upN = Math.max(upN, num(r.grid_in_charge_kwh) * k - off(r.price));
+      if (sold(r)) dnN = Math.max(dnN, num(r.grid_out_kwh) * k - (PRICE_PX - off(r.price)));
+    }
+    const pt = Math.max(14, upN + 17);
+    const Z = Math.round(pt + PRICE_PX + Math.max(16, dnN + 17) + 4 + CUT * KWH_PX);
+    const PANEL_H = Z + 16;
+    const py = (p) => pt + off(p);
+    let s = `<svg class="dm" width="${W}" height="${PANEL_H}">`;
+    for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${PANEL_H - 2}" class="rule"/>`;
+    for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
+    const [gb, bars] = gridBars(rows, py, k, Z);
     s += gb;
 
     let prev = null;
@@ -990,26 +1012,30 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       if (cp.length) {
         const top = cp.reduce((a, r) => (r.price > a.price ? r : a));
         const bot = cp.reduce((a, r) => (r.price < a.price ? r : a));
-        const lab = (r, y) =>
-          `<text x="${r1(clamp((r.p0 + r.p1) / 2, 13))}" y="${r1(y)}" font-size="11" text-anchor="middle" class="ink">${r.price.toFixed(2)}</text>`;
+        const lab = (r, y) => {
+          const x = clamp((r.p0 + r.p1) / 2, 13);
+          placed.push({ x: x - 13, y: y - 9, w: 26, h: 11 });
+          return `<text x="${r1(x)}" y="${r1(y)}" font-size="11" text-anchor="middle" class="ink pl">${r.price.toFixed(2)}</text>`;
+        };
         s += lab(top, py(top.price) - 5);
         if (bot.price < top.price) s += lab(bot, py(bot.price) + 14);
       }
-      s += ticks(date, i, { X, tz }, lo, 122);
+      s += ticks(date, i, { X, tz }, lo, Z + 13);
 
-      // Each charge and export block gets its total beside it, or nothing if that would overlap.
+      // Each charge and export block gets its total at the free end of its bars, or nothing if that would overlap.
       for (const [key, sign] of [['grid_in_charge_kwh', '+'], ['grid_out_kwh', '−']]) {
         const blocks = [];
         let blk = null;
         for (const r of col) {
-          const v = num(r[key]);
+          const v = sign === '−' && !sold(r) ? null : num(r[key]);
           if (v === null || v <= 0.05) {
             blk = null;
           } else if (blk && blk.last.t + H === r.t) {
             blk.kwh += v;
             blk.last = r;
+            blk.rows.push(r);
           } else {
-            blk = { kwh: v, first: r, last: r };
+            blk = { kwh: v, first: r, last: r, rows: [r] };
             blocks.push(blk);
           }
         }
@@ -1017,21 +1043,22 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
           if (bl.kwh < 0.5) continue;
           const text = `${sign}${bl.kwh.toFixed(1)}`;
           const w = text.length * 6;
-          const base = sign === '+' ? Z - CUT * KWH_PX + 8 : Z + 10;
-          const pw = (r) => (r.p1 - r.p0) * 0.86;
-          for (const x of [bl.last.p0 + pw(bl.last) + 2, bl.first.p1 - pw(bl.first) - 2 - w]) {
+          const ends = bl.rows.map((r) => py(r.price) + (sign === '+' ? -1 : 1) * (num(r[key]) || 0) * k);
+          const base = sign === '+' ? Math.min(...ends) - 4 : Math.max(...ends) + 13;
+          // Centred on the block, else flush to either end so the now line can stay clear.
+          for (const x of [(bl.first.p0 + bl.last.p1) / 2 - w / 2, bl.first.p0, bl.last.p1 - w]) {
             const box = { x, y: base - 9, w, h: 10 };
             if (x < cx[i] + 2 || x + w > cx[i] + cw[i] - 2) continue;
             if (nowX !== null && nowX > x - 2 && nowX < x + w + 2) continue;
             if (placed.some((p) => hit(p, box)) || bars.some((b) => hit(b, box))) continue;
             placed.push(box);
-            s += `<text x="${r1(x)}" y="${r1(base)}" font-size="11" class="ink">${text}</text>`;
+            s += `<text x="${r1(x)}" y="${r1(base)}" font-size="11" class="ink pl">${text}</text>`;
             break;
           }
         }
       }
     }
-    if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="4" x2="${r1(nowX)}" y2="${Z + CUT * KWH_PX}" class="now"/>`;
+    if (nowX !== null) s += `<line x1="${r1(nowX)}" y1="4" x2="${r1(nowX)}" y2="${Z}" class="now"/>`;
     return s + `<rect class="gd" data-k="p" y="0" width="0" height="${PANEL_H - 14}"/></svg>`;
   }
 
