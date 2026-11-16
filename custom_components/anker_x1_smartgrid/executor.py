@@ -239,7 +239,7 @@ async def run_forcing_and_export(
         controller.hold_state,
         discharge_value=_discharge_v,
         # The DP's value for this slot: a later slot can be worth more than the horizon end.
-        stored_value=_dp_out.get("hold_kept_value", _stored_v),
+        stored_value=(_dp_out.get("kept_by_slot") or {}).get(_dp_slot, _stored_v),
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,

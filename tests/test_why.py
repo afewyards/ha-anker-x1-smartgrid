@@ -320,3 +320,13 @@ def test_a_price_that_clears_the_unrounded_bar_by_a_hair_beats_it():
     why = _why([_row(0, bar + 0.0003, 60, export=2.0, mode="export")], terminal=terminal)
     (sell,) = why[_at(0)]["beats"]
     assert sell["price"] >= sell["beat_eur"]
+
+
+def test_a_hold_or_house_hour_keeps_for_the_value_the_hold_rule_weighs():
+    kept = {NOW: 0.50, NOW + H: 0.10}
+    why = _reasons(
+        [_row(0, 0.30, 80, mode="hold"), _row(1, 0.46, 60, house=0.5, mode="battery")],
+        kept_value=lambda s: kept.get(s),
+    )
+    assert why[_at(0)]["keep_eur"] == 0.5
+    assert why[_at(1)]["keep_eur"] == 0.1

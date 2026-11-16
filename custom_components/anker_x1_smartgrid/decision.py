@@ -425,9 +425,19 @@ def _dp_select_slots(
         )
     ]
     _deficit_w = [(window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0 for h in range(window_len)]
+    _eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
     _kept = (
         optimize_mod.kept_values(
-            window_price, _deficit_w, optimize_mod.hold_stored_value(water_value, terminal_segments), cfg, eta_curve
+            window_price,
+            _deficit_w,
+            optimize_mod.hold_stored_value(water_value, terminal_segments),
+            cfg,
+            eta_curve,
+            sell=(
+                [p * _eta_d - cfg.cycle_cost_eur_per_kwh for p in window_export_price]
+                if export_price is not None
+                else None
+            ),
         )
         if cfg.low_power_hold and water_value is not None
         else None
@@ -605,7 +615,7 @@ def _dp_select_slots(
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
         if _kept:
-            _out["hold_kept_value"] = _kept[0]
+            _out["kept_by_slot"] = {now_h + h * stride: v for h, v in enumerate(_kept)}
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots
 
 

@@ -120,3 +120,43 @@ def test_a_slot_keeps_for_the_richest_later_use_unless_bought_back_cheaper_first
 def test_without_an_estimated_gap_the_real_minimum_anchors_the_kept_value():
     out = _run(_cfg(charge_margin_eur_per_kwh=0.02), TODAY, est=None)
     assert out["water_value"] == pytest.approx(0.355 / 0.8878 + 0.02, abs=1e-5)
+
+
+def test_a_refill_before_tomorrows_peak_cheaper_than_using_now_does_not_hold_today():
+    tomorrow = [0.42] * 4 + [0.20] * 6 + [0.80] * 3 + [0.42] * 2
+    out = _run(_cfg(charge_margin_eur_per_kwh=0.0), TODAY[:6] + tomorrow, soc=40.0, est=0.20)
+    assert _held(out) == []
+
+
+def test_a_later_sale_counts_as_a_use_worth_keeping_for():
+    cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
+    price, deficit = [0.40, 0.90, 0.20], [500.0, 0.0, 500.0]
+    assert optimize.kept_values(price, deficit, 0.10, cfg)[0] == pytest.approx(0.20, abs=1e-5)
+    assert optimize.kept_values(price, deficit, 0.10, cfg, sell=[0.0, 0.70, 0.0])[0] == pytest.approx(0.70)
+
+
+def test_kept_values_follow_single_quarters():
+    q = timedelta(minutes=15)
+    # 0.50 quarters, one cheap 0.10 quarter at 15:45, one rich 0.90 quarter at 17:45, a 0.05 last quarter.
+    prices = [0.50] * 7 + [0.10] + [0.50] * 7 + [0.90] + [0.50] * 7 + [0.05]
+    cfg = _cfg(charge_margin_eur_per_kwh=0.0)
+    curve = EfficiencyCurve.static(cfg)
+    out: dict = {}
+    compute_decision(
+        PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=2), ()),
+        PlantInputs(soc=60.0, meter_w=0.0, now=NOW),
+        [PriceSlot(NOW + i * q, p) for i, p in enumerate(prices)],
+        0.0,
+        NOW + len(prices) * q,
+        _Flat(),
+        None,
+        cfg,
+        _out=out,
+        eta_curve=curve,
+        slot_minutes=15,
+    )
+    kept = out["kept_by_slot"]
+    # Kept through the quarter before the cheap one: worth only buying it back there.
+    assert kept[NOW + 6 * q] == pytest.approx(optimize.compute_water_value(0.10, cfg, curve))
+    # Kept through the quarter before the rich one: worth using it there.
+    assert kept[NOW + 14 * q] == pytest.approx(optimize.discharge_value(0.90, 1000.0, cfg, curve))

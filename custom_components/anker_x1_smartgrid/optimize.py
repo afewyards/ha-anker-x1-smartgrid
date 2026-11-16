@@ -164,15 +164,23 @@ def hold_stored_value(water_value: float, terminal_segments: list[tuple[float, f
     return max([water_value, *(v for _, v in terminal_segments or ())])
 
 
-def kept_values(price: list[float], deficit_w: list[float], stored: float, cfg: Config, eta_curve=None) -> list[float]:
+def kept_values(
+    price: list[float],
+    deficit_w: list[float],
+    stored: float,
+    cfg: Config,
+    eta_curve=None,
+    sell: list[float] | None = None,
+) -> list[float]:
     """€/DC-kWh a kWh kept through each slot is worth to the hold, never below ``stored``.
 
-    Backward from the horizon end: the richer of using it for the house in a later
-    slot or keeping it on, capped by buying it back in that slot first.
+    Backward over the plan's own slots, so only published prices raise it: the
+    richest of using it for the house in a later slot, selling it there (``sell``,
+    net € per DC kWh) or keeping it on, capped by buying it back in that slot first.
     """
     out = [stored] * len(price)
     for h in range(len(price) - 1, 0, -1):
-        use = discharge_value(price[h], deficit_w[h], cfg, eta_curve)
+        use = max(discharge_value(price[h], deficit_w[h], cfg, eta_curve), sell[h] if sell else 0.0)
         out[h - 1] = max(stored, min(compute_water_value(price[h], cfg, eta_curve), max(use, out[h])))
     return out
 

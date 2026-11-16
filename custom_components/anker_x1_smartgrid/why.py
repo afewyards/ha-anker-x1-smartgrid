@@ -33,6 +33,7 @@ def hour_reasons(
     eta_discharge: float,
     cycle_cost: float,
     charge_margin: float,
+    kept_value: Callable[[datetime], float | None] | None = None,
 ) -> dict[str, dict]:
     """``{kind, keep_eur, use_eur, kept_for, beats}`` per planned hour, keyed by the hour's
     start as :func:`usecost.hourly_series` emits it.
@@ -57,6 +58,8 @@ def hour_reasons(
     ``terminal_value``, ``kept_for`` its run, else ``terminal_value``. An hour
     whose action the comparison contradicts gets no reason, nor any hour
     without ``terminal_value`` or a value a callable returns as ``None``.
+    A hold or house hour keeps for ``kept_value`` instead, when it gives one for
+    the hour's slots (their mean): the value the hold rule weighs a kept kWh at.
     Estimated slots count as not planned.
 
     ``beats`` turns the comparison into the tariff the hour would have to
@@ -81,12 +84,15 @@ def hour_reasons(
         edge = start + timedelta(hours=h)
         if (price := row.get("price")) is None:
             continue
-        b = hours.setdefault(_hour_key(start, tz), dict.fromkeys(_SUMS, 0.0))
+        b = hours.setdefault(_hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0))
         b["top"] = max(b["top"], *(math.inf if x is None else x for x in (before, level)))
         raw = math.nan if (x := export_price(start, price)) is None else x
         reserve = row.get("reserve_soc")
         b["under"] = max(b["under"], float(reserve is not None and level is not None and level <= reserve))
         b["h"] += h * left
+        if kept_value is not None and (k := kept_value(start)) is not None:
+            b["kept"] += k * h * left
+            b["kept_h"] += h * left
         b["price"] += price * h * left
         b["sell_h"] += raw * h * left
         b["deficit"] += (float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)) * left * 1000.0
@@ -150,8 +156,10 @@ def hour_reasons(
             if stop == n:
                 options.append(next_day)
             keep, kept_for = max(options, key=lambda o: o[0])
+        b = hours[key]
+        if kinds[i] in ("hold", "house") and b["kept_h"] > 0.0:
+            keep = b["kept"] / b["kept_h"]
         if use[i] >= keep if releasing else keep >= use[i]:
-            b = hours[key]
             price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
             sell_at = (keep + cycle_cost) / eta_discharge + export_fee
             selling = {"kept": keep, "wear": cycle_cost, "conversion": None, "fee": export_fee}

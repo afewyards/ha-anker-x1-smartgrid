@@ -282,7 +282,7 @@ async def test_hold_engages_without_release():
 async def test_hold_weighs_the_kept_value_the_dp_published():
     # Worth less at the end of the horizon than discharging now, but kept for a richer later slot.
     ctrl, act = _exec_ctrl()
-    dp_out = {"water_value": 0.15, "hold_kept_value": 0.30, "held_slots": frozenset({T})}
+    dp_out = {"water_value": 0.15, "kept_by_slot": {T: 0.30}, "held_slots": frozenset({T})}
     await executor.run_forcing_and_export(
         ctrl,
         T,
