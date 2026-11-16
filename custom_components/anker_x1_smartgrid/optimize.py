@@ -670,6 +670,7 @@ def optimize_grid(
     day_index: list[int] | None = None,
     eta_curve=None,
     hold: list[bool] | None = None,
+    charge_stop_kwh: float | None = None,
 ) -> dict:
     """Minimum-cost grid schedule for a forecast window (DP-exact).
 
@@ -741,6 +742,10 @@ def optimize_grid(
         tomorrow's PV exactly as charging above it would.  Export transitions
         always discharge.  ``None`` is byte-identical.  When supplied, the result
         carries ``hold_schedule``: the slots the chosen trajectory holds.
+    charge_stop_kwh :
+        Optional DC kWh no grid charge goes past, where the executor stops
+        charging. Unlike ``grid_charge_ceiling`` it leaves the hold alone, so a
+        pack above it still holds. ``None`` is byte-identical.
     feed_in :
         Optional per-hour dynamic feed-in tariff (€/kWh).  Must have exactly
         ``window_len`` elements when provided.
@@ -1012,6 +1017,8 @@ def optimize_grid(
                     max_grid_dc = 0.0
                 if grid_charge_ceiling is not None:
                     max_grid_dc = min(max_grid_dc, max(0.0, grid_charge_ceiling[h] - soc_pass))
+                if charge_stop_kwh is not None:
+                    max_grid_dc = min(max_grid_dc, max(0.0, charge_stop_kwh - soc_pass))
 
                 # Economic-only floor (A1) aligned to regret.realized_grid_cost (A5):
                 # the grid charge is applied FIRST (on the raw, possibly below-floor

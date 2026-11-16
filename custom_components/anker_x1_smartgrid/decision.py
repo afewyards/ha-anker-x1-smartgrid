@@ -415,15 +415,9 @@ def _dp_select_slots(
     # room for the solar that REALISTICALLY arrives — not a conservative load
     # estimate (which would under-reserve and waste afternoon solar).
     cycle_end_idx = optimize_mod.solar_cycle_end_idx(now_h, window_len, sun_times, slot_minutes=slot_minutes)
-    # Never above the charge stop: the executor ends FORCING there, so a top-up past it never runs
-    # and the slot it took from the hold drains instead.
-    _stop_kwh = cfg.pct_to_kwh(cfg.charge_stop_pct)
-    grid_charge_ceiling = [
-        min(c, _stop_kwh)
-        for c in optimize_mod.solar_reservation_ceiling(
-            window_pv, window_load_reserve, cfg, cycle_end_idx=cycle_end_idx, dt_h=dt_h
-        )
-    ]
+    grid_charge_ceiling = optimize_mod.solar_reservation_ceiling(
+        window_pv, window_load_reserve, cfg, cycle_end_idx=cycle_end_idx, dt_h=dt_h
+    )
     _deficit_w = [(window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0 for h in range(window_len)]
     _eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
     _kept = (
@@ -474,6 +468,8 @@ def _dp_select_slots(
         dt_h=dt_h,
         eta_curve=eta_curve,
         terminal_segments=terminal_segments,
+        # The executor ends FORCING here; the hold and ceiling_by_hour keep the solar ceiling.
+        charge_stop_kwh=cfg.pct_to_kwh(cfg.charge_stop_pct),
         hold=(
             [
                 _price_valid[h] and optimize_mod.holds_at(window_price[h], _deficit_w[h], _kept[h], cfg, eta_curve)

@@ -6,15 +6,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from custom_components.anker_x1_smartgrid import executor
 from custom_components.anker_x1_smartgrid.decision import compute_decision
 from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     ControllerState,
+    ExportState,
     PlantInputs,
     PlanState,
     PriceSlot,
 )
+from tests.helpers import StubHass, make_controller
 
 NOW = datetime(2026, 11, 16, 2, 0, tzinfo=UTC)
 CFG = Config.from_dict(
@@ -35,15 +38,17 @@ class _Heavy:
         return 1500.0
 
 
+# A cheap night before a dear day and a dear estimated night: the whole pack gets used,
+# so topping it up tonight pays.
+SLOTS = [PriceSlot(NOW + timedelta(minutes=15 * i), p) for i, p in enumerate([0.20] * 16 + [0.45] * 32)]
+
+
 def _run(soc: float) -> dict:
-    # A cheap night before a dear day and a dear estimated night: the whole pack gets used,
-    # so topping it up tonight pays.
-    prices = [0.20] * 16 + [0.45] * 32
     out: dict = {}
     compute_decision(
         PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=1), ()),
         PlantInputs(soc=soc, meter_w=1500.0, now=NOW),
-        [PriceSlot(NOW + timedelta(minutes=15 * i), p) for i, p in enumerate(prices)],
+        SLOTS,
         0.0,
         NOW + timedelta(hours=12),
         _Heavy(),
@@ -57,8 +62,9 @@ def _run(soc: float) -> dict:
     return out
 
 
-def test_at_the_charge_stop_the_plan_holds_instead_of_topping_up():
-    out = _run(99.0)
+@pytest.mark.parametrize("soc", [99.0, 99.5, 100.0])
+def test_at_or_above_the_charge_stop_the_plan_holds_instead_of_topping_up(soc):
+    out = _run(soc)
     assert out["grid_request"] == {}
     assert NOW in out["held_slots"]
 
@@ -68,5 +74,31 @@ def test_below_the_charge_stop_the_plan_fills_only_to_it():
     assert bought_dc == pytest.approx(CFG.pct_to_kwh(1.0), abs=0.05)
 
 
-def test_grid_charging_stops_where_the_executor_does():
-    assert max(_run(98.0)["ceiling_by_hour"].values()) == pytest.approx(CFG.soc_target - 1.0)
+def test_the_hold_keeps_the_solar_ceiling_above_the_charge_stop():
+    assert _run(98.0)["ceiling_by_hour"][NOW] == pytest.approx(CFG.soc_target)
+
+
+@pytest.mark.parametrize("soc", [99.5, 100.0])
+async def test_above_the_charge_stop_a_top_up_slot_holds_instead_of_draining(soc):
+    out = _run(soc)
+    # A top-up planned a tick earlier, which the charge stop does not force.
+    out["grid_request"] = {NOW: 900.0}
+    out["held_slots"] = out["held_slots"] - {NOW}
+    ctrl, act = make_controller(StubHass())
+    ctrl.cfg = CFG
+    ctrl._house_load_fresh = True
+    ctrl._hold_deficit_w.append((NOW, 1500.0))
+    ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=NOW - timedelta(hours=1))
+    await executor.run_forcing_and_export(
+        ctrl,
+        NOW,
+        PlanState(ControllerState.PASSIVE, NOW, ()),
+        PlantInputs(soc=soc, meter_w=1500.0, now=NOW),
+        SLOTS,
+        out,
+        [],
+        15,
+        None,
+        1500.0,
+    )
+    assert act.calls == [("engage_hold",)]
