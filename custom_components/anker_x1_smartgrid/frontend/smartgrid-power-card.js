@@ -354,7 +354,7 @@ function verdict(w, t, tz) {
   const f = w.kept_for || {};
   const a = Date.parse(f.start);
   const at = Number.isFinite(a) ? stamp(a, t, tz) : '';
-  const tgt = f.kind === 'next_day' ? 'the next day' : !at ? 'later' : { export: `the sale at ${at}`, house: `house use at ${at}` }[f.kind] || `the refill at ${at}${f.kind === 'refill' && w.kept_estimated ? ' (estimated)' : ''}`;
+  const tgt = f.kind === 'next_day' ? 'the next day' : !at ? 'later' : { export: `the sale at ${at}`, house: `house use at ${at}`, refill: `the refill at ${at}${w.kept_estimated ? ' (estimated)' : ''}` }[f.kind] || 'later';
   const keep = `${eur(w.keep_eur, 3)}/kWh`;
   const use = `${eur(w.use_eur, 3)}/kWh`;
   if (w.kind === 'hold') return `Holding: ${tgt} is worth ${keep}, using it now only ${use}.`;
@@ -427,7 +427,7 @@ function decision(w, tz) {
   const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
   const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
   let note = '';
-  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}${w.kept_estimated ? ' (estimated)' : ''}.`;
+  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.`;
   else if (target) note = `${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.`;
   return { win: kept ? later : now, lose: kept ? now : later, note };
 }
