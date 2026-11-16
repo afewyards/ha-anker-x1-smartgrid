@@ -572,6 +572,17 @@ def test_compute_decision_hedge_none_is_noop():
     assert [r["soc"] for r in a[3]] == [r["soc"] for r in b[3]]
 
 
+def test_compute_decision_hedge_lowers_projection():
+    """A hedge keyed at now_h lowers the published horizon SoC from that hour onward."""
+    cfg = _cfg()
+    # Flat: no cheaper hour to buy the debit back at.
+    prices = [0.40] * 9
+    now_h = BASE  # BASE is already hour-aligned (minute=0, second=0)
+    base = _call_compute_decision(cfg, soc=50.0, prices=prices)
+    hed = _call_compute_decision(cfg, soc=50.0, prices=prices, hedge_drain_by_hour={now_h: 1.5})
+    assert hed[3][-1]["soc"] <= base[3][-1]["soc"]
+
+
 def test_compute_decision_hedge_buys_the_debit_back_at_a_cheaper_hour():
     """A hedge keyed at now_h that would ride the pack into the floor is bought back at the
     cheap hour, never more than the debit; without it a kWh kept past the horizon is worth
