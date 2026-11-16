@@ -255,6 +255,7 @@ VALUE = {
     "charge": lambda p, _w: p / ETA_C + MARGIN,
     "house": _house_value,
 }
+NOW_PARTS = {"sell": ["fee", "conversion", "wear"], "charge": ["conversion", "margin"], "house": ["conversion", "wear"]}
 PARTS = {
     "sell": ["kept", "wear", "conversion", "fee"],
     "charge": ["kept", "margin", "conversion"],
@@ -379,3 +380,19 @@ def test_an_hours_kept_source_is_its_last_quarter_s():
     src = {NOW + k * H / 4: ("house", NOW + (2 * H if k == 3 else H / 4)) for k in range(4)}
     why = _why(horizon, kept_value=lambda s: 0.40, kept_source=src.get)
     assert why[_at(0)]["kept_for"]["start"] == _at(2)
+
+
+def test_each_build_up_also_walks_from_the_price_to_what_using_it_now_is_worth():
+    why = _why(_day(), terminal=0.1, **PRICED)
+    for row in why.values():
+        for b in row["beats"]:
+            assert b["price"] + sum(p["eur"] for p in b["now_parts"]) == pytest.approx(b["now_eur"], abs=1e-9)
+            assert b["now_eur"] == pytest.approx(VALUE[b["q"]](b["price"], 500.0), abs=1e-4)
+            assert [p["key"] for p in b["now_parts"]] == NOW_PARTS[b["q"]]
+            wins = b["now_eur"] >= row["keep_eur"] - 5e-4
+            if b["q"] == "charge":
+                assert not wins
+            elif b["q"] == "house":
+                assert wins == (row["kind"] == "house")
+            elif not b.get("blocked"):
+                assert wins == (row["kind"] == "export")

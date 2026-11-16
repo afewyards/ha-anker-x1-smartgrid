@@ -333,53 +333,42 @@ const DEBUG_LEGEND = {
   cost: `<span>grid cost against the first plan of the day${swatch('dn', 9)}dearer${swatch('dp', 9)}cheaper<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>unknown</span>`,
 };
 
-// The price an hour has to beat before selling, charging or using the battery pays, per question.
-const ASK = {
-  sell: ['sell', 'export', 'Sell above', 'Export price'],
-  charge: ['charge', 'charge', 'Charge below', 'Import price'],
-  house: ['use it for the house', 'house', 'Use above', 'Import price'],
-};
-const PART = { wear: 'Wear', conversion: 'Conversion', fee: 'Export fee', margin: 'Charge margin' };
+const TITLE = { sell: 'Sell it now', charge: 'Charge it now', house: 'Use it for the house now' };
+const PART = { wear: 'Wear', conversion: 'Conversion loss', fee: 'Export fee', margin: 'Charge margin' };
 function stamp(a, t, tz) {
   return dateOf(a, tz) === dateOf(t, tz) ? clock(a, tz) : `${weekday(a, tz)} ${clock(a, tz)}`;
 }
-// What the kept kWh is kept for, as the build-up's first row reads.
-function keptLabel(w, t, tz) {
+// What the kept kWh is kept for, as a phrase.
+function target(w, t, tz) {
   const f = w.kept_for || {};
   const a = Date.parse(f.start);
-  if (f.kind === 'next_day') return 'Worth next day';
-  if (!Number.isFinite(a)) return 'Worth later';
+  if (f.kind === 'next_day') return 'the next day';
+  if (!Number.isFinite(a)) return 'later';
   const at = stamp(a, t, tz);
-  const p = num(w.kept_price) === null ? null : eur(w.kept_price, 3);
-  if (f.kind === 'export' && p) return `Sells at ${at} for ${p}`;
-  if (f.kind === 'house') return `House use at ${at}`;
-  if (f.kind === 'refill') return `Refill ${at}${p ? ` at ${w.kept_estimated ? '~' : ''}${p}${w.kept_estimated ? ' (estimated)' : ''}` : ''}`;
-  return `Worth at ${at}`;
+  return { export: `the sale at ${at}`, house: `house use at ${at}`, refill: `the refill at ${at}${w.kept_estimated ? ' (estimated)' : ''}` }[f.kind] || 'later';
 }
 // One plain line: what the hour does and the two values it weighed.
 function verdict(w, t, tz) {
   if (!w || !w.kind || num(w.keep_eur) === null || num(w.use_eur) === null) return '';
-  const f = w.kept_for || {};
-  const a = Date.parse(f.start);
-  const at = Number.isFinite(a) ? stamp(a, t, tz) : '';
-  const tgt = f.kind === 'next_day' ? 'the next day' : !at ? 'later' : { export: `the sale at ${at}`, house: `house use at ${at}`, refill: `the refill at ${at}${w.kept_estimated ? ' (estimated)' : ''}` }[f.kind] || 'later';
+  const tgt = target(w, t, tz);
   const keep = `${eur(w.keep_eur, 3)}/kWh`;
   const use = `${eur(w.use_eur, 3)}/kWh`;
   if (w.kind === 'hold') return `Holding: ${tgt} is worth ${keep}, using it now only ${use}.`;
   if (w.kind === 'charge') return `Charging: it costs ${use} and is worth ${keep} for ${tgt}.`;
   return `${w.kind === 'export' ? 'Selling now' : 'Using it now'}: ${use} beats ${keep} for ${tgt}.`;
 }
+// Per stored kWh: from the hour's price down (up, for a charge) to what using it now is worth, against what it is kept for.
 function buildups(w, t, tz) {
-  const bs = (w && Array.isArray(w.beats) ? w.beats : []).filter((b) => b && ASK[b.q] && num(b.price) !== null && num(b.beat_eur) !== null);
+  const bs = (w && Array.isArray(w.beats) ? w.beats : []).filter((b) => b && TITLE[b.q] && num(b.price) !== null && num(b.now_eur) !== null && Array.isArray(b.now_parts) && num(w.keep_eur) !== null);
   if (!bs.length) return '';
-  const kept = keptLabel(w, t, tz);
+  const keep = w.keep_eur;
   const ups = bs.map((b) => {
-    let s = 0;
-    const steps = (Array.isArray(b.parts) ? b.parts : []).filter((p) => p && num(p.eur) !== null && Math.abs(p.eur) >= 0.0005).map((p) => [p, s, (s += p.eur)]);
+    let x = b.price;
+    const steps = b.now_parts.filter((p) => p && num(p.eur) !== null && Math.abs(p.eur) >= 0.0005).map((p) => [p, x, (x += p.eur)]);
     return [b, steps];
   });
   // One scale for both build-ups, so their bars compare.
-  const vals = ups.flatMap(([b, st]) => [b.price, b.beat_eur, ...st.flatMap(([, x, y]) => [x, y])]);
+  const vals = ups.flatMap(([b, st]) => [b.price, b.now_eur, keep, ...st.flatMap(([, x, y]) => [x, y])]);
   const lo = Math.min(0, ...vals);
   const span = Math.max(0, ...vals) - lo || 1;
   const bar = (x, y, cls) => {
@@ -387,18 +376,22 @@ function buildups(w, t, tz) {
     return `<span class="dtr">${wd >= 0.5 ? `<b${cls ? ` class="${cls}"` : ''} style="left:${r1(((Math.min(x, y) - lo) / span) * 100)}%;width:${r1(wd)}%"></b>` : ''}</span>`;
   };
   const one = ([b, steps]) => {
-    const [verb, does, above, gets] = ASK[b.q];
-    // Above zero the hour's price pays: selling and house use above the bar, charging below it.
-    const d = b.q === 'charge' ? b.beat_eur - b.price : b.price - b.beat_eur;
-    const ok = d >= 0 ? 'pos' : 'neg';
-    const rows = steps.map(([p, x, y]) => `<span>${p.key === 'kept' ? kept : PART[p.key] || esc(p.key)}</span>${bar(x, y)}<span class="v">${p.key === 'kept' ? eur(p.eur, 3) : signed(p.eur, '€', 3)}</span>`);
+    const charge = b.q === 'charge';
+    const row = (label, x, y, v, cls) => `<span${cls ? ` class="${cls}"` : ''}>${label}</span>${bar(x, y, cls && 'tot')}<span class="v${cls ? ` ${cls}` : ''}">${v}</span>`;
+    const rows = steps.map(([p, x, y]) => row(charge && p.key === 'conversion' ? 'Charge loss' : PART[p.key] || esc(p.key), x, y, signed(p.eur, '€', 3)));
+    // The two rows are compared as shown, so the answer never disagrees with them by a rounding step.
+    const now = Math.round(b.now_eur * 1000) / 1000;
+    const d = charge ? keep - now : now - keep;
+    const winner = charge ? 'Charging' : w.kind === 'export' ? 'Selling now' : 'Using it now';
     const end = b.blocked
-      ? `The price clears it, but ${b.blocked === 'reserve' ? 'the reserve holds this energy back' : 'a planning rule holds it back'}.`
-      : `${d >= 0 ? 'Clears it' : 'Short'} by <b class="${ok}">${eur(Math.abs(d), 3)} per kWh</b>.`;
+      ? `${winner} would win, but ${b.blocked === 'reserve' ? 'the reserve holds this energy back' : 'a planning rule holds it back'}.`
+      : `${d >= 0 ? winner : 'Keeping'} wins by <b class="${d >= 0 ? 'pos' : 'neg'}">${eur(Math.abs(d), 3)} per kWh</b>.`;
     return (
-      `<div class="dbu"><div class="dq">Why ${w.kind === does ? '' : 'not '}${verb} now</div><div class="dld">${rows.join('')}` +
-      `<span class="t">${above}</span>${bar(0, b.beat_eur, 'tot')}<span class="v t">${eur(b.beat_eur, 3)}</span>` +
-      `<span>${gets}</span>${bar(0, b.price, ok === 'pos' ? 'dp' : 'dn')}<span class="v ${ok}">${eur(b.price, 3)}</span></div><div class="dans">${end}</div></div>`
+      `<div class="dbu"><div class="dq">${TITLE[b.q]}</div><div class="dld">` +
+      `<span>${b.q === 'sell' ? 'Export' : 'Import'} price</span>${bar(0, b.price)}<span class="v">${eur(b.price, 3)}</span>${rows.join('')}` +
+      row(charge ? 'Costs once stored' : 'Worth now', 0, b.now_eur, eur(b.now_eur, 3), 't') +
+      row(`Kept for ${target(w, t, tz)}`, 0, keep, eur(keep, 3), 't') +
+      `</div><div class="dans">${end}</div></div>`
     );
   };
   return `<div class="dbus">${ups.map(one).join('')}</div>`;

@@ -317,13 +317,17 @@
     // Today 14:00 and 15:00 hold although selling clears the bar: the reserve, then a planning rule.
     const EC = 0.93, ED = 0.91, CC = 0.03, M = 0.04, FEE = 0.02;
     const beat = (q, price, b, parts) => ({ q, price: r4(price), beat_eur: r4(b), parts: Object.entries(parts).map(([key, eur]) => ({ key, eur: r4(eur) })) });
+    const worth = (price, now, parts) => {
+      const rest = now - price - Object.values(parts).reduce((a, v) => a + (v ?? 0), 0);
+      return { now_eur: r4(now), now_parts: Object.entries(parts).map(([key, eur]) => ({ key, eur: r4(eur ?? rest) })) };
+    };
     const sell = (price, keep) => {
       const b = (keep + CC) / ED + FEE;
-      return beat('sell', price, b, { kept: keep, wear: CC, conversion: b - keep - CC - FEE, fee: FEE });
+      return { ...beat('sell', price, b, { kept: keep, wear: CC, conversion: b - keep - CC - FEE, fee: FEE }), ...worth(price, (price - FEE) * ED - CC, { fee: -FEE, conversion: null, wear: -CC }) };
     };
     const house = (price, keep) => {
       const b = (keep + 0.03) / 0.9;
-      return beat('house', price, b, { kept: keep, wear: CC, conversion: b - keep - CC });
+      return { ...beat('house', price, b, { kept: keep, wear: CC, conversion: b - keep - CC }), ...worth(price, 0.9 * price - 0.03, { conversion: null, wear: -CC }) };
     };
     const reasons = {};
     hours.forEach((h, n) => {
@@ -339,7 +343,7 @@
       else if (kind === 'charge') {
         keep = r3((p + 0.03) / EC + M);
         const b = EC * (keep - M);
-        beats = [beat('charge', p, b, { kept: keep, margin: -M, conversion: b - keep + M })];
+        beats = [{ ...beat('charge', p, b, { kept: keep, margin: -M, conversion: b - keep + M }), ...worth(p, p / EC + M, { conversion: null, margin: M }) }];
       } else {
         keep = r3(0.9 * (p + (kind === 'house' ? -0.02 : 0.03)) - 0.03);
         beats = [house(p, keep), sell(r3(kind === 'house' ? p - 0.05 : p), keep)];

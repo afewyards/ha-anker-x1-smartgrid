@@ -73,7 +73,9 @@ def hour_reasons(
     charge charges, a hold or house hour uses it for the house and, when the
     hour has an export price, sells; a ``sell`` the price clears in such an
     hour is ``blocked`` by the ``reserve`` when its level is at or under the
-    row's ``reserve_soc``, else by a ``rule``.
+    row's ``reserve_soc``, else by a ``rule``. Each also carries ``now_eur``,
+    what a stored kWh is worth used that way now, and ``now_parts``, the signed
+    steps from ``price`` to it, so ``price`` plus the parts is ``now_eur``.
     """
     if terminal_value is None:
         return {}
@@ -187,11 +189,19 @@ def hour_reasons(
             price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
             sell_at = (keep + cycle_cost) / eta_discharge + export_fee
             selling = {"kept": keep, "wear": cycle_cost, "conversion": None, "fee": export_fee}
+            sold = {"fee": -export_fee, "conversion": None, "wear": -cycle_cost}
             if kinds[i] == "export":
-                beats = [_beat("sell", b["sell_kwh"] / b["export"], sell_at, selling)]
+                raw = b["sell_kwh"] / b["export"]
+                beats = [
+                    _beat("sell", raw, sell_at, selling)
+                    | _worth(raw, (raw - export_fee) * eta_discharge - cycle_cost, sold)
+                ]
             elif kinds[i] == "charge":
                 charging = {"kept": keep, "margin": -charge_margin, "conversion": None}
-                beats = [_beat("charge", price, eta_charge * (keep - charge_margin), charging)]
+                beats = [
+                    _beat("charge", price, eta_charge * (keep - charge_margin), charging)
+                    | _worth(price, charge_cost(price), {"conversion": None, "margin": charge_margin})
+                ]
             else:
                 # use_value is linear in price, so its values at 0 and 1 €/kWh invert it.
                 v0, v1 = use_value(0.0, deficit_w), use_value(1.0, deficit_w)
@@ -199,9 +209,16 @@ def hour_reasons(
                 beats = (
                     []
                     if v0 is None or v1 is None or v1 <= v0
-                    else [_beat("house", price, (keep - v0) / (v1 - v0), using)]
+                    else [
+                        _beat("house", price, (keep - v0) / (v1 - v0), using)
+                        | _worth(price, use_value(price, deficit_w), {"conversion": None, "wear": -cycle_cost})
+                    ]
                 )
-                beats.append(_beat("sell", b["sell_h"] / b["h"], sell_at, selling))
+                raw = b["sell_h"] / b["h"]
+                beats.append(
+                    _beat("sell", raw, sell_at, selling)
+                    | _worth(raw, (raw - export_fee) * eta_discharge - cycle_cost, sold)
+                )
                 if beats[-1]["price"] > beats[-1]["beat_eur"]:
                     beats[-1]["blocked"] = "reserve" if b["under"] else "rule"
             out[_iso(key, tz)] = {
@@ -223,6 +240,18 @@ def _beat(q: str, price: float, beat: float, parts: dict[str, float | None]) -> 
         "price": round(price, 4),
         "beat_eur": beat,
         "parts": [{"key": key, "eur": round(rest if eur is None else eur, 6)} for key, eur in parts.items()],
+    }
+
+
+def _worth(price: float, now: float, parts: dict[str, float | None]) -> dict:
+    """What a stored kWh is worth if used now, built down (or up) from ``price`` by signed ``parts``."""
+    if math.isnan(price) or now is None:
+        return {}
+    price = round(price, 4)
+    rest = now - price - sum(round(eur, 6) for eur in parts.values() if eur is not None)
+    return {
+        "now_eur": round(now, 6),
+        "now_parts": [{"key": key, "eur": round(rest if eur is None else eur, 6)} for key, eur in parts.items()],
     }
 
 
