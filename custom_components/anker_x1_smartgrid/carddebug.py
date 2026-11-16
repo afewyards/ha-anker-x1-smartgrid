@@ -110,7 +110,7 @@ def slot_series(
         _parse(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference if r.get("minutes") == width
     }
     out = []
-    for row in hourly_series(rows, horizon, tz, now, delivered_at, width, export_fee):
+    for row in hourly_series(rows, horizon, tz, now, delivered_at, width):
         key = _parse(row["start"]).astimezone(UTC)
         a = acc.get(key)
         setpoint = a[1] / a[0] if a and a[0] else plan.get(key)
@@ -121,7 +121,7 @@ def slot_series(
         if plan_eur is None or real_eur is None:
             plan_eur = real_eur = None
         out.append(
-            row
+            {k: v for k, v in row.items() if k not in ("grid_bought_eur", "grid_sold_eur")}
             | {"setpoint_w": setpoint, "batt_w": batt, "export_price": export_price}
             | {"plan_eur": plan_eur, "real_eur": real_eur}
         )

@@ -423,14 +423,14 @@ function owed(label, v) {
   return `${label} <span${zero ? '' : ` class="${v < 0 ? 'pos' : 'neg'}"`}>${eur(zero ? 0 : v)}</span>`;
 }
 
-// A day's grid bill, bought less sold, over its two legs. An older backend sends no bill: the use cost and battery cash stand in.
+// A day's grid bill, bought less sold, over its two legs. Without a bill (an older backend, or a leg unknown) the use cost and battery cash stand in.
 function bill(d, b) {
-  if (!('grid_bill_eur' in d)) {
+  if (num(d.grid_bill_eur) === null && num(d.use_cost_eur) !== null) {
     const bal = b === undefined ? '' : `<span class="bal">${owed('balance', b && b.balance_eur)}</span>`;
     return [`<span>${eur(d.use_cost_eur)}</span>`, `<span>${owed('battery', d.batt_grid_eur)}</span>${bal}`];
   }
   const v = d.grid_bill_eur;
-  const legs = num(d.grid_bought_eur) === null && num(d.grid_sold_eur) === null ? '' : `bought ${eur(d.grid_bought_eur)} · sold ${eur(d.grid_sold_eur)}`;
+  const legs = num(d.grid_bought_eur) === null || num(d.grid_sold_eur) === null ? '' : `bought ${eur(d.grid_bought_eur)} · sold ${eur(d.grid_sold_eur)}`;
   return [`<span${num(v) !== null && v < 0 ? ' class="pos"' : ''}>${eur(v)}</span>`, `<span class="bs">${legs}</span>`];
 }
 

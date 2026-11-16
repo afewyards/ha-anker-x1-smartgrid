@@ -385,7 +385,7 @@ def _hour(hours: dict, ts: datetime, tz: tzinfo, slot_min: int = 60) -> dict:
         _hour_key(ts, tz, slot_min),
         {"price_eur_h": 0.0, "price_h": 0.0, "soc": None, "use_kwh": 0.0, "solar_kwh": 0.0, "held_h": 0.0, "grid": None}
         | dict.fromkeys(_ACTIONS, 0.0)
-        | {"bought_eur": 0.0, "sold_eur": 0.0},
+        | {"bought_eur": 0.0, "unpriced_kwh": 0.0, "sold_eur": 0.0},
     )
 
 
@@ -418,8 +418,9 @@ def hourly_series(
     PV. Unknown (``None``) without a meter reading, and for estimated-tail rows.
     ``grid_bought_eur`` / ``grid_sold_eur`` price that import and export per
     sample or plan row: at the recorded tariffs less ``export_fee``, or the
-    row's price and ``export_price_at`` (post-fee); unknown once energy went
-    through without its price.
+    row's price and ``export_price_at`` (post-fee). Export without an export
+    price earns nothing; import without a price takes the hour's mean price,
+    and is unknown only when the hour has none.
     """
     since = datetime.combine(now.astimezone(tz).date() - timedelta(days=1), time(), tzinfo=tz)
     pts = sorted(
@@ -504,24 +505,33 @@ def hourly_series(
                 "plan": key + timedelta(minutes=slot_min) > now,
             }
             | dict(zip(_GRID_KEYS, [round(v, 2) for v in b["grid"]] if b["grid"] else (None,) * 3, strict=True))
-            | {
-                f"grid_{leg}_eur": round(b[f"{leg}_eur"], 4) if b["grid"] and b[f"{leg}_eur"] is not None else None
-                for leg in ("bought", "sold")
-            }
+            | _grid_eur(b)
         )
     return out
 
 
 def _add_grid(bucket: dict, price: float | None, export_price: float | None, *kwh: float) -> None:
     bucket["grid"] = [a + x for a, x in zip(bucket["grid"] or (0.0,) * 3, kwh, strict=True)]
-    bucket["bought_eur"] = _priced(bucket["bought_eur"], kwh[0] + kwh[1], price)
-    bucket["sold_eur"] = _priced(bucket["sold_eur"], kwh[2], export_price)
+    bought = kwh[0] + kwh[1]
+    if price is None:
+        bucket["unpriced_kwh"] += bought
+    else:
+        bucket["bought_eur"] += bought * float(price)
+    # No export price means no revenue, as in daily_stats.
+    bucket["sold_eur"] += kwh[2] * float(export_price or 0.0)
 
 
-def _priced(total: float | None, kwh: float, price: float | None) -> float | None:
-    if total is None or (price is None and kwh > 1e-6):
-        return None
-    return total + kwh * float(price or 0.0)
+def _grid_eur(b: dict) -> dict:
+    if not b["grid"]:
+        return {"grid_bought_eur": None, "grid_sold_eur": None}
+    bought = b["bought_eur"]
+    if b["unpriced_kwh"] > 1e-6:
+        # Energy without its own price takes the hour's time-mean price.
+        bought = bought + b["unpriced_kwh"] * b["price_eur_h"] / b["price_h"] if b["price_h"] > 0 else None
+    return {
+        "grid_bought_eur": None if bought is None else round(bought, 4),
+        "grid_sold_eur": round(b["sold_eur"], 4),
+    }
 
 
 def live_state(recorded_state: str, exporting: bool, batt_w: float | None, p1_w: float | None) -> str:

@@ -510,7 +510,7 @@ class TestGridBill:
         assert y["grid_in_kwh"] == pytest.approx(23.0)
         assert y["grid_bought_eur"] == round(23 * 0.30, 2) and _bill(y)
 
-    def test_unpriced_energy_leaves_the_bill_unknown(self):
+    def test_energy_sold_without_an_export_price_earns_nothing(self):
         # Yesterday sold 1 kWh with no export tariff recorded; tomorrow is the estimated tail.
         rows = _phase(YESTERDAY0, 60, 50, 50, 0.0, 0.30, load=1_000)
         rows += _phase(YESTERDAY0 + timedelta(hours=1), 60, 50, 50, 0.0, 0.30, pv=2_000, load=1_000)
@@ -522,11 +522,25 @@ class TestGridBill:
         hours = hourly_series(rows, horizon, AMS, NOW)
         y, t, tm = merge_days(replay(rows, CAP, AMS)[0], roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at), DAY, hours)
         assert y["grid_bought_eur"] == 0.30
-        assert y["grid_sold_eur"] is None and y["grid_bill_eur"] is None
+        assert (y["grid_sold_eur"], y["grid_bill_eur"]) == (0.0, 0.30)
         assert (t["grid_bought_eur"], t["grid_sold_eur"], t["grid_bill_eur"]) == (0.30, 0.0, 0.30)
         assert (tm["grid_bought_eur"], tm["grid_sold_eur"], tm["grid_bill_eur"]) == (None, None, None)
 
-    def test_an_unpriced_sample_that_imports_leaves_the_bought_amount_unknown(self):
+    def test_a_jitter_export_tick_without_an_export_price_keeps_the_day_priced(self):
+        rows = _phase(YESTERDAY0, 120, 50, 50, 0.0, 0.30, load=1_000) + _end(YESTERDAY0 + timedelta(hours=2), 50)
+        rows[5]["p1_w"] = -3.0
+        hours = hourly_series(rows, [], AMS, NOW)
+        y, _t, _tm = merge_days(replay(rows, CAP, AMS)[0], {}, DAY, hours)
+        assert (y["grid_sold_eur"], y["grid_bill_eur"] is None) == (0.0, False)
+
+    def test_an_unpriced_sample_that_imports_takes_the_hours_mean_price(self):
+        rows = _phase(YESTERDAY0, 60, 50, 50, 0.0, 0.30, load=1_000) + _end(YESTERDAY0 + timedelta(hours=1), 50)
+        rows[10]["import_price"] = None
+        hours = hourly_series(rows, [], AMS, NOW)
+        y, _t, _tm = merge_days(replay(rows, CAP, AMS)[0], {}, DAY, hours)
+        assert y["grid_bought_eur"] == pytest.approx(0.30, abs=0.01)
+
+    def test_an_hour_without_any_price_that_imports_leaves_the_bought_amount_unknown(self):
         rows = _phase(YESTERDAY0, 120, 50, 50, 0.0, 0.30, load=1_000) + _end(YESTERDAY0 + timedelta(hours=2), 50)
         for row in rows[60:]:
             row["import_price"] = None

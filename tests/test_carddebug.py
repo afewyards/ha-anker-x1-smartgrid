@@ -121,6 +121,7 @@ def test_slot_series_setpoint_and_battery_sign():
     past = carddebug.slot_series(rows, _horizon(15), AMS, NOW, _delivered)[0]
     assert past["setpoint_w"] == -4000
     plan = carddebug.slot_series([], _horizon(15, grid_export_w=4000.0), AMS, NOW, _delivered)
+    assert not any("grid_sold_eur" in r or "grid_bought_eur" in r for r in plan)
     row = next(r for r in plan if r["plan"])
     assert row["setpoint_w"] == -4000 and row["batt_w"] is None
 
