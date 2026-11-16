@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from custom_components.anker_x1_smartgrid.dp_common import KEEP_TIE_EUR_PER_KWH
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import hold_stored_value, overnight_terminal_segments
 
@@ -241,12 +242,12 @@ def test_segment_capped_at_refilling_earlier_in_the_gap():
     (_, v0), (_, v1), (_, v2) = segs
     assert v0 == pytest.approx(0.60 * ETA_D)  # nothing cheaper before it
     assert v1 == pytest.approx(0.20 * ETA_D)
-    assert v2 == pytest.approx(0.20 / 0.95 + 0.03)  # refill at 0.20 beats 0.60·η_d
+    assert v2 == pytest.approx(0.20 / 0.95 + 0.03 - KEEP_TIE_EUR_PER_KWH)  # refill at 0.20 beats 0.60·η_d
 
     # The charge efficiency is the DP's own: the measured curve when one is given.
     curve = SimpleNamespace(eta_charge=lambda _w: 0.80, eta_discharge=lambda _w: ETA_D)
     segs_c, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.10, cfg=cfg, eta_curve=curve)
-    assert segs_c[2][1] == pytest.approx(0.20 / 0.80 + 0.03)
+    assert segs_c[2][1] == pytest.approx(0.20 / 0.80 + 0.03 - KEEP_TIE_EUR_PER_KWH)
 
 
 def test_refill_below_v_lo_keeps_segment_at_v_lo():
@@ -299,7 +300,7 @@ def test_glitch_hour_capped_at_earlier_refill_others_untouched():
     (_, v0), (_, v1), (_, v2) = segs
     assert v0 == pytest.approx(0.30 * ETA_D)
     assert v1 == pytest.approx(0.30 * ETA_D)  # untouched by the glitch hour
-    assert v2 == pytest.approx(0.30 / 0.95)  # capped at refilling in the 0.30 hours before it
+    assert v2 == pytest.approx(0.30 / 0.95 - KEEP_TIE_EUR_PER_KWH)  # capped at refilling in the 0.30 hours before it
 
     per_hour_dc = 800.0 / ETA_D / 1000.0
     expected_mean = (v0 + v1 + v2) * per_hour_dc / (3 * per_hour_dc)

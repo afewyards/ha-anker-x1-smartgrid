@@ -424,7 +424,15 @@ def _dp_select_slots(
         optimize_mod.kept_values(
             window_price,
             _deficit_w,
-            optimize_mod.hold_stored_value(water_value, terminal_segments),
+            # Estimated prices may lower the value past the horizon, never raise it above the real refill.
+            min(
+                optimize_mod.hold_stored_value(water_value, terminal_segments),
+                optimize_mod.compute_water_value(
+                    min((p for p, ok in zip(window_price, _price_valid, strict=True) if ok), default=0.0),
+                    cfg,
+                    eta_curve,
+                ),
+            ),
             cfg,
             eta_curve,
             sell=(
@@ -432,6 +440,8 @@ def _dp_select_slots(
                 if export_price is not None
                 else None
             ),
+            valid=_price_valid,
+            chargeable=chargeable,
         )
         if cfg.low_power_hold and water_value is not None
         else None

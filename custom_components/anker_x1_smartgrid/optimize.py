@@ -171,17 +171,26 @@ def kept_values(
     cfg: Config,
     eta_curve=None,
     sell: list[float] | None = None,
+    valid: list[bool] | None = None,
+    chargeable: list[bool] | None = None,
 ) -> list[float]:
-    """€/DC-kWh a kWh kept through each slot is worth to the hold, never below ``stored``.
+    """€/DC-kWh a kWh kept through each slot is worth to the hold, ``stored`` past the last.
 
-    Backward over the plan's own slots, so only published prices raise it: the
-    richest of using it for the house in a later slot, selling it there (``sell``,
-    net € per DC kWh) or keeping it on, capped by buying it back in that slot first.
+    Backward over the plan's own slots: the richest of using it for the house in
+    a later slot, selling it there (``sell``, net € per DC kWh) or keeping it on,
+    capped by buying it back in that slot first where ``chargeable`` lets the DP
+    charge. A slot without a price (``valid`` False) passes the value through.
     """
     out = [stored] * len(price)
     for h in range(len(price) - 1, 0, -1):
-        use = max(discharge_value(price[h], deficit_w[h], cfg, eta_curve), sell[h] if sell else 0.0)
-        out[h - 1] = max(stored, min(compute_water_value(price[h], cfg, eta_curve), max(use, out[h])))
+        if valid is not None and not valid[h]:
+            out[h - 1] = out[h]
+            continue
+        keep = max(discharge_value(price[h], deficit_w[h], cfg, eta_curve), sell[h] if sell else 0.0, out[h])
+        # shortcut: one chargeable slot refills the whole pack (ignores charge rate x slot length and the
+        # solar ceiling); budget the refill kWh per slot if a single cheap quarter undervalues a full pack.
+        refills = chargeable is None or chargeable[h]
+        out[h - 1] = min(compute_water_value(price[h], cfg, eta_curve), keep) if refills else keep
     return out
 
 
@@ -226,8 +235,9 @@ def overnight_terminal_segments(
     * ``seg_v = max(v_lo, min(raw_v_h, refill_h))`` — a per-segment floor at the
       horizon-min refill anchor, never a global clamp, and a cap at
       ``refill_h``: the cheapest estimated price earlier in the gap divided by
-      the DP's full-rate charge efficiency, plus ``charge_margin_eur_per_kwh``.
-      A stored kWh is never worth more than re-buying it before it is needed.
+      the DP's full-rate charge efficiency, plus ``charge_margin_eur_per_kwh``,
+      less ``KEEP_TIE_EUR_PER_KWH`` (as in :func:`compute_water_value`). A
+      stored kWh is never worth more than re-buying it before it is needed.
 
     Only the first 24 h of the gap are priced (one estimated day, see
     :func:`pricing_store.build_estimated_slots`).
@@ -283,7 +293,7 @@ def overnight_terminal_segments(
                 seg_v = max(v_lo, min(raw_v_h, refill))
                 raw_segments.append([dc_h, seg_v, raw_v_h])
             # shortcut: ignores how much this hour can recharge; budget by max_charge_w·dt_h if it over-caps.
-            refill = min(refill, p_h / eta_c + cfg.charge_margin_eur_per_kwh)
+            refill = min(refill, p_h / eta_c + cfg.charge_margin_eur_per_kwh - KEEP_TIE_EUR_PER_KWH)
         cur += timedelta(hours=1)
 
     if not raw_segments:

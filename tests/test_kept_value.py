@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from homeassistant.util import dt as dt_util
 
 from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.decision import compute_decision
@@ -139,7 +140,8 @@ def test_kept_values_follow_single_quarters():
     q = timedelta(minutes=15)
     # 0.50 quarters, one cheap 0.10 quarter at 15:45, one rich 0.90 quarter at 17:45, a 0.05 last quarter.
     prices = [0.50] * 7 + [0.10] + [0.50] * 7 + [0.90] + [0.50] * 7 + [0.05]
-    cfg = _cfg(charge_margin_eur_per_kwh=0.0)
+    # A wide cheap-charge band, so the DP may charge the 0.10 quarter ahead of the 0.05 one.
+    cfg = _cfg(charge_margin_eur_per_kwh=0.0, charge_window_price_band=1.0)
     curve = EfficiencyCurve.static(cfg)
     out: dict = {}
     compute_decision(
@@ -160,3 +162,49 @@ def test_kept_values_follow_single_quarters():
     assert kept[NOW + 6 * q] == pytest.approx(optimize.compute_water_value(0.10, cfg, curve))
     # Kept through the quarter before the rich one: worth using it there.
     assert kept[NOW + 14 * q] == pytest.approx(optimize.discharge_value(0.90, 1000.0, cfg, curve))
+
+
+@pytest.mark.parametrize("night", [0.355, 0.3549])
+def test_an_estimate_that_copies_the_last_real_price_buys_nothing(night):
+    # The estimated 23:00 equals the real 22:00 price, the rest of the night is dear: refilling at
+    # 22:00 to carry into the night gains nothing over refilling at 23:00.
+    est = [0.60] * 24
+    est[dt_util.as_local(LAST + timedelta(hours=1)).hour] = night
+    out: dict = {}
+    compute_decision(
+        PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=2), ()),
+        PlantInputs(soc=20.0, meter_w=0.0, now=NOW),
+        [PriceSlot(NOW + timedelta(hours=i), p) for i, p in enumerate(TODAY)],
+        0.0,
+        NOW + timedelta(hours=len(TODAY)),
+        _Flat(),
+        None,
+        _cfg(charge_margin_eur_per_kwh=0.0),
+        estimated_tomorrow=est,
+        _out=out,
+        eta_curve=EfficiencyCurve.static(_cfg()),
+    )
+    assert LAST not in out["grid_request"]
+
+
+@pytest.mark.parametrize("est", [0.20, 0.80])
+def test_estimated_prices_never_raise_a_kept_value_above_the_real_one(est):
+    # A real 0.20 refill tonight; the estimated night either side of it.
+    prices = [*TODAY[:-1], 0.20]
+    cfg = _cfg(charge_margin_eur_per_kwh=0.0)
+    real = _run(cfg, prices, est=None)["kept_by_slot"]
+    kept = _run(cfg, prices, est=est)["kept_by_slot"]
+    assert all(kept[t] <= real[t] + 1e-9 for t in real)
+
+
+def test_a_slot_without_a_price_carries_the_kept_value_through():
+    cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
+    # The 0.0 is a pad for a missing price, not a free refill.
+    kept = optimize.kept_values([0.40, 0.0, 0.80], [500.0] * 3, 0.10, cfg, valid=[True, False, True])
+    assert kept == pytest.approx([0.80, 0.80, 0.10], abs=1e-5)
+
+
+def test_only_a_slot_the_dp_may_charge_in_caps_the_kept_value():
+    cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
+    kept = optimize.kept_values([0.40, 0.20, 0.80], [500.0] * 3, 0.10, cfg, chargeable=[True, False, True])
+    assert kept[0] == pytest.approx(0.80, abs=1e-5)
