@@ -225,9 +225,14 @@ const LEVEL_H = 48;
 // Lower chart: px per kWh, and the cut that keeps a heavy house hour from flattening the rest.
 const KWH_PX = 10;
 const CUT = 2.5;
-// The price line spans PRICE_PX; charge and export bars on it are at most BAR_PX tall.
+// The price line spans PRICE_PX; the busiest hour's bar is BAR_PX long, and any bar above the noise floor shows at least MIN_BAR.
 const PRICE_PX = 26;
-const BAR_PX = 30;
+const BAR_PX = 28;
+const MIN_BAR = 2.5;
+// Chart top, the room under the price band for its low label and an export total, and the gap to the house chart.
+const PT = 15;
+const PB = 17;
+const GAP = 4;
 const COLS = { 3: [0.26, 0.44, 0.3], 2: [0.58, 0.42] };
 function ly(soc) {
   return 46 - Math.max(0, Math.min(100, soc)) * 0.42;
@@ -277,13 +282,13 @@ function outline(rows, key, cls, h, z) {
 function out(r) {
   return Math.max(0, num(r.grid_out_kwh) || 0);
 }
-// Bar heights on the price line, px per kWh.
-function barPx(rows) {
-  const top = Math.max(6, ...rows.map((r) => Math.max(num(r.grid_in_charge_kwh) || 0, out(r))));
-  return BAR_PX / top;
+// Bar length is compressed (square root) so small amounts stay visible; it is cut to the room left on the panel.
+function barLen(rows) {
+  const k = BAR_PX / Math.sqrt(Math.max(6, ...rows.map((r) => Math.max(num(r.grid_in_charge_kwh) || 0, out(r)))));
+  return (v, room) => (v > 0 ? Math.max(0, Math.min(room, v > 0.05 ? Math.max(MIN_BAR, Math.sqrt(v) * k) : Math.sqrt(v) * k)) : 0);
 }
 // Charge rises from its hour's price level and export hangs from it; house use and sun sit on the lower baseline Z.
-function gridBars(rows, lv, k, Z) {
+function gridBars(rows, lv, len, Z) {
   let s = outline(rows, 'solar_kwh', 'so', kh, Z);
   let pb = '';
   const bars = [];
@@ -299,8 +304,8 @@ function gridBars(rows, lv, k, Z) {
     if (fed > CUT) b += cuts(bx, Z - hb + 2.5, w);
     if (b) s += r.plan ? `<g opacity=".5">${b}</g>` : b;
     const y0 = lv(r);
-    const up = Math.max(0, num(r.grid_in_charge_kwh) || 0) * k;
-    const dn = out(r) * k;
+    const up = len(Math.max(0, num(r.grid_in_charge_kwh) || 0), y0 - PT);
+    const dn = len(out(r), PT + PRICE_PX + PB - 13 - y0);
     let p = '';
     if (up > 0) p += `<rect x="${r1(bx)}" y="${r1(y0 - up)}" width="${r1(w)}" height="${r1(up)}" class="gc"/>`;
     if (dn > 0) p += `<rect x="${r1(bx)}" y="${r1(y0)}" width="${r1(w)}" height="${r1(dn)}" class="go"/>`;
@@ -321,7 +326,7 @@ function ticks(date, i, { X, tz }, lo, y) {
 }
 const LEGEND = `<div class="lg dm">
 <span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
-<span>bars on the price line: kWh charged from grid (up) and sold (down)</span>
+<span>bars on the price line: grid kWh in (up), sold (down); length compressed, totals exact</span>
 <span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house</span>
 <span>${stroke('uo')}use${stroke('so')}sun<svg width="6" height="9"><rect x="1" width="4" height="9" class="gb"/>${cuts(1, 1.5, 4)}</svg>cut at ${CUT} · faint: plan</span>
 </div>`;
@@ -958,23 +963,23 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const priced = rows.filter((r) => num(r.price) !== null);
     const pmax = Math.max(...priced.map((r) => r.price));
     const pmin = Math.min(...priced.map((r) => r.price));
-    const k = barPx(rows);
+    const len = barLen(rows);
     const off = (p) => (p !== null && pmax > pmin ? ((pmax - p) / (pmax - pmin)) * PRICE_PX : PRICE_PX / 2);
     // A priceless hour sits at the nearest priced hour's level, the chart middle if none.
     for (const r of rows) {
       const near = priced.reduce((a, q) => (!a || Math.abs(q.t - r.t) < Math.abs(a.t - r.t) ? q : a), null);
       r.lvl = near ? near.price : null;
     }
-    // Room for a full-height bar at the top or bottom of the price line, so the card keeps its height.
-    const pt = BAR_PX + 17;
-    const Z = pt + PRICE_PX + BAR_PX + 17 + 4 + CUT * KWH_PX;
+    // Bars grow from the price line into the band and are cut to the room left, so the card keeps its height.
+    const pt = PT;
+    const Z = pt + PRICE_PX + PB + GAP + CUT * KWH_PX;
     const PANEL_H = Z + 16;
     const py = (p) => pt + off(p);
     const lv = (r) => py(r.lvl);
     let s = `<svg class="dm" width="${W}" height="${PANEL_H}">`;
     for (let i = 1; i < cx.length; i++) s += `<line x1="${r1(cx[i])}" y1="0" x2="${r1(cx[i])}" y2="${PANEL_H - 2}" class="rule"/>`;
     for (let i = 0; i < cx.length; i++) s += `<line x1="${r1(cx[i] + PAD)}" y1="${Z}" x2="${r1(cx[i] + cw[i] - PAD)}" y2="${Z}" class="rule"/>`;
-    const [gb, bars] = gridBars(rows, lv, k, Z);
+    const [gb, bars] = gridBars(rows, lv, len, Z);
     s += gb;
 
     let prev = null;
@@ -1036,7 +1041,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
           if (bl.kwh < 0.5) continue;
           const text = `${sign}${bl.kwh.toFixed(1)}`;
           const w = text.length * 6;
-          const ends = bl.rows.map((r) => lv(r) + (sign === '+' ? -1 : 1) * (num(r[key]) || 0) * k);
+          const ends = bl.rows.map((r) => lv(r) + (sign === '+' ? -1 : 1) * len(num(r[key]) || 0, sign === '+' ? lv(r) - PT : pt + PRICE_PX + PB - 13 - lv(r)));
           const base = sign === '+' ? Math.min(...ends) - 4 : Math.max(...ends) + 13;
           // Centred on the block, else flush to either end so the now line can stay clear.
           for (const x of [(bl.first.p0 + bl.last.p1) / 2 - w / 2, bl.first.p0, bl.last.p1 - w]) {
