@@ -249,3 +249,17 @@ def test_only_a_later_slot_the_dp_may_charge_in_caps_the_value_kept_past_the_hor
     flat = _run(_cfg(charge_margin_eur_per_kwh=0.0), [0.40] * len(TODAY), est=0.80)
     stored = optimize.hold_stored_value(flat["water_value"], flat["terminal_segments"])
     assert flat["kept_by_slot"][LAST] == pytest.approx(stored)
+
+
+def test_a_tie_with_the_refill_counts_as_the_refill_and_a_capped_end_value_names_it():
+    cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
+    price, deficit = [0.40, 0.50, 0.10, 0.30], [500.0, 500.0, 0.0, 0.0]
+    capped = optimize.compute_water_value(0.10, cfg)
+    assert optimize.kept_values(price, deficit, capped, cfg)[1][1] == ("refill", 2)
+    assert optimize.kept_values(price, deficit, capped, cfg, stored_src=("refill", 2))[1][2] == ("refill", 2)
+
+
+def test_a_placeholder_sale_is_not_a_source():
+    cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
+    _, source = optimize.kept_values([0.40, -0.3, -0.3], [500.0] * 3, -0.05, cfg, chargeable=[False] * 3)
+    assert source[1] == ("next_day", None)
