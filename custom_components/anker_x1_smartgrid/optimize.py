@@ -181,25 +181,35 @@ def kept_values(
     sell: list[float] | None = None,
     valid: list[bool] | None = None,
     chargeable: list[bool] | None = None,
-) -> list[float]:
+) -> tuple[list[float], list[tuple[str, int | None]]]:
     """€/DC-kWh a kWh kept through each slot is worth to the hold, ``stored`` past the last.
 
     Backward over the plan's own slots: the richest of using it for the house in
     a later slot, selling it there (``sell``, net € per DC kWh) or keeping it on,
     capped by buying it back in that slot first where ``chargeable`` lets the DP
     charge. A slot without a price (``valid`` False) passes the value through.
+    Also returns what each value comes from: ``(kind, slot)`` with kind
+    ``house``, ``export`` or ``refill`` and the slot index it is earned in, or
+    ``("next_day", None)`` past the last slot.
     """
     out = [stored] * len(price)
+    src: list[tuple[str, int | None]] = [("next_day", None)] * len(price)
     for h in range(len(price) - 1, 0, -1):
         if valid is not None and not valid[h]:
-            out[h - 1] = out[h]
+            out[h - 1], src[h - 1] = out[h], src[h]
             continue
-        keep = max(discharge_value(price[h], deficit_w[h], cfg, eta_curve), sell[h] if sell else 0.0, out[h])
+        use = discharge_value(price[h], deficit_w[h], cfg, eta_curve)
+        sale = sell[h] if sell else 0.0
+        keep = max(use, sale, out[h])
+        src[h - 1] = src[h] if keep == out[h] else ("export", h) if sell and keep == sale else ("house", h)
         # shortcut: one chargeable slot refills the whole pack (ignores charge rate x slot length and the
         # solar ceiling); budget the refill kWh per slot if a single cheap quarter undervalues a full pack.
         refills = chargeable is None or chargeable[h]
-        out[h - 1] = min(compute_water_value(price[h], cfg, eta_curve), keep) if refills else keep
-    return out
+        refill = compute_water_value(price[h], cfg, eta_curve) if refills else keep
+        if refill < keep:
+            src[h - 1] = ("refill", h)
+        out[h - 1] = min(refill, keep)
+    return out, src
 
 
 def overnight_terminal_segments(

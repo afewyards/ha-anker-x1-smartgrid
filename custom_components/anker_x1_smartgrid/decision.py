@@ -422,7 +422,7 @@ def _dp_select_slots(
     _eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
     # Same refills kept_values counts: later slots the DP may charge in.
     _refills = [p for p, ok in zip(window_price[1:], chargeable[1:], strict=True) if ok]
-    _kept = (
+    _kept, _kept_src = (
         optimize_mod.kept_values(
             window_price,
             _deficit_w,
@@ -442,7 +442,7 @@ def _dp_select_slots(
             chargeable=chargeable,
         )
         if cfg.low_power_hold and water_value is not None
-        else None
+        else (None, None)
     )
 
     # Single co-optimized DP: grid-charge + discharge-to-grid in one pass.
@@ -620,6 +620,10 @@ def _dp_select_slots(
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
         if _kept:
             _out["kept_by_slot"] = {now_h + h * stride: v for h, v in enumerate(_kept)}
+            _out["kept_src_by_slot"] = {
+                now_h + h * stride: (kind, None if i is None else now_h + i * stride)
+                for h, (kind, i) in enumerate(_kept_src)
+            }
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots
 
 

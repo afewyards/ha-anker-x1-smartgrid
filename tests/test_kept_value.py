@@ -135,8 +135,10 @@ def test_sell_today_and_refill_tonight_only_when_it_clears_wear_and_margin(margi
 
 def test_a_slot_keeps_for_the_richest_later_use_unless_bought_back_cheaper_first():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
-    kept = optimize.kept_values([0.40, 0.80, 0.20, 0.80], [500.0] * 4, 0.10, cfg)
+    kept, source = optimize.kept_values([0.40, 0.80, 0.20, 0.80], [500.0] * 4, 0.10, cfg)
     assert kept == pytest.approx([0.80, 0.20, 0.80, 0.10], abs=1e-5)
+    # At 0.80 use and refill tie in this config, so only the other slots are pinned.
+    assert (source[1], source[3]) == (("refill", 2), ("next_day", None))
 
 
 def test_without_an_estimated_gap_the_real_minimum_anchors_the_kept_value():
@@ -153,8 +155,9 @@ def test_a_refill_before_tomorrows_peak_cheaper_than_using_now_does_not_hold_tod
 def test_a_later_sale_counts_as_a_use_worth_keeping_for():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
     price, deficit = [0.40, 0.90, 0.20], [500.0, 0.0, 500.0]
-    assert optimize.kept_values(price, deficit, 0.10, cfg)[0] == pytest.approx(0.20, abs=1e-5)
-    assert optimize.kept_values(price, deficit, 0.10, cfg, sell=[0.0, 0.70, 0.0])[0] == pytest.approx(0.70)
+    assert optimize.kept_values(price, deficit, 0.10, cfg)[0][0] == pytest.approx(0.20, abs=1e-5)
+    assert optimize.kept_values(price, deficit, 0.10, cfg, sell=[0.0, 0.70, 0.0])[0][0] == pytest.approx(0.70)
+    assert optimize.kept_values(price, deficit, 0.10, cfg, sell=[0.0, 0.70, 0.0])[1][0] == ("export", 1)
 
 
 def test_kept_values_follow_single_quarters():
@@ -183,6 +186,10 @@ def test_kept_values_follow_single_quarters():
     assert kept[NOW + 6 * q] == pytest.approx(optimize.compute_water_value(0.10, cfg, curve))
     # Kept through the quarter before the rich one: worth using it there.
     assert kept[NOW + 14 * q] == pytest.approx(optimize.discharge_value(0.90, 1000.0, cfg, curve))
+    # Each slot names the later slot its value comes from.
+    source = out["kept_src_by_slot"]
+    assert source[NOW + 6 * q] == ("refill", NOW + 7 * q)
+    assert source[NOW + 14 * q] == ("house", NOW + 15 * q)
 
 
 @pytest.mark.parametrize("night", [0.355, 0.3549])
@@ -221,13 +228,13 @@ def test_estimated_prices_never_raise_a_kept_value_above_the_real_one(est):
 def test_a_slot_without_a_price_carries_the_kept_value_through():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
     # The 0.0 is a pad for a missing price, not a free refill.
-    kept = optimize.kept_values([0.40, 0.0, 0.80], [500.0] * 3, 0.10, cfg, valid=[True, False, True])
+    kept, _ = optimize.kept_values([0.40, 0.0, 0.80], [500.0] * 3, 0.10, cfg, valid=[True, False, True])
     assert kept == pytest.approx([0.80, 0.80, 0.10], abs=1e-5)
 
 
 def test_only_a_slot_the_dp_may_charge_in_caps_the_kept_value():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
-    kept = optimize.kept_values([0.40, 0.20, 0.80], [500.0] * 3, 0.10, cfg, chargeable=[True, False, True])
+    kept, _ = optimize.kept_values([0.40, 0.20, 0.80], [500.0] * 3, 0.10, cfg, chargeable=[True, False, True])
     assert kept[0] == pytest.approx(0.80, abs=1e-5)
 
 
