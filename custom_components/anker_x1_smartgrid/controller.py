@@ -1189,7 +1189,8 @@ class Controller:
                 or self._soc_drift_last_soc_pct is None
                 or self._soc_drift_last_intervals is None
                 or _gc_prev is None
-                or _soc_now >= self.cfg.soc_target - 1.0
+                # Either end at the charge stop: the pack dithers there while it holds or tops up.
+                or max(_soc_now, self._soc_drift_last_soc_pct) >= self.cfg.charge_stop_pct
                 or _soc_now <= self.cfg.soc_floor + 1.0
             )
             if not _gated:

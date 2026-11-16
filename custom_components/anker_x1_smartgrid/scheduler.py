@@ -211,7 +211,7 @@ def decide_state(
     disables the guard, preserving the prior soc_target-only behaviour.
     """
     # 1. High-SoC guard always wins.
-    if soc >= cfg.soc_target - 1.0:
+    if soc >= cfg.charge_stop_pct:
         if plan.state is ControllerState.PASSIVE:
             return plan
         return PlanState(ControllerState.PASSIVE, now, ())

@@ -300,6 +300,25 @@ async def test_hold_weighs_the_kept_value_the_dp_published():
     assert ctrl.last_hold_values == (pytest.approx(0.21), 0.15)
 
 
+async def test_a_top_up_the_plan_does_not_force_holds_instead_of_draining():
+    # The DP charges this slot, but at 99 % the charge stop keeps the plan PASSIVE.
+    ctrl, act = _exec_ctrl()
+    dp_out = {"water_value": 0.25, "held_slots": frozenset(), "grid_request": {T: 900.0}}
+    await executor.run_forcing_and_export(
+        ctrl,
+        T,
+        PlanState(ControllerState.PASSIVE, T, ()),
+        PlantInputs(soc=99.0, meter_w=250.0, now=T),
+        _SLOTS,
+        dp_out,
+        [],
+        60,
+        None,
+        250.0,
+    )
+    assert act.calls == [("engage_hold",)]
+
+
 async def test_forcing_to_hold_skips_the_release():
     ctrl, act = _exec_ctrl()
     ctrl.plan = PlanState(ControllerState.FORCING, T - timedelta(hours=1), ())

@@ -700,6 +700,22 @@ async def test_rail_gate_at_soc_target(monkeypatch):
     assert ctrl._soc_drift_kwh == pytest.approx(0.0)
 
 
+@pytest.mark.asyncio
+async def test_flips_across_the_charge_stop_book_no_drift(monkeypatch):
+    """99 -> 98 at a 100 % target is the pack leaving the charge stop, not forecast drift."""
+    hass = _StubHass()
+    ctrl, _, _ = _make_ctrl(hass, cfg=_drift_cfg(soc_target=100.0))
+    ivs = [ForecastInterval(BASE, 0.0, 0.0, 3.0)]  # nothing expected to move the pack
+    for i, soc in enumerate(("99", "98", "99", "98")):
+        t = BASE + timedelta(minutes=i)
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda t=t: t)
+        _seed_inputs(hass, soc=soc, now=t)
+        monkeypatch.setattr(ctrl_mod, "compute_decision", _make_stub(intervals=ivs))
+        await ctrl.tick()
+
+    assert ctrl._soc_drift_kwh == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # 10. Hedge flows to LIVE compute_decision at the cheapest forward slot (trough)
 # ---------------------------------------------------------------------------

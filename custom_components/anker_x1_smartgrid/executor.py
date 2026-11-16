@@ -234,6 +234,7 @@ async def run_forcing_and_export(
     # The DP weighed this slot against the whole horizon; the live rule may only
     # refine what it chose, never hold a slot it turned down.
     _dp_held = _dp_out.get("held_slots")
+    _dp_slot = _dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)
     controller.hold_state = scheduler.decide_hold_state(
         controller.hold_state,
         discharge_value=_discharge_v,
@@ -242,8 +243,8 @@ async def run_forcing_and_export(
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,
-        dp_holds=_dp_held is None
-        or (_dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)) in _dp_held,
+        # A charge the plan does not force (charge stop, dwell) keeps the pack rather than drains it.
+        dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
     )
     _hold = controller.hold_state.engaged
     controller.last_hold_values = (_discharge_v, _stored_v)

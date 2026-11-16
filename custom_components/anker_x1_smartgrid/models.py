@@ -162,6 +162,11 @@ class Config:
         return self.pct_to_kwh(self.soc_target)
 
     @property
+    def charge_stop_pct(self) -> float:
+        """SoC% where grid charging stops: the executor's high-SoC guard and the DP's grid top."""
+        return self.soc_target - 1.0
+
+    @property
     def firmware_floor_kwh(self) -> float:
         """Hard firmware discharge floor (DC kWh); see const.FIRMWARE_SOC_FLOOR."""
         return self.pct_to_kwh(const.FIRMWARE_SOC_FLOOR)
