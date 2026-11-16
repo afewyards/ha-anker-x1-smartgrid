@@ -157,6 +157,17 @@ class TestReplay:
         days, inv = replay([], CAP, AMS)
         assert days == {} and inv.e_kwh == 0.0
 
+    def test_a_zero_soc_glitch_mid_stock_changes_nothing(self):
+        before = _phase(T0, 60, 0, 80, -16_000, 0.20) + _phase(H1, 5, 80, 80, 0.0, 0.20)
+        after = _phase(H1 + timedelta(minutes=51), 9, 80, 80, 0.0, 0.20)
+        after += _phase(H2, 60, 80, 0.5, 15_900, 0.40, load=15_900, p1=0.0) + _end(H2 + timedelta(hours=1), 0.5)
+        glitch = _phase(H1 + timedelta(minutes=5), 46, 0.0, 0.0, 0.0, 0.20)
+        clean_days, clean_inv = replay(before + after, CAP, AMS)
+        days, inv = replay(before + glitch + after, CAP, AMS)
+        assert days[DAY]["saved_eur"] == pytest.approx(clean_days[DAY]["saved_eur"])
+        assert days[DAY]["use_cost_eur"] == pytest.approx(clean_days[DAY]["use_cost_eur"])
+        assert inv.c_exp / inv.e_kwh == pytest.approx(clean_inv.c_exp / clean_inv.e_kwh)
+
 
 def _slot(
     start,

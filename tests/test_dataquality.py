@@ -176,3 +176,16 @@ def test_clean_hourly_partial_coverage_rescaled_by_count():
 def test_clean_hourly_full_coverage_unscaled():
     rows = [{"hour_ts": "2026-07-09T10:00:00+00:00", "house_load_kwh_sum": 0.5, "house_load_count": 60}]
     assert dq.clean_hourly_rows(rows)[0].load_w == 500.0
+
+
+def test_soc_glitch_rejects_a_zero_jump_from_a_real_level():
+    assert dq.soc_glitch(0.0, 0.0, 96.0)
+    assert dq.soc_glitch(0.0, 0.0, 10.0)
+
+
+def test_soc_glitch_accepts_a_real_low_soc():
+    assert not dq.soc_glitch(0.0, 0.0, None)  # fresh start: nothing to compare with
+    assert not dq.soc_glitch(0.0, 0.0, 4.0)  # a real descent passes through low values
+    assert not dq.soc_glitch(0.0, 350.0, 96.0)  # the pack is still moving
+    assert not dq.soc_glitch(0.0, None, 96.0)
+    assert not dq.soc_glitch(4.0, 0.0, 96.0)

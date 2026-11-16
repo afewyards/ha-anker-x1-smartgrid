@@ -181,3 +181,15 @@ def test_margin_total_sums_last_30_days_only():
 def test_margin_total_none_without_data():
     assert margin_total(None, date(2026, 11, 11)) == (None, None)
     assert margin_total({}, date(2026, 11, 11)) == (None, None)
+
+
+def test_a_zero_soc_glitch_mid_stock_changes_nothing():
+    t1, t2 = T0 + timedelta(hours=1), T0 + timedelta(hours=2)
+    before = _phase(T0, 60, 0, 80, -16_000, 0.30) + _phase(t1, 5, 80, 80, 0.0, 0.30)
+    after = _phase(t1 + timedelta(minutes=51), 9, 80, 80, 0.0, 0.30)
+    after += _phase(t2, 60, 80, 0.5, 15_900, 0.50, load=15_900) + _end(t2 + timedelta(hours=1), 0.5)
+    glitch = _phase(t1 + timedelta(minutes=5), 46, 0.0, 0.0, 0.0, 0.30)
+    clean = battery_margin_by_day(before + after, CAP, AMS)[DAY]
+    rec = battery_margin_by_day(before + glitch + after, CAP, AMS)[DAY]
+    assert rec["cost_eur"] == pytest.approx(clean["cost_eur"])
+    assert rec["value_eur"] - rec["cost_eur"] == pytest.approx(clean["value_eur"] - clean["cost_eur"])

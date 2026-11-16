@@ -19,6 +19,16 @@ class FeatureRow:
     temp: float | None
 
 
+def soc_glitch(soc: float, batt_w: float | None, prev_soc: float | None) -> bool:
+    """True for the Anker entities' false ``SoC 0 / 0 W`` reading.
+
+    A real pack falls at most ~0.8 %/min, so it never reaches 0 in one step
+    from 10 % or more. ``prev_soc`` is the last accepted SoC (``None`` at start).
+    """
+    # shortcut: a glitch from a real SoC below 10 % is accepted, add a duration rule if one is seen again
+    return soc <= 0 and batt_w == 0 and prev_soc is not None and prev_soc >= 10.0
+
+
 def _is_export_row(row: dict) -> bool:
     """Return True when the row represents a net grid-export state (p1_w < 0)."""
     p1 = row.get("p1_w")

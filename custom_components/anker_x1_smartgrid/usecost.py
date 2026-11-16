@@ -17,8 +17,8 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import pairwise
 
 from .daily_stats import _parse
-from .dataquality import house_load_w
-from .margin import _EMPTY_KWH, _MAX_DT_S, sun_share
+from .dataquality import house_load_w, soc_glitch
+from .margin import _EMPTY_KWH, _MAX_DT_S, _points, sun_share
 
 _BAND_W = 50.0
 _MOVED_KWH = 0.05
@@ -104,13 +104,7 @@ def replay(
       ``saved_eur`` and ``solar_gain_eur`` are the margin's two parts: output
       value minus released ``c_exp``, split between grid and solar charge.
     """
-    pts = []
-    for row in rows:
-        ts = _parse(row.get("ts"))
-        if ts is not None and row.get("soc") is not None and row.get("import_price") is not None:
-            pts.append((ts, row))
-    pts.sort(key=lambda p: p[0])
-
+    pts = _points(rows)
     out: dict[date, dict] = {}
     inv = Inventory(0.0, 0.0, 0.0, 0.0, 0.0)
     share = 1.0
@@ -431,7 +425,7 @@ def hourly_series(
     level = None
     for i, (ts, row) in enumerate(pts):
         b = _hour(hours, ts, tz, slot_min)
-        if row.get("soc") is not None:
+        if row.get("soc") is not None and not soc_glitch(float(row["soc"]), row.get("batt_w"), level):
             b["soc"] = level = float(row["soc"])
         dt_s = (pts[i + 1][0] - ts).total_seconds() if i + 1 < len(pts) else 0.0
         load = house_load_w(row)

@@ -218,3 +218,42 @@ async def test_failsafe_tick_above_floor_releases():
 
     assert _engages(act) == []
     assert ctrl.plan.state is ControllerState.PASSIVE
+
+
+@pytest.mark.asyncio
+async def test_zero_soc_glitch_is_treated_as_missing_soc(caplog):
+    """The Anker entities sometimes read SoC 0 / 0 W at a real 96 %: no rescue, failsafe like a missing SoC."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+    act.calls.clear()
+
+    hass.set_state("sensor.soc", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    with caplog.at_level(logging.WARNING):
+        first = await ctrl.tick()
+        second = await ctrl.tick()
+
+    assert _engages(act) == []
+    assert first["reason"] == second["reason"] == "failsafe"
+    assert first["setpoint_w"] == 0.0
+    assert ctrl.plan.state is ControllerState.PASSIVE
+    assert any(c[0] == "release_to_self" for c in act.calls)
+    assert len([r for r in caplog.records if "SoC" in r.getMessage() and "glitch" in r.getMessage()]) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_descent_to_zero_still_rescues():
+    """From a real low SoC the 0 reading is accepted and the rescue charges."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="6.0")
+    await ctrl.tick()
+
+    hass.set_state("sensor.soc", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    await ctrl.tick()
+
+    assert _engages(act) == [_expected_setpoint(ctrl.cfg)]
+    assert ctrl.plan.state is ControllerState.FORCING

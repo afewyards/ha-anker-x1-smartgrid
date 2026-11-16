@@ -51,7 +51,7 @@ from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
 from .export_filter import apply_min_export_block
-from .dataquality import clean_hourly_rows
+from .dataquality import clean_hourly_rows, soc_glitch
 from .forecast import build_intervals, LoadPredictor
 from .hgbr import HGBRQuantileModel
 from .ledger import CashLedger
@@ -248,6 +248,8 @@ class Controller:
         # sits below const.FIRMWARE_SOC_FLOOR. Deliberately NOT persisted — a
         # restart re-derives it from live SoC on the first tick.
         self._floor_rescue_active: bool = False
+        self._last_soc: float | None = None
+        self._soc_glitch: bool = False
         self.profile: dict = {}
         self._profile_predictor: LoadPredictor = LoadPredictor.from_profile(self.profile)
         self.last_status: dict = {}
@@ -1406,6 +1408,25 @@ class Controller:
             "planned_grid_hours": _grid_slots * (slot_minutes / 60.0),
         }
 
+    def _read_plant_inputs(self) -> PlantInputs | None:
+        """Live plant inputs, ``None`` (as for a missing SoC) on a false SoC-0 reading."""
+        inputs = coordinator.read_plant_inputs(self._hass, self._data)
+        if inputs is None:
+            return None
+        batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
+        if soc_glitch(inputs.soc, batt_w, self._last_soc):
+            if not self._soc_glitch:
+                _LOGGER.warning(
+                    "SoC glitch: %.1f%% at 0 W right after %.1f%%; ignoring SoC until it reads back",
+                    inputs.soc,
+                    self._last_soc,
+                )
+            self._soc_glitch = True
+            return None
+        self._soc_glitch = False
+        self._last_soc = inputs.soc
+        return inputs
+
     async def _run_floor_rescue_tick(self, now: datetime, soc: float | None) -> float:
         """Rescue below the firmware floor and record FORCING; return the setpoint (0.0 = none)."""
         if not executor.floor_rescue_needed(self, soc):
@@ -1569,7 +1590,7 @@ class Controller:
                 _LOGGER.debug("remote_forecast: owed same-hour fetch raised unexpectedly", exc_info=True)
 
         if not self.enabled:
-            inputs = coordinator.read_plant_inputs(self._hass, self._data)
+            inputs = self._read_plant_inputs()
             # The hard-floor rescue outranks the master switch: below
             # const.FIRMWARE_SOC_FLOOR the pack is protected unconditionally.
             # This branch never reaches run_forcing_and_export, so it actuates
@@ -1775,7 +1796,7 @@ class Controller:
 
             return status
 
-        inputs = coordinator.read_plant_inputs(self._hass, self._data)
+        inputs = self._read_plant_inputs()
         slots = coordinator.read_price_slots(self._hass, self._data)
         sunset = coordinator.read_sunset(self._hass, self._data)
         pv_remaining = coordinator.read_pv_remaining_kwh(self._hass, self._data)

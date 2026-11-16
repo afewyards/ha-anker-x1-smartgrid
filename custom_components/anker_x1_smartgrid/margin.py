@@ -2,13 +2,32 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 
 from .daily_stats import _parse
-from .dataquality import house_load_w
+from .dataquality import house_load_w, soc_glitch
 
 _MAX_DT_S = 300.0
 _EMPTY_KWH = 0.01
+
+
+def _points(rows: list[dict]) -> list[tuple[datetime, dict]]:
+    """Rows with ``ts``, ``soc`` and ``import_price`` in ``ts`` order, false SoC-0 readings dropped."""
+    pts = sorted(
+        (
+            (ts, row)
+            for row in rows
+            if (ts := _parse(row.get("ts"))) is not None
+            and row.get("soc") is not None
+            and row.get("import_price") is not None
+        ),
+        key=lambda p: p[0],
+    )
+    kept: list[tuple[datetime, dict]] = []
+    for ts, row in pts:
+        if not soc_glitch(float(row["soc"]), row.get("batt_w"), float(kept[-1][1]["soc"]) if kept else None):
+            kept.append((ts, row))
+    return kept
 
 
 def battery_margin_by_day(
@@ -46,13 +65,7 @@ def battery_margin_by_day(
     the grid part's; together they are ``value_eur - cost_eur``.
     Energy charged one day and used the next earns its margin on the second day.
     """
-    pts = []
-    for row in rows:
-        ts = _parse(row.get("ts"))
-        if ts is not None and row.get("soc") is not None and row.get("import_price") is not None:
-            pts.append((ts, row))
-    pts.sort(key=lambda p: p[0])
-
+    pts = _points(rows)
     out: dict[date, dict] = {}
     e = c = c_sun = grid_kwh = sun_kwh = 0.0
     for i, (ts, row) in enumerate(pts):
