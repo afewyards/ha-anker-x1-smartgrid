@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from . import featureset
+from .const import FIRMWARE_SOC_FLOOR
 
 _LOAD_MAX_W = 25000.0
 
@@ -19,25 +20,27 @@ class FeatureRow:
     temp: float | None
 
 
-_GLITCH_ENTRY_MAX_AGE_S = 180.0
+_FALL_PCT_PER_MIN = 2.0
+_GLITCH_MIN_SOC = 3.0
 _GLITCH_MAX_S = 4 * 3600.0
+_GLITCH_MAX_S_LOW = 30 * 60.0
 
 
 def soc_glitch(soc: float, batt_w: float | None, prev_soc: float | None, age_s: float, latched: bool = False) -> bool:
     """True for the Anker entities' false ``SoC 0 / 0 W`` reading.
 
-    A real pack falls at most ~2 %/min, so it never reads 0 one tick after
-    3 % or more. ``prev_soc`` is the last accepted SoC (``None`` at start) and
-    ``age_s`` its age; more than three ticks old, it is too stale to judge by.
-    ``latched`` (the previous reading was a glitch) keeps a 0 false whatever
-    the battery power reads, until it is 4 h older than ``prev_soc``.
+    A real pack falls at most ~2 %/min, so it is a glitch when ``prev_soc``
+    (the last accepted SoC, ``None`` at start, ``age_s`` old) could not have
+    fallen to under 3 % by now. ``latched`` (the previous reading was a glitch)
+    keeps a 0 false whatever the battery power reads, until it is 4 h older
+    than ``prev_soc`` (30 min when that was below the firmware floor).
     """
     if soc > 0 or prev_soc is None:
         return False
     if latched:
-        return age_s < _GLITCH_MAX_S
+        return age_s < (_GLITCH_MAX_S if prev_soc >= FIRMWARE_SOC_FLOOR else _GLITCH_MAX_S_LOW)
     # shortcut: a glitch entered from below 3 % is accepted, lower the limit if one is seen
-    return batt_w in (None, 0.0) and prev_soc >= 3.0 and age_s <= _GLITCH_ENTRY_MAX_AGE_S
+    return batt_w in (None, 0.0) and prev_soc - _FALL_PCT_PER_MIN * age_s / 60.0 >= _GLITCH_MIN_SOC
 
 
 def _is_export_row(row: dict) -> bool:

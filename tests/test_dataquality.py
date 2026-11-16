@@ -180,9 +180,9 @@ def test_clean_hourly_full_coverage_unscaled():
 
 def test_soc_glitch_rejects_a_zero_jump_from_a_real_level():
     assert dq.soc_glitch(0.0, 0.0, 96.0, 60.0)
-    assert dq.soc_glitch(0.0, 0.0, 3.0, 60.0)
+    assert dq.soc_glitch(0.0, 0.0, 3.0, 0.0)
+    assert dq.soc_glitch(0.0, 0.0, 96.0, 300.0)  # a gap: the pack still cannot fall 96 % in 5 min
     assert dq.soc_glitch(0.0, None, 96.0, 60.0)  # no battery power reading: same as 0 W
-    assert dq.soc_glitch(0.0, 0.0, 96.0, 180.0)
 
 
 def test_soc_glitch_accepts_a_real_low_soc():
@@ -190,7 +190,8 @@ def test_soc_glitch_accepts_a_real_low_soc():
     assert not dq.soc_glitch(0.0, 0.0, 2.9, 60.0)  # a real descent passes through low values
     assert not dq.soc_glitch(0.0, 350.0, 96.0, 60.0)  # the pack is still moving
     assert not dq.soc_glitch(4.0, 0.0, 96.0, 60.0)
-    assert not dq.soc_glitch(0.0, 0.0, 96.0, 181.0)  # the last reading is too old to compare with
+    assert not dq.soc_glitch(0.0, 0.0, 3.0, 60.0)  # 3 % can fall to 1 % in a minute
+    assert not dq.soc_glitch(0.0, 0.0, 96.0, 50 * 60.0)  # long enough to have really emptied
 
 
 def test_soc_glitch_holds_while_soc_reads_zero_up_to_four_hours():
@@ -198,3 +199,8 @@ def test_soc_glitch_holds_while_soc_reads_zero_up_to_four_hours():
     assert dq.soc_glitch(0.0, None, 96.0, 4 * 3600.0 - 1, latched=True)
     assert not dq.soc_glitch(0.0, 0.0, 96.0, 4 * 3600.0, latched=True)
     assert not dq.soc_glitch(95.0, 0.0, 96.0, 600.0, latched=True)
+
+
+def test_soc_glitch_below_the_firmware_floor_holds_only_thirty_minutes():
+    assert dq.soc_glitch(0.0, 0.0, 4.0, 29 * 60.0, latched=True)
+    assert not dq.soc_glitch(0.0, 0.0, 4.0, 30 * 60.0, latched=True)
