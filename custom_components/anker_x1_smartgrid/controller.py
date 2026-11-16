@@ -2568,7 +2568,13 @@ class Controller:
         _tz, _cap, _fee = dt_util.DEFAULT_TIME_ZONE, self.cfg.capacity_kwh, self.cfg.export_fee_eur_per_kwh
         days, inv = usecost.replay(rows, _cap, _tz, _fee)
         planned = usecost.roll_plan(horizon, inv, _cap, _tz, now, export_price_at, _fee, delivered_at)
-        hours = usecost.hourly_series(rows, horizon, _tz, now, delivered_at)
+        hours = usecost.hourly_series(
+            rows, horizon, _tz, now, delivered_at, export_fee=_fee, export_price_at=export_price_at
+        )
+        days = usecost.merge_days(days, planned, dt_util.as_local(now).date(), hours)
+        for h in hours:
+            # The day totals carry them; per hour they would push the sensor past its 16 KB attribute budget.
+            del h["grid_bought_eur"], h["grid_sold_eur"]
         cfg = self.cfg
         # The DP's own export gate and terminal-refill prices, per stored kWh.
         eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve)
@@ -2610,7 +2616,7 @@ class Controller:
         return {
             "built_at": now.isoformat(),
             "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,
-            "days": usecost.merge_days(days, planned, dt_util.as_local(now).date(), hours),
+            "days": days,
             "hours": hours,
         }
 

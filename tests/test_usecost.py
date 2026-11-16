@@ -380,6 +380,9 @@ class TestMergeDays:
             "planned": "none",
             "grid_in_kwh": None,
             "grid_out_kwh": None,
+            "grid_bought_eur": None,
+            "grid_sold_eur": None,
+            "grid_bill_eur": None,
             "cheap": None,
         }
 
@@ -451,6 +454,86 @@ class TestMergeDays:
         y, _t, _tm = merge_days(actual, {}, date(2026, 10, 26), hours)
         assert y["date"] == "2026-10-25"
         assert y["grid_in_kwh"] == pytest.approx(25.0)
+
+
+YESTERDAY0 = datetime(2026, 11, 8, 23, 0, tzinfo=UTC)
+TODAY0 = datetime(2026, 11, 9, 23, 0, tzinfo=UTC)
+
+
+def _bill(day):
+    return round(day["grid_bought_eur"] - day["grid_sold_eur"], 2) == day["grid_bill_eur"]
+
+
+class TestGridBill:
+    def test_the_bill_prices_each_slots_import_and_export_at_its_own_price(self):
+        # Yesterday: 10 h import at 0.30, 2 h selling 2 kW at a 0.12 tariff (0.02 fee), 12 h import at 0.40.
+        rows = _phase(YESTERDAY0, 600, 50, 50, 0.0, 0.30, load=1_000)
+        rows += _phase(YESTERDAY0 + timedelta(hours=10), 120, 50, 50, 0.0, 0.30, pv=3_000, load=1_000, export=0.12)
+        rows += _phase(YESTERDAY0 + timedelta(hours=12), 720, 50, 50, 0.0, 0.40, load=1_000)
+        rows += _end(TODAY0, 50)
+        actual, _inv = replay(rows, CAP, AMS, 0.02)
+        hours = hourly_series(rows, [], AMS, NOW, export_fee=0.02)
+        y, _t, _tm = merge_days(actual, {}, DAY, hours)
+        assert (y["grid_in_kwh"], y["grid_out_kwh"]) == (22.0, 4.0)
+        assert y["grid_bought_eur"] == round(10 * 0.30 + 12 * 0.40, 2)
+        assert y["grid_sold_eur"] == round(4 * 0.10, 2)
+        assert y["grid_bill_eur"] == 7.40
+        assert _bill(y)
+
+    def test_today_adds_the_planned_rest_at_each_slots_prices(self):
+        rows = _phase(TODAY0, 22 * 60, 50, 50, 0.0, 0.30, load=1_000) + _end(NOW, 50)
+        actual, inv = replay(rows, CAP, AMS)
+        horizon = [
+            _slot(NOW, 70.0, 0.20, load=0.5, grid=2.0, mode="grid"),
+            _slot(NOW + timedelta(hours=1), 65.0, 0.40, load=1.0, house=0.6, export=0.4, mode="export"),
+        ]
+
+        def export_at(_start, price):
+            return price / 4
+
+        planned = roll_plan(horizon, inv, CAP, AMS, NOW, export_at)
+        hours = hourly_series(rows, horizon, AMS, NOW, export_price_at=export_at)
+        _y, t, _tm = merge_days(actual, planned, DAY, hours)
+        assert t["grid_in_kwh"] == pytest.approx(22 + 2.5 + 0.4)
+        assert t["grid_out_kwh"] == pytest.approx(0.4)
+        assert t["grid_bought_eur"] == round(22 * 0.30 + 2.5 * 0.20 + 0.4 * 0.40, 2)
+        assert t["grid_sold_eur"] == round(0.4 * 0.10, 2)
+        assert t["grid_bill_eur"] == 7.22
+        assert _bill(t)
+
+    def test_an_hour_without_a_meter_reading_is_in_neither_the_kwh_nor_the_bill(self):
+        rows = _phase(YESTERDAY0, 24 * 60, 50, 50, 0.0, 0.30, load=1_000) + _end(TODAY0, 50)
+        for row in rows[60:120]:
+            row["p1_w"] = None
+        hours = hourly_series(rows, [], AMS, NOW)
+        y, _t, _tm = merge_days(replay(rows, CAP, AMS)[0], {}, DAY, hours)
+        assert y["grid_in_kwh"] == pytest.approx(23.0)
+        assert y["grid_bought_eur"] == round(23 * 0.30, 2) and _bill(y)
+
+    def test_unpriced_energy_leaves_the_bill_unknown(self):
+        # Yesterday sold 1 kWh with no export tariff recorded; tomorrow is the estimated tail.
+        rows = _phase(YESTERDAY0, 60, 50, 50, 0.0, 0.30, load=1_000)
+        rows += _phase(YESTERDAY0 + timedelta(hours=1), 60, 50, 50, 0.0, 0.30, pv=2_000, load=1_000)
+        rows += _end(YESTERDAY0 + timedelta(hours=2), 50)
+        inv = Inventory(10.0, 3.0, 3.0, 10.0, 0.0)
+        horizon = [_slot(NOW, 50.0, 0.30, load=1.0)] + [
+            _slot(TODAY0 + timedelta(days=1, hours=h), 45.0, 0.30, load=1.0, est=True) for h in range(24)
+        ]
+        hours = hourly_series(rows, horizon, AMS, NOW)
+        y, t, tm = merge_days(replay(rows, CAP, AMS)[0], roll_plan(horizon, inv, CAP, AMS, NOW, _exp_at), DAY, hours)
+        assert y["grid_bought_eur"] == 0.30
+        assert y["grid_sold_eur"] is None and y["grid_bill_eur"] is None
+        assert (t["grid_bought_eur"], t["grid_sold_eur"], t["grid_bill_eur"]) == (0.30, 0.0, 0.30)
+        assert (tm["grid_bought_eur"], tm["grid_sold_eur"], tm["grid_bill_eur"]) == (None, None, None)
+
+    def test_an_unpriced_sample_that_imports_leaves_the_bought_amount_unknown(self):
+        rows = _phase(YESTERDAY0, 120, 50, 50, 0.0, 0.30, load=1_000) + _end(YESTERDAY0 + timedelta(hours=2), 50)
+        for row in rows[60:]:
+            row["import_price"] = None
+        hours = hourly_series(rows, [], AMS, NOW)
+        y, _t, _tm = merge_days(replay(rows, CAP, AMS)[0], {}, DAY, hours)
+        assert y["grid_in_kwh"] == pytest.approx(2.0)
+        assert y["grid_bought_eur"] is None and y["grid_bill_eur"] is None
 
 
 class TestBatteryGridAmount:
@@ -747,6 +830,8 @@ def _day_rows(day, prices, first_plan=0):
                 "grid_out_kwh": 0.0,
                 "grid_in_house_kwh": 0.0,
                 "grid_in_charge_kwh": 0.0,
+                "grid_bought_eur": 0.0,
+                "grid_sold_eur": 0.0,
             }
         )
     return out

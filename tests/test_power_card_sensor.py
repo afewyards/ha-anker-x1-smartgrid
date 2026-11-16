@@ -98,6 +98,9 @@ async def test_controller_builds_the_card_from_one_sample_read():
         h["grid_in_house_kwh"] + h["grid_in_charge_kwh"] for h in card["hours"] if h["start"][:10] == today["date"]
     )
     assert today["grid_in_kwh"] == pytest.approx(grid_in) and grid_in > 0
+    assert today["grid_bill_eur"] == round(today["grid_bought_eur"] - today["grid_sold_eur"], 2)
+    assert today["grid_bought_eur"] > 0
+    assert not any("grid_bought_eur" in h or "grid_sold_eur" in h for h in card["hours"])
     assert card["hours"][0]["plan"] is False and card["hours"][-1]["plan"] is True
 
     # A later tick without a fresh sample read keeps the series and refreshes the live line.
@@ -263,6 +266,9 @@ def test_payload_fits_the_16_kb_attribute_budget():
         "planned": "partial",
         "grid_in_kwh": 12.345,
         "grid_out_kwh": 3.456,
+        "grid_bought_eur": 13.7,
+        "grid_sold_eur": 7.3,
+        "grid_bill_eur": 6.4,
     }
     battery = {
         "soc": 55.5,

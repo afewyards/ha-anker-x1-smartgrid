@@ -322,7 +322,7 @@ def merge_days(
 ) -> list[dict]:
     """Yesterday (measured), today (measured so far + planned rest), tomorrow (planned).
 
-    The grid totals are the sum of that day's rows of :func:`hourly_series`.
+    The grid totals, kWh and euros, are the sum of that day's rows of :func:`hourly_series`.
     """
     out = []
     for day in (today - timedelta(days=1), today, today + timedelta(days=1)):
@@ -341,6 +341,12 @@ def merge_days(
         def grid_total(*keys, grid=grid):
             return round(sum(h[k] for h in grid for k in keys), 3) if grid else None
 
+        def grid_eur(key, grid=grid):
+            eur = [h[key] for h in grid]
+            return round(sum(eur), 2) if grid and None not in eur else None
+
+        bought, sold = grid_eur("grid_bought_eur"), grid_eur("grid_sold_eur")
+
         out.append(
             {
                 "date": day.isoformat(),
@@ -354,6 +360,9 @@ def merge_days(
                 "planned": "none" if p is None else "partial" if a is not None else "full",
                 "grid_in_kwh": grid_total("grid_in_house_kwh", "grid_in_charge_kwh"),
                 "grid_out_kwh": grid_total("grid_out_kwh"),
+                "grid_bought_eur": bought,
+                "grid_sold_eur": sold,
+                "grid_bill_eur": None if bought is None or sold is None else round(bought - sold, 2),
                 "cheap": cheapest_window([h for h in hours or () if h["start"][:10] == day.isoformat()])
                 if priced and day >= today
                 else None,
@@ -375,7 +384,8 @@ def _hour(hours: dict, ts: datetime, tz: tzinfo, slot_min: int = 60) -> dict:
     return hours.setdefault(
         _hour_key(ts, tz, slot_min),
         {"price_eur_h": 0.0, "price_h": 0.0, "soc": None, "use_kwh": 0.0, "solar_kwh": 0.0, "held_h": 0.0, "grid": None}
-        | dict.fromkeys(_ACTIONS, 0.0),
+        | dict.fromkeys(_ACTIONS, 0.0)
+        | {"bought_eur": 0.0, "sold_eur": 0.0},
     )
 
 
@@ -386,6 +396,8 @@ def hourly_series(
     now: datetime,
     delivered_at: Callable[[datetime], float] = _nothing_delivered,
     slot_min: int = 60,
+    export_fee: float = 0.0,
+    export_price_at: Callable[[datetime, float | None], float | None] = lambda _start, _price: None,
 ) -> list[dict]:
     """One row per local hour (or ``slot_min`` slot) from yesterday 00:00 local to the end of the horizon.
 
@@ -404,6 +416,10 @@ def hourly_series(
     import their grid charge plus the deficit the battery does not cover, as
     :func:`roll_plan` books it, and export the battery export plus unstored
     PV. Unknown (``None``) without a meter reading, and for estimated-tail rows.
+    ``grid_bought_eur`` / ``grid_sold_eur`` price that import and export per
+    sample or plan row: at the recorded tariffs less ``export_fee``, or the
+    row's price and ``export_price_at`` (post-fee); unknown once energy went
+    through without its price.
     """
     since = datetime.combine(now.astimezone(tz).date() - timedelta(days=1), time(), tzinfo=tz)
     pts = sorted(
@@ -431,7 +447,8 @@ def hourly_series(
         if (p1 := row.get("p1_w")) is not None:
             meter = float(p1) * h / 1000.0
             charge = min(max(-batt - max(pv - load, 0.0), 0.0) * h / 1000.0, max(meter, 0.0))
-            _add_grid(b, max(meter, 0.0) - charge, charge, max(-meter, 0.0))
+            exp = None if row.get("export_price") is None else float(row["export_price"]) - export_fee
+            _add_grid(b, row.get("import_price"), exp, max(meter, 0.0) - charge, charge, max(-meter, 0.0))
         if row.get("state") == "hold":
             b["held_h"] += h
         elif batt < -_BAND_W:
@@ -449,8 +466,9 @@ def hourly_series(
         b["solar_kwh"] += pv
         if row.get("estimated"):
             continue
-        if row.get("price") is not None:
-            b["price_eur_h"] += float(row["price"]) * h * left
+        imp = None if row.get("price") is None else float(row["price"])
+        if imp is not None:
+            b["price_eur_h"] += imp * h * left
             b["price_h"] += h * left
         soc = None if row.get("soc") is None else float(row["soc"])
         kwh = _battery_kwh(row, delivered_at(start), soc is None or level is None or soc < level)
@@ -460,6 +478,8 @@ def hourly_series(
             b[action] += kwh[action]
         _add_grid(
             b,
+            imp,
+            export_price_at(start, imp),
             max(load - pv - kwh["house"], 0.0) + float(row.get("hold_import_kwh") or 0.0),
             kwh["charge_grid"],
             kwh["export"] + max(pv - load - kwh["charge_solar"], 0.0),
@@ -484,12 +504,24 @@ def hourly_series(
                 "plan": key + timedelta(minutes=slot_min) > now,
             }
             | dict(zip(_GRID_KEYS, [round(v, 2) for v in b["grid"]] if b["grid"] else (None,) * 3, strict=True))
+            | {
+                f"grid_{leg}_eur": round(b[f"{leg}_eur"], 4) if b["grid"] and b[f"{leg}_eur"] is not None else None
+                for leg in ("bought", "sold")
+            }
         )
     return out
 
 
-def _add_grid(bucket: dict, *kwh: float) -> None:
+def _add_grid(bucket: dict, price: float | None, export_price: float | None, *kwh: float) -> None:
     bucket["grid"] = [a + x for a, x in zip(bucket["grid"] or (0.0,) * 3, kwh, strict=True)]
+    bucket["bought_eur"] = _priced(bucket["bought_eur"], kwh[0] + kwh[1], price)
+    bucket["sold_eur"] = _priced(bucket["sold_eur"], kwh[2], export_price)
+
+
+def _priced(total: float | None, kwh: float, price: float | None) -> float | None:
+    if total is None or (price is None and kwh > 1e-6):
+        return None
+    return total + kwh * float(price or 0.0)
 
 
 def live_state(recorded_state: str, exporting: bool, batt_w: float | None, p1_w: float | None) -> str:

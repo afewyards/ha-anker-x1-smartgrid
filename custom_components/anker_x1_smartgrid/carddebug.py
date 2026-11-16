@@ -110,7 +110,7 @@ def slot_series(
         _parse(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference if r.get("minutes") == width
     }
     out = []
-    for row in hourly_series(rows, horizon, tz, now, delivered_at, width):
+    for row in hourly_series(rows, horizon, tz, now, delivered_at, width, export_fee):
         key = _parse(row["start"]).astimezone(UTC)
         a = acc.get(key)
         setpoint = a[1] / a[0] if a and a[0] else plan.get(key)
