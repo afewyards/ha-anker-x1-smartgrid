@@ -346,7 +346,7 @@
         const blocked = { [`${TODAY}T14`]: 'reserve', [`${TODAY}T15`]: 'rule' }[h.start.slice(0, 13)];
         if (blocked) beats[1] = { ...sell(beats[1].beat_eur + 0.03, keep), blocked };
       }
-      reasons[h.start] = { kind, keep_eur: keep, use_eur: r3(kind === 'charge' ? p / EC : p * 0.9 - 0.03), kept_for, beats, at: h.plan ? built : iso(t - 10 * 60e3) };
+      reasons[h.start] = { kind, keep_eur: keep, use_eur: r3(kind === 'charge' ? p / EC : p * 0.9 - 0.03), kept_for, kept_price: next < 0 ? null : hours[next].price, kept_estimated: next >= 0 && !hours[next].plan, beats, at: h.plan ? built : iso(t - 10 * 60e3) };
     });
     return { slots, hour_costs, reference, internals, reasons };
   }

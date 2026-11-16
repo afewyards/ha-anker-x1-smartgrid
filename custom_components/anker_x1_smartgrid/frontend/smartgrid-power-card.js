@@ -335,12 +335,36 @@ const PART = { wear: 'Wear', conversion: 'Conversion', fee: 'Export fee', margin
 function stamp(a, t, tz) {
   return dateOf(a, tz) === dateOf(t, tz) ? clock(a, tz) : `${weekday(a, tz)} ${clock(a, tz)}`;
 }
+// What the kept kWh is kept for, as the build-up's first row reads.
+function keptLabel(w, t, tz) {
+  const f = w.kept_for || {};
+  const a = Date.parse(f.start);
+  if (f.kind === 'next_day') return 'Worth next day';
+  if (!Number.isFinite(a)) return 'Worth later';
+  const at = stamp(a, t, tz);
+  const p = num(w.kept_price) === null ? null : eur(w.kept_price, 3);
+  if (f.kind === 'export' && p) return `Sells at ${at} for ${p}`;
+  if (f.kind === 'house') return `House use at ${at}`;
+  if (f.kind === 'refill') return `Refill ${at}${p ? ` at ${w.kept_estimated ? '~' : ''}${p}${w.kept_estimated ? ' (estimated)' : ''}` : ''}`;
+  return `Worth at ${at}`;
+}
+// One plain line: what the hour does and the two values it weighed.
+function verdict(w, t, tz) {
+  if (!w || !w.kind || num(w.keep_eur) === null || num(w.use_eur) === null) return '';
+  const f = w.kept_for || {};
+  const a = Date.parse(f.start);
+  const at = Number.isFinite(a) ? stamp(a, t, tz) : '';
+  const tgt = f.kind === 'next_day' ? 'the next day' : !at ? 'later' : { export: `the sale at ${at}`, house: `house use at ${at}` }[f.kind] || `the refill at ${at}${f.kind === 'refill' && w.kept_estimated ? ' (estimated)' : ''}`;
+  const keep = `${eur(w.keep_eur, 3)}/kWh`;
+  const use = `${eur(w.use_eur, 3)}/kWh`;
+  if (w.kind === 'hold') return `Holding: ${tgt} is worth ${keep}, using it now only ${use}.`;
+  if (w.kind === 'charge') return `Charging: it costs ${use} and is worth ${keep} for ${tgt}.`;
+  return `${w.kind === 'export' ? 'Selling now' : 'Using it now'}: ${use} beats ${keep} for ${tgt}.`;
+}
 function buildups(w, t, tz) {
   const bs = (w && Array.isArray(w.beats) ? w.beats : []).filter((b) => b && ASK[b.q] && num(b.price) !== null && num(b.beat_eur) !== null);
   if (!bs.length) return '';
-  const f = w.kept_for || {};
-  const a = Date.parse(f.start);
-  const kept = f.kind === 'next_day' ? 'Worth next day' : Number.isFinite(a) ? `${f.kind === 'refill' ? 'Refill' : 'Worth'} at ${stamp(a, t, tz)}` : 'Worth later';
+  const kept = keptLabel(w, t, tz);
   const ups = bs.map((b) => {
     let s = 0;
     const steps = (Array.isArray(b.parts) ? b.parts : []).filter((p) => p && num(p.eur) !== null && Math.abs(p.eur) >= 0.0005).map((p) => [p, s, (s += p.eur)]);
@@ -403,7 +427,7 @@ function decision(w, tz) {
   const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
   const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
   let note = '';
-  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.`;
+  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}${w.kept_estimated ? ' (estimated)' : ''}.`;
   else if (target) note = `${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.`;
   return { win: kept ? later : now, lose: kept ? now : later, note };
 }
@@ -435,7 +459,7 @@ const INTERNALS = new Map([
   ['load_correction_ratio', ['load correction', (v) => `×${fx(v, 2)}`]],
   ['reserve_soc', ['reserve', pct]],
   ['target_soc', ['target', pct]],
-  ['end_value_eur_per_kwh', ['end value', per]],
+  ['end_value_eur_per_kwh', ['kept now', per]],
   ['eta_charge', ['efficiency in', (v) => fx(v, 2)]],
   ['eta_discharge', ['efficiency out', (v) => fx(v, 2)]],
   ['cycle_cost_eur_per_kwh', ['wear', per]],
@@ -1144,7 +1168,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const from = !r.plan && w && Date.parse(w.at);
     const dc = !ups && decision(w, tz);
     const why = ups
-      ? `${Number.isFinite(from) ? `<div>Reason from <b>${stamp(from, r.t, tz)}</b></div>` : ''}${ups}`
+      ? `${Number.isFinite(from) ? `<div>Reason from <b>${stamp(from, r.t, tz)}</b></div>` : ''}<div class="dans">${verdict(w, r.t, tz)}</div>${ups}`
       : dc
         ? `<span class="pos">✓</span> <b>${dc.win[0]} ${eur(dc.win[1], 3)}</b> · ${dc.lose[0]} ${eur(dc.lose[1], 3)} per stored kWh.${dc.note && ` ${dc.note}`}`
         : r.plan

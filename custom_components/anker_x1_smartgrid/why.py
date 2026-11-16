@@ -176,7 +176,10 @@ def hour_reasons(
                         price = export_price(at, price)
                     first = _hour_key(at, tz)
                     kept_for = {"start": _iso(first, tz), "end": _iso(first + _H, tz), "kind": kind}
-                    extra = {"kept_price": None if kind == "house" else price, "kept_estimated": bool(row.get("estimated"))}
+                    extra = {
+                        "kept_price": None if kind == "house" else price,
+                        "kept_estimated": bool(row.get("estimated")),
+                    }
         if use[i] >= keep if releasing else keep >= use[i]:
             price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
             sell_at = (keep + cycle_cost) / eta_discharge + export_fee

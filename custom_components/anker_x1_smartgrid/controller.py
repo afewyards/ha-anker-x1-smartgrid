@@ -2604,7 +2604,9 @@ class Controller:
         for h in hours:
             if h["start"] in reasons:
                 # Build-ups would push the sensor past its 16 KB attribute budget.
-                h["why"] = {k: v for k, v in reasons[h["start"]].items() if k not in ("beats", "kept_price", "kept_estimated")}
+                h["why"] = {
+                    k: v for k, v in reasons[h["start"]].items() if k not in ("beats", "kept_price", "kept_estimated")
+                }
         return {
             "built_at": now.isoformat(),
             "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,
