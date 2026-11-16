@@ -237,7 +237,8 @@ async def run_forcing_and_export(
     controller.hold_state = scheduler.decide_hold_state(
         controller.hold_state,
         discharge_value=_discharge_v,
-        stored_value=_stored_v,
+        # The DP's value for this slot: a later slot can be worth more than the horizon end.
+        stored_value=_dp_out.get("hold_kept_value", _stored_v),
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,

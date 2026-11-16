@@ -110,6 +110,11 @@ _BASE_CFG = dict(
 )
 
 
+# The trough charge pays by selling at the evening peak; a kWh only kept past the
+# horizon is worth exactly its trough refill, so it is not bought.
+_SELLS_AT_IMPORT_PRICE = dict(export_price=0.0, export_price_matches_import=True)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -202,6 +207,7 @@ def test_morning_no_survival_charge_passive():
         cfg=cfg,
         today_watts=_today_watts(),
         _out=_out,
+        **_SELLS_AT_IMPORT_PRICE,
     )
 
     # A2: 05:00 is NOT a DP-selected slot → state stays PASSIVE, setpoint = 0
@@ -268,6 +274,7 @@ def test_trough_economic_topoff_actuates():
         cfg=cfg,
         today_watts=_today_watts(),
         _out=_out,
+        **_SELLS_AT_IMPORT_PRICE,
     )
 
     # A2: 11:00 is DP-selected (cheapest slot, soc well below ceiling) → FORCING

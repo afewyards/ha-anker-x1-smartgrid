@@ -52,6 +52,9 @@ def soc_bins(
 
 # Equal-value end states must not be picked by float rounding: ties go to the higher SoC.
 TIE_EPS_EUR = 1e-9
+# A kWh bought at exactly its kept value gains nothing, so the kept value sits this far
+# below it; one SoC bin of it must clear TIE_EPS_EUR or the tie above buys it.
+KEEP_TIE_EUR_PER_KWH = 1e-6
 
 
 def select_end_state(
@@ -117,7 +120,7 @@ def select_end_state(
 
         def _walk(avail: float) -> float:
             credit = 0.0
-            for seg_kwh, seg_v in _segs:
+            for seg_kwh, seg_v in _segs or ():
                 take = min(avail, seg_kwh)
                 credit += take * seg_v
                 avail -= take

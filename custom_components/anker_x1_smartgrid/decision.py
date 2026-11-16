@@ -418,6 +418,14 @@ def _dp_select_slots(
     grid_charge_ceiling = optimize_mod.solar_reservation_ceiling(
         window_pv, window_load_reserve, cfg, cycle_end_idx=cycle_end_idx, dt_h=dt_h
     )
+    _deficit_w = [(window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0 for h in range(window_len)]
+    _kept = (
+        optimize_mod.kept_values(
+            window_price, _deficit_w, optimize_mod.hold_stored_value(water_value, terminal_segments), cfg, eta_curve
+        )
+        if cfg.low_power_hold and water_value is not None
+        else None
+    )
 
     # Single co-optimized DP: grid-charge + discharge-to-grid in one pass.
     # export_price (per-hour effective feed-in) drives the discharge action;
@@ -452,17 +460,10 @@ def _dp_select_slots(
         terminal_segments=terminal_segments,
         hold=(
             [
-                _price_valid[h]
-                and optimize_mod.holds_at(
-                    window_price[h],
-                    (window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0,
-                    optimize_mod.hold_stored_value(water_value, terminal_segments),
-                    cfg,
-                    eta_curve,
-                )
+                _price_valid[h] and optimize_mod.holds_at(window_price[h], _deficit_w[h], _kept[h], cfg, eta_curve)
                 for h in range(window_len)
             ]
-            if cfg.low_power_hold and water_value is not None
+            if _kept is not None
             else None
         ),
     )
@@ -597,6 +598,8 @@ def _dp_select_slots(
     if _out is not None:
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
+        if _kept:
+            _out["hold_kept_value"] = _kept[0]
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots
 
 
@@ -963,13 +966,11 @@ def compute_decision(
     # this change; it is retained for its unit-test coverage and possible
     # future reuse only.
     _remaining_prices = [s.price for s in slots if s.start >= now_h]
-    _horizon_min_price = min(_remaining_prices) if _remaining_prices else 0.0
     # The optimization horizon is the FULL forecast, not [now, trough]: tomorrow's
     # evening peak (best export hour) sits past any local trough and must be in-window.
     _last_slot = max((s.start for s in slots), default=now_h)
     horizon_edge = resolution.hour_floor(_last_slot) + timedelta(hours=1)
     terminal_mode = "water_value"
-    water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg, eta_curve)
 
     # --- Water-value curve/interval build over [now, horizon_edge] ---
     # build_display_intervals emits one interval per price-slot hour >= now_h
@@ -1099,6 +1100,10 @@ def compute_decision(
             if estimated_tomorrow is not None
             else []
         )
+    # The estimated night is a refill too: a kWh kept past it is worth no more than buying it there.
+    _refill_prices = _remaining_prices + [s.price for s in _est_slot_list]
+    _horizon_min_price = min(_refill_prices) if _refill_prices else 0.0
+    water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg, eta_curve)
 
     # rev-2 ride-to-trough: precompute the cheap-relief map ONCE, thread to the walk.
     # Widened with the estimated tail (when present, i.e. flag ON) so the

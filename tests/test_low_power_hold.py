@@ -279,6 +279,27 @@ async def test_hold_engages_without_release():
     assert ctrl.last_hold_values == (pytest.approx(0.21), 0.25)
 
 
+async def test_hold_weighs_the_kept_value_the_dp_published():
+    # Worth less at the end of the horizon than discharging now, but kept for a richer later slot.
+    ctrl, act = _exec_ctrl()
+    dp_out = {"water_value": 0.15, "hold_kept_value": 0.30, "held_slots": frozenset({T})}
+    await executor.run_forcing_and_export(
+        ctrl,
+        T,
+        PlanState(ControllerState.PASSIVE, T, ()),
+        PlantInputs(soc=50.0, meter_w=250.0, now=T),
+        _SLOTS,
+        dp_out,
+        [],
+        60,
+        None,
+        250.0,
+    )
+    assert act.calls == [("engage_hold",)]
+    # The status keeps the end-of-horizon value the card explains the plan with.
+    assert ctrl.last_hold_values == (pytest.approx(0.21), 0.15)
+
+
 async def test_forcing_to_hold_skips_the_release():
     ctrl, act = _exec_ctrl()
     ctrl.plan = PlanState(ControllerState.FORCING, T - timedelta(hours=1), ())

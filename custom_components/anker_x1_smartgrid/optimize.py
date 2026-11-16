@@ -62,7 +62,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from . import const
-from .dp_common import export_leg_precompute, select_end_state, soc_bins
+from .dp_common import KEEP_TIE_EUR_PER_KWH, export_leg_precompute, select_end_state, soc_bins
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -80,13 +80,16 @@ from .regret import (
 def compute_water_value(trough_price: float, cfg: Config, eta_curve=None) -> float:
     """Terminal water value v (€/DC-kWh) for the water-value end selection.
 
-    ``v = (trough_price / eta) * water_value_factor``, ``eta`` being the DP's own
-    full-rate grid-charge efficiency (the measured curve when one is given).  When
-    ``clamp_water_value_nonneg`` is True a negative or zero trough price clamps
-    v to 0.0, pushing the optimal end SoC down toward the survival floor.
+    ``v = (trough_price / eta) * water_value_factor + charge_margin_eur_per_kwh``,
+    ``eta`` being the DP's own full-rate grid-charge efficiency (the measured
+    curve when one is given): what refilling a kWh costs, so using it now must
+    clear wear plus the margin. ``KEEP_TIE_EUR_PER_KWH`` below that, so a
+    charge at exactly that cost is not bought. When
+    ``clamp_water_value_nonneg`` is True a negative v clamps to 0.0, pushing
+    the optimal end SoC down toward the survival floor.
     """
     eta = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
-    v = (trough_price / eta) * cfg.water_value_factor
+    v = (trough_price / eta) * cfg.water_value_factor + cfg.charge_margin_eur_per_kwh - KEEP_TIE_EUR_PER_KWH
     if cfg.clamp_water_value_nonneg:
         v = max(0.0, v)
     return v
@@ -159,6 +162,19 @@ def holds_at(price: float, deficit_w: float, water_value: float, cfg: Config, et
 def hold_stored_value(water_value: float, terminal_segments: list[tuple[float, float]] | None) -> float:
     """€/DC-kWh the hold weighs a kept kWh at: never below the richest terminal segment it could earn."""
     return max([water_value, *(v for _, v in terminal_segments or ())])
+
+
+def kept_values(price: list[float], deficit_w: list[float], stored: float, cfg: Config, eta_curve=None) -> list[float]:
+    """€/DC-kWh a kWh kept through each slot is worth to the hold, never below ``stored``.
+
+    Backward from the horizon end: the richer of using it for the house in a later
+    slot or keeping it on, capped by buying it back in that slot first.
+    """
+    out = [stored] * len(price)
+    for h in range(len(price) - 1, 0, -1):
+        use = discharge_value(price[h], deficit_w[h], cfg, eta_curve)
+        out[h - 1] = max(stored, min(compute_water_value(price[h], cfg, eta_curve), max(use, out[h])))
+    return out
 
 
 def overnight_terminal_segments(

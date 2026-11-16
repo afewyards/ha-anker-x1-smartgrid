@@ -193,3 +193,19 @@ def test_empty_segments_preserved_not_collapsed_to_none(monkeypatch):
     row = rec.daily_regret_rows[DAY]
     assert row["dp_regret_eur"] is not None
     assert abs(row["dp_regret_eur"]) < 1e-6
+
+
+def test_cheaper_next_night_anchors_both_water_values(monkeypatch):
+    """The live DP anchors its kept value on the estimated night too; the oracle mirrors it with
+    the realized one."""
+    monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
+    captured = _spy_terminal_params(monkeypatch)
+    rec = StubRecorder()
+    cfg = _cfg()
+    _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
+    _seed_day(rec, NEXT, soc_start=60.0, load_w=500.0, import_price=0.10, hours=range(14))
+
+    regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
+
+    want = regret_job.optimize_mod.compute_water_value(0.10, cfg)
+    assert captured["oracle"]["water_value"] == captured["shadow"]["water_value"] == want

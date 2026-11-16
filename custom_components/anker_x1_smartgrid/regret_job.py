@@ -386,6 +386,8 @@ def run_daily_regret(
                 if _gap_start <= _h_dt < _pickup:
                     _est_price_by_hour[_h_dt] = sum(_plist) / len(_plist)
             if _est_price_by_hour:
+                # Same anchor as the live DP, which also refills over the estimated night.
+                _water_value = optimize_mod.compute_water_value(min([*price, *_est_price_by_hour.values()]), cfg)
                 # Day-D realized per-slot load → W by hour-of-day (avg across a
                 # slot's sub-hour buckets at 15-min; identity at 60-min).
                 _hod_w: dict[int, list[float]] = defaultdict(list)

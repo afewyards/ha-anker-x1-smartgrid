@@ -3,20 +3,21 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.anker_x1_smartgrid import optimize
+from custom_components.anker_x1_smartgrid.dp_common import KEEP_TIE_EUR_PER_KWH
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid.optimize import compute_water_value, eta_discharge, optimize_grid
 
 
 def test_compute_water_value_divides_by_eta_and_scales():
     cfg = Config(eta_charge=0.92, water_value_factor=1.0, clamp_water_value_nonneg=True)
-    assert compute_water_value(0.10, cfg) == pytest.approx(0.10 / 0.92)
+    assert compute_water_value(0.10, cfg) == pytest.approx(0.10 / 0.92 - KEEP_TIE_EUR_PER_KWH)
 
 
 def test_compute_water_value_uses_the_measured_charge_eta_at_full_rate():
     cfg = Config(eta_charge=0.95, max_charge_w=6000.0, water_value_factor=1.0)
     seen = []
     curve = SimpleNamespace(eta_charge=lambda w: seen.append(w) or 0.80)
-    assert compute_water_value(0.10, cfg, curve) == pytest.approx(0.10 / 0.80)
+    assert compute_water_value(0.10, cfg, curve) == pytest.approx(0.10 / 0.80 - KEEP_TIE_EUR_PER_KWH)
     assert seen == [6000.0]
 
 
@@ -27,7 +28,12 @@ def test_compute_water_value_clamps_negative_to_zero():
 
 def test_compute_water_value_factor_scales_down():
     cfg = Config(eta_charge=1.0, water_value_factor=0.5, clamp_water_value_nonneg=True)
-    assert compute_water_value(0.20, cfg) == pytest.approx(0.10)
+    assert compute_water_value(0.20, cfg) == pytest.approx(0.10 - KEEP_TIE_EUR_PER_KWH)
+
+
+def test_compute_water_value_adds_the_charge_margin():
+    cfg = Config(eta_charge=0.92, charge_margin_eur_per_kwh=0.03)
+    assert compute_water_value(0.10, cfg) == pytest.approx(0.10 / 0.92 + 0.03 - KEEP_TIE_EUR_PER_KWH)
 
 
 def test_water_value_zero_ends_at_floor():

@@ -575,7 +575,8 @@ def test_compute_decision_hedge_none_is_noop():
 def test_compute_decision_hedge_lowers_projection():
     """A hedge keyed at now_h lowers the published horizon SoC from that hour onward."""
     cfg = _cfg()
-    prices = [0.10, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40, 0.40]
+    # Flat: no cheaper hour to buy the debit back at.
+    prices = [0.40] * 9
     now_h = BASE  # BASE is already hour-aligned (minute=0, second=0)
     base = _call_compute_decision(cfg, soc=50.0, prices=prices)
     hed = _call_compute_decision(cfg, soc=50.0, prices=prices, hedge_drain_by_hour={now_h: 1.5})
