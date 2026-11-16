@@ -23,11 +23,27 @@ def _points(rows: list[dict]) -> list[tuple[datetime, dict]]:
         ),
         key=lambda p: p[0],
     )
-    kept: list[tuple[datetime, dict]] = []
-    for ts, row in pts:
-        if not soc_glitch(float(row["soc"]), row.get("batt_w"), float(kept[-1][1]["soc"]) if kept else None):
-            kept.append((ts, row))
-    return kept
+    bad = _glitches(pts)
+    return [p for i, p in enumerate(pts) if i not in bad]
+
+
+def _glitches(pts: list[tuple[datetime, dict]]) -> set[int]:
+    """Indices of the false SoC-0 readings in ``ts``-ordered ``pts``; rows without a SoC are skipped."""
+    out: set[int] = set()
+    prev: tuple[datetime, float] | None = None
+    latched = False
+    for i, (ts, row) in enumerate(pts):
+        if row.get("soc") is None:
+            continue
+        soc = float(row["soc"])
+        latched = prev is not None and soc_glitch(
+            soc, row.get("batt_w"), prev[1], (ts - prev[0]).total_seconds(), latched
+        )
+        if latched:
+            out.add(i)
+        else:
+            prev = (ts, soc)
+    return out
 
 
 def battery_margin_by_day(

@@ -8,6 +8,7 @@ releases the moment SoC reads back at the floor.
 """
 
 import dataclasses
+import json
 import logging
 from datetime import timedelta
 
@@ -15,7 +16,7 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const, controller, guard, scheduler
 from custom_components.anker_x1_smartgrid.models import ControllerState, PlanState
-from tests.helpers import BASE, StubHass, make_controller, seed_valid_inputs
+from tests.helpers import BASE, CapturingStore, StubHass, make_controller, seed_valid_inputs
 
 
 def _expected_setpoint(cfg) -> float:
@@ -220,27 +221,166 @@ async def test_failsafe_tick_above_floor_releases():
     assert ctrl.plan.state is ControllerState.PASSIVE
 
 
+def _glitch(hass, batt="0.0"):
+    hass.set_state("sensor.soc", "0.0")
+    hass.set_state("sensor.battery_power", batt)
+
+
+def _clock(monkeypatch):
+    """Tick time under test control: ``at(minutes)`` moves it to BASE + minutes."""
+    now = [BASE]
+    monkeypatch.setattr(controller.dt_util, "utcnow", lambda: now[0])
+
+    def at(minutes: float) -> None:
+        now[0] = BASE + timedelta(minutes=minutes)
+
+    return at
+
+
 @pytest.mark.asyncio
-async def test_zero_soc_glitch_is_treated_as_missing_soc(caplog):
-    """The Anker entities sometimes read SoC 0 / 0 W at a real 96 %: no rescue, failsafe like a missing SoC."""
+async def test_zero_soc_glitch_holds_the_pack_and_keeps_recording(caplog):
+    """The Anker entities sometimes read SoC 0 / 0 W at a real 96 %: hold at 0 W, keep the meter side."""
     hass = StubHass()
     ctrl, act = make_controller(hass)
     seed_valid_inputs(hass, soc="96.0")
     await ctrl.tick()
     act.calls.clear()
+    imported = ctrl.today_house_import_kwh
 
-    hass.set_state("sensor.soc", "0.0")
-    hass.set_state("sensor.battery_power", "0.0")
+    _glitch(hass)
+    hass.set_state("sensor.meter_power", "11000.0")
     with caplog.at_level(logging.WARNING):
         first = await ctrl.tick()
         second = await ctrl.tick()
 
     assert _engages(act) == []
-    assert first["reason"] == second["reason"] == "failsafe"
+    assert not any(c[0].startswith("engage_export") or c[0] == "release_to_self" for c in act.calls)
+    assert ("engage_hold",) in act.calls
+    assert first["reason"] == second["reason"] == "soc glitch"
     assert first["setpoint_w"] == 0.0
     assert ctrl.plan.state is ControllerState.PASSIVE
-    assert any(c[0] == "release_to_self" for c in act.calls)
-    assert len([r for r in caplog.records if "SoC" in r.getMessage() and "glitch" in r.getMessage()]) == 1
+    rows = ctrl._recorder.rows[-2:]
+    assert [r["soc"] for r in rows] == [None, None]
+    assert [r["p1_w"] for r in rows] == [11000.0, 11000.0]
+    assert ctrl.today_house_import_kwh - imported == pytest.approx(2 * 11.0 * const.TICK_SECONDS / 3600)
+    assert len([r for r in caplog.records if "SoC glitch" in r.getMessage()]) == 1
+
+
+@pytest.mark.asyncio
+async def test_glitch_end_resumes_normal_operation(caplog):
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+    _glitch(hass)
+    await ctrl.tick()
+
+    hass.set_state("sensor.soc", "96.0")
+    hass.set_state("sensor.battery_power", "-500.0")
+    with caplog.at_level(logging.WARNING):
+        result = await ctrl.tick()
+
+    assert result["reason"] != "soc glitch"
+    assert ctrl._recorder.rows[-1]["soc"] == 96.0
+    assert len([r for r in caplog.records if "SoC glitch over" in r.getMessage()]) == 1
+    # Out of the glitch, a 0 with the pack still moving is real again.
+    _glitch(hass, batt="-500.0")
+    await ctrl.tick()
+    assert _engages(act) == [_expected_setpoint(ctrl.cfg)]
+
+
+@pytest.mark.asyncio
+async def test_glitch_holds_through_an_odd_battery_power_tick():
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+
+    reasons = []
+    for batt in ("0.0", "0.0", "-3.0", "0.0", "0.0"):
+        _glitch(hass, batt=batt)
+        reasons.append((await ctrl.tick())["reason"])
+
+    assert _engages(act) == []
+    assert reasons == ["soc glitch"] * 5
+
+
+@pytest.mark.asyncio
+async def test_glitch_ends_after_four_hours_and_rescues(monkeypatch):
+    at = _clock(monkeypatch)
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+
+    _glitch(hass)
+    at(1)
+    await ctrl.tick()
+    at(239)
+    assert (await ctrl.tick())["reason"] == "soc glitch"
+    assert _engages(act) == []
+
+    at(240)
+    await ctrl.tick()
+    assert _engages(act) == [_expected_setpoint(ctrl.cfg)]
+
+
+@pytest.mark.asyncio
+async def test_zero_after_a_stale_reading_is_real_and_rescues(monkeypatch):
+    """After a sensor outage the pack may really have emptied: the 0 is accepted."""
+    at = _clock(monkeypatch)
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+
+    hass.set_state("sensor.soc", "unavailable")
+    for minute in range(1, 10):
+        at(minute)
+        assert (await ctrl.tick())["reason"] == "failsafe"
+    _glitch(hass)
+    at(10)
+    await ctrl.tick()
+
+    assert _engages(act) == [_expected_setpoint(ctrl.cfg)]
+
+
+@pytest.mark.asyncio
+async def test_restart_mid_glitch_keeps_holding(monkeypatch):
+    at = _clock(monkeypatch)
+    hass = StubHass()
+    ctrl, _act = make_controller(hass)
+    ctrl._store = CapturingStore()
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+    _glitch(hass)
+    at(1)
+    await ctrl.tick()
+    at(30)
+    await ctrl.tick()
+
+    fresh, act = make_controller(hass)
+    fresh.restore(json.loads(json.dumps(ctrl._store.saved)))
+    at(31)
+    result = await fresh.tick()
+
+    assert _engages(act) == []
+    assert result["reason"] == "soc glitch"
+
+
+@pytest.mark.asyncio
+async def test_glitch_with_master_switch_off_does_not_rescue():
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    ctrl.enabled = False
+    seed_valid_inputs(hass, soc="96.0")
+    await ctrl.tick()
+
+    _glitch(hass)
+    await ctrl.tick()
+
+    assert _engages(act) == []
+    assert ctrl._recorder.rows[-1]["soc"] is None
 
 
 @pytest.mark.asyncio
@@ -248,11 +388,11 @@ async def test_real_descent_to_zero_still_rescues():
     """From a real low SoC the 0 reading is accepted and the rescue charges."""
     hass = StubHass()
     ctrl, act = make_controller(hass)
-    seed_valid_inputs(hass, soc="6.0")
+    seed_valid_inputs(hass, soc="2.9")
     await ctrl.tick()
+    act.calls.clear()
 
-    hass.set_state("sensor.soc", "0.0")
-    hass.set_state("sensor.battery_power", "0.0")
+    _glitch(hass)
     await ctrl.tick()
 
     assert _engages(act) == [_expected_setpoint(ctrl.cfg)]

@@ -190,6 +190,12 @@ _PERSIST_GROUPS = [
         ("soc_drift_engaged", "_soc_drift_engaged", lambda v: v, bool, False),
         ("soc_drift_last_export_kwh_dc", "_soc_drift_last_export_kwh_dc", lambda v: v, float, False),
     ],
+    # A restart mid-glitch must not take the false SoC 0 as real.
+    [
+        ("last_soc", "_last_soc", lambda v: v, float, True),
+        ("last_soc_at", "_last_soc_at", _persist_iso_or_none, dt_util.parse_datetime, True),
+        ("soc_glitch", "_soc_glitch", lambda v: v, bool, False),
+    ],
 ]
 
 # Flat view used by _persist() (payload order/content is unaffected by grouping).
@@ -197,8 +203,9 @@ _PERSIST_FIELDS = [field for group in _PERSIST_GROUPS for field in group]
 
 
 class Controller:
-    # Class default only so the bare __new__ test stubs can read it.
+    # Class defaults only so the bare __new__ test stubs can read them.
     standby: bool = False
+    _glitch_inputs: PlantInputs | None = None  # this tick's reading when it was a false SoC 0
 
     # Pure per-tick caches, declared at class level (and re-initialised in
     # __init__) so they read as "empty" rather than raising AttributeError on a
@@ -248,7 +255,9 @@ class Controller:
         # sits below const.FIRMWARE_SOC_FLOOR. Deliberately NOT persisted — a
         # restart re-derives it from live SoC on the first tick.
         self._floor_rescue_active: bool = False
+        # Last accepted SoC and its time, and whether the SoC reads a false 0 (see dataquality.soc_glitch).
         self._last_soc: float | None = None
+        self._last_soc_at: datetime | None = None
         self._soc_glitch: bool = False
         self.profile: dict = {}
         self._profile_predictor: LoadPredictor = LoadPredictor.from_profile(self.profile)
@@ -1409,23 +1418,53 @@ class Controller:
         }
 
     def _read_plant_inputs(self) -> PlantInputs | None:
-        """Live plant inputs, ``None`` (as for a missing SoC) on a false SoC-0 reading."""
+        """Live plant inputs, ``None`` on a false SoC-0 reading (kept in ``_glitch_inputs``)."""
+        self._glitch_inputs = None
         inputs = coordinator.read_plant_inputs(self._hass, self._data)
         if inputs is None:
             return None
         batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
-        if soc_glitch(inputs.soc, batt_w, self._last_soc):
+        age_s = (inputs.now - self._last_soc_at).total_seconds() if self._last_soc_at is not None else math.inf
+        if soc_glitch(inputs.soc, batt_w, self._last_soc, age_s, self._soc_glitch):
             if not self._soc_glitch:
                 _LOGGER.warning(
-                    "SoC glitch: %.1f%% at 0 W right after %.1f%%; ignoring SoC until it reads back",
+                    "SoC glitch: %.1f%% at 0 W right after %.1f%%; holding the battery until it reads back",
                     inputs.soc,
                     self._last_soc,
                 )
             self._soc_glitch = True
+            self._glitch_inputs = inputs
             return None
+        if self._soc_glitch:
+            _LOGGER.warning("SoC glitch over after %.0f min: SoC reads %.1f%%", age_s / 60.0, inputs.soc)
         self._soc_glitch = False
-        self._last_soc = inputs.soc
+        self._last_soc, self._last_soc_at = inputs.soc, inputs.now
         return inputs
+
+    async def _soc_glitch_tick(self, now: datetime, inputs: PlantInputs, slots, weather_entry, persons_home) -> dict:
+        """Hold the battery at 0 W through a false SoC 0 and keep the meter side of the books."""
+        try:
+            await self._actuator.engage_hold()
+        except Exception:
+            _LOGGER.error("Actuator engage_hold failed (soc glitch)", exc_info=True)
+            await executor.safe_release(self, now, "Actuator release_to_self failed (soc glitch)")
+        else:
+            await executor.safe_release(self, now, release=False)
+            if not self.hold_state.engaged:
+                # The hold's own exit hands the battery back once the SoC reads true.
+                self.hold_state = ExportState(engaged=True, state_since=now)
+        self.plan = PlanState(ControllerState.PASSIVE, now, ())
+        self._rollover_daily_ledgers(now)
+        self._accumulate_cash_ledger(
+            now, inputs, slots, self._resolve_slot_minutes(slots), self._resolve_export_price()[0]
+        )
+        await self._persist()
+        _state = "hold" if self.hold_state.engaged else "passive"
+        await self._record_sample(
+            now, inputs, setpoint=0.0, state=_state, weather_entry=weather_entry, persons_home=persons_home
+        )
+        await self._publish_power_card(now, None, _state, False)
+        return self._status(now, 0.0, None, "soc glitch")
 
     async def _run_floor_rescue_tick(self, now: datetime, soc: float | None) -> float:
         """Rescue below the firmware floor and record FORCING; return the setpoint (0.0 = none)."""
@@ -1698,10 +1737,12 @@ class Controller:
                 except Exception:
                     _LOGGER.warning("Shadow compute_decision failed (disabled path)", exc_info=True)
 
-            if inputs is not None:
+            if self._glitch_inputs is not None:
+                await self._persist()
+            if (_sample_inputs := inputs or self._glitch_inputs) is not None:
                 await self._record_sample(
                     now,
-                    inputs,
+                    _sample_inputs,
                     setpoint=0.0,
                     state="disabled",
                     weather_entry=_weather_entry,
@@ -1803,6 +1844,8 @@ class Controller:
         tomorrow_total = coordinator.read_pv_tomorrow_kwh(self._hass, self._data)
         sun_times = coordinator.read_sun_times(self._hass, self._data)
 
+        if self._glitch_inputs is not None:
+            return await self._soc_glitch_tick(now, self._glitch_inputs, slots, _weather_entry, _persons_home_now)
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
             if inputs is not None and (rescue_w := await self._run_floor_rescue_tick(now, inputs.soc)):
@@ -3130,7 +3173,7 @@ class Controller:
             "ts": now.isoformat(),
             "hour": now.hour,
             "weekday": now.weekday(),
-            "soc": inputs.soc,
+            "soc": None if self._glitch_inputs is not None else inputs.soc,
             # Legacy 3-phase columns retired (the Anker X1 meter reports one signed
             # scalar, not per-phase import); schema unchanged, so these stay NULL.
             "p1_l1": None,

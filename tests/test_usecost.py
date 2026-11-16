@@ -162,6 +162,7 @@ class TestReplay:
         after = _phase(H1 + timedelta(minutes=51), 9, 80, 80, 0.0, 0.20)
         after += _phase(H2, 60, 80, 0.5, 15_900, 0.40, load=15_900, p1=0.0) + _end(H2 + timedelta(hours=1), 0.5)
         glitch = _phase(H1 + timedelta(minutes=5), 46, 0.0, 0.0, 0.0, 0.20)
+        glitch[10]["batt_w"] = -3.0  # one odd tick inside the stretch
         clean_days, clean_inv = replay(before + after, CAP, AMS)
         days, inv = replay(before + glitch + after, CAP, AMS)
         assert days[DAY]["saved_eur"] == pytest.approx(clean_days[DAY]["saved_eur"])
@@ -455,6 +456,14 @@ class TestMergeDays:
         assert t["grid_in_kwh"] == pytest.approx(1.0)
         assert tm["use_kwh"] == pytest.approx(24.0)
         assert tm["grid_in_kwh"] is None and tm["grid_out_kwh"] is None
+
+    def test_a_zero_soc_glitch_leaves_the_hours_soc_alone(self):
+        rows = _phase(TODAY0, 65, 80, 80, 0.0, 0.30, load=1_000)
+        rows += _phase(TODAY0 + timedelta(minutes=65), 55, 0.0, 0.0, 0.0, 0.30, load=1_000)
+        rows[70]["batt_w"] = -3.0  # one odd tick inside the stretch
+        rows += _end(TODAY0 + timedelta(hours=2), 80)
+        socs = [h["soc"] for h in hourly_series(rows, [], AMS, NOW) if h["soc"] is not None]
+        assert socs and min(socs) == 80
 
     def test_a_25_hour_day_sums_all_its_hours(self):
         start = datetime(2026, 10, 24, 22, 0, tzinfo=UTC)

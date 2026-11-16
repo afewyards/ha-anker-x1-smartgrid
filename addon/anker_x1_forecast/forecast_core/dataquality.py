@@ -19,14 +19,25 @@ class FeatureRow:
     temp: float | None
 
 
-def soc_glitch(soc: float, batt_w: float | None, prev_soc: float | None) -> bool:
+_GLITCH_ENTRY_MAX_AGE_S = 180.0
+_GLITCH_MAX_S = 4 * 3600.0
+
+
+def soc_glitch(soc: float, batt_w: float | None, prev_soc: float | None, age_s: float, latched: bool = False) -> bool:
     """True for the Anker entities' false ``SoC 0 / 0 W`` reading.
 
-    A real pack falls at most ~0.8 %/min, so it never reaches 0 in one step
-    from 10 % or more. ``prev_soc`` is the last accepted SoC (``None`` at start).
+    A real pack falls at most ~2 %/min, so it never reads 0 one tick after
+    3 % or more. ``prev_soc`` is the last accepted SoC (``None`` at start) and
+    ``age_s`` its age; more than three ticks old, it is too stale to judge by.
+    ``latched`` (the previous reading was a glitch) keeps a 0 false whatever
+    the battery power reads, until it is 4 h older than ``prev_soc``.
     """
-    # shortcut: a glitch from a real SoC below 10 % is accepted, add a duration rule if one is seen again
-    return soc <= 0 and batt_w == 0 and prev_soc is not None and prev_soc >= 10.0
+    if soc > 0 or prev_soc is None:
+        return False
+    if latched:
+        return age_s < _GLITCH_MAX_S
+    # shortcut: a glitch entered from below 3 % is accepted, lower the limit if one is seen
+    return batt_w in (None, 0.0) and prev_soc >= 3.0 and age_s <= _GLITCH_ENTRY_MAX_AGE_S
 
 
 def _is_export_row(row: dict) -> bool:

@@ -706,6 +706,9 @@ async def test_persist_writes_wrapped_payload():
         "soc_drift_engaged",
         "soc_drift_last_export_kwh_dc",
         "standby",
+        "last_soc",
+        "last_soc_at",
+        "soc_glitch",
     }
     assert ctrl._store.saved["enabled"] is True
 

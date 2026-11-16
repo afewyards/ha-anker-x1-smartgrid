@@ -17,8 +17,8 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from itertools import pairwise
 
 from .daily_stats import _parse
-from .dataquality import house_load_w, soc_glitch
-from .margin import _EMPTY_KWH, _MAX_DT_S, _points, sun_share
+from .dataquality import house_load_w
+from .margin import _EMPTY_KWH, _MAX_DT_S, _glitches, _points, sun_share
 
 _BAND_W = 50.0
 _MOVED_KWH = 0.05
@@ -423,9 +423,10 @@ def hourly_series(
     )
     hours: dict[datetime, dict] = {}
     level = None
+    bad = _glitches(pts)
     for i, (ts, row) in enumerate(pts):
         b = _hour(hours, ts, tz, slot_min)
-        if row.get("soc") is not None and not soc_glitch(float(row["soc"]), row.get("batt_w"), level):
+        if row.get("soc") is not None and i not in bad:
             b["soc"] = level = float(row["soc"])
         dt_s = (pts[i + 1][0] - ts).total_seconds() if i + 1 < len(pts) else 0.0
         load = house_load_w(row)
