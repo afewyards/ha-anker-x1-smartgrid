@@ -77,18 +77,26 @@ from .regret import (
 )
 
 
+def refill_eta_charge(cfg: Config, eta_curve=None) -> float:
+    """Best charge efficiency the DP can price a step at, up to full rate: the cheapest refill."""
+    if eta_curve is None:
+        return cfg.eta_charge_safe()
+    powers = [w for w in (0.0, *const.EFFICIENCY_DC_BIN_EDGES_W) if w < cfg.max_charge_w]
+    return max(eta_curve.eta_charge(w) for w in (*powers, cfg.max_charge_w))
+
+
 def compute_water_value(trough_price: float, cfg: Config, eta_curve=None) -> float:
     """Terminal water value v (€/DC-kWh) for the water-value end selection.
 
     ``v = (trough_price / eta) * water_value_factor + charge_margin_eur_per_kwh``,
-    ``eta`` being the DP's own full-rate grid-charge efficiency (the measured
-    curve when one is given): what refilling a kWh costs, so using it now must
-    clear wear plus the margin. ``KEEP_TIE_EUR_PER_KWH`` below that, so a
-    charge at exactly that cost is not bought. When
-    ``clamp_water_value_nonneg`` is True a negative v clamps to 0.0, pushing
-    the optimal end SoC down toward the survival floor.
+    ``eta`` being :func:`refill_eta_charge`: what refilling a kWh costs, so
+    using it now must clear wear plus the margin. ``KEEP_TIE_EUR_PER_KWH``
+    below that, so a charge at exactly that cost is not bought, at whatever
+    power the DP paces it. When ``clamp_water_value_nonneg`` is True a
+    negative v clamps to 0.0, pushing the optimal end SoC down toward the
+    survival floor.
     """
-    eta = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
+    eta = refill_eta_charge(cfg, eta_curve)
     v = (trough_price / eta) * cfg.water_value_factor + cfg.charge_margin_eur_per_kwh - KEEP_TIE_EUR_PER_KWH
     if cfg.clamp_water_value_nonneg:
         v = max(0.0, v)
@@ -235,7 +243,7 @@ def overnight_terminal_segments(
     * ``seg_v = max(v_lo, min(raw_v_h, refill_h))`` — a per-segment floor at the
       horizon-min refill anchor, never a global clamp, and a cap at
       ``refill_h``: the cheapest estimated price earlier in the gap divided by
-      the DP's full-rate charge efficiency, plus ``charge_margin_eur_per_kwh``,
+      :func:`refill_eta_charge`, plus ``charge_margin_eur_per_kwh``,
       less ``KEEP_TIE_EUR_PER_KWH`` (as in :func:`compute_water_value`). A
       stored kWh is never worth more than re-buying it before it is needed.
 
@@ -265,7 +273,7 @@ def overnight_terminal_segments(
         return ([], 0.0, v_lo)
 
     eta_d_static = cfg.eta_discharge_static()
-    eta_c = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
+    eta_c = refill_eta_charge(cfg, eta_curve)
     # shortcut: the first gap hour has no earlier hour so stays uncapped; seed from the horizon tail if it drives holds.
     refill = float("inf")
 

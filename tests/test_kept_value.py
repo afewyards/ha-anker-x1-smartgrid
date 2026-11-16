@@ -5,6 +5,7 @@ Using it today must clear that refill plus wear; a tie must not buy it.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -52,7 +53,15 @@ def _cfg(**over) -> Config:
     )
 
 
-def _run(cfg: Config, prices: list[float], *, soc: float = 60.0, est: float | None = 0.32, export: bool = False):
+def _run(
+    cfg: Config,
+    prices: list[float],
+    *,
+    soc: float = 60.0,
+    est: float | None = 0.32,
+    export: bool = False,
+    curve: EfficiencyCurve | None = None,
+):
     out: dict = {}
     compute_decision(
         PlanState(ControllerState.PASSIVE, NOW - timedelta(hours=2), ()),
@@ -67,7 +76,7 @@ def _run(cfg: Config, prices: list[float], *, soc: float = 60.0, est: float | No
         export_price_matches_import=export,
         estimated_tomorrow=None if est is None else [est] * 24,
         _out=out,
-        eta_curve=EfficiencyCurve.static(cfg),
+        eta_curve=curve or EfficiencyCurve.static(cfg),
     )
     return out
 
@@ -92,6 +101,18 @@ def test_peak_is_held_when_the_gain_does_not_clear_wear_and_margin():
 def test_no_charge_at_the_horizon_min_slot_on_a_tie(margin):
     out = _run(_cfg(charge_margin_eur_per_kwh=margin), TODAY, est=None)
     assert out["water_value"] == pytest.approx(0.355 / 0.8878 + margin, abs=1e-5)
+    assert LAST not in (out.get("grid_request") or {})
+    assert out["dp_selected"] == []
+
+
+@pytest.mark.parametrize("margin", [0.0, 0.03])
+def test_no_charge_on_a_tie_when_the_curve_charges_best_below_full_rate(margin):
+    # Measured: 0.89 below the top bin, 0.8878 at full rate. Refilling at the full-rate eta would leave a
+    # paced charge at 0.89 just under the tie, and the DP bought it at the last real slot.
+    cfg = _cfg(charge_margin_eur_per_kwh=margin)
+    base = EfficiencyCurve.static(cfg)
+    charge = [replace(b, eta=0.89 if b.hi_w < float("inf") else 0.8878) for b in base._charge]
+    out = _run(cfg, TODAY, est=None, curve=EfficiencyCurve(charge, list(base._discharge), base._fc, base._fd))
     assert LAST not in (out.get("grid_request") or {})
     assert out["dp_selected"] == []
 

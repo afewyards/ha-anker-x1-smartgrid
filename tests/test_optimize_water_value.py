@@ -13,12 +13,11 @@ def test_compute_water_value_divides_by_eta_and_scales():
     assert compute_water_value(0.10, cfg) == pytest.approx(0.10 / 0.92 - KEEP_TIE_EUR_PER_KWH)
 
 
-def test_compute_water_value_uses_the_measured_charge_eta_at_full_rate():
+def test_compute_water_value_uses_the_best_measured_charge_eta_up_to_full_rate():
     cfg = Config(eta_charge=0.95, max_charge_w=6000.0, water_value_factor=1.0)
-    seen = []
-    curve = SimpleNamespace(eta_charge=lambda w: seen.append(w) or 0.80)
-    assert compute_water_value(0.10, cfg, curve) == pytest.approx(0.10 / 0.80 - KEEP_TIE_EUR_PER_KWH)
-    assert seen == [6000.0]
+    # 0.85 in the 2.5-4 kW bin beats 0.80 at full rate; above full rate the DP never charges.
+    curve = SimpleNamespace(eta_charge=lambda w: 0.99 if w > 6000.0 else 0.85 if 2500.0 <= w < 4000.0 else 0.80)
+    assert compute_water_value(0.10, cfg, curve) == pytest.approx(0.10 / 0.85 - KEEP_TIE_EUR_PER_KWH)
 
 
 def test_compute_water_value_clamps_negative_to_zero():

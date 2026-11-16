@@ -2570,7 +2570,7 @@ class Controller:
         cfg = self.cfg
         # The DP's own export gate and terminal-refill prices, per stored kWh.
         eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve)
-        eta_c = optimize_mod._eta_charge_at(cfg.max_charge_w, cfg, curve)
+        eta_c = optimize_mod.refill_eta_charge(cfg, curve)
         try:
             reasons = why.hour_reasons(
                 horizon,
