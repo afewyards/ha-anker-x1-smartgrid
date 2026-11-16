@@ -235,11 +235,12 @@ async def run_forcing_and_export(
     # refine what it chose, never hold a slot it turned down.
     _dp_held = _dp_out.get("held_slots")
     _dp_slot = _dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)
+    # The DP's value for this slot: a later slot can be worth more than the horizon end.
+    _stored_v = (_dp_out.get("kept_by_slot") or {}).get(_dp_slot, _stored_v)
     controller.hold_state = scheduler.decide_hold_state(
         controller.hold_state,
         discharge_value=_discharge_v,
-        # The DP's value for this slot: a later slot can be worth more than the horizon end.
-        stored_value=(_dp_out.get("kept_by_slot") or {}).get(_dp_slot, _stored_v),
+        stored_value=_stored_v,
         now=now,
         cfg=controller.cfg,
         slot_minutes=_slot_minutes,

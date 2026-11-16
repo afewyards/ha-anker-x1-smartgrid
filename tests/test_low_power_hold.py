@@ -296,8 +296,8 @@ async def test_hold_weighs_the_kept_value_the_dp_published():
         250.0,
     )
     assert act.calls == [("engage_hold",)]
-    # The status keeps the end-of-horizon value the card explains the plan with.
-    assert ctrl.last_hold_values == (pytest.approx(0.21), 0.15)
+    # The status reports the value the rule weighed.
+    assert ctrl.last_hold_values == (pytest.approx(0.21), 0.30)
 
 
 async def test_a_top_up_the_plan_does_not_force_holds_instead_of_draining():
