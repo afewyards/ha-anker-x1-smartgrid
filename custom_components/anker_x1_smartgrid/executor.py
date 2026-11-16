@@ -246,6 +246,7 @@ async def run_forcing_and_export(
         slot_minutes=_slot_minutes,
         # A charge the plan does not force (charge stop, dwell) keeps the pack rather than drains it.
         dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
+        paused=new_plan.state is ControllerState.FORCING,
     )
     _hold = controller.hold_state.engaged
     controller.last_hold_values = (_discharge_v, _stored_v)

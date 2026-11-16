@@ -113,7 +113,7 @@ def test_no_dp_hold_trajectory_blocks():
 # ── dwell / hysteresis ──────────────────────────────────────────────────────
 
 
-def _decide(prev, dv, sv, now=T, dp_holds=True, **cfg):
+def _decide(prev, dv, sv, now=T, dp_holds=True, paused=False, **cfg):
     return scheduler.decide_hold_state(
         prev,
         discharge_value=dv,
@@ -121,6 +121,7 @@ def _decide(prev, dv, sv, now=T, dp_holds=True, **cfg):
         now=now,
         cfg=Config(export_dwell_min=15, **cfg),
         dp_holds=dp_holds,
+        paused=paused,
     )
 
 
@@ -332,6 +333,33 @@ async def test_forcing_blocks_hold_and_charges():
     await _run(ctrl, new_state=ControllerState.FORCING)
     assert [c[0] for c in act.calls] == ["engage_and_charge"]
     assert not ctrl.hold_state.engaged
+
+
+@pytest.mark.parametrize("held_for", [timedelta(hours=1), timedelta(minutes=2)])
+async def test_a_top_up_burst_hands_straight_back_to_the_hold(held_for):
+    # 98 %: a cheap slot forces a burst that hits the 99 % charge stop within two minutes. Releasing
+    # then would feed the house from the pack until the dwell ran out, and the next cheap slot repeats it.
+    ctrl, act = _exec_ctrl()
+    ctrl.cfg = replace(ctrl.cfg, export_dwell_min=15)
+    ctrl.hold_state = ExportState(engaged=True, state_since=T - held_for)
+    dp_out = {"water_value": 0.25, "held_slots": frozenset({T})}
+    for now, soc, state in (
+        (T, 98.0, ControllerState.FORCING),
+        (T + timedelta(minutes=2), 99.0, ControllerState.PASSIVE),
+    ):
+        new_plan = PlanState(state, now, ())
+        inputs = PlantInputs(soc=soc, meter_w=250.0, now=now)
+        await executor.run_forcing_and_export(ctrl, now, new_plan, inputs, _SLOTS, dp_out, [], 60, None, 250.0)
+        ctrl.plan = new_plan
+    assert [c[0] for c in act.calls] == ["engage_and_charge", "engage_hold"]
+    assert ctrl.hold_state.engaged
+
+
+def test_a_forced_charge_pauses_the_hold_without_a_dwell():
+    held = ExportState(engaged=True, state_since=T - timedelta(minutes=2))
+    paused = _decide(held, None, 0.25, paused=True)
+    assert not paused.engaged
+    assert _decide(paused, 0.20, 0.25, now=T + timedelta(minutes=1)).engaged
 
 
 async def test_hold_exit_releases_once():

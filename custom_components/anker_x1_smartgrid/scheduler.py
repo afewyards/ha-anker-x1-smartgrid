@@ -298,6 +298,7 @@ def decide_hold_state(
     cfg: Config,
     slot_minutes: int = 60,
     dp_holds: bool = True,
+    paused: bool = False,
 ) -> ExportState:
     """Next low-power-hold state (``engaged`` = holding), on the export dwell pattern.
 
@@ -310,11 +311,17 @@ def decide_hold_state(
     ``dp_holds`` False means the DP weighed a hold here and declined: treated
     as an economic flip, not a blocker, so a DP that changes its mind between
     ticks cannot flap the work mode.
+
+    ``paused`` marks the block as a forced charge, which has its own dwell: it
+    starts none here, so a burst that reaches the charge stop hands straight
+    back to the hold instead of draining the pack until the dwell runs out.
     """
+    _dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
     if discharge_value is None or stored_value is None:
-        return ExportState(engaged=False, state_since=now) if prev.engaged else prev
-    _dwell = _effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min")
-    if now - prev.state_since < timedelta(minutes=_dwell):
+        if not prev.engaged:
+            return prev
+        return ExportState(engaged=False, state_since=min(prev.state_since, now - _dwell) if paused else now)
+    if now - prev.state_since < _dwell:
         return prev
     if prev.engaged:
         if not dp_holds or discharge_value > stored_value + const.LOW_POWER_HOLD_RELEASE_MARGIN_EUR_PER_KWH:
