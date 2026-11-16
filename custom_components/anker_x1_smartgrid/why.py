@@ -62,7 +62,8 @@ def hour_reasons(
     A hold or house hour keeps for ``kept_value`` instead, when it gives one for
     the hour's slots (their mean): the value the hold rule weighs a kept kWh at,
     and ``kept_for`` is then the slot ``kept_source`` names for it, with its price
-    as ``kept_price`` and ``kept_estimated``. An export hour weighs it the same way.
+    as ``kept_price`` and ``kept_estimated``. An export hour weighs it the same way
+    unless it exceeds the sale.
     Estimated slots count as not planned.
 
     ``beats`` turns the comparison into the tariff the hour would have to
@@ -97,7 +98,7 @@ def hour_reasons(
         if kept_value is not None and (k := kept_value(start)) is not None:
             b["kept"] += k * h * left
             b["kept_h"] += h * left
-            b["src"] = b["src"] or (kept_source(start) if kept_source else None)
+            b["src"] = (kept_source(start) if kept_source else None) or b["src"]
         b["price"] += price * h * left
         b["sell_h"] += raw * h * left
         b["deficit"] += (float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)) * left * 1000.0
@@ -163,8 +164,10 @@ def hour_reasons(
             keep, kept_for = max(options, key=lambda o: o[0])
         b = hours[key]
         extra = {}
-        if kinds[i] in ("hold", "house", "export") and b["kept_h"] > 0.0:
-            keep = b["kept"] / b["kept_h"]
+        kept = b["kept"] / b["kept_h"] if b["kept_h"] > 0.0 else None
+        # An export whose kept value beats the sale has sold into a later, richer sale: keep the run's own logic.
+        if kept is not None and (kinds[i] in ("hold", "house") or (kinds[i] == "export" and use[i] >= kept)):
+            keep = kept
             if b["src"] is not None:
                 kind, at = b["src"]
                 if at is None:

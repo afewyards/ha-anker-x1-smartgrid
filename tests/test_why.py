@@ -364,3 +364,18 @@ def test_an_export_hour_is_weighed_against_its_own_kept_value():
     horizon = [_row(0, 0.46, 60, export=2.0, mode="export")]
     assert _at(0) not in _why(horizon, terminal=0.5)
     assert _why(horizon, terminal=0.5, kept_value=lambda s: 0.20)[_at(0)]["beats"]
+
+
+def test_rising_export_hours_each_keep_a_reason_with_a_build_up():
+    horizon = [_row(0, 0.40, 80, export=2.0, mode="export"), _row(1, 0.50, 60, export=2.0, mode="export")]
+    why = _why(horizon, terminal=0.2, kept_value=lambda s: 0.45 if s == NOW else 0.20)
+    assert why[_at(0)]["beats"]
+    assert why[_at(1)]["beats"]
+
+
+def test_an_hours_kept_source_is_its_last_quarter_s():
+    horizon = [_row(0, 0.30, 80, mode="hold")]
+    horizon = [dict(horizon[0], start=(NOW + k * H / 4).isoformat(), load_kwh=0.125) for k in range(4)]
+    src = {NOW + k * H / 4: ("house", NOW + (2 * H if k == 3 else H / 4)) for k in range(4)}
+    why = _why(horizon, kept_value=lambda s: 0.40, kept_source=src.get)
+    assert why[_at(0)]["kept_for"]["start"] == _at(2)
