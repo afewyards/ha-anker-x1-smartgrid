@@ -191,8 +191,16 @@
         planned: ['none', 'partial', 'full'][k],
         grid_in_kwh: priced ? sum('grid_in_house_kwh', 'grid_in_charge_kwh') : null,
         grid_out_kwh: priced ? sum('grid_out_kwh') : null,
+        // Export at the debug slots' tariff, the import price less 0.05.
+        grid_bought_eur: priced ? Math.round(rows.reduce((a, h) => a + (h.grid_in_house_kwh + h.grid_in_charge_kwh) * h.price, 0) * 100) / 100 : null,
+        grid_sold_eur: priced ? Math.round(rows.reduce((a, h) => a + h.grid_out_kwh * (h.price - 0.05), 0) * 100) / 100 : null,
       };
     });
+    for (const d of days) d.grid_bill_eur = d.grid_bought_eur === null ? null : Math.round((d.grid_bought_eur - d.grid_sold_eur) * 100) / 100;
+    // A day that sold more than it bought, at its widest.
+    if (CASE === 'wide') Object.assign(days[1], { grid_bought_eur: 113.7, grid_sold_eur: 127.35, grid_bill_eur: -13.65 });
+    // Days as an older backend sends them, without the grid bill.
+    if (CASE === 'old') for (const d of days) ['grid_bought_eur', 'grid_sold_eur', 'grid_bill_eur'].forEach((k) => delete d[k]);
     // Today's name line at its widest: a large sun figure and a negative average price.
     if (CASE === 'wide') Object.assign(days[1], { solar_gain_eur: -12.42, avg_price: -0.414 });
     const cur = hours.find((h) => Date.parse(h.start) === nowHour) || hours[hours.length - 1];

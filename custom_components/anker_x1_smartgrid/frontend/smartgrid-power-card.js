@@ -423,6 +423,17 @@ function owed(label, v) {
   return `${label} <span${zero ? '' : ` class="${v < 0 ? 'pos' : 'neg'}"`}>${eur(zero ? 0 : v)}</span>`;
 }
 
+// A day's grid bill, bought less sold, over its two legs. An older backend sends no bill: the use cost and battery cash stand in.
+function bill(d, b) {
+  if (!('grid_bill_eur' in d)) {
+    const bal = b === undefined ? '' : `<span class="bal">${owed('balance', b && b.balance_eur)}</span>`;
+    return [`<span>${eur(d.use_cost_eur)}</span>`, `<span>${owed('battery', d.batt_grid_eur)}</span>${bal}`];
+  }
+  const v = d.grid_bill_eur;
+  const legs = num(d.grid_bought_eur) === null && num(d.grid_sold_eur) === null ? '' : `bought ${eur(d.grid_bought_eur)} · sold ${eur(d.grid_sold_eur)}`;
+  return [`<span${num(v) !== null && v < 0 ? ' class="pos"' : ''}>${eur(v)}</span>`, `<span class="bs">${legs}</span>`];
+}
+
 // The planner's reason for an hour: the winning and the losing option per stored kWh, and what the energy is kept for.
 function decision(w, tz) {
   if (!w || !w.kind || num(w.keep_eur) === null || num(w.use_eur) === null) return null;
@@ -769,6 +780,8 @@ class SmartgridPowerCard extends HTMLElement {
       // Today's battery line gives up the balance before it clips the battery amount.
       const bal = card.querySelector('.ph.on .bal');
       if (bal && bal.parentNode.scrollWidth > bal.parentNode.clientWidth) bal.remove();
+      // A day's bought and sold line goes whole rather than run clipped into the next column.
+      for (const bs of card.querySelectorAll('.ph .bs')) if (bs.parentNode.scrollWidth > bs.parentNode.clientWidth) bs.remove();
     } catch (e) {
       console.error(TAG, e);
       card.innerHTML = `${this._battery(null, this._swState(), false)}<div class="empty">The planner has no data yet.</div>`;
@@ -944,18 +957,20 @@ class SmartgridPowerCard extends HTMLElement {
         const use = [`${fx(d.use_kwh, 1)} kWh${cw[i] - 2 * PAD - 1 >= 200 ? ' used' : ''}`];
         if (num(d.grid_in_kwh) !== null) use.push(`${d.grid_in_kwh.toFixed(1)} from grid`);
         if (num(d.grid_out_kwh) !== null) use.push(`${d.grid_out_kwh.toFixed(1)} sold`);
+        const [cost, line] = bill(d, b || null);
         return `<div class="ph on">
 <div><span class="name">Today</span>${info}</div>
-<div class="cost"><span>${eur(d.use_cost_eur)}</span>${saved(d.saved_eur, 'saved ')}</div>
-<div class="bl"><span>${owed('battery', d.batt_grid_eur)}</span><span class="bal">${owed('balance', b && b.balance_eur)}</span></div>
+<div class="cost">${cost}${saved(d.saved_eur, 'saved ')}</div>
+<div class="bl">${line}</div>
 <div class="l3">${use.join(' · ')}</div>
 ${this._cheap(d.cheap, tz)}
 </div>`;
       }
+      const [cost, line] = bill(d);
       return `<div class="ph">
 <div><span class="name">${date < today ? 'Yesterday' : 'Tomorrow'}</span></div>
-<div class="cost"><span>${eur(d.use_cost_eur)}</span></div>
-<div class="bl"><span>${owed('battery', d.batt_grid_eur)}</span></div>
+<div class="cost">${cost}</div>
+<div class="bl">${line}</div>
 <div><span>${fx(d.use_kwh, 1)} kWh</span>${saved(d.saved_eur, date > today ? 'plan ' : '')}</div>
 ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
 </div>`;
