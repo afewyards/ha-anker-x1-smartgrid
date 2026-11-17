@@ -346,16 +346,18 @@ def backup_reserve_hold(
     Engages at once at or under the planner's snapped reserve and releases only
     once SoC is a full point above it and ``export_dwell_min`` has run, so a
     pack hovering at the reserve cannot flap the work mode. PV covering the
-    house is no opinion: the pack should charge from it.
+    house is no opinion, after the same dwell: the pack should charge from it.
     """
-    if cfg.backup_reserve_soc <= 0.0 or pv_surplus:
+    if cfg.backup_reserve_soc <= 0.0:
         return None
+    dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
+    if pv_surplus:
+        return prev if prev.engaged and now - prev.state_since < dwell else None
     reserve = cfg.kwh_to_pct(dp_common.reserve_wall_kwh(cfg))
     if soc <= reserve:
         return prev if prev.engaged else ExportState(engaged=True, state_since=now)
     if not prev.engaged:
         return None
-    dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
     if soc >= reserve + 1.0 and now - prev.state_since >= dwell:
         return ExportState(engaged=False, state_since=now)
     return prev

@@ -475,10 +475,13 @@ class TestBackupReserve:
         assert any(c[0] == "engage_and_charge" for c in act.calls)
 
         at += timedelta(hours=1)
-        await self._tick(monkeypatch, ctrl, hass, at, "32.0", window(4))
+        # The refill ends just over the reserve: the hold carries straight on, no release yet.
+        await self._tick(monkeypatch, ctrl, hass, at, "30.5", window(4))
+        assert [c[0] for c in act.calls].count("release_to_self") == 0
+        assert ctrl.hold_state.engaged
         await self._tick(monkeypatch, ctrl, hass, at + timedelta(minutes=20), "32.0", window(4))
         names = [c[0] for c in act.calls]
         assert names.count("release_to_self") == 1
         assert not ctrl.hold_state.engaged
-        # hold, charge, release: the work mode changes three times, not once per tick
-        assert len([n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]) <= 3
+        collapsed = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
+        assert collapsed == ["engage_hold", "engage_and_charge", "engage_hold", "release_to_self"]

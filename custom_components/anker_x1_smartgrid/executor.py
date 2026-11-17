@@ -146,6 +146,12 @@ async def run_floor_rescue(controller: Controller, now: datetime) -> float | Non
     return controller._actuator.last_setpoint_w
 
 
+def recent_deficits_w(controller: Controller, now: datetime) -> list[float]:
+    """House-load-minus-PV samples inside the hold's rolling window; empty when the load is stale."""
+    window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
+    return [w for t, w in controller._hold_deficit_w if now - t < window]
+
+
 def hold_values(
     controller: Controller,
     now: datetime,
@@ -176,8 +182,7 @@ def hold_values(
     if stored is not None:
         stored = optimize_mod.hold_stored_value(stored, _dp_out.get("terminal_segments"))
     price = resolution.price_at(slots, now, _slot_minutes)
-    window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
-    deficits = [w for t, w in controller._hold_deficit_w if now - t < window]
+    deficits = recent_deficits_w(controller, now)
     # The DP's own slot key when it published one: re-flooring `now` here can
     # land on the next slot and miss the current one entirely.
     _slot = _dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)
@@ -248,15 +253,14 @@ async def run_forcing_and_export(
         dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
         paused=new_plan.state is ControllerState.FORCING,
     )
+    # A forced charge only carries an engaged hold across: a refill ending just over the reserve hands straight back.
     if (
         controller.cfg.backup_reserve_soc > 0.0
         and inputs.soc is not None
-        and new_plan.state is not ControllerState.FORCING
-        and _dp_slot not in (_dp_out.get("export_request") or {})
+        and not controller.export_state.engaged
+        and (new_plan.state is not ControllerState.FORCING or _prev_hold.engaged)
     ):
-        _window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
-        _recent = [w for t, w in controller._hold_deficit_w if now - t < _window]
-        # The economic rule releases on its own clock; the dwell restarts from the reserve hold's own state.
+        _recent = recent_deficits_w(controller, now)
         _reserve_hold = scheduler.backup_reserve_hold(
             _prev_hold,
             soc=inputs.soc,
@@ -268,6 +272,8 @@ async def run_forcing_and_export(
         if _reserve_hold is not None and _reserve_hold.engaged:
             controller.hold_state = _reserve_hold
     _hold = controller.hold_state.engaged
+    _hold_state = controller.hold_state
+    _committed_slots = _dp_out.get("export_request") or {}
     controller.last_hold_values = (_discharge_v, _stored_v)
     if new_plan.state is ControllerState.FORCING:
         # Grid charging is grid import: bound the FORCING request by whichever
@@ -314,7 +320,9 @@ async def run_forcing_and_export(
     else:
         setpoint = 0.0
         # A hold re-engages at 0 W below; releasing first would just flap the workmode.
-        if controller.plan.state is ControllerState.FORCING and not _hold:
+        _released_for_forcing = False
+        if controller.plan.state is ControllerState.FORCING and not (_hold and _dp_slot not in _committed_slots):
+            _released_for_forcing = True
             await safe_release(
                 controller,
                 now,
@@ -549,11 +557,15 @@ async def run_forcing_and_export(
                     reset_before_release=True,
                 )
 
-        # Low-power hold: hold_values blocks on any planned or running export,
-        # so the export executor above never fires on a hold tick.
+        # A hold never overwrites an export that is actually written this tick; a planned export that
+        # does not fire leaves the hold standing.
+        if _hold and _export_setpoint_w is not None:
+            controller.hold_state = ExportState(engaged=False, state_since=now)
+            _hold = False
         if _hold:
             try:
                 await controller._actuator.engage_hold()
+                controller.hold_state = _hold_state
             except Exception:
                 _LOGGER.error("Actuator engage_hold failed (low-power hold)", exc_info=True)
                 await safe_release(
@@ -562,7 +574,7 @@ async def run_forcing_and_export(
                     "Actuator release_to_self failed (hold engage-failure recovery)",
                     reset_export=False,
                 )
-        elif _prev_hold.engaged and _export_setpoint_w is None:
+        elif _prev_hold.engaged and _export_setpoint_w is None and not _released_for_forcing:
             if not await safe_release(
                 controller, now, "Actuator release_to_self failed (hold exit)", reset_export=False
             ):
