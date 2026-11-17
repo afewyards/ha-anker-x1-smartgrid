@@ -1,8 +1,8 @@
-"""Tick phases that publish and persist per-tick state, moved out of ``Controller._tick_impl``."""
+"""Enabled-tick phases: re-publish observability keys, persist the decision and run the periodic jobs."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from . import calibration
@@ -89,3 +89,24 @@ def publish(
         "deadline": deadline.isoformat() if deadline else None,
         "planned_grid_hours": _grid_slots * (_slot_minutes / 60.0),
     }
+
+
+async def persist(controller: Controller, now: datetime) -> None:
+    """Write the decision snapshot, run the daily regret job and the 6-hourly purges."""
+    # A3b: persist decision snapshot to decisions table.
+    await controller._persist_decision_snapshot()
+
+    # A3b: daily regret job — run on first tick after LOCAL midnight, and
+    # also on first tick after restart (_last_regret_day is None).
+    await controller._backfill_regret(now)
+
+    if now.hour % 6 == 0 and now.hour != controller._last_purge_hour:
+        controller._last_purge_hour = now.hour
+        await controller._hass.async_add_executor_job(
+            controller._recorder.purge_older_than, now.isoformat(), controller.cfg.retention_days
+        )
+        # Purge stale decision rows on the same 6-hour schedule; else the
+        # decisions table grows at ~1440 rows/day indefinitely.
+        _cutoff = (now - timedelta(days=controller.cfg.retention_days)).isoformat()
+        await controller._hass.async_add_executor_job(controller._recorder.purge_decisions_older_than, _cutoff)
+        await controller._purge_plan_snapshots(now)

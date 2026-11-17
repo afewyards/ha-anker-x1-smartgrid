@@ -2289,23 +2289,7 @@ class Controller:
             horizon_mode=_horizon_mode_e,
         )
 
-        # A3b: persist decision snapshot to decisions table.
-        await self._persist_decision_snapshot()
-
-        # A3b: daily regret job — run on first tick after LOCAL midnight, and
-        # also on first tick after restart (_last_regret_day is None).
-        await self._backfill_regret(now)
-
-        if now.hour % 6 == 0 and now.hour != self._last_purge_hour:
-            self._last_purge_hour = now.hour
-            await self._hass.async_add_executor_job(
-                self._recorder.purge_older_than, now.isoformat(), self.cfg.retention_days
-            )
-            # Purge stale decision rows on the same 6-hour schedule; else the
-            # decisions table grows at ~1440 rows/day indefinitely.
-            _cutoff = (now - timedelta(days=self.cfg.retention_days)).isoformat()
-            await self._hass.async_add_executor_job(self._recorder.purge_decisions_older_than, _cutoff)
-            await self._purge_plan_snapshots(now)
+        await tick_publish.persist(self, now)
         required_kwh = max(0.0, (self.cfg.soc_target - inputs.soc) / 100.0 * self.cfg.capacity_kwh)
         # Full kWh required to reach soc_target from current SoC. Used as the
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
