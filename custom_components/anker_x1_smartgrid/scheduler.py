@@ -332,6 +332,12 @@ def decide_hold_state(
     return prev
 
 
+def backup_reserve_band(cfg: Config) -> tuple[float, float]:
+    """The planner's snapped backup reserve as SoC %, and the SoC % the reserve hold releases at."""
+    reserve = cfg.kwh_to_pct(dp_common.reserve_wall_kwh(cfg))
+    return reserve, reserve + 1.0
+
+
 def backup_reserve_hold(
     prev: ExportState,
     *,
@@ -353,11 +359,11 @@ def backup_reserve_hold(
     dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
     if pv_surplus:
         return prev if prev.engaged and now - prev.state_since < dwell else None
-    reserve = cfg.kwh_to_pct(dp_common.reserve_wall_kwh(cfg))
+    reserve, release = backup_reserve_band(cfg)
     if soc <= reserve:
         return prev if prev.engaged else ExportState(engaged=True, state_since=now)
     if not prev.engaged:
         return None
-    if soc >= reserve + 1.0 and now - prev.state_since >= dwell:
+    if soc >= release and now - prev.state_since >= dwell:
         return ExportState(engaged=False, state_since=now)
     return prev

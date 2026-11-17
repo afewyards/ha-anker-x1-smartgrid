@@ -1080,7 +1080,7 @@ def optimize_grid(
                 if chargeable is not None and not chargeable[h]:
                     max_grid_dc = (
                         min(max_grid_dc, max(0.0, reserve_kwh - soc_pass))
-                        if refill_ok is not None and refill_ok[h]
+                        if soc < reserve_kwh and refill_ok is not None and refill_ok[h]
                         else 0.0
                     )
                 if grid_charge_ceiling is not None:

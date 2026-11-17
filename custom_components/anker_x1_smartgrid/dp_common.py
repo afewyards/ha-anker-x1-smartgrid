@@ -98,10 +98,14 @@ def wall_import_kwh(soc_kwh: float, wall_kwh: float, firmware_floor_kwh: float, 
 
 
 def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float, reserve_kwh: float) -> float:
-    """Start SoC for the DP: a start at a real floor (firmware or reserve) must not bin below the snapped one."""
+    """Start SoC for the DP: a start at a real floor (firmware or reserve) must not bin below the snapped one.
+
+    A start up to one point under the reserve starts at it too: the executor holds the pack there,
+    so a small sag while held is not a shortfall to buy back.
+    """
     if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh:
         return firmware_floor_kwh
-    if cfg.backup_reserve_kwh <= soc0 < reserve_kwh:
+    if cfg.backup_reserve_kwh - cfg.pct_to_kwh(1.0) <= soc0 < reserve_kwh:
         return reserve_kwh
     return soc0
 

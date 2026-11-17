@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from statistics import fmean
 from typing import TYPE_CHECKING
 
-from . import const, coordinator, dp_common, energy, guard, optimize as optimize_mod, resolution, scheduler
+from . import const, coordinator, energy, guard, optimize as optimize_mod, resolution, scheduler
 from .decision import _build_is_cheap_by_hour
 from .models import ControllerState, ExportState, PlanState, PlantInputs, PriceSlot
 
@@ -264,7 +264,7 @@ async def run_forcing_and_export(
         _recent = recent_deficits_w(controller, now)
         _surplus = bool(_recent) and fmean(_recent) < 0.0
         _after_charge = controller.plan.state is ControllerState.FORCING
-        _band = controller.cfg.kwh_to_pct(dp_common.reserve_wall_kwh(controller.cfg)) + 1.0
+        _band = scheduler.backup_reserve_band(controller.cfg)[1]
         _reserve_hold = scheduler.backup_reserve_hold(
             ExportState(engaged=True, state_since=now)
             if _after_charge and not _surplus and inputs.soc < _band

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 import pytest
 
 from custom_components.anker_x1_smartgrid import dp_common
@@ -135,6 +137,64 @@ def test_start_at_off_grid_reserve_does_not_top_up():
     cfg = Config(capacity_kwh=20.48, backup_reserve_soc=25.0)
     res = _opt([0.0] * 12, [0.25] * 12, 25.0, cfg=cfg)
     assert res["schedule"] == [0.0] * 12
+
+
+@pytest.mark.parametrize("cap", [10.0, 20.48])
+def test_start_a_fraction_under_reserve_does_not_top_up(cap):
+    # The executor holds anywhere under reserve + 1, so a pack that sagged a little while held is not refilled.
+    cfg = Config(capacity_kwh=cap, backup_reserve_soc=30.0, idle_drain_w=100.0)
+    load, price = [0.5] * 12, [0.25] * 12
+    kw: dict = dict(water_value=0.12, chargeable=[False] * 12, refill_ok=[True] * 12)
+    assert _opt(load, price, 29.5, cfg=cfg, **kw)["schedule"] == [0.0] * 12
+    day = DayData(pv_kwh=(0.0,) * 12, load_kwh=tuple(load), price=tuple(price), soc_start=29.5)
+    assert hindsight_optimal_grid(day, cfg, terminal_mode="water_value", water_value=0.12)["schedule"] == [0.0] * 12
+    # The dead band is one point: further under, the pack still refills.
+    assert _charged_slots(_opt(load, price, 28.5, cfg=cfg, **kw)) == [0]
+
+
+def _closed_refill(cfg, soc_start, load, price, chargeable, **kw):
+    n = len(load)
+    kw = dict(window_start_h=0, window_len=n, terminal_mode="water_value", chargeable=chargeable, **kw)
+    args = ([0.0] * n, list(load), list(price), soc_start, cfg)
+    return optimize_grid(*args, **kw), optimize_grid(*args, refill_ok=[True] * n, **kw)
+
+
+_QUARTERS: dict = dict(water_value=0.05, dt_h=0.25, slots_per_day=96)
+# One 5 kW quarter at a negative price, in a slot the mask closes.
+_NEG_PRICE = [0.10, -0.02, 0.10] + [0.12] * 5
+
+
+def test_refill_ok_is_inert_without_reserve():
+    cfg = Config(capacity_kwh=20.48, idle_drain_w=100.0)
+    plain, refill = _closed_refill(cfg, 5.0, [0.3, 1.25] + [0.3] * 6, _NEG_PRICE, [False] * 8, **_QUARTERS)
+    assert refill == plain
+    rng = random.Random(1)
+    for _ in range(40):
+        eta = rng.choice([1.0, 0.92])
+        cfg = Config(
+            capacity_kwh=10.0,
+            eta_charge=eta,
+            round_trip_eff=eta * 0.9 if eta < 1.0 else 1.0,
+            idle_drain_w=rng.choice([0.0, 100.0]),
+        )
+        load = [rng.choice([0.3, 0.8, 1.5, 2.5]) for _ in range(12)]
+        price = [rng.choice([-0.05, 0.0, 0.1, 0.25, 0.4]) for _ in range(12)]
+        mask = [rng.random() < 0.3 for _ in range(12)]
+        plain, refill = _closed_refill(cfg, rng.choice([5.0, 6.0, 8.0, 15.0]), load, price, mask, water_value=0.1)
+        assert refill == plain
+
+
+@pytest.mark.parametrize(
+    ("cap", "quarter_kwh", "soc_start"),
+    [(20.48, 1.25, 30.0), (20.48, 1.25, 35.0), (10.0, 3.0, 30.0)],
+)
+def test_refill_ok_does_not_charge_a_pack_at_or_above_reserve(cap, quarter_kwh, soc_start):
+    # The wall already stops the pack at the reserve; a "charge" here would only buy house load at -0.02,
+    # the last case modelled down past the firmware floor.
+    cfg = Config(capacity_kwh=cap, backup_reserve_soc=30.0, idle_drain_w=100.0)
+    plain, refill = _closed_refill(cfg, soc_start, [0.3, quarter_kwh] + [0.3] * 6, _NEG_PRICE, [False] * 8, **_QUARTERS)
+    assert refill["schedule"] == [0.0] * 8
+    assert refill == plain
 
 
 def test_eur_excludes_penalties():
