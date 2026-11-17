@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from custom_components.anker_x1_smartgrid import const
-from custom_components.anker_x1_smartgrid import controller as controller_mod, tick_remote
+from custom_components.anker_x1_smartgrid import tick_inputs, tick_remote
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
@@ -1071,7 +1071,7 @@ async def test_late_starting_addon_fetched_on_the_tick_its_health_recovers():
 @pytest.mark.asyncio
 async def test_empty_weather_reads_capped_per_hour():
     ctrl = _make_controller(addon_enabled=True)
-    budget = controller_mod._MAX_WEATHER_READ_RETRIES
+    budget = tick_inputs._MAX_WEATHER_READ_RETRIES
 
     async def _no_weather(hass, data):
         return []

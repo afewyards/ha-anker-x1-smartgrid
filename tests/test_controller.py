@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta, UTC
 import pytest
 from custom_components.anker_x1_smartgrid.models import Config, PlanState, PlantInputs, PriceSlot, ControllerState
-from custom_components.anker_x1_smartgrid import controller, const, forecast
+from custom_components.anker_x1_smartgrid import controller, const, forecast, tick_inputs
 from custom_components.anker_x1_smartgrid.forecast import LoadPredictor
 from custom_components.anker_x1_smartgrid.hgbr import HGBRQuantileModel
 from tests.helpers import (
@@ -2290,7 +2290,7 @@ async def test_learned_model_unavailable_warns_once(monkeypatch, caplog):
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     ctrl.cfg = replace(ctrl.cfg, use_learned_model=True, addon_enabled=False)
-    monkeypatch.setattr(controller.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(tick_inputs.importlib.util, "find_spec", lambda name: None)
     with caplog.at_level("WARNING"):
         await ctrl.tick()
         await ctrl.tick()

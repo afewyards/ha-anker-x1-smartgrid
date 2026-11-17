@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-import importlib.util
 import json
 import logging
 import math
@@ -46,6 +45,7 @@ from . import (
     snapshot,
     soc_drift,
     tick_calibration,
+    tick_inputs,
     tick_publish,
     tick_remote,
     usecost,
@@ -107,10 +107,6 @@ _LIMIT_LOG_META = {
     const.CONF_MAX_CHARGE_W: ("max charge power", "W"),
     const.CONF_MAX_EXPORT_W: ("max export power", "W"),
 }
-
-# Same-hour retries of an EMPTY weather read (integration not populated yet
-# after boot), bounded for the same reason when the entity never fills.
-_MAX_WEATHER_READ_RETRIES = 5
 
 
 def _persist_iso_or_none(value: datetime | None) -> str | None:
@@ -1506,83 +1502,9 @@ class Controller:
         self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
         _first_tick = self._first_tick_after_start
         self._first_tick_after_start = False
-        # RACE 1: retry device-derived capacity/limit resolution while it
-        # hasn't genuinely landed yet (self-heals a HA-restart race where the
-        # anker_x1 entities weren't populated at config-entry setup). Runs
-        # regardless of self.enabled so a re-enable always sees correct cfg.
-        self._maybe_reresolve_anker()
-        # Refresh the measured efficiency curve off-loop (cached; cheap no-op most
-        # ticks). Skipped entirely when use_measured_eta is off (default) — the
-        # planner uses the static scalar; the curve rebuilds on the first tick after
-        # the flag is flipped on.
-        await self._refresh_efficiency_curve(now)
-        # Hour-gate: the hourly forecast changes at most hourly, and an unbounded
-        # await here (a hung weather integration) would otherwise wedge every 60 s
-        # tick with the inverter parked. Read once per clock-hour, plus up to
-        # _MAX_WEATHER_READ_RETRIES same-hour retries while the read comes back []
-        # (integration not populated yet after boot); keep the last good forecast
-        # on [].
-        _read_weather = now.hour != self._last_weather_hour
-        if _read_weather:
-            self._last_weather_hour = now.hour
-            self._weather_retries_left = _MAX_WEATHER_READ_RETRIES
-        elif self._weather_retries_left > 0 and not self._weather_forecast:
-            self._weather_retries_left -= 1
-            _read_weather = True
-        if _read_weather:
-            _fetched = await coordinator.read_hourly_weather_forecast(self._hass, self._data)
-            if _fetched:
-                self._weather_forecast = _fetched
-                self._weather_retries_left = 0
-        _wf_list = self._weather_forecast
-        _now_hour = resolution.hour_floor(now)
-        _weather_entry = coordinator.get_forecast_for_hour(_wf_list, _now_hour)
-        # Home-presence count for this tick (on-loop state reads).
-        _persons_home_now = coordinator.count_persons_home(self._hass, self._data)
-        self._persons_home_now = _persons_home_now
-        # Per-hour temperature map derived from the hourly weather forecast.
-        # Keys are hour-start UTC datetimes; values are temp_forecast (float | None).
-        # Passed to compute_decision so each forecast interval uses its own hourly
-        # temperature rather than the flat current-temperature scalar.
-        _temp_by_hour: dict[datetime, float | None] = {
-            resolution.hour_floor(e["datetime"]): e.get("temp_forecast")
-            for e in (_wf_list or [])
-            if e.get("datetime") is not None
-        }
+        gathered = await tick_inputs.gather(self, now)
 
-        # Hourly rollup: aggregate completed clock-hours into samples_hourly once per
-        # clock-hour, regardless of enabled/disabled state.  Guard against a missing
-        # recorder (partial initialisation or tests without one — the backfill sync path
-        # uses try/except, but here we guard explicitly to keep the tick clean).
-        if self._recorder is not None and now.hour != self._last_rollup_hour:
-            self._last_rollup_hour = now.hour
-            _hourly_cutoff = (now - timedelta(days=self.cfg.retention_hourly_days)).isoformat()
-            await self._hass.async_add_executor_job(self._rollup_hourly_sync, now.isoformat(), _hourly_cutoff)
-
-        # H3a: periodic WAL checkpoint so a read-only immutable reader (the addon,
-        # mounted config:ro) sees recent rows. Once per clock-hour, off-loop.
-        if self._recorder is not None and now.hour != self._last_wal_checkpoint_hour:
-            self._last_wal_checkpoint_hour = now.hour
-            await self._hass.async_add_executor_job(self._recorder.wal_checkpoint)
-
-        # A4: DEFAULT_USE_LEARNED_MODEL is True, but sklearn is NOT an integration
-        # requirement (musl is why the addon exists) and the addon defaults off — a
-        # stock install then silently falls back to the bucketed model forever.
-        if (
-            not self._learned_model_warned
-            and self.cfg.use_learned_model
-            and not self.cfg.addon_enabled
-            and importlib.util.find_spec("sklearn") is None
-        ):
-            self._learned_model_warned = True
-            _LOGGER.warning(
-                "use_learned_model is on but scikit-learn is unavailable in the "
-                "integration and the forecast add-on is disabled — falling back to "
-                "the bucketed load model. Enable the Anker X1 Forecast add-on to "
-                "use the learned model."
-            )
-
-        await tick_remote.refresh(self, now, _wf_list, _persons_home_now)
+        await tick_remote.refresh(self, now, gathered.wf_list, gathered.persons_home_now)
 
         if not self.enabled:
             inputs = self._read_plant_inputs()
@@ -1685,7 +1607,7 @@ class Controller:
                         export_price=_shadow_export_price,
                         export_price_matches_import=_shadow_export_matches_import,
                         export_slots=_shadow_export_slots,
-                        temp_by_hour=_temp_by_hour,
+                        temp_by_hour=gathered.temp_by_hour,
                         slot_minutes=_slot_minutes,
                         dp_out=_shadow_dp_out,
                         shadow=True,
@@ -1701,8 +1623,8 @@ class Controller:
                     _sample_inputs,
                     setpoint=0.0,
                     state="disabled",
-                    weather_entry=_weather_entry,
-                    persons_home=_persons_home_now,
+                    weather_entry=gathered.weather_entry,
+                    persons_home=gathered.persons_home_now,
                 )
 
             # Keep the predictor warming while disabled so the SoC/load curve
@@ -1770,7 +1692,7 @@ class Controller:
                     self.cfg,
                     today_watts=today_watts,
                     tomorrow_watts=tomorrow_watts,
-                    temp_by_hour=_temp_by_hour,
+                    temp_by_hour=gathered.temp_by_hour,
                     slot_minutes=_slot_minutes,
                     eta_curve=self._planner_curve(),
                 )
@@ -1801,7 +1723,9 @@ class Controller:
         sun_times = coordinator.read_sun_times(self._hass, self._data)
 
         if self._glitch_inputs is not None:
-            return await self._soc_glitch_tick(now, self._glitch_inputs, slots, _weather_entry, _persons_home_now)
+            return await self._soc_glitch_tick(
+                now, self._glitch_inputs, slots, gathered.weather_entry, gathered.persons_home_now
+            )
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
             if inputs is not None and (rescue_w := await self._run_floor_rescue_tick(now, inputs)) is not None:
@@ -1896,7 +1820,7 @@ class Controller:
             export_price=_export_price,
             export_price_matches_import=_export_matches_import,
             export_slots=_export_slots,
-            temp_by_hour=_temp_by_hour,
+            temp_by_hour=gathered.temp_by_hour,
             slot_minutes=_slot_minutes,
             dp_out=_dp_out,
             estimated_tomorrow=_estimated_tomorrow,
@@ -2040,13 +1964,13 @@ class Controller:
             inputs,
             setpoint=setpoint,
             state=_recorded_state,
-            weather_entry=_weather_entry,
+            weather_entry=gathered.weather_entry,
             export_setpoint_w=_export_setpoint_w,
             export_kwh=_export_kwh,
             reserve_kwh=_reserve_kwh_val,
             surplus_kwh=_surplus_kwh_val,
             house_load_w=_house_load_now_w,
-            persons_home=_persons_home_now,
+            persons_home=gathered.persons_home_now,
         )
 
         # Stash decision snapshot for persistence by the recorder writer (A3).
