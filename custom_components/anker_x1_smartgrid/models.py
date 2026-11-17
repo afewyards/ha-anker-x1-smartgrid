@@ -19,6 +19,7 @@ class ControllerState(str, Enum):  # noqa: UP042 -- StrEnum str()/format() diffe
 class Config:
     capacity_kwh: float = const.DEFAULT_CAPACITY_KWH
     soc_floor: float = const.DEFAULT_SOC_FLOOR
+    backup_reserve_soc: float = const.DEFAULT_BACKUP_RESERVE_SOC
     soc_target: float = const.DEFAULT_SOC_TARGET
     max_charge_w: float = const.DEFAULT_MAX_CHARGE_W
     eta_charge: float = const.DEFAULT_ETA_CHARGE
@@ -155,6 +156,10 @@ class Config:
     def floor_kwh(self) -> float:
         """Soft decision-margin SoC floor (DC kWh); see ``soc_floor``."""
         return self.pct_to_kwh(self.soc_floor)
+
+    @property
+    def backup_reserve_kwh(self) -> float:
+        return self.pct_to_kwh(self.backup_reserve_soc)
 
     @property
     def target_kwh(self) -> float:

@@ -192,3 +192,12 @@ def test_resolve_pv_power_entities_list_stored():
 def test_resolve_pv_power_entities_empty_falls_back_to_default():
     for data in ({const.CONF_ENT_PV_POWER: ""}, {const.CONF_ENT_PV_POWER: []}, {}):
         assert const.resolve_pv_power_entities(data) == [const.DEFAULT_ENTITIES[const.CONF_ENT_PV_POWER]]
+
+
+def test_backup_reserve_consts():
+    from custom_components.anker_x1_smartgrid import const
+
+    assert const.CONF_BACKUP_RESERVE_SOC == "backup_reserve_soc"
+    assert const.DEFAULT_BACKUP_RESERVE_SOC == 0.0
+    assert const.BACKUP_REFILL_URGENCY_EUR_PER_KWH_H == 0.01
+    assert const.BACKUP_SHORTFALL_EUR_PER_KWH == 1.0

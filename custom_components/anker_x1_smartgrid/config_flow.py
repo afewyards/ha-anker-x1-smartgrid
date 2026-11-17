@@ -161,6 +161,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
     ),
     SECTION_BATTERY: (
         const.CONF_SOC_FLOOR,
+        const.CONF_BACKUP_RESERVE_SOC,
         const.CONF_SOC_TARGET,
         const.CONF_ETA_CHARGE,
         const.CONF_ROUND_TRIP_EFF,
@@ -249,6 +250,11 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.CONF_SOC_FLOOR,
         const.DEFAULT_SOC_FLOOR,
         vol.All(vol.Coerce(float), vol.Range(min=const.FIRMWARE_SOC_FLOOR, max=50.0)),
+    ),
+    (
+        const.CONF_BACKUP_RESERVE_SOC,
+        const.DEFAULT_BACKUP_RESERVE_SOC,
+        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
     ),
     (const.CONF_ADDON_ENABLED, const.DEFAULT_ADDON_ENABLED, cv.boolean),
     (const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL, cv.string),
@@ -654,6 +660,13 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
                 const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET
             ):
                 errors["base"] = "soc_floor_above_target"
+            if (
+                not errors
+                and user_input.get(const.CONF_BACKUP_RESERVE_SOC, const.DEFAULT_BACKUP_RESERVE_SOC) > 0
+                and user_input.get(const.CONF_BACKUP_RESERVE_SOC, const.DEFAULT_BACKUP_RESERVE_SOC) + 1
+                >= user_input.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET) - 1
+            ):
+                errors["base"] = "backup_reserve_too_high"
             if (
                 not errors
                 and user_input.get(const.CONF_PRICE_MODE, merged.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE))

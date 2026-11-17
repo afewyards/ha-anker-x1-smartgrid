@@ -11,6 +11,7 @@ TICK_SECONDS = 60
 # Config keys
 CONF_CAPACITY_KWH = "capacity_kwh"
 CONF_SOC_FLOOR = "soc_floor"
+CONF_BACKUP_RESERVE_SOC = "backup_reserve_soc"
 CONF_SOC_TARGET = "soc_target"
 CONF_MAX_CHARGE_W = "max_charge_w"
 CONF_ETA_CHARGE = "eta_charge"
@@ -81,6 +82,10 @@ PRICE_MODE_STATIC = "static"
 # Defaults (spec §8)
 DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
+DEFAULT_BACKUP_RESERVE_SOC = 0.0
+BACKUP_REFILL_URGENCY_EUR_PER_KWH_H = 0.01
+# Above any price/eta, so a pack short of the reserve refills inside the plan.
+BACKUP_SHORTFALL_EUR_PER_KWH = 1.0
 DEFAULT_SOC_TARGET = 97.0
 FIRMWARE_SOC_FLOOR = 5.0  # X1 hardware floor (%): discharge stops here regardless of cfg.soc_floor
 # Discharging the bottom of the pack (firmware floor up to the band top) delivers only

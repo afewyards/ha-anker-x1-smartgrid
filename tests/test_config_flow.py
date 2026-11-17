@@ -1,5 +1,7 @@
 """Tests for Anker X1 SmartGrid config flow."""
 
+import pytest
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import EntitySelector
@@ -62,8 +64,8 @@ def test_sections_cover_all_option_fields():
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
     assert (
-        len(section_keys) == 69
-    )  # +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode, +4 calibration_*, +1 history_days
+        len(section_keys) == 70
+    )  # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode, +4 calibration_*, +1 history_days
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1899,6 +1901,65 @@ async def test_options_flow_saves_occupancy_wave_flags(hass):
     assert const.CONF_OCC_PERSISTENCE_H in entry.options
     assert const.CONF_CURRENT_HOUR_BLEND in entry.options
     assert const.CONF_LOAD_ADAPT_PARTIAL_HOUR in entry.options
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+# ---------------------------------------------------------------------------
+# Backup reserve option
+# ---------------------------------------------------------------------------
+
+
+def test_backup_reserve_config_default_off():
+    from custom_components.anker_x1_smartgrid.models import Config
+
+    cfg = Config(capacity_kwh=10.0)
+    assert cfg.backup_reserve_soc == 0.0
+    assert cfg.backup_reserve_kwh == 0.0
+    assert Config.from_dict({"capacity_kwh": 10.0, "backup_reserve_soc": 30.0}).backup_reserve_kwh == pytest.approx(3.0)
+
+
+def test_backup_reserve_in_tunables_and_section():
+    from custom_components.anker_x1_smartgrid.config_flow import _TUNABLES, OPTIONS_SECTIONS
+
+    validator = next(v for k, _d, v in _TUNABLES if k == const.CONF_BACKUP_RESERVE_SOC)
+    assert validator(0) == 0.0
+    assert validator(90) == 90.0
+    with pytest.raises(vol.Invalid):
+        validator(91)
+    with pytest.raises(vol.Invalid):
+        validator(-1)
+    assert any(const.CONF_BACKUP_RESERVE_SOC in keys for keys in OPTIONS_SECTIONS.values())
+
+
+async def test_options_flow_rejects_backup_reserve_too_high(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: 60.0, const.CONF_SOC_TARGET: 62.0}),
+    )
+    assert result2["type"] == "form"
+    assert result2["errors"] == {"base": "backup_reserve_too_high"}
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_flow_backup_reserve_saved_and_zero_accepted(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    res = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: 30.0})
+    )
+    assert res["type"] == "create_entry"
+    assert entry.options[const.CONF_BACKUP_RESERVE_SOC] == 30.0
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    res = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: 0.0, const.CONF_SOC_TARGET: 10.0, const.CONF_SOC_FLOOR: 5.0}),
+    )
+    assert res["type"] == "create_entry"
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

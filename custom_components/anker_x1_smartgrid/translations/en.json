@@ -69,6 +69,7 @@
             "description": "State-of-charge margins, efficiencies and charge economics.",
             "data": {
               "soc_floor": "SoC floor (%)",
+              "backup_reserve_soc": "Backup reserve (%)",
               "soc_target": "SoC target (%)",
               "eta_charge": "Charge efficiency",
               "round_trip_eff": "Round-trip efficiency",
@@ -87,6 +88,7 @@
               "calibration_dwell_h": "Calibration dwell (hours)"
             },
             "data_description": {
+              "backup_reserve_soc": "Keep this much of the battery back for power cuts. The planner will not spend it on the house or on export, and refills it in cheap slots. 0 disables. Use 30 or more, above the backup reserve set in the Anker app.",
               "soc_floor": "Soft minimum state of charge the planner protects. The firmware enforces a hard 5% floor below this. Default 5.",
               "soc_target": "State of charge the planner aims for in cheap hours. Default 97.",
               "eta_charge": "One-way AC→battery charging efficiency (0.5–1.0), used while measured efficiency is off. Default 0.92.",
@@ -226,6 +228,7 @@
     "error": {
       "anker_roles_missing": "The selected device is missing required entities (SoC, battery power, setpoint, work mode or Modbus control). Pick a device from the Anker X1 integration, and enable its control entities in the Anker device page.",
       "soc_floor_above_target": "SoC floor must be below SoC target.",
+      "backup_reserve_too_high": "Backup reserve must be more than 2 points below SoC target.",
       "static_import_price_required": "Static mode needs a positive import price.",
       "static_offpeak_price_required": "Set a positive off-peak price, or clear the off-peak hours.",
       "static_offpeak_hours_invalid": "Off-peak hours must be comma-separated HH:MM-HH:MM ranges."
