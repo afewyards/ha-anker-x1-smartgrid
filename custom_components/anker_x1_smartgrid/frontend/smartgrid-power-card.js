@@ -133,6 +133,14 @@ svg { display: block; }
 .lg { display: flex; flex-wrap: wrap; column-gap: 10px; color: var(--sg-dim); margin-top: 2px; line-height: 1.5; }
 .lg > span { white-space: nowrap; }
 .lg svg { display: inline-block; vertical-align: -1px; margin: 0 2px 0 5px; }
+.lgg { display: grid; grid-template-columns: max-content 1fr; column-gap: 10px; row-gap: 1px; }
+.lgg > b { font-weight: 400; color: var(--sg-ink); }
+.lgg > span { display: flex; flex-wrap: wrap; column-gap: 11px; white-space: normal; }
+.lgg > span > span { white-space: nowrap; }
+.lgg svg { margin: 0 4px 0 0; }
+.lgg .n { grid-column: 2; }
+.fc { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sg-rule); color: var(--sg-dim); }
+.fc b { font-weight: 500; color: var(--sg-ink); }
 .empty { font-size: 14px; color: var(--sg-dim); padding: 8px 0; }
 .ink { fill: var(--sg-ink); } .dim { fill: var(--sg-dim); }
 .rule { stroke: var(--sg-rule); }
@@ -328,12 +336,38 @@ function ticks(date, i, { X, tz }, lo, y) {
   }
   return s;
 }
-const LEGEND = `<div class="lg dm">
-<span>price${swatch('sw charge')}charge${swatch('sw house')}to house${swatch('sw export')}export${swatch('sw idle', 1.5)}idle, hold<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>held</span>
-<span>bars on the price line: grid kWh in (up), sold (down)</span>
-<span>grid kWh${swatch('gh', 9)}house${swatch('gb', 9)}battery to house</span>
-<span>${stroke('uo')}use${stroke('so')}sun · faint: plan · bar lengths compressed, peak hour labelled</span>
+const HELD = '<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>';
+const LEGEND = `<div class="lg lgg dm">
+<b>price line</b><span><span>${swatch('sw charge')}charge</span><span>${swatch('sw house')}to house</span><span>${swatch('sw export')}export</span><span>${swatch('sw idle', 1.5)}idle, hold</span><span>${HELD}held</span></span>
+<b>bars on it</b><span><span>${swatch('gc', 9)}up: bought from grid</span><span>${swatch('go', 9)}down: sold</span></span>
+<b>house</b><span><span>${swatch('gh', 9)}from grid</span><span>${swatch('gb', 9)}from battery</span><span>${stroke('uo')}use</span><span>${stroke('so')}sun</span></span>
+<span class="n">Faint is planned. Bars are compressed; the peak hour shows its kWh.</span>
 </div>`;
+function forecastLine(st, tz) {
+  if (!st || st.state === 'unavailable' || st.state === 'unknown') return '';
+  const a = st.attributes || {};
+  const imp = num(a.addon_improvement_pct);
+  const origins = num(a.addon_origins_24h);
+  const t = Date.parse(a.addon_last_trained);
+  const at = Number.isNaN(t) ? '' : `${Date.now() - t > 36 * H ? `${weekday(t, tz)} ` : ''}${clock(t, tz)}`;
+  const base = 'House use forecast: ';
+  const avg = `${base}hour averages.`;
+  let html;
+  if (a.addon_promoted === true && st.state === 'remote') {
+    html = `${base}<b>learned model</b>${imp === null ? '' : `, <span class="pos">${fx(imp, 1)}% closer than hour averages</span>${origins === null ? '' : ` in last night's replay of ${origins} days`}`}${at ? `, trained ${at}` : ''}.`;
+  } else if (a.addon_configured === true && a.addon_reachable === false) {
+    html = `<span class="neg">${avg}</span> Learned model unreachable.`;
+  } else if (a.addon_promoted === true) {
+    html = `<span class="neg">${avg}</span> Learned model ready, not picked up yet.`;
+  } else if (a.addon_ready === true) {
+    const h24 = num(a.addon_h24_mae);
+    const b24 = num(a.addon_baseline_h24_mae);
+    html = h24 !== null && b24 !== null && b24 > 0 && h24 > b24
+      ? `${avg} Learned model held back: ${imp !== null && imp > 0 ? `${fx(imp, 1)}% closer per hour, ` : ''}${Math.round((h24 - b24) / b24 * 100)}% worse over 24 h in replay.`
+      : `${avg} Learned model not ahead yet${imp === null ? '' : ` (${fx(imp, 1)}% in replay)`}.`;
+  } else html = avg;
+  return `<div class="fc dm">${html}</div>`;
+}
 const DEBUG_FAIL = '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
 const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'sun']];
 const DEBUG_LEGEND = {
@@ -590,9 +624,10 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', debug: false, ...config };
+    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', model: 'sensor.smartgrid_active_load_model', debug: false, ...config };
     this._state = this._hass ? this._hass.states[this._cfg.entity] : null;
     this._sw = this._hass ? this._hass.states[this._cfg.switch] : null;
+    this._model = this._hass ? this._hass.states[this._cfg.model] : null;
     this._dbg = { for: null, data: null, err: null };
     if (this._cfg.debug) this._fetch();
     this._drawn = null;
@@ -620,13 +655,15 @@ class SmartgridPowerCard extends HTMLElement {
     if (!this._cfg) return;
     const s = hass.states[this._cfg.entity];
     const sw = hass.states[this._cfg.switch];
-    if (s === this._state && sw === this._sw) return;
+    const m = hass.states[this._cfg.model];
+    if (s === this._state && sw === this._sw && m === this._model) return;
     if (sw !== this._sw) {
       this._pending = null;
       clearTimeout(this._pendingTimer);
     }
     this._state = s;
     this._sw = sw;
+    this._model = m;
     if (this._cfg.debug) this._fetch();
     this._render();
   }
@@ -759,8 +796,8 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel && d.view === this._view) return;
-    this._drawn = { st: this._state, sw: this._sw, pend: this._pending, width, dbg: this._dbg, sel: this._sel, view: this._view };
+    if (d && d.st === this._state && d.sw === this._sw && d.model === this._model && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel && d.view === this._view) return;
+    this._drawn = { st: this._state, sw: this._sw, model: this._model, pend: this._pending, width, dbg: this._dbg, sel: this._sel, view: this._view };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
     const refocus = ae && (ae.dataset.view ? `[data-view="${ae.dataset.view}"]` : ['[role=switch]', '.dsel'].find((q) => ae.matches(q)));
@@ -857,6 +894,7 @@ class SmartgridPowerCard extends HTMLElement {
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
+      forecastLine(this._model, tz) +
       dbg +
       '<div class="tip" hidden></div></div>'
     );

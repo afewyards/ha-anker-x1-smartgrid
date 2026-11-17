@@ -5,6 +5,7 @@
 <!--
   Fixture page for the power card, not served by Home Assistant.
   ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail|debug-gap|debug-mixed|debug-stale|debug-throw  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
+  ?model=active|unreachable|waiting|gate|gate-thin|off|missing  the stubbed sensor.smartgrid_active_load_model (default active); checks the forecast line under the legend
   ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan, each hour's reason and the slots' grid cost (debug-empty: no plan stored, no past reasons, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan and no export price in export hours, debug-mixed: yesterday's plan in hourly slots, debug-stale: stale inputs, debug-throw: an answer the inspector cannot format)
   ?view=cost|use|sun  with debug, presses that panel switch (cost is the default) and checks it reads pressed
   ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed (today 14 and 15: selling blocked by the reserve, a rule; past hours: a stored reason)
@@ -372,6 +373,13 @@
   if (CASE !== 'missing' && CASE !== 'noswitch') {
     states['switch.smartgrid_enabled'] = { state: CASE === 'disabled' ? 'off' : 'on', attributes: { friendly_name: 'SmartGrid enabled' } };
   }
+  const MODEL = q.get('model') || 'active';
+  if (MODEL !== 'missing') {
+    const on = { addon_configured: true, addon_reachable: true, addon_ready: true, addon_promoted: true, addon_improvement_pct: 4.6, addon_origins_24h: 16, addon_last_trained: iso(midnight(TODAY) + 3 * H + 10 * 60e3) };
+    const by = { active: ['remote', on], unreachable: ['hour_mean', { ...on, addon_reachable: false, addon_promoted: false }], waiting: ['hour_mean', on], gate: ['hour_mean', { ...on, addon_promoted: false, addon_improvement_pct: 6.0, addon_h24_mae: 2.71, addon_baseline_h24_mae: 2.29 }], 'gate-thin': ['hour_mean', { ...on, addon_promoted: false, addon_improvement_pct: 1.2 }], off: ['hour_mean', { addon_configured: false }] };
+    states['sensor.smartgrid_active_load_model'] = { state: by[MODEL][0], attributes: by[MODEL][1] };
+  }
+  window.MODEL = MODEL;
   window.CALLS = [];
   window.WS = [];
   const callWS = (msg) => {
@@ -423,6 +431,9 @@
       card.hass = { ...window.HASS };
       STATUS.rerender = inner() === before ? 'same state: no re-render' : 'same state: RE-RENDERED';
       // Debug off must never ask the websocket; on, it asks once per state.
+      const fc = card.shadowRoot.querySelector('.fc');
+      const want = { active: 'learned model', unreachable: 'unreachable', waiting: 'not picked up', gate: ['held back', '18% worse'], 'gate-thin': 'not ahead yet', off: 'hour averages' }[MODEL];
+      if (!card.shadowRoot.querySelector('.chart')) {} else if (MODEL === 'missing' ? fc : !fc || ![].concat(want).every((w) => fc.textContent.includes(w))) console.error(`forecast line wrong for model=${MODEL}: ${fc ? fc.textContent : 'absent'}`);
       STATUS.ws = window.DEBUG ? `callWS ${WS.length}` : WS.length ? 'callWS CALLED WITH DEBUG OFF' : '';
       showStatus();
       if (HOVER.at) point(card);
