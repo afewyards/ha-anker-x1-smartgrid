@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 from . import const
 from .interp import MidpointLinear

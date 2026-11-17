@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util

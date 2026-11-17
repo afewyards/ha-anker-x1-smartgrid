@@ -6,7 +6,7 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 from .const import TICK_SECONDS
 from .dataquality import house_load_w as _house_load_w

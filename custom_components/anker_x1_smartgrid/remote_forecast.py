@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 from . import const
 from .resolution import hour_floor

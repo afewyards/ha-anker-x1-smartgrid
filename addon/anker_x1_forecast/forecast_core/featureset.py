@@ -56,7 +56,6 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Union
 
 import holidays as holidays_lib
 

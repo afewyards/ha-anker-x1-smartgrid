@@ -12,7 +12,7 @@ byte-identical planning).  Pure module: no HA imports, no I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 
 from . import featureset
