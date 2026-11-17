@@ -939,3 +939,110 @@ def test_hold_weighs_the_kept_kwh_at_its_terminal_credit(monkeypatch):
     assert captured["hold"] == [True, True, False]
     dp_out = {"water_value": 0.25, "terminal_segments": segs, "held_slots": frozenset({T})}
     assert _values(dp_out=dp_out)[1] == pytest.approx(0.40)
+
+
+# ── backup reserve hold ─────────────────────────────────────────────────────
+
+
+def _reserve_hold(prev, soc, *, surplus=False, now=T, cap=10.0, reserve=30.0):
+    cfg = Config(capacity_kwh=cap, backup_reserve_soc=reserve, export_dwell_min=15)
+    return scheduler.backup_reserve_hold(prev, soc=soc, pv_surplus=surplus, now=now, cfg=cfg)
+
+
+def test_backup_hold_table():
+    idle = ExportState(engaged=False, state_since=T - timedelta(hours=1))
+    since = T - timedelta(minutes=5)
+    on = ExportState(engaged=True, state_since=since)
+    assert scheduler.backup_reserve_hold(idle, soc=20.0, pv_surplus=False, now=T, cfg=Config()) is None
+    assert _reserve_hold(idle, 30.0) == ExportState(engaged=True, state_since=T)
+    assert _reserve_hold(on, 20.0) == on
+    assert _reserve_hold(idle, 30.4) is None
+    assert _reserve_hold(on, 30.4) == on
+    assert _reserve_hold(on, 31.0) == on  # inside the dwell
+    assert _reserve_hold(on, 31.0, now=T + timedelta(minutes=11)) == ExportState(
+        engaged=False, state_since=T + timedelta(minutes=11)
+    )
+    assert _reserve_hold(on, 20.0, surplus=True) is None
+    assert _reserve_hold(idle, 20.0, surplus=True) is None
+
+
+def test_backup_hold_uses_the_snapped_reserve():
+    # 25 % of 20.48 kWh snaps up to ~25.15 %: the planner parks there, so the hold must too.
+    idle = ExportState(engaged=False, state_since=T - timedelta(hours=1))
+    assert _reserve_hold(idle, 25.1, cap=20.48, reserve=25.0) is not None
+    assert _reserve_hold(idle, 25.3, cap=20.48, reserve=25.0) is None
+
+
+def _reserve_ctrl(*, load=250.0, held=frozenset(), **cfg_over):
+    ctrl, act = _exec_ctrl(**cfg_over)
+    ctrl.cfg = replace(ctrl.cfg, backup_reserve_soc=30.0, capacity_kwh=10.0, export_dwell_min=15)
+    ctrl._hold_deficit_w.clear()
+    if load is not None:
+        ctrl._hold_deficit_w.append((T, load))
+    ctrl._held = held
+    return ctrl, act
+
+
+async def _run_at(ctrl, soc, *, new_state=ControllerState.PASSIVE, export=None, now=T):
+    return await executor.run_forcing_and_export(
+        ctrl,
+        now,
+        PlanState(new_state, now, ()),
+        PlantInputs(soc=soc, meter_w=250.0, now=now),
+        _SLOTS,
+        {"water_value": 0.25, "held_slots": ctrl._held, "export_request": export or {}},
+        [],
+        60,
+        None,
+        250.0,
+    )
+
+
+async def test_executor_holds_at_reserve():
+    ctrl, act = _reserve_ctrl()  # the DP declined: held_slots is empty
+    await _run_at(ctrl, 29.0)
+    assert act.calls == [("engage_hold",)]
+    assert ctrl.hold_state.engaged
+
+
+async def test_executor_no_hold_with_pv_surplus():
+    ctrl, act = _reserve_ctrl(load=-400.0)
+    await _run_at(ctrl, 20.0)
+    assert act.calls == []
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_forcing_wins_under_reserve():
+    ctrl, act = _reserve_ctrl()
+    await _run_at(ctrl, 20.0, new_state=ControllerState.FORCING)
+    assert [c[0] for c in act.calls] == ["engage_and_charge"]
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_planned_export_not_overwritten():
+    ctrl, act = _reserve_ctrl()
+    ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(hours=1))
+    await _run_at(ctrl, 30.5, export={T: 3000.0})
+    assert not any(c[0] == "engage_hold" for c in act.calls)
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_stale_load_holds():
+    ctrl, act = _reserve_ctrl(load=None)
+    ctrl._hold_deficit_w.append((T - timedelta(minutes=30), -900.0))
+    await _run_at(ctrl, 29.0)
+    assert act.calls == [("engage_hold",)]
+
+
+async def test_executor_reserve_hold_releases_once_after_dwell():
+    ctrl, act = _reserve_ctrl()
+    await _run_at(ctrl, 29.0)
+    later = T + timedelta(minutes=5)
+    ctrl._hold_deficit_w.append((later, 250.0))
+    await _run_at(ctrl, 32.0, now=later)  # above the band, still inside the dwell
+    assert act.calls == [("engage_hold",), ("engage_hold",)]
+    done = T + timedelta(minutes=20)
+    ctrl._hold_deficit_w.append((done, 250.0))
+    await _run_at(ctrl, 32.0, now=done)
+    assert act.calls[2:] == [("release_to_self",)]
+    assert not ctrl.hold_state.engaged

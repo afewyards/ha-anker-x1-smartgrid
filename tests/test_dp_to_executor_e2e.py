@@ -434,3 +434,51 @@ class TestAntiFightExportWinsOverStaleForcing:
         assert not any(c[0] == "engage_and_charge" for c in act.calls), (
             "export must win outright — no engage_and_charge this tick"
         )
+
+
+# ---------------------------------------------------------------------------
+# Case 5 — backup reserve (real DP → hold under the reserve, refill, one release)
+# ---------------------------------------------------------------------------
+
+
+class TestBackupReserve:
+    BASE = datetime(2026, 6, 25, 20, 0, tzinfo=UTC)
+
+    async def _tick(self, monkeypatch, ctrl, hass, at, soc, prices):
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: at)
+        _seed_common(hass, at, soc=soc, export_price="0.0")
+        _seed_price_forecast(hass, at, prices)
+        await ctrl.tick()
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_holds_until_the_cheap_slot_refills_then_releases_once(self, monkeypatch):
+        hass = StubHass()
+        ctrl, act = _make_controller(
+            hass, cfg_overrides={"backup_reserve_soc": 30.0, "enable_export": False, "export_dwell_min": 15}
+        )
+        ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+        ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
+        prices = [0.30, 0.30, 0.30, 0.02] + [0.30] * 8
+
+        def window(h):
+            return prices[h:] + [0.30] * h
+
+        for h in (0, 1, 2):
+            await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=h), "12.0", window(h))
+            assert ctrl.plan.state is not ControllerState.FORCING
+        assert [c[0] for c in act.calls] == ["engage_hold"] * 3
+
+        at = self.BASE + timedelta(hours=3)
+        await self._tick(monkeypatch, ctrl, hass, at, "12.0", window(3))
+        assert ctrl.plan.state is ControllerState.FORCING
+        assert any(c[0] == "engage_and_charge" for c in act.calls)
+
+        at += timedelta(hours=1)
+        await self._tick(monkeypatch, ctrl, hass, at, "32.0", window(4))
+        await self._tick(monkeypatch, ctrl, hass, at + timedelta(minutes=20), "32.0", window(4))
+        names = [c[0] for c in act.calls]
+        assert names.count("release_to_self") == 1
+        assert not ctrl.hold_state.engaged
+        # hold, charge, release: the work mode changes three times, not once per tick
+        assert len([n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]) <= 3

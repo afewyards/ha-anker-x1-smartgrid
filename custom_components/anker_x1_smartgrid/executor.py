@@ -248,6 +248,25 @@ async def run_forcing_and_export(
         dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
         paused=new_plan.state is ControllerState.FORCING,
     )
+    if (
+        controller.cfg.backup_reserve_soc > 0.0
+        and inputs.soc is not None
+        and new_plan.state is not ControllerState.FORCING
+        and _dp_slot not in (_dp_out.get("export_request") or {})
+    ):
+        _window = timedelta(minutes=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN)
+        _recent = [w for t, w in controller._hold_deficit_w if now - t < _window]
+        # The economic rule releases on its own clock; the dwell restarts from the reserve hold's own state.
+        _reserve_hold = scheduler.backup_reserve_hold(
+            _prev_hold,
+            soc=inputs.soc,
+            pv_surplus=bool(_recent) and fmean(_recent) < 0.0,
+            now=now,
+            cfg=controller.cfg,
+            slot_minutes=_slot_minutes,
+        )
+        if _reserve_hold is not None and _reserve_hold.engaged:
+            controller.hold_state = _reserve_hold
     _hold = controller.hold_state.engaged
     controller.last_hold_values = (_discharge_v, _stored_v)
     if new_plan.state is ControllerState.FORCING:

@@ -7,7 +7,7 @@ import math
 import statistics
 from datetime import datetime, timedelta
 
-from . import const
+from . import const, dp_common
 from .models import Config, ControllerState, ExportState, ForecastInterval, PlanState, PriceSlot
 from .regret import _eta_charge_at, _eta_discharge_at
 
@@ -329,4 +329,33 @@ def decide_hold_state(
         return prev
     if dp_holds and discharge_value < stored_value:
         return ExportState(engaged=True, state_since=now)
+    return prev
+
+
+def backup_reserve_hold(
+    prev: ExportState,
+    *,
+    soc: float,
+    pv_surplus: bool,
+    now: datetime,
+    cfg: Config,
+    slot_minutes: int = 60,
+) -> ExportState | None:
+    """Hold state that keeps the pack at the backup reserve; ``None`` = no opinion.
+
+    Engages at once at or under the planner's snapped reserve and releases only
+    once SoC is a full point above it and ``export_dwell_min`` has run, so a
+    pack hovering at the reserve cannot flap the work mode. PV covering the
+    house is no opinion: the pack should charge from it.
+    """
+    if cfg.backup_reserve_soc <= 0.0 or pv_surplus:
+        return None
+    reserve = cfg.kwh_to_pct(dp_common.reserve_wall_kwh(cfg))
+    if soc <= reserve:
+        return prev if prev.engaged else ExportState(engaged=True, state_since=now)
+    if not prev.engaged:
+        return None
+    dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
+    if soc >= reserve + 1.0 and now - prev.state_since >= dwell:
+        return ExportState(engaged=False, state_since=now)
     return prev
