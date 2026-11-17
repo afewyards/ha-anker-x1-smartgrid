@@ -236,11 +236,11 @@ DEFAULT_ENABLE_EXPORT = True
 DEFAULT_MAX_EXPORT_W = 6000.0
 DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0  # configurable grid-connection cap
 # Import-side mirror of DEFAULT_GRID_EXPORT_LIMIT_W: the grid connection's own
-# rating, independent of the (now device-derived, per-install) inverter charge
-# rate.  17250 W = 3-phase 25A x 230V, a generous default connection size so
-# it stays inert (never binds) unless the user narrows it. See
-# regret._max_grid_dc for where this is applied (grid remainder only, not
-# solar-absorbed charge).
+# rating (TOTAL meter import: grid charge + net house draw), independent of the
+# (now device-derived, per-install) inverter charge rate.  17250 W = 3-phase
+# 25A x 230V, a generous default connection size so it stays inert at ordinary
+# house loads unless the user narrows it. See energy.grid_charge_request_w
+# (solar-absorbed charge is never bounded by it).
 DEFAULT_GRID_IMPORT_LIMIT_W = 17250.0
 DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.10  # battery cycle degradation cost (€/kWh stored)
 # Two-sided surplus hysteresis band (mirrors decide_state's eps_lo/eps_hi)

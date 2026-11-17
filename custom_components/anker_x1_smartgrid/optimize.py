@@ -1073,7 +1073,8 @@ def optimize_grid(
             # path.  In the drain case (net<0) the clamp only RAISES soc_after,
             # which these raw-based quantities deliberately do not see.
             for held_kwh, soc_pass in hold_options:
-                max_grid_dc = _max_grid_dc(soc, soc_pass, cfg, dt_h, eta_curve=eta_curve)
+                # A held slot buys the house from the meter, so it shares the connection with the charge.
+                max_grid_dc = _max_grid_dc(soc, soc_pass, cfg, dt_h, eta_curve=eta_curve, house_import_kwh=held_kwh)
                 # Action mask: block grid charge when this hour is not chargeable.
                 # g_dc=0 (no-charge transition) is still evaluated so the battery
                 # can discharge naturally; only g_dc>0 steps are suppressed.

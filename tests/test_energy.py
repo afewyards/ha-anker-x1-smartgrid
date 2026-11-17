@@ -306,3 +306,16 @@ def test_reserve_curve_raises_for_lower_low_power_eta():
     now = datetime(2026, 7, 1, 22, 0, 0)
     ivs = [ForecastInterval(datetime(2026, 7, 1, 22, 0, 0), 0.0, 600.0, 4.0)]
     assert ride_out_reserve_kwh(now, ivs, cfg, eta_curve=curve) > ride_out_reserve_kwh(now, ivs, cfg)
+
+
+def test_grid_charge_request_leaves_room_for_house_draw():
+    cfg = Config(max_charge_w=11000.0, grid_import_limit_w=12000.0)
+    assert energy.grid_charge_request_w(cfg, 1300.0) == 10700.0
+    # HVAC kicks on (+4 kW): the charge gives the house its 4 kW.
+    assert energy.grid_charge_request_w(cfg, 5300.0) == 6700.0
+    assert energy.grid_charge_request_w(cfg, 13000.0) == 0.0
+    assert energy.grid_charge_request_w(cfg, 0.0) == 11000.0
+
+
+def test_grid_charge_request_default_limit_does_not_bind():
+    assert energy.grid_charge_request_w(Config(max_charge_w=11000.0), 1300.0) == 11000.0

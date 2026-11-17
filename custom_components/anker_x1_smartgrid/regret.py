@@ -176,6 +176,7 @@ def _max_grid_dc(
     dt_h: float = 1.0,
     *,
     eta_curve=None,
+    house_import_kwh: float = 0.0,
 ) -> float:
     """Max DC grid charge for one hour under the two-cap structure (inverter + grid).
 
@@ -189,9 +190,13 @@ def _max_grid_dc(
          import, so it always gets the full inverter rate.
       2. The GRID connection's own rating (cfg.grid_import_limit_w) additionally
          bounds only the remainder actually pulled from the grid. A connection
-         wider than the inverter (the default) never binds here; a connection
-         narrower than the inverter clips the grid portion but never touches
-         solar_ac_used.
+         wider than the inverter plus ``house_import_kwh`` never binds here; a
+         narrower one clips the grid portion but never touches
+         solar_ac_used. The limit is TOTAL meter import, but the load leg of
+         _apply_solar_load already drains the house deficit from the pack, so
+         that deficit sits inside the grid charge and is not subtracted again;
+         only house energy bought from the meter outside it
+         (``house_import_kwh``, the DP's held branch) shares the connection.
     Finally, headroom to soc_target bounds whichever of the two is tighter.
 
     soc_kwh / soc_after_kwh are DC kWh before / after the solar-load step
@@ -206,7 +211,7 @@ def _max_grid_dc(
     remaining_ac = max(0.0, rate_kwh_slot - solar_ac_used)
     # Grid-connection cap applies ONLY to this remaining (grid) AC — solar_ac_used
     # above already carries the full inverter rate and is untouched by it.
-    grid_import_cap_kwh_slot = cfg.grid_import_limit_w / 1000.0 * dt_h
+    grid_import_cap_kwh_slot = cfg.grid_import_limit_w / 1000.0 * dt_h - house_import_kwh
     grid_ac = min(remaining_ac, grid_import_cap_kwh_slot)
     return max(0.0, min(grid_ac * eta, target_kwh - soc_after_kwh))
 

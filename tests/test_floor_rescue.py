@@ -111,6 +111,46 @@ async def test_rescue_overrides_master_switch_off():
 
 
 @pytest.mark.asyncio
+async def test_rescue_leaves_room_for_house_load():
+    """The rescue is grid import too: total meter import stays within grid_import_limit_w."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, max_charge_w=6000.0, grid_import_limit_w=6000.0)
+    ctrl.enabled = False
+    seed_valid_inputs(hass, soc="4.0")
+    hass.set_state("sensor.pv_power", "0.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.meter_power", "2000.0")
+
+    await ctrl.tick()
+
+    assert _engages(act) == [-4000.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["disabled", "failsafe"])
+async def test_rescue_at_zero_headroom_stays_engaged(path):
+    """The house alone fills the connection: the rescue holds at 0 W instead of releasing every tick."""
+    hass = StubHass()
+    ctrl, act = make_controller(hass)
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, max_charge_w=6000.0, grid_import_limit_w=6000.0)
+    seed_valid_inputs(hass, soc="4.0")
+    hass.set_state("sensor.battery_power", "0.0")
+    hass.set_state("sensor.meter_power", "7000.0")
+    if path == "disabled":
+        ctrl.enabled = False
+    else:
+        hass.set_state("sensor.price", "unavailable")
+
+    for _ in range(3):
+        await ctrl.tick()
+
+    assert _engages(act) == [0.0] * 3
+    assert not any(c[0] == "release_to_self" for c in act.calls)
+    assert ctrl.plan.state is ControllerState.FORCING
+
+
+@pytest.mark.asyncio
 async def test_master_switch_off_above_floor_stays_hands_off():
     """Above the floor a disabled controller behaves exactly as before."""
     hass = StubHass()

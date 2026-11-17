@@ -1881,3 +1881,30 @@ def test_plan_parks_at_the_snapped_reserve_on_a_20_kwh_pack():
     snapped = cfg.kwh_to_pct(reserve_wall_kwh(cfg))
     assert snapped > 25.0
     assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12)) == pytest.approx(snapped, abs=0.05)
+
+
+def test_grid_import_limit_w_leaves_room_for_house_draw():
+    """The connection also carries the house's net draw, so the grid bar shows only what is left."""
+    cfg = Config(capacity_kwh=40.0, soc_target=100.0, max_charge_w=11000.0, eta_charge=1.0, grid_import_limit_w=12000.0)
+    slots = _slots(1)
+    intervals = [ForecastInterval(BASE, pv_w=1000.0, load_w=6300.0, dt_h=1.0)]
+    out = plan.build_plan_horizon(slots, intervals, [BASE], 0.0, BASE + timedelta(hours=1), cfg)
+    assert out[0]["grid_charge_w"] == 6700.0
+
+
+def test_delivered_grid_charge_is_not_clipped_by_the_forecast_house_draw():
+    """Measured energy is what the meter saw; a forecast house load must not shave it off the card."""
+    cfg = Config(capacity_kwh=40.0, soc_target=100.0, max_charge_w=12000.0, eta_charge=1.0, grid_import_limit_w=12000.0)
+    intervals = [ForecastInterval(BASE, pv_w=0.0, load_w=9000.0, dt_h=1.0)]
+    out = plan.build_plan_horizon(
+        _slots(1),
+        intervals,
+        [BASE],
+        20.0,
+        BASE + timedelta(hours=1),
+        cfg,
+        delivered_by_hour={BASE: {"grid_charge_kwh": 5.0}},
+        now=BASE + timedelta(minutes=30),
+    )
+    # 5 kWh measured + 3 kW modelled for the last half hour.
+    assert out[0]["grid_charge_w"] == pytest.approx(6500.0)

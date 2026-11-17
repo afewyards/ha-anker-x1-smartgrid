@@ -115,7 +115,32 @@ def floor_rescue_needed(controller: Controller, soc: float | None) -> bool:
     return True
 
 
-async def run_floor_rescue(controller: Controller, now: datetime) -> float | None:
+def grid_charge_request_w(controller: Controller, inputs: PlantInputs) -> float:
+    """Grid-charge request (W) under grid_import_limit_w, the house's draw read off the live meter.
+
+    Net house draw = meter (+ import) + battery (+ discharge, − charge) − inverter loss,
+    i.e. ``_compute_house_load_w`` minus PV, so no PV reading is needed. Without a
+    battery reading the setpoint stands in, but only while the pack is engaged to
+    charge or hold; a free or exporting pack may be feeding the house, so request 0 W.
+    """
+    batt_w = coordinator.read_float(controller._hass, controller._data[const.CONF_ENT_BATTERY_POWER])
+    if batt_w is None:
+        if not controller._actuator.engaged or controller._actuator.last_setpoint_w > 0.0:
+            return 0.0
+        batt_w = controller._actuator.last_setpoint_w
+    loss_w = coordinator.read_float(
+        controller._hass,
+        controller._data.get(const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]),
+    )
+    commanded_w = controller._actuator.last_setpoint_w
+    if controller._actuator.engaged and commanded_w < 0.0 and commanded_w > batt_w:
+        # Measured power of an overdrawing pack settles above the limit; a tapering pack's smaller reading wins.
+        batt_w, loss_w = commanded_w, 0.0
+    net_house_draw_w = max(0.0, inputs.meter_w + batt_w - (loss_w or 0.0))
+    return energy.grid_charge_request_w(controller.cfg, net_house_draw_w)
+
+
+async def run_floor_rescue(controller: Controller, now: datetime, inputs: PlantInputs) -> float | None:
     """Engage the grid-charge rescue directly; return the setpoint written.
 
     Used by the DISABLED and failsafe (missing price/PV/sunset) tick paths,
@@ -125,10 +150,11 @@ async def run_floor_rescue(controller: Controller, now: datetime) -> float | Non
 
     Returns ``None`` when the engage failed, having released the inverter
     back to firmware control so it is not left half-engaged — same
-    best-effort recovery as the FORCING path.
+    best-effort recovery as the FORCING path. Any successful engage returns
+    a float, 0.0 included (the house alone fills the connection).
     """
     setpoint = guard.command_setpoint(
-        min(controller.cfg.max_charge_w, controller.cfg.grid_import_limit_w),
+        grid_charge_request_w(controller, inputs),
         controller._actuator.last_setpoint_w,
         controller.cfg,
     )
@@ -281,11 +307,8 @@ async def run_forcing_and_export(
     _hold_state = controller.hold_state
     controller.last_hold_values = (_discharge_v, _stored_v)
     if new_plan.state is ControllerState.FORCING:
-        # Grid charging is grid import: bound the FORCING request by whichever
-        # is tighter, the inverter rate or the grid connection's own rating
-        # (mirrors regret._max_grid_dc's two-cap structure).
         setpoint = guard.command_setpoint(
-            min(controller.cfg.max_charge_w, controller.cfg.grid_import_limit_w),
+            grid_charge_request_w(controller, inputs),
             controller._actuator.last_setpoint_w,
             controller.cfg,
         )

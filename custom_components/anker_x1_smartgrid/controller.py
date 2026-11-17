@@ -1468,12 +1468,12 @@ class Controller:
         await self._publish_power_card(now, None, _state, False)
         return self._status(now, 0.0, None, "soc glitch")
 
-    async def _run_floor_rescue_tick(self, now: datetime, soc: float | None) -> float:
-        """Rescue below the firmware floor and record FORCING; return the setpoint (0.0 = none)."""
-        if not executor.floor_rescue_needed(self, soc):
-            return 0.0
-        setpoint = await executor.run_floor_rescue(self, now) or 0.0
-        if setpoint != 0.0:
+    async def _run_floor_rescue_tick(self, now: datetime, inputs: PlantInputs | None) -> float | None:
+        """Rescue below the firmware floor and record FORCING; return the setpoint written, None when no rescue ran."""
+        if not executor.floor_rescue_needed(self, inputs.soc if inputs is not None else None) or inputs is None:
+            return None
+        setpoint = await executor.run_floor_rescue(self, now, inputs)
+        if setpoint is not None:
             # FORCING is persisted so a restart mid-rescue still releases once SoC recovers.
             _prev_plan = self.plan
             _since = self.plan.state_since if self.plan.state is ControllerState.FORCING else now
@@ -1636,8 +1636,8 @@ class Controller:
             # const.FIRMWARE_SOC_FLOOR the pack is protected unconditionally.
             # This branch never reaches run_forcing_and_export, so it actuates
             # directly. On success we must NOT take the hands-off release below.
-            _disabled_setpoint = await self._run_floor_rescue_tick(now, inputs.soc if inputs is not None else None)
-            if _disabled_setpoint == 0.0 and self.standby:
+            _disabled_setpoint = await self._run_floor_rescue_tick(now, inputs)
+            if _disabled_setpoint is None and self.standby:
                 # Re-asserted every tick, like the low-power hold; also covers the first
                 # tick after a restart and the end of a floor rescue.
                 try:
@@ -1648,7 +1648,7 @@ class Controller:
                 if self.hold_state.engaged:
                     self.hold_state = ExportState(engaged=False, state_since=now)
                 self.plan = PlanState(ControllerState.PASSIVE, now, ())
-            elif _disabled_setpoint == 0.0:
+            elif _disabled_setpoint is None:
                 # Hand control back to the X1 ONCE if we were actively engaged, then stay
                 # hands-off — re-asserting self-consumption every tick would clobber a
                 # user-set manual/modbus mode while disabled.
@@ -1788,8 +1788,8 @@ class Controller:
             # but live sensors stay 0 while disabled — except a floor rescue, which
             # really is actuating and must publish the setpoint it wrote.
             # Build status AFTER the daily regret job so regret keys are fresh.
-            status = self._status(now, _disabled_setpoint, None, "disabled")
-            await self._publish_power_card(now, inputs, "forcing" if _disabled_setpoint > 0 else "disabled", False)
+            status = self._status(now, _disabled_setpoint or 0.0, None, "disabled")
+            await self._publish_power_card(now, inputs, "disabled" if _disabled_setpoint is None else "forcing", False)
             # R1: mirror the enabled path below — surface the DP's export-curve
             # engagement for observability even while shadow/disabled. _status()
             # rebuilds self.last_status wholesale every tick, so these keys must
@@ -1850,7 +1850,7 @@ class Controller:
             return await self._soc_glitch_tick(now, self._glitch_inputs, slots, _weather_entry, _persons_home_now)
         # FIX M4 — treat all-PV-unavailable as failsafe (pv_remaining is None).
         if inputs is None or not slots or sunset is None or pv_remaining is None:
-            if inputs is not None and (rescue_w := await self._run_floor_rescue_tick(now, inputs.soc)):
+            if inputs is not None and (rescue_w := await self._run_floor_rescue_tick(now, inputs)) is not None:
                 await self._publish_power_card(now, inputs, "forcing", False)
                 return self._status(now, rescue_w, None, "failsafe")
             await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")

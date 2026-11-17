@@ -1,5 +1,7 @@
 """Shared rate-cap: grid charge is bounded by the rate left after solar."""
 
+import pytest
+
 from custom_components.anker_x1_smartgrid.models import Config
 from custom_components.anker_x1_smartgrid import optimize as opt
 from custom_components.anker_x1_smartgrid.regret import _max_grid_dc
@@ -80,6 +82,21 @@ def test_grid_import_limit_still_bounded_by_headroom():
     cfg = _cfg(grid_import_limit_w=4000.0)
     # soc_after 9.5 of a 10 kWh pack at 100% target -> 0.5 kWh headroom.
     assert _max_grid_dc(9.5, 9.5, cfg) == 0.5
+
+
+def test_grid_import_limit_shares_the_connection_with_meter_bought_house_energy():
+    """House energy bought off the meter (the DP's held branch) leaves the charge only what is left."""
+    cfg = _cfg(capacity_kwh=30.0, max_charge_w=11000.0, grid_import_limit_w=12000.0)
+    assert _max_grid_dc(10.0, 10.0, cfg, house_import_kwh=5.3) == pytest.approx(6.7)
+    # 15-min slot: 3 kWh of connection, 1.325 kWh of it taken by the house.
+    assert _max_grid_dc(10.0, 10.0, cfg, dt_h=0.25, house_import_kwh=1.325) == pytest.approx(1.675)
+    assert _max_grid_dc(10.0, 10.0, cfg, house_import_kwh=13.0) == 0.0
+
+
+def test_grid_import_limit_does_not_subtract_the_pack_served_deficit_again():
+    """Without a held slot the load leg drains the deficit from the pack, so it is already inside the grid charge."""
+    cfg = _cfg(capacity_kwh=30.0, max_charge_w=11000.0, grid_import_limit_w=12000.0)
+    assert _max_grid_dc(10.0, 4.7, cfg) == pytest.approx(11.0)
 
 
 def test_optimize_grid_respects_grid_import_limit():

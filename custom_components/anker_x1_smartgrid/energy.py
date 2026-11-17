@@ -165,3 +165,8 @@ def export_net_target_w(surplus_kwh: float, cfg: Config, *, eta_curve=None) -> f
         _eta_d = eta_curve.eta_discharge(surplus_kwh * 1000.0 / drain_h)
         surplus_w = surplus_kwh * _eta_d * 1000.0 / drain_h
     return min(surplus_w, cfg.max_export_w, cfg.grid_export_limit_w)
+
+
+def grid_charge_request_w(cfg: Config, net_house_draw_w: float) -> float:
+    """Grid-charge request (W) that keeps total meter import (charge + net house draw) within grid_import_limit_w."""
+    return min(cfg.max_charge_w, max(0.0, cfg.grid_import_limit_w - net_house_draw_w))

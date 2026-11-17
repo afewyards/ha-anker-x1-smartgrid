@@ -22,6 +22,7 @@ docstrings for the economic mechanism that makes the outcome unambiguous.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
@@ -218,6 +219,92 @@ class TestCheapHourGridCharge:
         assert abs(setpoint) <= ctrl.cfg.grid_import_limit_w + 1e-6, (
             f"setpoint magnitude {abs(setpoint)} exceeds grid_import_limit_w={ctrl.cfg.grid_import_limit_w}"
         )
+
+    def _hvac_controller(self, monkeypatch, hass):
+        monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: self.BASE)
+        ctrl, act = _make_controller(
+            hass, cfg_overrides={"capacity_kwh": 40.0, "max_charge_w": 11000.0, "grid_import_limit_w": 12000.0}
+        )
+        _seed_common(hass, self.BASE, soc="15.0", export_price="0.30")
+        _seed_price_forecast(hass, self.BASE, [0.05] + [0.35] * 11)
+        ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+        return ctrl, act
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_leaves_room_for_house_load(self, monkeypatch):
+        """grid_import_limit_w bounds TOTAL meter import: an HVAC step (+4 kW) takes 4 kW off the charge."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        hass.set_state("sensor.meter_power", "1300.0")  # pv 0, battery 0 -> house load 1300 W
+        await ctrl.tick()
+        hass.set_state("sensor.meter_power", "5300.0")
+        await ctrl.tick()
+
+        assert ctrl.plan.state is ControllerState.FORCING
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [-10700.0, -6700.0]
+        assert not any(c[0] == "release_to_self" for c in act.calls)
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_reads_the_house_draw_off_the_live_meter(self, monkeypatch):
+        """A stale PV must not cancel a stale house load: the cap takes the house's draw from the live meter."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        ctrl._last_house_load_w, ctrl._last_pv_w = 800.0, 3000.0
+        hass.set_state("sensor.pv_power", "unavailable")
+        hass.set_state("sensor.meter_power", "4000.0")
+        await ctrl.tick()
+
+        assert ctrl._house_load_fresh is False
+        assert ctrl.plan.state is ControllerState.FORCING
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [-8000.0]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_converges_under_the_limit_when_the_pack_overdraws(self, monkeypatch):
+        """A pack taking 2.7 % more than commanded must not settle the meter above grid_import_limit_w."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        ctrl.cfg = replace(ctrl.cfg, grid_import_limit_w=10000.0)
+        house_w = 1300.0
+        for _ in range(5):
+            batt_w = 1.027 * act.last_setpoint_w
+            hass.set_state("sensor.battery_power", str(batt_w))
+            hass.set_state("sensor.meter_power", str(house_w - batt_w))
+            await ctrl.tick()
+
+        assert house_w - 1.027 * act.last_setpoint_w <= 10000.0
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_backs_off_at_once_when_a_tapering_pack_meets_a_load_jump(self, monkeypatch):
+        """A pack drawing far less than commanded: the request follows the measured draw, not the stale setpoint."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        ctrl.cfg = replace(ctrl.cfg, grid_import_limit_w=10000.0)
+        hass.set_state("sensor.meter_power", "1300.0")
+        await ctrl.tick()
+        hass.set_state("sensor.battery_power", "-2000.0")
+        hass.set_state("sensor.meter_power", "7300.0")  # house jumped to 5300 W
+        await ctrl.tick()
+
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [-8700.0, -4700.0]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_forcing_charge_without_battery_power_trusts_only_a_pinned_pack(self, monkeypatch):
+        """No battery reading: an engaged charge pins the pack at its setpoint; a free pack may be feeding the house."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        hass.set_state("sensor.battery_power", "unavailable")
+        hass.set_state("sensor.meter_power", "4000.0")
+        await ctrl.tick()
+        await ctrl.tick()
+        hass.set_state("sensor.meter_power", "13000.0")  # 8 kW charge + 5 kW house
+        await ctrl.tick()
+
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [0.0, -8000.0, -7000.0]
 
 
 # ---------------------------------------------------------------------------

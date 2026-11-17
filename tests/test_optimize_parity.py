@@ -1520,3 +1520,20 @@ def test_parity_holds_across_live_cfg_permutations(overrides, dt_h):
     )
     assert sum(hind["export_schedule"]) > 0.0  # sweep is non-vacuous
     assert_export_parity(opt, hind, label=f"parity[{overrides},dt={dt_h}]")
+
+
+@pytest.mark.parametrize("dt_h", [HOURLY_DT_H, 0.25])
+def test_parity_house_draw_does_not_shrink_the_gross_grid_cap(dt_h):
+    """The grid charge is gross of the pack-served house deficit: a busy house leaves it at the inverter cap in both."""
+    cfg = make_cfg(capacity_kwh=40.0, soc_target=100.0, max_charge_w=11000.0, grid_import_limit_w=12000.0)
+    n = 24
+    pv = [0.0] * n
+    # 5.3 kW house draw in the one cheap slot; 4 kW after it, so the cheap slot is worth filling.
+    load = [5.3 * dt_h] + [4.0 * dt_h] * (n - 1)
+    price = [0.05] + [0.40] * (n - 1)
+    day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=20.0)
+    hind = hindsight_optimal_grid(day, cfg, dt_h=dt_h)
+    opt = optimize_grid(pv, load, price, soc_start=20.0, cfg=cfg, window_start_h=0, window_len=n, dt_h=dt_h)
+    assert_parity(opt, hind, tol=1e-6, label=f"house_draw_dt{dt_h}")
+    # Above limit − house (the double count), at most the inverter cap.
+    assert (12.0 - 5.3) * dt_h < opt["schedule"][0] <= 11.0 * dt_h + 1e-9

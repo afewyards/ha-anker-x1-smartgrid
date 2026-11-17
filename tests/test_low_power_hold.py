@@ -715,6 +715,27 @@ def test_a_grid_charging_slot_is_not_labelled_held():
     assert out["kwh"] > sum(out["schedule"])
 
 
+def test_a_held_charge_leaves_room_for_the_house_on_the_meter():
+    """Held and charging, the meter carries the house AND the charge: together they fit the connection."""
+    cfg = make_config(
+        soc_floor=5.0, soc_target=100.0, capacity_kwh=40.0, max_charge_w=11000.0, grid_import_limit_w=12000.0
+    )
+    out = optimize.optimize_grid(
+        [0.0],
+        [5.3],
+        [0.05],
+        20.0,
+        cfg,
+        window_start_h=0,
+        window_len=1,
+        terminal_mode="water_value",
+        water_value=10.0,
+        hold=[True],
+    )
+    assert out["schedule"][0] > 0.0
+    assert out["kwh"] <= 12.0 + 1e-6
+
+
 def test_dp_held_slot_buys_the_standby_and_keeps_the_pack():
     # chargeable=False keeps the DP from refilling in the cheap slot instead.
     kw = dict(soc=50.0, water_value=10.0, idle_drain_w=100.0, chargeable=[False] * 4)

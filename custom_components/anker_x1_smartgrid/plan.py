@@ -143,13 +143,13 @@ def build_plan_horizon(
     Read-only and derived: never affects control.  Each hour splits battery
     charging into two coexisting AC components under the SHARED inverter rate
     cap (solar first, grid fills the remainder), with the GRID component
-    additionally bounded by the grid connection's own rating
-    (``grid_import_limit_w`` — mirrors ``regret._max_grid_dc``; solar is not
-    grid import and keeps the full inverter rate):
+    additionally bounded by what the grid connection (``grid_import_limit_w``,
+    total meter import) has left after the slot's net house draw; solar is not
+    grid import and keeps the full inverter rate:
 
         solar_charge_w = min(solar_surplus, max_charge_w, headroom_w)
         grid_charge_w  = max(0, min(grid_request, max_charge_w - solar_charge_w,
-                                    grid_import_limit_w,
+                                    grid_import_limit_w - max(0, load_w - pv_w),
                                     headroom_w - solar_charge_w))   # grid hours only
 
     ``grid_request_by_hour`` maps an hour-start datetime to the requested grid
@@ -384,6 +384,8 @@ def build_plan_horizon(
         # kWh == W * dt_h / 1000 invariant survives a partial slot.
         out_scale = model_h / dt_h if dt_h > 0 else 0.0
         solar_surplus = max(0.0, iv.pv_w - iv.load_w) if iv is not None else 0.0
+        # A grid slot keeps the house on the meter, so the connection carries it next to the charge.
+        import_cap_w = cfg.grid_import_limit_w - (max(0.0, iv.load_w - iv.pv_w) if iv is not None else 0.0)
         if cap_wh > 0 and model_h > 0:
             headroom_w = max(0.0, (cfg.soc_target - soc_sim) / 100.0 * cap_wh / (eta * model_h))
         else:
@@ -415,15 +417,14 @@ def build_plan_horizon(
                 ceil_headroom_w = max(0.0, (ceil_soc - soc_sim) / 100.0 * cap_wh / (eta * model_h))
             else:
                 ceil_headroom_w = 0.0
-            # Grid connection cap (grid_import_limit_w) bounds only the GRID portion —
-            # solar_charge_w above already got the full inverter rate and is untouched.
-            # Mirrors regret._max_grid_dc so the displayed plan matches the DP decision.
+            # Grid connection cap bounds only the GRID portion — solar_charge_w above
+            # already got the full inverter rate and is untouched.
             grid_charge_w = max(
                 0.0,
                 min(
                     grid_request_w,
                     cfg.max_charge_w - solar_charge_w,
-                    cfg.grid_import_limit_w,
+                    import_cap_w,
                     ceil_headroom_w - solar_charge_w,
                 ),
             )
