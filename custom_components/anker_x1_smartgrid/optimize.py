@@ -62,7 +62,17 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from . import const
-from .dp_common import KEEP_TIE_EUR_PER_KWH, export_leg_precompute, select_end_state, soc_bins
+from .dp_common import (
+    KEEP_TIE_EUR_PER_KWH,
+    discharge_wall_kwh,
+    export_leg_precompute,
+    reserve_urgency_by_bin,
+    reserve_wall_kwh,
+    select_end_state,
+    soc_bins,
+    start_soc_kwh,
+    wall_import_kwh,
+)
 from .models import Config
 from .regret import (
     _BIN_KWH,
@@ -709,6 +719,7 @@ def optimize_grid(
     eta_curve=None,
     hold: list[bool] | None = None,
     charge_stop_kwh: float | None = None,
+    refill_ok: list[bool] | None = None,
 ) -> dict:
     """Minimum-cost grid schedule for a forecast window (DP-exact).
 
@@ -778,12 +789,18 @@ def optimize_grid(
         branch also respects
         ``grid_charge_ceiling`` — holding above the solar reservation blocks
         tomorrow's PV exactly as charging above it would.  Export transitions
-        always discharge.  ``None`` is byte-identical.  When supplied, the result
-        carries ``hold_schedule``: the slots the chosen trajectory holds.
+        always discharge.  ``None`` is byte-identical.  When supplied, or when the
+        backup reserve is set, the result carries ``hold_schedule``: the slots the
+        chosen trajectory holds, including those where the pack sits at or under the
+        reserve with a deficit.
     charge_stop_kwh :
         Optional DC kWh no grid charge goes past, where the executor stops
         charging. Unlike ``grid_charge_ceiling`` it leaves the hold alone, so a
         pack above it still holds. ``None`` is byte-identical.
+    refill_ok :
+        Optional per-slot mask of slots where a pack under the backup reserve
+        may grid-charge up to the reserve even though ``chargeable`` closes the
+        slot. ``None`` is byte-identical.
     feed_in :
         Optional per-hour dynamic feed-in tariff (€/kWh).  Must have exactly
         ``window_len`` elements when provided.
@@ -850,6 +867,8 @@ def optimize_grid(
         raise ValueError(f"window_len must be >= 1, got {window_len}")
     if chargeable is not None and len(chargeable) != window_len:
         raise ValueError(f"chargeable length {len(chargeable)} != window_len {window_len}")
+    if refill_ok is not None and len(refill_ok) != window_len:
+        raise ValueError(f"refill_ok length {len(refill_ok)} != window_len {window_len}")
     if feed_in is not None and len(feed_in) != window_len:
         raise ValueError(f"feed_in length {len(feed_in)} != window_len {window_len}")
     if export_price is not None and len(export_price) != window_len:
@@ -874,6 +893,7 @@ def optimize_grid(
     # Snapped up onto the SoC grid (5% of 20.48 kWh: 1.024 -> 1.05) so the floor
     # the import is measured against is the floor the state bins to.
     firmware_floor_kwh = grid_floor_kwh(cfg.firmware_floor_kwh)
+    reserve_kwh = reserve_wall_kwh(cfg)
     band_top = band_top_kwh(cfg)
     target_kwh = cfg.target_kwh
     eta = cfg.eta_charge_safe()
@@ -925,15 +945,14 @@ def optimize_grid(
     n_states, to_bin, from_bin = soc_bins(cap_kwh)
 
     INF = float("inf")
+    urgency = reserve_urgency_by_bin(reserve_kwh, n_states, from_bin, dt_h)
 
     # ------------------------------------------------------------------
     # DP initialisation
     # ------------------------------------------------------------------
     # dp[b] = minimum cost to reach SoC bin b at the current hour boundary.
     dp: list[float] = [INF] * n_states
-    soc0 = cfg.pct_to_kwh(soc_start)
-    # A start at the real floor must not bin below the snapped one.
-    init_b = to_bin(firmware_floor_kwh if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh else soc0)
+    init_b = to_bin(start_soc_kwh(cfg.pct_to_kwh(soc_start), cfg, firmware_floor_kwh, reserve_kwh))
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_credit_eur, export_dc_kwh,
@@ -955,6 +974,8 @@ def optimize_grid(
         price_h = price[h]
         net = window_pv[h] - window_load[h]
         eta_load = _load_eta_d(net, cfg, dt_h, eta_curve)
+        # A deficit slot that starts at or under the reserve is a hold, whatever the mask says.
+        wall_holds = reserve_kwh > 0.0 and net <= 0.0
 
         # Hoist the feed_in lookup and discount product out of the per-state
         # loop — both are invariant within a given hour h.
@@ -968,7 +989,9 @@ def optimize_grid(
 
             # Solar/load step — physics imported from regret.py (shared).
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
-            house_wear = max(0.0, soc - max(soc_after, firmware_floor_kwh)) * cfg.cycle_cost_eur_per_kwh
+            wall = discharge_wall_kwh(soc, firmware_floor_kwh, reserve_kwh)
+            at_reserve = wall_holds and soc <= reserve_kwh
+            house_wear = max(0.0, soc - max(soc_after, wall)) * cfg.cycle_cost_eur_per_kwh
 
             # SoC drift-hedge: synthetic forward DC-kWh debit that sags the projected
             # trajectory so the DP books the cheapest in-range recovery (or trims export).
@@ -1052,7 +1075,11 @@ def optimize_grid(
                 # g_dc=0 (no-charge transition) is still evaluated so the battery
                 # can discharge naturally; only g_dc>0 steps are suppressed.
                 if chargeable is not None and not chargeable[h]:
-                    max_grid_dc = 0.0
+                    max_grid_dc = (
+                        min(max_grid_dc, max(0.0, reserve_kwh - soc_pass))
+                        if refill_ok is not None and refill_ok[h]
+                        else 0.0
+                    )
                 if grid_charge_ceiling is not None:
                     max_grid_dc = min(max_grid_dc, max(0.0, grid_charge_ceiling[h] - soc_pass))
                 if charge_stop_kwh is not None:
@@ -1074,9 +1101,7 @@ def optimize_grid(
                 # binned state, so a drain too small to move it books none (no gain in buying a
                 # bin to park above the band); the charge leaves it alone, a held pack has none.
                 band_kwh = (
-                    0.0
-                    if held_kwh
-                    else band_shortfall_dc(soc, from_bin(to_bin(soc_pass)), firmware_floor_kwh, band_top) * eta_load
+                    0.0 if held_kwh else band_shortfall_dc(soc, from_bin(to_bin(soc_pass)), wall, band_top) * eta_load
                 )
 
                 for step in range(n_steps + 1):
@@ -1088,12 +1113,20 @@ def optimize_grid(
                     # Floor import on the POST-charge SoC: the charge offsets the
                     # below-firmware-floor deficit first; only the remainder is a
                     # priced grid->load import.  Booked only where it physically
-                    # occurs — below const.FIRMWARE_SOC_FLOOR — not below the
-                    # soft cfg.soc_floor margin.  Zero whenever new_soc_pre >=
-                    # firmware_floor_kwh.
-                    floor_import_kwh_step = held_kwh + max(0.0, firmware_floor_kwh - new_soc_pre) + band_kwh
+                    # occurs — below the wall (const.FIRMWARE_SOC_FLOOR, or the
+                    # backup reserve) — not below the soft cfg.soc_floor margin.
+                    # Zero whenever new_soc_pre >= wall.
+                    floor_import_kwh_step = (
+                        held_kwh
+                        + (
+                            wall_import_kwh(new_soc_pre, wall, firmware_floor_kwh, eta_load)
+                            if new_soc_pre < wall
+                            else 0.0
+                        )
+                        + band_kwh
+                    )
                     floor_import_cost = floor_import_kwh_step * price_h
-                    new_soc = max(new_soc_pre, firmware_floor_kwh)
+                    new_soc = max(new_soc_pre, wall)
                     new_b = to_bin(new_soc)
                     eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                     g_ac = g_dc / eta_g
@@ -1109,6 +1142,8 @@ def optimize_grid(
                         # Charge slots still feed the house from the pack, so wear is constant across g_dc.
                         + (0.0 if held_kwh else house_wear)
                     )
+                    if urgency is not None:
+                        new_cost += urgency[new_b]
 
                     # Strict < mirrors hindsight tie-breaking — do not change to <=
                     # (the T0.1b parity gate depends on identical tie resolution).
@@ -1118,7 +1153,15 @@ def optimize_grid(
                         # backtracking can accumulate the exact values the DP used for routing,
                         # ensuring reported eur == best_cost exactly — even when hedge_drain_kwh
                         # sags a state below floor (MAJOR-1: no unhedged recompute in backtrack).
-                        par_h[new_b] = (b, g_ac, hour_credit, 0.0, floor_import_cost, floor_import_kwh_step, held_kwh)
+                        par_h[new_b] = (
+                            b,
+                            g_ac,
+                            hour_credit,
+                            0.0,
+                            floor_import_cost,
+                            floor_import_kwh_step,
+                            held_kwh or (floor_import_kwh_step if at_reserve else 0.0),
+                        )
 
             # Action class B: export discharge (e_dc > 0). Mutually exclusive with
             # grid charge (g_dc=0). Ported from regret.hindsight_optimal_grid:347-377.
@@ -1130,9 +1173,13 @@ def optimize_grid(
                 floor_import_export = max(0.0, floor_kwh - soc_after) * price_h
                 net_rev_per_dc = ep_h * eta_d - cycle_cost
                 # C1: per-hour ride-out floor — voluntary export may not take SoC
-                # below the reserve sized to the next solar pickup.  Defaults to the
-                # firmware floor when reserve_by_hour is None (byte parity preserved).
-                export_floor_h = floor_kwh if reserve_by_hour is None else max(floor_kwh, reserve_by_hour[h])
+                # below the reserve sized to the next solar pickup, nor below the
+                # backup reserve.  Defaults to the soft floor when both are off.
+                export_floor_h = (
+                    max(floor_kwh, reserve_kwh)
+                    if reserve_by_hour is None
+                    else max(floor_kwh, reserve_kwh, reserve_by_hour[h])
+                )
                 band_floor = peak_from[h] * (1.0 - _band)
                 if net_rev_per_dc > 1e-9 and ep_h >= band_floor - 1e-9 and soc_after > export_floor_h + bin_kwh - 1e-9:
                     export_headroom_dc = max(0.0, soc_after - export_floor_h)
@@ -1144,7 +1191,7 @@ def optimize_grid(
                     max_e_dc = min(export_headroom_dc, max_export_dc_h, batt_dc_cap)
                     n_exp_steps = round(max_e_dc / bin_kwh)
                     soc_after_b = from_bin(to_bin(soc_after))
-                    band_load_kwh = band_shortfall_dc(soc, soc_after_b, firmware_floor_kwh, band_top) * eta_load
+                    band_load_kwh = band_shortfall_dc(soc, soc_after_b, wall, band_top) * eta_load
                     for exp_step in range(1, n_exp_steps + 1):  # start at 1: e_dc > 0
                         e_dc = exp_step * bin_kwh
                         if e_dc > max_e_dc + 1e-9:
@@ -1167,9 +1214,7 @@ def optimize_grid(
                         # Bottom band: the load leg's shortfall is bought, the export leg's is not sold.
                         band_eur = (
                             band_load_kwh * price_h
-                            + band_shortfall_dc(soc_after_b, from_bin(new_b), firmware_floor_kwh, band_top)
-                            * eta_d_step
-                            * ep_h
+                            + band_shortfall_dc(soc_after_b, from_bin(new_b), wall, band_top) * eta_d_step * ep_h
                         )
                         new_cost = (
                             cost
@@ -1179,6 +1224,8 @@ def optimize_grid(
                             + band_eur
                             + house_wear
                         )
+                        if urgency is not None:
+                            new_cost += urgency[new_b]
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
                             # Export requires soc_after > export_floor_h >= floor, so the
@@ -1203,6 +1250,7 @@ def optimize_grid(
         n_states=n_states,
         terminal_segments=terminal_segments,
         band_top_kwh=band_top,
+        reserve_kwh=reserve_kwh,
     )
 
     if best_end_b == -1:
@@ -1282,8 +1330,8 @@ def optimize_grid(
     # forward/oracle eur parity still holds byte-exactly (both reconstruct it).
     total_eur = import_eur - export_credit - net_export_rev + floor_import_eur
     result = {"schedule": schedule_ac, "kwh": total_kwh, "eur": total_eur}
-    if hold is not None:
-        # Which slots the CHOSEN trajectory actually holds — a subset of the mask.
+    if hold is not None or reserve_kwh > 0.0:
+        # Which slots the CHOSEN trajectory actually holds — a subset of the mask, plus slots at the reserve.
         result["hold_schedule"] = held_sched
     if feed_in is not None:
         result["export_credit_eur"] = export_credit

@@ -170,6 +170,12 @@ def test_an_empty_pack_has_nothing_to_keep():
     assert _reasons([_row(0, 0.30, 4, house=0.2), _row(1, 0.30, 4, mode="hold")], terminal=0.35, soc=5.0) == {}
 
 
+def test_a_pack_parked_at_the_backup_reserve_has_nothing_to_keep():
+    night = [_row(0, 0.30, 30, mode="hold"), _row(1, 0.50, 30, house=0.5), _row(2, 0.40, 30, mode="hold")]
+    assert _reasons(night, terminal=0.35, soc=30.0)
+    assert _reasons(night, terminal=0.35, soc=30.0, backup_reserve_soc=30.0) == {}
+
+
 def test_a_grid_charge_up_to_the_floor_keeps_its_reason():
     why = _reasons([_row(0, 0.20, 5, grid=0.5, mode="grid"), _row(1, 0.30, 5, mode="hold")], terminal=0.35, soc=3.0)
     assert list(why) == [_at(0)]

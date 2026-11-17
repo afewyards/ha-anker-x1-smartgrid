@@ -35,6 +35,7 @@ def hour_reasons(
     charge_margin: float,
     kept_value: Callable[[datetime], float | None] | None = None,
     kept_source: Callable[[datetime], tuple[str, datetime | None] | None] | None = None,
+    backup_reserve_soc: float = 0.0,
 ) -> dict[str, dict]:
     """``{kind, keep_eur, use_eur, kept_for, beats}`` per planned hour, keyed by the hour's
     start as :func:`usecost.hourly_series` emits it.
@@ -47,7 +48,8 @@ def hour_reasons(
     ``charge_cost``, otherwise ``use_value`` at the hour's mean price and
     deficit (load less PV, W). The level starts at ``soc``, as in
     :func:`usecost.hourly_series`; an hour that stays at or below the firmware
-    floor holds nothing and gets no reason unless it grid-charges.
+    floor or ``backup_reserve_soc`` holds nothing and gets no reason unless it
+    grid-charges.
 
     A hold or charge keeps for the higher of the richest release (export, else
     house use) before the next grid-charge run, ``kept_for`` that release's run
@@ -80,6 +82,7 @@ def hour_reasons(
     if terminal_value is None:
         return {}
     hours: dict[datetime, dict] = {}
+    empty_soc = max(FIRMWARE_SOC_FLOOR, backup_reserve_soc)
     rows_at = {start: row for start, row, _h in _slots(horizon)}
     level, edge = soc, None
     for start, row, h, left in _ahead(horizon, now):
@@ -129,7 +132,7 @@ def hour_reasons(
             kind, value = "house", house
         else:
             kind, value = None if moved["solar"] or deficit_w <= 0.0 else "hold", house
-        if value is None or math.isnan(value) or (b["top"] <= FIRMWARE_SOC_FLOOR and not moved["charge"]):
+        if value is None or math.isnan(value) or (b["top"] <= empty_soc and not moved["charge"]):
             kind = None
         gives = value if moved["export"] else house if moved["house"] else None
         kinds.append(kind)

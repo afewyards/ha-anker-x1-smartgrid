@@ -50,6 +50,47 @@ def soc_bins(
     return n_states, to_bin, from_bin
 
 
+def reserve_wall_kwh(cfg: Config) -> float:
+    """The backup reserve in DC kWh, rounded up onto the SoC grid; ``0.0`` when off."""
+    from .regret import grid_floor_kwh  # local import: avoids a module-level cycle
+
+    reserve = cfg.backup_reserve_kwh
+    return grid_floor_kwh(reserve) if reserve > 0.0 else 0.0
+
+
+def discharge_wall_kwh(soc_kwh: float, firmware_floor_kwh: float, reserve_kwh: float) -> float:
+    """Lowest SoC a slot discharges to from *soc_kwh*: the reserve, or where it starts when already under it."""
+    return max(firmware_floor_kwh, min(reserve_kwh, soc_kwh))
+
+
+def wall_import_kwh(soc_kwh: float, wall_kwh: float, firmware_floor_kwh: float, eta_load: float) -> float:
+    """AC the meter buys for the house when the pack stops at *wall_kwh* instead of falling to *soc_kwh*.
+
+    Under the firmware floor the shortfall is booked 1:1; between it and the wall the DC the pack
+    did not deliver is converted at the load leg's *eta_load*.
+    """
+    return max(0.0, firmware_floor_kwh - soc_kwh) + max(0.0, wall_kwh - max(soc_kwh, firmware_floor_kwh)) * eta_load
+
+
+def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float, reserve_kwh: float) -> float:
+    """Start SoC for the DP: a start at a real floor (firmware or reserve) must not bin below the snapped one."""
+    if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh:
+        return firmware_floor_kwh
+    if cfg.backup_reserve_kwh <= soc0 < reserve_kwh:
+        return reserve_kwh
+    return soc0
+
+
+def reserve_urgency_by_bin(
+    reserve_kwh: float, n_states: int, from_bin: Callable[[int], float], dt_h: float
+) -> list[float] | None:
+    """Objective-only cost of ending a slot in each SoC bin, per kWh short of the reserve; ``None`` when off."""
+    if reserve_kwh <= 0.0:
+        return None
+    rate = const.BACKUP_REFILL_URGENCY_EUR_PER_KWH_H * dt_h
+    return [max(0.0, reserve_kwh - from_bin(b)) * rate for b in range(n_states)]
+
+
 # Equal-value end states must not be picked by float rounding: ties go to the higher SoC.
 TIE_EPS_EUR = 1e-9
 # A kWh bought at exactly its kept value gains nothing, so the kept value sits this far
@@ -70,6 +111,7 @@ def select_end_state(
     n_states: int,
     terminal_segments: list[tuple[float, float]] | None = None,
     band_top_kwh: float = 0.0,
+    reserve_kwh: float = 0.0,
 ) -> tuple[int, float, bool]:
     """Select the DP terminal end state: ``(best_end_b, best_cost, infeasible)``.
 
@@ -108,6 +150,10 @@ def select_end_state(
     the first energy the walk credits, so end states above it all shift by
     the same amount. ``0.0`` disables this.
 
+    An end state under ``reserve_kwh`` (the backup reserve) scores
+    ``const.BACKUP_SHORTFALL_EUR_PER_KWH`` per kWh short, so the plan refills it;
+    the penalty is selection-only and is never in the returned cost.
+
     ``terminal_mode="reserve"`` (default): select the minimum-cost end state
     with SoC >= soc_target; if unreachable, fall back to the best achievable
     end state and mark ``infeasible``.
@@ -145,7 +191,11 @@ def select_end_state(
         target_b = to_bin(target_kwh)
 
         def _pick(hi: int) -> int:
-            scores = {b: dp[b] - _credit(b) for b in range(floor_b, hi) if dp[b] != INF}
+            scores = {
+                b: dp[b] - _credit(b) + max(0.0, reserve_kwh - from_bin(b)) * const.BACKUP_SHORTFALL_EUR_PER_KWH
+                for b in range(floor_b, hi)
+                if dp[b] != INF
+            }
             if not scores:
                 return -1
             best = min(scores.values())

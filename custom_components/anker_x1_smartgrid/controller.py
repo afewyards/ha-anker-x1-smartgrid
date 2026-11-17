@@ -2663,6 +2663,7 @@ class Controller:
                 charge_margin=cfg.charge_margin_eur_per_kwh,
                 kept_value=(self._kept_by_slot or {}).get,
                 kept_source=(self._kept_src_by_slot or {}).get,
+                backup_reserve_soc=cfg.backup_reserve_soc,
             )
             self._why_failed = False
         except Exception:
