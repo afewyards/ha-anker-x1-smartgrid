@@ -11,7 +11,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, tzinfo
 
 from .const import FIRMWARE_SOC_FLOOR
-from .usecost import _MOVED_KWH, _ahead, _battery_kwh, _hour_key, _slots
+from .money import ahead, hour_key, slots
+from .usecost import MOVED_KWH, battery_kwh
 
 _H = timedelta(hours=1)
 _SUMS = ("h", "price", "deficit", "export", "eur", "house", "charge", "solar", "top", "sell_h", "sell_kwh", "under")
@@ -83,18 +84,18 @@ def hour_reasons(
         return {}
     hours: dict[datetime, dict] = {}
     empty_soc = max(FIRMWARE_SOC_FLOOR, backup_reserve_soc)
-    rows_at = {start: row for start, row, _h in _slots(horizon)}
+    rows_at = {start: row for start, row, _h in slots(horizon)}
     level, edge = soc, None
-    for start, row, h, left in _ahead(horizon, now):
+    for start, row, h, left in ahead(horizon, now):
         if row.get("estimated"):
             continue
         before, soc = level, row.get("soc")
-        kwh = _battery_kwh(row, 0.0, soc is None or level is None or soc < level)
+        kwh = battery_kwh(row, 0.0, soc is None or level is None or soc < level)
         level = level if soc is None else soc
         edge = start + timedelta(hours=h)
         if (price := row.get("price")) is None:
             continue
-        b = hours.setdefault(_hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0) | {"src": None})
+        b = hours.setdefault(hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0) | {"src": None})
         b["top"] = max(b["top"], *(math.inf if x is None else x for x in (before, level)))
         raw = math.nan if (x := export_price(start, price)) is None else x
         reserve = row.get("reserve_soc")
@@ -122,7 +123,7 @@ def hour_reasons(
         b = hours[key]
         price, deficit_w = b["price"] / b["h"], b["deficit"] / b["h"]
         house = use_value(price, deficit_w)
-        moved = {k: b[k] > _MOVED_KWH for k in ("export", "charge", "house", "solar")}
+        moved = {k: b[k] > MOVED_KWH for k in ("export", "charge", "house", "solar")}
         cost = charge_cost(price) if moved["charge"] else None
         if moved["export"]:
             kind, value = "export", b["eur"] / b["export"]
@@ -182,7 +183,7 @@ def hour_reasons(
                     price = row.get("price")
                     if kind == "export" and price is not None:
                         price = export_price(at, price)
-                    first = _hour_key(at, tz)
+                    first = hour_key(at, tz)
                     kept_for = {"start": _iso(first, tz), "end": _iso(first + _H, tz), "kind": kind}
                     extra = {
                         "kept_price": None if kind == "house" else price,

@@ -2,48 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, timedelta, tzinfo
 
-from .daily_stats import _parse
-from .dataquality import house_load_w, soc_glitch
-
-_MAX_DT_S = 300.0
-_EMPTY_KWH = 0.01
-
-
-def _points(rows: list[dict]) -> list[tuple[datetime, dict]]:
-    """Rows with ``ts``, ``soc`` and ``import_price`` in ``ts`` order, false SoC-0 readings dropped."""
-    pts = sorted(
-        (
-            (ts, row)
-            for row in rows
-            if (ts := _parse(row.get("ts"))) is not None
-            and row.get("soc") is not None
-            and row.get("import_price") is not None
-        ),
-        key=lambda p: p[0],
-    )
-    bad = _glitches(pts)
-    return [p for i, p in enumerate(pts) if i not in bad]
-
-
-def _glitches(pts: list[tuple[datetime, dict]]) -> set[int]:
-    """Indices of the false SoC-0 readings in ``ts``-ordered ``pts``; rows without a SoC are skipped."""
-    out: set[int] = set()
-    prev: tuple[datetime, float] | None = None
-    latched = False
-    for i, (ts, row) in enumerate(pts):
-        if row.get("soc") is None:
-            continue
-        soc = float(row["soc"])
-        latched = prev is not None and soc_glitch(
-            soc, row.get("batt_w"), prev[1], (ts - prev[0]).total_seconds(), latched
-        )
-        if latched:
-            out.add(i)
-        else:
-            prev = (ts, soc)
-    return out
+from .dataquality import house_load_w
+from .money import EMPTY_KWH, MAX_DT_S, points
 
 
 def battery_margin_by_day(
@@ -81,7 +43,7 @@ def battery_margin_by_day(
     the grid part's; together they are ``value_eur - cost_eur``.
     Energy charged one day and used the next earns its margin on the second day.
     """
-    pts = _points(rows)
+    pts = points(rows)
     out: dict[date, dict] = {}
     e = c = c_sun = grid_kwh = sun_kwh = 0.0
     for i, (ts, row) in enumerate(pts):
@@ -92,16 +54,16 @@ def battery_margin_by_day(
         raw_exp = row.get("export_price")
         exp = (imp if raw_exp is None else float(raw_exp)) - export_fee_eur_per_kwh
         e_new = float(row["soc"]) / 100.0 * capacity_kwh
-        gap = i > 0 and (ts - pts[i - 1][0]).total_seconds() > _MAX_DT_S
+        gap = i > 0 and (ts - pts[i - 1][0]).total_seconds() > MAX_DT_S
         keep = 1.0
-        if i == 0 or (gap and e <= _EMPTY_KWH):
+        if i == 0 or (gap and e <= EMPTY_KWH):
             c, c_sun, grid_kwh, sun_kwh = e_new * imp, 0.0, e_new, 0.0
         elif gap:
             # shortcut: a gap rise keeps the pre-gap grid/sun ratio;
             # split it by PV surplus if restarts start showing up in the split.
             keep = e_new / e
         elif e_new < e:
-            keep = e_new / e if e_new > _EMPTY_KWH else 0.0
+            keep = e_new / e if e_new > EMPTY_KWH else 0.0
             rec["cost_eur"] += c * (1.0 - keep)
             rec["solar_gain_eur"] -= c_sun * (1.0 - keep)
         c, c_sun, grid_kwh, sun_kwh = c * keep, c_sun * keep, grid_kwh * keep, sun_kwh * keep
@@ -111,7 +73,7 @@ def battery_margin_by_day(
             break
         dt_s = (pts[i + 1][0] - ts).total_seconds()
         load = house_load_w(row)
-        if not 0 < dt_s <= _MAX_DT_S or load is None:
+        if not 0 < dt_s <= MAX_DT_S or load is None:
             continue
         kwh_per_w = dt_s / 3_600_000.0
         batt = float(row.get("batt_w") or 0.0)

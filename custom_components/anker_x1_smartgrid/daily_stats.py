@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, tzinfo
 
+from .money import parse_ts
+
 # Rolling history depth of the merged table, in days back from today.
 WINDOW_DAYS = 14
 
@@ -53,15 +55,6 @@ def new_day_totals() -> dict:
     return dict(_ZERO)
 
 
-def _parse(value) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except (ValueError, TypeError):
-        return None
-
-
 def aggregate_actual_days(
     rows: list[dict],
     export_fee_eur_per_kwh: float,
@@ -92,7 +85,7 @@ def aggregate_actual_days(
     """
     out: dict[date, dict] = {}
     for row in rows:
-        ts = _parse(row.get("ts"))
+        ts = parse_ts(row.get("ts"))
         if ts is None:
             continue
         rec = out.setdefault(ts.astimezone(tz).date(), new_day_totals())
@@ -201,7 +194,7 @@ def aggregate_planned_days(
     for row in horizon or []:
         if row.get("estimated") or row.get("mode") == "actual":
             continue
-        start = _parse(row.get("start"))
+        start = parse_ts(row.get("start"))
         if start is None:
             continue
         if now is not None and start <= now:
@@ -240,7 +233,7 @@ def baseline_by_day(horizon: list[dict] | None, tz: tzinfo, export_price_at) -> 
     for row in horizon or []:
         if row.get("estimated"):
             continue
-        start = _parse(row.get("start"))
+        start = parse_ts(row.get("start"))
         if start is None:
             continue
         net_kwh = float(row.get("load_kwh") or 0.0) - float(row.get("pv_kwh") or 0.0)
@@ -268,7 +261,7 @@ def current_import_price(horizon: list[dict] | None, now: datetime) -> float | N
     best: tuple[datetime, float] | None = None
     first: tuple[datetime, float] | None = None
     for row in horizon or []:
-        start = _parse(row.get("start"))
+        start = parse_ts(row.get("start"))
         price = row.get("price")
         if start is None or price is None:
             continue

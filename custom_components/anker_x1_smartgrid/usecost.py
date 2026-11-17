@@ -11,17 +11,17 @@ seed and price grid charge alike and release by the same fraction, so
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from itertools import pairwise
 
-from .daily_stats import _parse
 from .dataquality import house_load_w
-from .margin import _EMPTY_KWH, _MAX_DT_S, _glitches, _points, sun_share
+from .margin import sun_share
+from .money import EMPTY_KWH, MAX_DT_S, ahead, glitches, hour_key, parse_ts, points
 
 _BAND_W = 50.0
-_MOVED_KWH = 0.05
+MOVED_KWH = 0.05
 _ACTIONS = ("charge_grid", "charge_solar", "house", "export")
 _GRID_KEYS = ("grid_in_house_kwh", "grid_in_charge_kwh", "grid_out_kwh")
 _PLAN_COLS = (
@@ -60,7 +60,7 @@ def _day(out: dict, day: date) -> dict:
 
 def _fall(inv: Inventory, e_new: float) -> tuple[float, float]:
     """Release the cost of a level fall to ``e_new`` from both inventories."""
-    f = 1.0 if e_new <= _EMPTY_KWH else (inv.e_kwh - e_new) / inv.e_kwh
+    f = 1.0 if e_new <= EMPTY_KWH else (inv.e_kwh - e_new) / inv.e_kwh
     free, exp = inv.c_free * f, inv.c_exp * f
     inv.c_free -= free
     inv.c_exp -= exp
@@ -104,7 +104,7 @@ def replay(
       ``saved_eur`` and ``solar_gain_eur`` are the margin's two parts: output
       value minus released ``c_exp``, split between grid and solar charge.
     """
-    pts = _points(rows)
+    pts = points(rows)
     out: dict[date, dict] = {}
     inv = Inventory(0.0, 0.0, 0.0, 0.0, 0.0)
     share = 1.0
@@ -116,8 +116,8 @@ def replay(
         e_new = float(row["soc"]) / 100.0 * capacity_kwh
         if i == 0:
             _seed(inv, e_new, imp)
-        elif (ts - pts[i - 1][0]).total_seconds() > _MAX_DT_S:
-            if inv.e_kwh > _EMPTY_KWH:
+        elif (ts - pts[i - 1][0]).total_seconds() > MAX_DT_S:
+            if inv.e_kwh > EMPTY_KWH:
                 # shortcut: a gap rise keeps the pre-gap grid/sun ratio;
                 # split it by PV surplus if restarts start showing up in the split.
                 _fall(inv, e_new)  # a rise too: the level is re-read at unchanged cost per kWh
@@ -135,7 +135,7 @@ def replay(
             break
         dt_s = (pts[i + 1][0] - ts).total_seconds()
         load = house_load_w(row)
-        if not 0 < dt_s <= _MAX_DT_S or load is None:
+        if not 0 < dt_s <= MAX_DT_S or load is None:
             continue
         kwh_per_w = dt_s / 3_600_000.0
         batt = float(row.get("batt_w") or 0.0)
@@ -178,26 +178,7 @@ def replay(
     return _finish(out), inv
 
 
-def _slots(horizon: list[dict] | None) -> list[tuple[datetime, dict, float]]:
-    """Horizon rows sorted by start, each with its length in hours (from the next start)."""
-    rows = sorted(
-        ((start, row) for row in horizon or [] if (start := _parse(row.get("start"))) is not None),
-        key=lambda p: p[0],
-    )
-    hours = [min((b[0] - a[0]).total_seconds() / 3600.0, 1.0) for a, b in pairwise(rows)]
-    hours.append(hours[-1] if hours else 1.0)
-    return [(start, row, h) for (start, row), h in zip(rows, hours, strict=False)]
-
-
-def _ahead(horizon: list[dict] | None, now: datetime) -> Iterator[tuple[datetime, dict, float, float]]:
-    """Plan rows not over at ``now``, with their hours and the fraction of them still ahead."""
-    for start, row, h in _slots(horizon):
-        end = start + timedelta(hours=h)
-        if end > now and row.get("mode") != "actual":
-            yield start, row, h, 1.0 if start >= now else (end - now) / (end - start)
-
-
-def _battery_kwh(row: dict, delivered_kwh: float, falls: bool) -> dict[str, float]:
+def battery_kwh(row: dict, delivered_kwh: float, falls: bool) -> dict[str, float]:
     """A plan row's battery kWh per action, less the grid charge already delivered in it.
 
     plan.py plans house use from the battery at the SoC floor too, so a row
@@ -211,7 +192,7 @@ def _battery_kwh(row: dict, delivered_kwh: float, falls: bool) -> dict[str, floa
     return kwh
 
 
-def _nothing_delivered(_start: datetime) -> float:
+def nothing_delivered(_start: datetime) -> float:
     return 0.0
 
 
@@ -223,7 +204,7 @@ def roll_plan(
     now: datetime,
     export_price_at: Callable[[datetime, float | None], float | None],
     export_fee: float = 0.0,
-    delivered_at: Callable[[datetime], float] = _nothing_delivered,
+    delivered_at: Callable[[datetime], float] = nothing_delivered,
 ) -> dict[date, dict]:
     """Roll both inventories forward over the plan from ``now``.
 
@@ -243,7 +224,7 @@ def roll_plan(
     """
     inv = replace(inv)
     out: dict[date, dict] = {}
-    for start, row, h, left in _ahead(horizon, now):
+    for start, row, h, left in ahead(horizon, now):
         rec = _day(out, start.astimezone(tz).date())
         load = float(row.get("load_kwh") or 0.0) * left
         pv = float(row.get("pv_kwh") or 0.0) * left
@@ -258,7 +239,7 @@ def roll_plan(
         exp = export_price_at(start, imp)
         exp = imp - export_fee if exp is None else float(exp)
         e_new = float(row["soc"]) / 100.0 * capacity_kwh
-        kwh = _battery_kwh(row, delivered_at(start), e_new < inv.e_kwh)
+        kwh = battery_kwh(row, delivered_at(start), e_new < inv.e_kwh)
         house, export = kwh["house"], kwh["export"]
         if (hedge := float(row.get("hedge_kwh") or 0.0)) > 0:
             e_mid = max(inv.e_kwh - hedge, 0.0)
@@ -365,18 +346,10 @@ def merge_days(
     return out
 
 
-def _hour_key(ts: datetime, tz: tzinfo, slot_min: int = 60) -> datetime:
-    """The start in UTC of the local ``slot_min``-minute clock slot holding ``ts``."""
-    loc = ts.astimezone(tz)
-    return ts.astimezone(UTC) - timedelta(
-        minutes=loc.minute % slot_min, seconds=loc.second, microseconds=loc.microsecond
-    )
-
-
 def _hour(hours: dict, ts: datetime, tz: tzinfo, slot_min: int = 60) -> dict:
     """The bucket of the local clock slot holding ``ts``, keyed by its start in UTC."""
     return hours.setdefault(
-        _hour_key(ts, tz, slot_min),
+        hour_key(ts, tz, slot_min),
         {"price_eur_h": 0.0, "price_h": 0.0, "soc": None, "use_kwh": 0.0, "solar_kwh": 0.0, "held_h": 0.0, "grid": None}
         | dict.fromkeys(_ACTIONS, 0.0)
         | {"bought_eur": 0.0, "unpriced_kwh": 0.0, "sold_eur": 0.0},
@@ -388,7 +361,7 @@ def hourly_series(
     horizon: list[dict] | None,
     tz: tzinfo,
     now: datetime,
-    delivered_at: Callable[[datetime], float] = _nothing_delivered,
+    delivered_at: Callable[[datetime], float] = nothing_delivered,
     slot_min: int = 60,
     export_fee: float = 0.0,
     export_price_at: Callable[[datetime, float | None], float | None] = lambda _start, _price: None,
@@ -418,19 +391,19 @@ def hourly_series(
     """
     since = datetime.combine(now.astimezone(tz).date() - timedelta(days=1), time(), tzinfo=tz)
     pts = sorted(
-        ((ts, row) for row in rows if (ts := _parse(row.get("ts"))) is not None and ts >= since),
+        ((ts, row) for row in rows if (ts := parse_ts(row.get("ts"))) is not None and ts >= since),
         key=lambda p: p[0],
     )
     hours: dict[datetime, dict] = {}
     level = None
-    bad = _glitches(pts)
+    bad = glitches(pts)
     for i, (ts, row) in enumerate(pts):
         b = _hour(hours, ts, tz, slot_min)
         if row.get("soc") is not None and i not in bad:
             b["soc"] = level = float(row["soc"])
         dt_s = (pts[i + 1][0] - ts).total_seconds() if i + 1 < len(pts) else 0.0
         load = house_load_w(row)
-        if not 0 < dt_s <= _MAX_DT_S or load is None:
+        if not 0 < dt_s <= MAX_DT_S or load is None:
             continue
         h = dt_s / 3600.0
         pv = float(row.get("pv_w") or 0.0)
@@ -454,7 +427,7 @@ def hourly_series(
         elif batt > _BAND_W:
             b["export" if float(row.get("p1_w") or 0.0) < 0 else "house"] += batt * h / 1000.0
 
-    for start, row, h, left in _ahead(horizon, now):
+    for start, row, h, left in ahead(horizon, now):
         b = _hour(hours, start, tz, slot_min)
         load = float(row.get("load_kwh") or 0.0) * left
         pv = float(row.get("pv_kwh") or 0.0) * left
@@ -467,7 +440,7 @@ def hourly_series(
             b["price_eur_h"] += imp * h * left
             b["price_h"] += h * left
         soc = None if row.get("soc") is None else float(row["soc"])
-        kwh = _battery_kwh(row, delivered_at(start), soc is None or level is None or soc < level)
+        kwh = battery_kwh(row, delivered_at(start), soc is None or level is None or soc < level)
         if soc is not None:
             b["soc"] = level = soc
         for action in _ACTIONS:
@@ -487,7 +460,7 @@ def hourly_series(
     for key in sorted(hours):
         b = hours[key]
         moved = max(_ACTIONS, key=b.__getitem__)
-        state = moved if b[moved] > _MOVED_KWH * slot_min / 60 else "hold" if b["held_h"] > slot_min / 120 else "idle"
+        state = moved if b[moved] > MOVED_KWH * slot_min / 60 else "hold" if b["held_h"] > slot_min / 120 else "idle"
         out.append(
             {
                 "start": key.astimezone(tz).isoformat(),
@@ -500,7 +473,7 @@ def hourly_series(
                 "plan": key + timedelta(minutes=slot_min) > now,
             }
             | dict(zip(_GRID_KEYS, [round(v, 2) for v in b["grid"]] if b["grid"] else (None,) * 3, strict=True))
-            | _grid_eur(b)
+            | _bucket_eur(b)
         )
     return out
 
@@ -516,7 +489,7 @@ def _add_grid(bucket: dict, price: float | None, export_price: float | None, *kw
     bucket["sold_eur"] += kwh[2] * float(export_price or 0.0)
 
 
-def _grid_eur(b: dict) -> dict:
+def _bucket_eur(b: dict) -> dict:
     if not b["grid"]:
         return {"grid_bought_eur": None, "grid_sold_eur": None}
     bought = b["bought_eur"]

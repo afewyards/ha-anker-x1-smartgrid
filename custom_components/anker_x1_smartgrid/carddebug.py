@@ -8,8 +8,8 @@ from itertools import pairwise
 
 from .daily_stats import planned_house_flows
 from .dataquality import house_load_w
-from .margin import _MAX_DT_S
-from .usecost import _ahead, _hour_key, _nothing_delivered, _parse, _slots, hourly_series
+from .money import MAX_DT_S, ahead, grid_eur, hour_key, parse_ts, slots
+from .usecost import nothing_delivered, hourly_series
 
 SNAPSHOT_KEYS = (
     "start",
@@ -24,14 +24,14 @@ SNAPSHOT_KEYS = (
 
 
 def slot_minutes(horizon: list[dict] | None) -> int:
-    real = [start for start, row, _h in _slots(horizon) if not row.get("estimated")]
+    real = [start for start, row, _h in slots(horizon) if not row.get("estimated")]
     width = round((real[1] - real[0]).total_seconds() / 60) if len(real) > 1 else 60
     return width if 0 < width <= 60 and 60 % width == 0 else 60
 
 
 def snapshot_rows(horizon: list[dict] | None, now: datetime) -> list[dict]:
     return [
-        {k: row.get(k) for k in SNAPSHOT_KEYS} for _s, row, _h, _l in _ahead(horizon, now) if not row.get("estimated")
+        {k: row.get(k) for k in SNAPSHOT_KEYS} for _s, row, _h, _l in ahead(horizon, now) if not row.get("estimated")
     ]
 
 
@@ -42,7 +42,7 @@ def merge_reference(snapshots: list[tuple[str, list[dict]]], tz: tzinfo) -> list
     """
     chosen: dict[datetime, dict] = {}
     for day, rows in snapshots:
-        for start, row, h in _slots(rows):
+        for start, row, h in slots(rows):
             own = start.astimezone(tz).date().isoformat() == day
             if own or start not in chosen or not chosen[start]["own"]:
                 chosen[start] = {"row": row | {"minutes": round(h * 60)}, "own": own}
@@ -50,9 +50,8 @@ def merge_reference(snapshots: list[tuple[str, list[dict]]], tz: tzinfo) -> list
 
 
 def _grid_eur(kwh: tuple[float, float] | None, price: float | None, export_price: float | None) -> float | None:
-    if kwh is None or price is None or (kwh[1] > 1e-6 and export_price is None):
-        return None
-    return round(kwh[0] * price - kwh[1] * (export_price or 0.0), 4)
+    eur = grid_eur(kwh, price, export_price)
+    return None if eur is None else round(eur, 4)
 
 
 def _measured(slot: dict) -> tuple[float, float] | None:
@@ -72,7 +71,7 @@ def slot_series(
     horizon: list[dict] | None,
     tz: tzinfo,
     now: datetime,
-    delivered_at: Callable[[datetime], float] = _nothing_delivered,
+    delivered_at: Callable[[datetime], float] = nothing_delivered,
     reference: Sequence[dict] = (),
     export_fee: float = 0.0,
 ) -> list[dict]:
@@ -84,15 +83,15 @@ def slot_series(
     for both when either side or a price it needs is missing, and for slots not yet over.
     """
     width = slot_minutes(horizon)
-    pts = sorted(((ts, r) for r in rows if (ts := _parse(r.get("ts"))) is not None), key=lambda p: p[0])
+    pts = sorted(((ts, r) for r in rows if (ts := parse_ts(r.get("ts"))) is not None), key=lambda p: p[0])
     acc: dict[datetime, list[float]] = {}
     for (ts, r), (nxt, _) in pairwise(pts):
         dt = (nxt - ts).total_seconds()
-        if not 0 < dt <= _MAX_DT_S:
+        if not 0 < dt <= MAX_DT_S:
             continue
         if house_load_w(r) is None:
             continue
-        a = acc.setdefault(_hour_key(ts, tz, width), [0.0] * 6)
+        a = acc.setdefault(hour_key(ts, tz, width), [0.0] * 6)
         a[0] += dt
         a[1] += (float(r.get("setpoint_w") or 0.0) - float(r.get("export_setpoint_w") or 0.0)) * dt
         if r.get("batt_w") is not None:
@@ -102,16 +101,16 @@ def slot_series(
             a[4] += dt
             a[5] += float(r["export_price"]) * dt
     plan = {
-        _hour_key(start, tz, width): float(row.get("grid_charge_w") or 0.0) - float(row.get("grid_export_w") or 0.0)
-        for start, row, _h, _l in _ahead(horizon, now)
+        hour_key(start, tz, width): float(row.get("grid_charge_w") or 0.0) - float(row.get("grid_export_w") or 0.0)
+        for start, row, _h, _l in ahead(horizon, now)
         if not row.get("estimated")
     }
     planned = {
-        _parse(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference if r.get("minutes") == width
+        parse_ts(r["start"]).astimezone(UTC): planned_house_flows(r) for r in reference if r.get("minutes") == width
     }
     out = []
     for row in hourly_series(rows, horizon, tz, now, delivered_at, width):
-        key = _parse(row["start"]).astimezone(UTC)
+        key = parse_ts(row["start"]).astimezone(UTC)
         a = acc.get(key)
         setpoint = a[1] / a[0] if a and a[0] else plan.get(key)
         batt = a[3] / a[2] if a and a[2] else None
@@ -137,10 +136,10 @@ def hour_costs(slots: list[dict], reference: Sequence[dict], tz: tzinfo, width: 
     rows cover it end to end.
     """
     step = timedelta(minutes=width)
-    over = {_parse(s["start"]).astimezone(UTC): s for s in slots if not s["plan"]}
-    ref = sorted(((_parse(r["start"]).astimezone(UTC), r) for r in reference), key=lambda p: p[0])
+    over = {parse_ts(s["start"]).astimezone(UTC): s for s in slots if not s["plan"]}
+    ref = sorted(((parse_ts(r["start"]).astimezone(UTC), r) for r in reference), key=lambda p: p[0])
     out = {}
-    for hour in sorted({_hour_key(start, tz) for start in over}):
+    for hour in sorted({hour_key(start, tz) for start in over}):
         end = hour + timedelta(hours=1)
         mine = [(hour + k * step, over.get(hour + k * step)) for k in range(60 // width)]
         real = [_grid_eur(_measured(s), s["price"], s["export_price"]) if s else None for _t, s in mine]
@@ -176,9 +175,9 @@ def internals(
     horizon = (status.get("plan") or {}).get("horizon") or []
     reserve = next((r.get("reserve_soc") for r in horizon if r.get("mode") != "actual"), None)
     stored = status.get("hold_stored_value_eur_per_kwh")
-    real = [(start, h) for start, row, h in _slots(horizon) if not row.get("estimated")]
-    built = _parse(built_at)
-    battery_at = next((_parse(r.get("ts")) for r in reversed(rows) if r.get("soc") is not None), None)
+    real = [(start, h) for start, row, h in slots(horizon) if not row.get("estimated")]
+    built = parse_ts(built_at)
+    battery_at = next((parse_ts(r.get("ts")) for r in reversed(rows) if r.get("soc") is not None), None)
 
     def _age(at: datetime | None) -> int | None:
         # The PV states are read after the build, so one may be newer than it.

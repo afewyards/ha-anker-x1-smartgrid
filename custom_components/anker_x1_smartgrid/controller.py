@@ -33,6 +33,7 @@ from . import (
     load_adapt,
     margin as margin_mod,
     ml_status,
+    money,
     occupancy,
     optimize as optimize_mod,
     past_actuals as past_actuals_mod,
@@ -2698,7 +2699,7 @@ class Controller:
                 }
         return {
             "built_at": now.isoformat(),
-            "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > margin_mod._EMPTY_KWH else None,
+            "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > money.EMPTY_KWH else None,
             "days": days,
             "hours": hours,
         }
@@ -2923,49 +2924,17 @@ class Controller:
         slot_minutes: int,
         export_matches_import: bool,
     ) -> Callable[[datetime, float | None], float | None]:
-        """Build the export-price resolver ``daily_stats`` and ``calibration``
-        use to value a planned kWh.
-
-        Export valuation MIRRORS ``decision.py``'s four-branch ladder, because
-        the caller's job is to report what the DP planned — value the same kWh
-        differently and the row stops being the plan's net:
-
-        1. static tariff mode → the configured constant, broadcast flat (never
-           ratio-scaled: a fixed credit must not swing with an HP/HC import
-           schedule);
-        2. an explicit per-slot export curve → that slot's price;
-        3. ``export_matches_import`` (one entity for both, i.e. salderen) →
-           THAT ROW's import price.  ``_resolve_export_slots`` returns [] for
-           this config by design, so branch 2 never fires and the old flat
-           fallback booked every future slot at the current spot — live on
-           2026-08-02 that valued a 0.36 €/kWh evening peak at 0.2319 and
-           under-reported today's net by €1.36;
-        4. otherwise → the import curve ratio-scaled by
-           ``export_price / current import``.
-
-        Every branch goes through ``effective_export_price`` so the feed-in fee
-        is subtracted exactly once.  A ``None`` export price zeroes the revenue
-        leg only, matching the DP's own "no export credit" branch.
-        """
-        _curve = resolution.resample_price_map(export_slots, slot_minutes) if export_slots else {}
-        _flat = optimize_mod.effective_export_price(export_price, self.cfg) if export_price is not None else None
-        _static = self.cfg.price_mode == const.PRICE_MODE_STATIC
-        _cur_import = daily_stats.current_import_price(horizon, now)
-
-        def _export_price_at(start: datetime, import_price: float | None) -> float | None:
-            _raw = _curve.get(start)
-            if _raw is not None:
-                return optimize_mod.effective_export_price(_raw, self.cfg)
-            if _static or export_price is None or import_price is None:
-                return _flat
-            if export_matches_import:
-                return optimize_mod.effective_export_price(import_price, self.cfg)
-            if _cur_import is not None and _cur_import > 1e-9:
-                _scaled = import_price * (export_price / _cur_import)
-                return optimize_mod.effective_export_price(_scaled, self.cfg)
-            return _flat
-
-        return _export_price_at
+        return money.export_price_fn(
+            now,
+            horizon,
+            export_price,
+            export_slots,
+            slot_minutes,
+            export_matches_import,
+            static=self.cfg.price_mode == const.PRICE_MODE_STATIC,
+            effective=lambda raw: optimize_mod.effective_export_price(raw, self.cfg),
+            current_import_price=daily_stats.current_import_price,
+        )
 
     @staticmethod
     def _delivered_fn(delivered_by_hour: dict | None, slot_minutes: int) -> Callable[[datetime], float]:
