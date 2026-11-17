@@ -855,3 +855,63 @@ class TestExportKeepValueHorizonMinAnchor:
             f"expected exactly zero PnL at the parity price (cycle_cost paid once, not "
             f"double-subtracted between v_hi and export_pnl_eur); got {ctrl.today_export_pnl_eur}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Persisted € totals: restart + local-day rollover
+# ---------------------------------------------------------------------------
+
+_SAVED_TOTALS = {
+    "today_export_pnl_eur": 1.25,
+    "export_pnl_day": "2026-06-25",
+    "today_charge_cost_eur": 2.5,
+    "today_export_revenue_eur": 3.75,
+    "total_net_eur": 41.5,
+    "today_grid_charge_kwh": 5.5,
+    "today_export_kwh": 6.5,
+    "today_house_import_kwh": 7.5,
+    "today_house_export_kwh": 8.5,
+    "today_house_cost_eur": 9.25,
+    "today_house_revenue_eur": 10.75,
+}
+
+
+@pytest.mark.asyncio
+async def test_persisted_totals_survive_restart():
+    from homeassistant.util import dt as dt_util
+
+    old_tz = dt_util.DEFAULT_TIME_ZONE
+    dt_util.set_default_time_zone(dt_util.get_time_zone("UTC"))
+    try:
+        ctrl, _act, store, _rec = _make_controller(_StubHass())
+        ctrl.restore(dict(_SAVED_TOTALS))
+
+        await ctrl._persist()
+        written = store.saved
+        for key, value in _SAVED_TOTALS.items():
+            assert written[key] == value, key
+        assert not [k for k in set(written) - set(_SAVED_TOTALS) if k.startswith(("today_", "export_pnl", "total_net"))]
+
+        # same local day: nothing resets
+        ctrl._rollover_daily_ledgers(datetime(2026, 6, 25, 23, 0, tzinfo=UTC))
+        assert ctrl.today_export_pnl_eur == 1.25
+        assert ctrl.today_house_cost_eur == 9.25
+
+        # next local day: per-day totals reset, running total intact
+        ctrl._rollover_daily_ledgers(datetime(2026, 6, 26, 0, 5, tzinfo=UTC))
+        assert ctrl.total_net_eur == 41.5
+        assert ctrl._export_pnl_day == "2026-06-26"
+        for name in (
+            "today_export_pnl_eur",
+            "today_charge_cost_eur",
+            "today_export_revenue_eur",
+            "today_grid_charge_kwh",
+            "today_export_kwh",
+            "today_house_import_kwh",
+            "today_house_export_kwh",
+            "today_house_cost_eur",
+            "today_house_revenue_eur",
+        ):
+            assert getattr(ctrl, name) == 0.0, name
+    finally:
+        dt_util.set_default_time_zone(old_tz)
