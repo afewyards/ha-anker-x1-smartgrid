@@ -195,6 +195,17 @@ _PERSIST_GROUPS = [
 _PERSIST_FIELDS = [field for group in _PERSIST_GROUPS for field in group]
 
 
+@dataclasses.dataclass(frozen=True)
+class TickDecision:
+    """What the decide phase hands to the rest of the tick."""
+
+    new_plan: PlanState
+    deadline: datetime | None
+    horizon: list[dict]
+    horizon_mode_e: str
+    ivs_reserve: list
+
+
 class Controller:
     # Class defaults only so the bare __new__ test stubs can read them.
     standby: bool = False
@@ -1490,6 +1501,102 @@ class Controller:
                 await self._persist()
         return setpoint
 
+    async def _tick_decide(
+        self,
+        now: datetime,
+        *,
+        past_actuals,
+        cur_temp: float | None,
+        inputs: PlantInputs,
+        slots: list[PriceSlot],
+        sunset: datetime,
+        pv_remaining: float,
+        tomorrow_total: float | None,
+        sun_times,
+        today_arrays,
+        tomorrow_arrays,
+        today_watts,
+        tomorrow_watts,
+        _export_price: float | None,
+        _export_matches_import: bool,
+        _export_slots: list[PriceSlot],
+        _temp_by_hour: dict,
+        _slot_minutes: int,
+        _dp_out: dict,
+        _estimated_tomorrow,
+        past_actuals_slots: dict,
+        delivered_now: dict,
+    ) -> TickDecision:
+        """Plan this tick: load adapt, drift hedge, the live decision and the floor warning."""
+        # Layer A: residual-corrected predictor for the LIVE plan only (shadow,
+        # fictive and disabled paths keep the base tier — parity preserved).
+        _plan_predictor = self._update_load_adapt(now, cur_temp, past_actuals)
+
+        # ── SoC drift-hedge (LIVE/enabled path; whole block gated OFF unless fraction>0) ──
+        # Default None = byte-identical to pre-hedge (parity preserved at soc_hedge_fraction=0.0).
+        hedge_drain_by_hour = self._apply_drift_hedge(now, inputs, slots, sunset)
+
+        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._run_compute_decision(
+            self.plan,
+            _plan_predictor,
+            inputs,
+            slots,
+            pv_remaining,
+            sunset,
+            cur_temp,
+            tomorrow_total,
+            sun_times,
+            today_arrays,
+            tomorrow_arrays,
+            today_watts,
+            tomorrow_watts,
+            export_price=_export_price,
+            export_price_matches_import=_export_matches_import,
+            export_slots=_export_slots,
+            temp_by_hour=_temp_by_hour,
+            slot_minutes=_slot_minutes,
+            dp_out=_dp_out,
+            estimated_tomorrow=_estimated_tomorrow,
+            past_actuals_by_slot=past_actuals_slots,
+            hedge_drain_by_hour=hedge_drain_by_hour,
+            delivered_by_hour=delivered_now,
+        )
+        # Cache P50 intervals for next tick's drift accumulator step (only when hedging
+        # is enabled; off→on toggle leaves it None so the H1 gate fires on the first
+        # hedging tick, then sets the cache — correct first-step behaviour).
+        if self.cfg.soc_hedge_fraction > 0.0:
+            self._soc_drift_last_intervals = _dp_out.get("intervals")
+        # C4: capture the DP's planned export revenue so the card always reflects
+        # the plan (not just realized ticks which stay 0.0 until export fires).
+        self.planned_export_revenue_eur = float(_dp_out.get("export_revenue_eur", 0.0))
+
+        # Edge-triggered WARNING: fire ONCE when the battery first drains to the
+        # firmware floor; re-arm when SoC recovers above the floor so the next
+        # episode (e.g., the following night) logs again.
+        # Only on the live/enabled path — the shadow/disabled path never reaches here.
+        _at_floor = inputs.soc <= self.cfg.soc_floor + 1.0
+        if _at_floor and not self._infeasible_at_floor_warned:
+            self._infeasible_at_floor_warned = True
+            _LOGGER.warning(
+                "Battery drained to firmware floor (soc=%.1f%% <= floor %.1f%%): "
+                "short on carryover charge from yesterday. Holding the reserve; "
+                "will recharge at the next price-worthy slot (economic-only). "
+                "Only a sag BELOW the firmware floor force-charges (safety rescue).",
+                inputs.soc,
+                self.cfg.soc_floor,
+            )
+        elif not _at_floor and self._infeasible_at_floor_warned:
+            # Re-arm: SoC has recovered above floor, so next drain episode logs again.
+            self._infeasible_at_floor_warned = False
+
+        return TickDecision(
+            new_plan=new_plan,
+            deadline=deadline,
+            horizon=horizon,
+            horizon_mode_e=_horizon_mode_e,
+            ivs_reserve=_ivs_reserve,
+        )
+
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
         # The previous tick's calibration plan, threaded into calibration_plan
@@ -1795,66 +1902,30 @@ class Controller:
         # charge stays on the card (display-only; see _get_current_delivered).
         delivered_now = await self._get_current_delivered(now, _slot_minutes)
 
-        # Layer A: residual-corrected predictor for the LIVE plan only (shadow,
-        # fictive and disabled paths keep the base tier — parity preserved).
-        _plan_predictor = self._update_load_adapt(now, cur_temp, past_actuals)
-
-        # ── SoC drift-hedge (LIVE/enabled path; whole block gated OFF unless fraction>0) ──
-        # Default None = byte-identical to pre-hedge (parity preserved at soc_hedge_fraction=0.0).
-        hedge_drain_by_hour = self._apply_drift_hedge(now, inputs, slots, sunset)
-
-        new_plan, _, deadline, horizon, _horizon_mode_e, _ivs_reserve = await self._run_compute_decision(
-            self.plan,
-            _plan_predictor,
-            inputs,
-            slots,
-            pv_remaining,
-            sunset,
-            cur_temp,
-            tomorrow_total,
-            sun_times,
-            today_arrays,
-            tomorrow_arrays,
-            today_watts,
-            tomorrow_watts,
-            export_price=_export_price,
-            export_price_matches_import=_export_matches_import,
-            export_slots=_export_slots,
-            temp_by_hour=gathered.temp_by_hour,
-            slot_minutes=_slot_minutes,
-            dp_out=_dp_out,
-            estimated_tomorrow=_estimated_tomorrow,
-            past_actuals_by_slot=past_actuals_slots,
-            hedge_drain_by_hour=hedge_drain_by_hour,
-            delivered_by_hour=delivered_now,
+        decided = await self._tick_decide(
+            now,
+            past_actuals=past_actuals,
+            cur_temp=cur_temp,
+            inputs=inputs,
+            slots=slots,
+            sunset=sunset,
+            pv_remaining=pv_remaining,
+            tomorrow_total=tomorrow_total,
+            sun_times=sun_times,
+            today_arrays=today_arrays,
+            tomorrow_arrays=tomorrow_arrays,
+            today_watts=today_watts,
+            tomorrow_watts=tomorrow_watts,
+            _export_price=_export_price,
+            _export_matches_import=_export_matches_import,
+            _export_slots=_export_slots,
+            _temp_by_hour=gathered.temp_by_hour,
+            _slot_minutes=_slot_minutes,
+            _dp_out=_dp_out,
+            _estimated_tomorrow=_estimated_tomorrow,
+            past_actuals_slots=past_actuals_slots,
+            delivered_now=delivered_now,
         )
-        # Cache P50 intervals for next tick's drift accumulator step (only when hedging
-        # is enabled; off→on toggle leaves it None so the H1 gate fires on the first
-        # hedging tick, then sets the cache — correct first-step behaviour).
-        if self.cfg.soc_hedge_fraction > 0.0:
-            self._soc_drift_last_intervals = _dp_out.get("intervals")
-        # C4: capture the DP's planned export revenue so the card always reflects
-        # the plan (not just realized ticks which stay 0.0 until export fires).
-        self.planned_export_revenue_eur = float(_dp_out.get("export_revenue_eur", 0.0))
-
-        # Edge-triggered WARNING: fire ONCE when the battery first drains to the
-        # firmware floor; re-arm when SoC recovers above the floor so the next
-        # episode (e.g., the following night) logs again.
-        # Only on the live/enabled path — the shadow/disabled path never reaches here.
-        _at_floor = inputs.soc <= self.cfg.soc_floor + 1.0
-        if _at_floor and not self._infeasible_at_floor_warned:
-            self._infeasible_at_floor_warned = True
-            _LOGGER.warning(
-                "Battery drained to firmware floor (soc=%.1f%% <= floor %.1f%%): "
-                "short on carryover charge from yesterday. Holding the reserve; "
-                "will recharge at the next price-worthy slot (economic-only). "
-                "Only a sag BELOW the firmware floor force-charges (safety rescue).",
-                inputs.soc,
-                self.cfg.soc_floor,
-            )
-        elif not _at_floor and self._infeasible_at_floor_warned:
-            # Re-arm: SoC has recovered above floor, so next drain episode logs again.
-            self._infeasible_at_floor_warned = False
 
         # ── C3 export executor variables (populated below when export fires) ──
         _export_setpoint_w: float | None = None
@@ -1896,7 +1967,7 @@ class Controller:
         new_plan = await tick_calibration.tick_override(
             self,
             now,
-            horizon=horizon,
+            horizon=decided.horizon,
             inputs=inputs,
             _slot_minutes=_slot_minutes,
             _export_price=_export_price,
@@ -1905,7 +1976,7 @@ class Controller:
             delivered_now=delivered_now,
             _calibration_prev=_calibration_prev,
             _dp_out=_dp_out,
-            new_plan=new_plan,
+            new_plan=decided.new_plan,
         )
 
         # ── Hard-floor rescue (safety; hardcoded, no config option) ───────────
@@ -1950,7 +2021,7 @@ class Controller:
             inputs,
             slots,
             _dp_out,
-            _ivs_reserve,
+            decided.ivs_reserve,
             _slot_minutes,
             _export_price,
             _house_load_now_w,
@@ -1975,20 +2046,22 @@ class Controller:
 
         # Stash decision snapshot for persistence by the recorder writer (A3).
         _price_window_e = [
-            (s.start.isoformat(), s.price) for s in slots if deadline is not None and now <= s.start < deadline
+            (s.start.isoformat(), s.price)
+            for s in slots
+            if decided.deadline is not None and now <= s.start < decided.deadline
         ]
         self.last_decision = snapshot.build_decision_snapshot(
             now=now,
             active=new_plan.state is ControllerState.FORCING and not _engage_failed,
             soc=inputs.soc,
-            deadline=deadline,
+            deadline=decided.deadline,
             committed_slots=new_plan.committed_slots,
             pv_remaining=pv_remaining,
             tomorrow_total=tomorrow_total,
             price_window=_price_window_e,
             setpoint=setpoint,
             state=_recorded_state,
-            horizon_mode=_horizon_mode_e,
+            horizon_mode=decided.horizon_mode_e,
         )
 
         await tick_publish.persist(self, now)
@@ -1996,13 +2069,15 @@ class Controller:
         # Full kWh required to reach soc_target from current SoC. Used as the
         # solar_charge_kwh status key so the dashboard shows the charge-to-target gap.
         solar_charge = required_kwh
-        result = self._status(now, setpoint, deadline, "ok", solar_charge=solar_charge)
+        result = self._status(now, setpoint, decided.deadline, "ok", solar_charge=solar_charge)
         if _engage_failed:
             # Override the published state only (self.plan intentionally left FORCING).
             result["state"] = "passive"
-        tick_publish.publish(self, _export_setpoint_w, _house_load_now_w, _dp_out, horizon, deadline, _slot_minutes)
+        tick_publish.publish(
+            self, _export_setpoint_w, _house_load_now_w, _dp_out, decided.horizon, decided.deadline, _slot_minutes
+        )
         self._publish_daily_stats(
-            now, horizon, _export_price, _export_slots, _slot_minutes, delivered_now, _export_matches_import
+            now, decided.horizon, _export_price, _export_slots, _slot_minutes, delivered_now, _export_matches_import
         )
         # After the actuator commands above, so the card can never hold them up.
         await self._publish_power_card(
@@ -2011,9 +2086,9 @@ class Controller:
             _recorded_state,
             (_export_setpoint_w or 0.0) > 0,
             lambda: (
-                horizon,
+                decided.horizon,
                 self._export_price_fn(
-                    now, horizon, _export_price, _export_slots, _slot_minutes, _export_matches_import
+                    now, decided.horizon, _export_price, _export_slots, _slot_minutes, _export_matches_import
                 ),
                 self._delivered_fn(delivered_now, _slot_minutes),
             ),
@@ -2021,7 +2096,7 @@ class Controller:
         # Publish the DP optimizer's proposed horizon as a second (fictive) plan so
         # shadow mode is legible on the dashboard (T0.6a); build+publish is shared
         # with the shadow path via _publish_fictive_plan (Task C5).
-        self._publish_fictive_plan(slots, _dp_out, inputs.soc, deadline, _slot_minutes)
+        self._publish_fictive_plan(slots, _dp_out, inputs.soc, decided.deadline, _slot_minutes)
         return result
 
     def _write_decision_sync(self, snapshot: dict) -> None:
