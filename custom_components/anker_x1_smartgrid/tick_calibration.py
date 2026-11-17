@@ -38,9 +38,9 @@ async def tick_override(
     # than expressed as a DP constraint so the parity-gated core is
     # untouched.  See the spec for the stranded-capacity evidence.
     #
-    # Was self.plan FORCING because of calibration, as of the end of the
-    # PREVIOUS tick? Captured before self._calibration_engaged updates
-    # below and before self.plan is reassigned further down.
+    # Was controller.plan FORCING because of calibration, as of the end of the
+    # PREVIOUS tick? Captured before controller._calibration_engaged updates
+    # below and before the caller reassigns controller.plan after return.
     _calibration_was_engaged = controller._calibration_engaged
     controller._calibration_last_success = None
     controller._calibration_days_since = None

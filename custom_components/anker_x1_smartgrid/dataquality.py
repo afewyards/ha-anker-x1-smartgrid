@@ -124,7 +124,7 @@ def clean_hourly_rows(rows: list[dict]) -> list[FeatureRow]:
     ``featureset.hourly_load_w``) then ``house_load_mean`` (fallback, e.g.
     pre-rollup rows or a partial hour). Temp comes from ``temp_mean``. Rows
     missing ``hour_ts`` or both load fields are dropped; outlier-clamped (after
-    rescaling) the same way as the raw-row path.
+    rescaling) to the same bounds as the other tiers.
     """
     out: list[FeatureRow] = []
     for row in rows:

@@ -13,7 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # ── RACE 2 (2026-07-29 add-battery-module restart) ──────────────────────────
 # Bounded same-hour retry count for the cheap add-on /health poll (see the
-# elif branch in _tick_impl and Controller._poll_addon_health). Ticks are
+# retry branch in refresh and Controller._poll_addon_health). Ticks are
 # ~60s apart, so this buys ~_MAX_ADDON_HEALTH_RETRIES extra minutes of
 # catch-up after a failed hourly poll without hammering a genuinely-dead
 # add-on every tick for the rest of the clock-hour.
@@ -23,7 +23,7 @@ _MAX_ADDON_HEALTH_RETRIES = 5
 async def refresh(controller: Controller, now: datetime, _wf_list: list[dict], _persons_home_now: int | None) -> None:
     """Run the hourly add-on health poll and remote forecast fetch, plus their same-hour catch-ups."""
     # Health poll + remote forecast fetch: once per clock-hour when the add-on
-    # is enabled. Uses the weather forecast already fetched above as the
+    # is enabled. Uses the weather forecast gathered by tick_inputs.gather as the
     # feature payload (no POST while it is empty; the fetch is then owed to a
     # later same-hour tick). A failed fetch (network error, timeout, non-200,
     # bad JSON) returns None and leaves the map unchanged; a {} map, or a

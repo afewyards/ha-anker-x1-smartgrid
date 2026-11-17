@@ -3,12 +3,10 @@
 No Home Assistant imports — only stdlib and the project's own models.
 All functions are pure (no side effects, no I/O).
 
-Discharge-model note  (INTENTIONAL divergence from energy.py)
--------------------------------------------------------------
-energy.py is a *charge-only* model: it processes solar
-surplus only and has no discharge term.  regret.py models the FULL day:
-solar surplus charges (same eta_charge and rate conventions as energy.py),
-and load deficit discharges the battery 1 DC kWh per 1 AC kWh consumed
+Discharge-model note
+--------------------
+regret.py models the FULL day: solar surplus charges the battery through
+eta_charge, and load deficit discharges it 1 DC kWh per 1 AC kWh consumed
 (no discharge efficiency factor).  This is a *deliberate* hindsight-
 modelling choice — the regret module needs to trace the battery level
 through the whole day, including load-driven discharge, to find where

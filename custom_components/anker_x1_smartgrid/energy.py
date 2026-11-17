@@ -1,4 +1,4 @@
-"""Pure energy model: forward SoC simulation and solar deficit."""
+"""Pure energy model helpers: solar deficit."""
 
 from __future__ import annotations
 

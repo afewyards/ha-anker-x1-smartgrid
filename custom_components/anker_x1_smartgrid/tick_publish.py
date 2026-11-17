@@ -24,8 +24,8 @@ def publish(
     # E2: surface the live export setpoint for observability only.
     # _status publishes 0.0/"passive" because export runs in the non-FORCING
     # branch with setpoint=0.0 — state is intentionally left untouched.
-    # The recorder's smartcharge_state column (_record_sample, called above
-    # at line 2201) already always records the plan state ("passive" during
+    # The recorder's smartcharge_state column (_record_sample, called before
+    # publish) already always records the plan state ("passive" during
     # export), so leaving last_status["state"] alone matches the recorded
     # history instead of diverging from it. A dedicated sensor reads the key.
     controller.last_status["export_setpoint_w"] = _export_setpoint_w
@@ -48,8 +48,8 @@ def publish(
     controller.last_status["terminal_v_hi"] = _dp_out.get("terminal_v_hi")
     controller.last_status["terminal_need_kwh"] = _dp_out.get("terminal_need_kwh")
     # R1: surface the DP's export-curve engagement (decision.py writes these
-    # into _dp_out) for the dashboard/diagnostic sensor. _status() above just
-    # rebuilt self.last_status wholesale, so — like terminal_v_hi/need_kwh —
+    # into _dp_out) for the dashboard/diagnostic sensor. _status() just
+    # rebuilt last_status wholesale, so — like terminal_v_hi/need_kwh —
     # this must be re-added every tick or sensor.py reads permanent None.
     controller.last_status["export_curve_covered"] = _dp_out.get("export_curve_covered")
     controller.last_status["export_curve_slots"] = _dp_out.get("export_curve_slots")

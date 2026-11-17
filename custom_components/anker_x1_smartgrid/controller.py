@@ -295,7 +295,7 @@ class Controller:
         self._addon_health_ts: datetime | None = None
         # RACE 2: bounded same-hour retry budget for a failed health poll;
         # reset to 0 each time the normal once-per-hour block runs. See
-        # _MAX_ADDON_HEALTH_RETRIES / _poll_addon_health / _tick_impl.
+        # _MAX_ADDON_HEALTH_RETRIES / _poll_addon_health / tick_remote.refresh.
         self._addon_health_retry_count: int = 0
         # RACE 1: True while an Anker device is configured but at least one
         # of capacity_kwh/max_charge_w/max_export_w has never yet been read
@@ -457,8 +457,8 @@ class Controller:
         # opposed to a genuine economic decision). Read at the top of the next
         # tick's override block (before self.plan is superseded) to tell "the
         # scheduler is coasting on a plan calibration itself injected" apart
-        # from "the DP genuinely wants this hour" — see the override block in
-        # _tick_impl for why that distinction matters. Not persisted: a
+        # from "the DP genuinely wants this hour" — see
+        # tick_calibration.tick_override for why that distinction matters. Not persisted: a
         # restart degrades to treating any in-progress cycle as freshly
         # starting, same as the scheduler's own restart self-heal.
         self._calibration_engaged: bool = False
