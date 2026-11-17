@@ -660,13 +660,10 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
                 const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET
             ):
                 errors["base"] = "soc_floor_above_target"
-            if (
-                not errors
-                and user_input.get(const.CONF_BACKUP_RESERVE_SOC, const.DEFAULT_BACKUP_RESERVE_SOC) > 0
-                and user_input.get(const.CONF_BACKUP_RESERVE_SOC, const.DEFAULT_BACKUP_RESERVE_SOC) + 1
-                >= user_input.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET) - 1
-            ):
-                errors["base"] = "backup_reserve_too_high"
+            if not errors:
+                _reserve = user_input.get(const.CONF_BACKUP_RESERVE_SOC, const.DEFAULT_BACKUP_RESERVE_SOC)
+                if _reserve > 0 and _reserve + 1 >= user_input.get(const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET) - 1:
+                    errors["base"] = "backup_reserve_too_high"
             if (
                 not errors
                 and user_input.get(const.CONF_PRICE_MODE, merged.get(const.CONF_PRICE_MODE, const.DEFAULT_PRICE_MODE))

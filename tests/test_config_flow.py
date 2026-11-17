@@ -63,9 +63,9 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert (
-        len(section_keys) == 70
-    )  # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band, +1 restore_workmode, +4 calibration_*, +1 history_days
+    # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
+    # +1 restore_workmode, +4 calibration_*, +1 history_days
+    assert len(section_keys) == 70
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1933,15 +1933,20 @@ def test_backup_reserve_in_tunables_and_section():
     assert any(const.CONF_BACKUP_RESERVE_SOC in keys for keys in OPTIONS_SECTIONS.values())
 
 
-async def test_options_flow_rejects_backup_reserve_too_high(hass):
+async def test_options_flow_backup_reserve_boundary(hass):
     entry = await _create_entry(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result2 = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: 60.0, const.CONF_SOC_TARGET: 62.0}),
-    )
-    assert result2["type"] == "form"
-    assert result2["errors"] == {"base": "backup_reserve_too_high"}
+    for reserve, ok in ((60.0, False), (59.9, True)):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        res = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: reserve, const.CONF_SOC_TARGET: 62.0}),
+        )
+        if ok:
+            assert res["type"] == "create_entry"
+        else:
+            assert res["type"] == "form"
+            assert res["errors"] == {"base": "backup_reserve_too_high"}
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
