@@ -64,7 +64,7 @@ def ride_out_reserve_kwh(
     * **Physics**: AC deficit → DC drawdown via ``/eta_discharge``
       (= ``min(round_trip_eff/eta_charge, 1)``), matching the displayed
       projected-SoC line (plan.py), NOT ``eta_charge``.
-    * Clamped to ``[floor_kwh, capacity_kwh]``.  ``max_window_h`` bounds the walk
+    * Clamped to ``[max(floor_kwh, backup reserve), capacity_kwh]``  ``max_window_h`` bounds the walk
       so a recovery-free multi-cloudy stretch cannot bleed the *next* night's
       drawdown into this reserve (drawdown past the pack → reserve pins to
       capacity → export disabled that hour — survival-correct).

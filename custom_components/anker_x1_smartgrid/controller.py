@@ -51,6 +51,7 @@ from .remote_forecast import RemoteForecastPredictor, build_hours_payload, fetch
 from .actuator import Actuator
 from .efficiency import EfficiencyCurve
 from .export_filter import apply_min_export_block
+from .dp_common import reserve_wall_kwh
 from .dataquality import clean_hourly_rows, soc_glitch
 from .forecast import build_intervals, LoadPredictor
 from .hgbr import HGBRQuantileModel
@@ -63,7 +64,6 @@ from .recorder import DataRecorder
 # Pure planner core (Task C2): re-exported so existing call sites / test
 # imports (`from .controller import compute_decision`, `controller._trough_by_hour`,
 # etc.) keep working unchanged after the move to decision.py.
-from .dp_common import reserve_wall_kwh
 from .decision import (
     _DP_EPSILON_SCHEDULE_KWH,
     _apply_price_prior,

@@ -383,3 +383,23 @@ async def test_where_a_kept_value_is_earned_reaches_the_debug_reasons_not_the_se
     assert sensor and debug
     assert all("kept_price" not in w and "kept_estimated" not in w for w in sensor)
     assert all(r["kept_for"]["kind"] == "refill" and "kept_price" in r for r in debug)
+
+
+async def test_reasons_get_the_snapped_backup_reserve_on_a_20_kwh_pack(monkeypatch):
+    import dataclasses
+
+    from custom_components.anker_x1_smartgrid import why
+    from custom_components.anker_x1_smartgrid.dp_common import reserve_wall_kwh
+    from tests.helpers import make_controller
+
+    seen = []
+    monkeypatch.setattr(why, "hour_reasons", lambda *a, **k: seen.append(k["backup_reserve_soc"]) or {})
+    ctrl, _act = make_controller()
+    ctrl.cfg = dataclasses.replace(ctrl.cfg, capacity_kwh=20.48, backup_reserve_soc=25.0)
+    ctrl._recorder.read_feature_rows = lambda since: _samples()
+    ctrl.last_status["terminal_v_hi"] = 0.30
+    await ctrl._refresh_battery_margin(NOW)
+    await ctrl._publish_power_card(NOW, card_inputs(48.0), "hold", False, _charge_then_export())
+    snapped = ctrl.cfg.kwh_to_pct(reserve_wall_kwh(ctrl.cfg))
+    assert snapped > 25.0
+    assert seen == [pytest.approx(snapped)]

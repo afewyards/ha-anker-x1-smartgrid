@@ -294,7 +294,10 @@ def build_plan_horizon(
     # (byte-identical parity rule; see D4/D5 refactor report).
     eta_discharge = min(cfg.round_trip_eff / cfg.eta_charge, 1.0) if cfg.eta_charge > 1e-9 else 1.0
     soc_sim = soc
-    reserve_wall_pct = cfg.kwh_to_pct(reserve_wall_kwh(cfg)) if cap_wh > 0 else 0.0
+    reserve_wall = reserve_wall_kwh(cfg)
+    reserve_wall_pct = cfg.kwh_to_pct(reserve_wall) if cap_wh > 0 else 0.0
+    rsv_default_kwh = max(cfg.floor_kwh, reserve_wall)
+    rsv_default_pct = max(cfg.soc_floor, reserve_wall_pct)
     out: list[dict] = []
     for slot in sorted(slots, key=lambda s: s.start):
         hour = hour_floor(slot.start)
@@ -308,10 +311,10 @@ def build_plan_horizon(
             # Past slot: emit recorded actuals verbatim and DO NOT advance soc_sim,
             # so the forward projection from the current SoC at now_h is unchanged.
             if rsv_by_hour:
-                rsv_kwh = rsv_by_hour.get(hour, cfg.floor_kwh)
-                reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else cfg.soc_floor
+                rsv_kwh = rsv_by_hour.get(hour, rsv_default_kwh)
+                reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else rsv_default_pct
             else:
-                reserve_soc = cfg.soc_floor
+                reserve_soc = rsv_default_pct
             solar_charge_w = act["solar_charge_w"]
             grid_charge_w = act["grid_charge_w"]
             # Keyed on slot_key, and the energies pass through UNSCALED: since
@@ -456,10 +459,10 @@ def build_plan_horizon(
         soc_sim = min(max(soc_sim, wall_pct), cfg.soc_target)
         # reserve_soc: ride-out reserve as % on the SoC axis, or cfg.soc_floor as default.
         if rsv_by_hour:
-            rsv_kwh = rsv_by_hour.get(hour, cfg.floor_kwh)
-            reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else cfg.soc_floor
+            rsv_kwh = rsv_by_hour.get(hour, rsv_default_kwh)
+            reserve_soc = cfg.kwh_to_pct(rsv_kwh) if cfg.capacity_kwh > 0 else rsv_default_pct
         else:
-            reserve_soc = cfg.soc_floor
+            reserve_soc = rsv_default_pct
         if is_est:
             # Estimated tail rows show the firmware floor plus the still-needed
             # terminal energy converted to SoC, instead of the usual reserve line.

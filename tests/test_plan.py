@@ -1848,10 +1848,21 @@ def test_plan_start_under_reserve_not_lifted():
 
 
 def test_plan_reserve_soc_at_least_backup_reserve():
+    from custom_components.anker_x1_smartgrid import energy
+
     cfg = _reserve_cfg(backup_reserve_soc=30.0)
-    rsv = {BASE + timedelta(hours=i): cfg.pct_to_kwh(30.0) for i in range(6)}
+    ivs = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=2000.0, dt_h=1.0) for i in range(6)]
+    rsv = {iv.start: energy.ride_out_reserve_kwh(iv.start, ivs, cfg) for iv in ivs}
     out = _deficit_plan(cfg, 80.0, reserve_by_hour=rsv)
     assert all(e["reserve_soc"] >= 30.0 for e in out)
+
+
+def test_plan_reserve_soc_fallbacks_sit_on_backup_reserve():
+    cfg = _reserve_cfg(backup_reserve_soc=30.0)
+    assert all(e["reserve_soc"] == 30.0 for e in _deficit_plan(cfg, 80.0))
+    other = {BASE + timedelta(hours=99): 9.0}
+    assert all(e["reserve_soc"] == 30.0 for e in _deficit_plan(cfg, 80.0, reserve_by_hour=other))
+    assert all(e["reserve_soc"] == 5.0 for e in _deficit_plan(_reserve_cfg(), 80.0))
 
 
 def test_plan_reserve_soc_estimated_rows_start_from_backup_reserve():
