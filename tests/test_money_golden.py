@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.anker_x1_smartgrid import carddebug, const, daily_stats, margin, usecost
+from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.ledger import CashLedger
 from custom_components.anker_x1_smartgrid.models import Config, PlantInputs, PriceSlot
 from custom_components.anker_x1_smartgrid.regret import DayData, realized_grid_cost
@@ -80,6 +81,24 @@ def _plain(v):
     return v
 
 
+def _export_price_fn(fx: dict, width: int, static: bool) -> dict:
+    ctl = Controller.__new__(Controller)
+    ctl.cfg = Config(
+        export_fee_eur_per_kwh=FEE, price_mode=const.PRICE_MODE_STATIC if static else const.PRICE_MODE_SENSOR
+    )
+    horizon, now = fx["horizon"], datetime.fromisoformat(fx["now"])
+    curve = [PriceSlot(datetime.fromisoformat(h["start"]), round(h["price"] * 0.7, 4), width) for h in horizon]
+    out = {}
+    for export_price in (0.12, None):
+        for slots_name, slots in (("curve", curve), ("nocurve", None)):
+            for matches in (False, True):
+                at = ctl._export_price_fn(now, horizon, export_price, slots, width, matches)
+                out[f"{export_price}/{slots_name}/{matches}"] = [
+                    at(datetime.fromisoformat(h["start"]), h["price"]) for h in horizon
+                ]
+    return out
+
+
 def figures(name: str) -> dict:
     fx = _load(name)
     tz = ZoneInfo(fx["tz"])
@@ -116,6 +135,7 @@ def figures(name: str) -> dict:
             baseline=daily_stats.baseline_by_day(horizon, tz, export_at),
             margin=by_day,
         ),
+        "export_price_fn": _export_price_fn(fx, width, not export_priced),
         "regret_realized": _regret(fx, tz, width, export_priced),
         "ledger": _ledger(fx, tz, width),
     }
