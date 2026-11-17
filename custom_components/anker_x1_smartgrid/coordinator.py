@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone, UTC
 
 from homeassistant.core import HomeAssistant
@@ -30,9 +31,10 @@ def read_float(hass: HomeAssistant, entity_id: str) -> float | None:
     if state is None or str(state.state).lower() in _BAD:
         return None
     try:
-        return float(state.state)
+        value = float(state.state)
     except (ValueError, TypeError):
         return None
+    return value if math.isfinite(value) else None
 
 
 def read_power_w(hass: HomeAssistant, entity_id: str) -> float | None:

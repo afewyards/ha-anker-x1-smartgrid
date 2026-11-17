@@ -23,6 +23,12 @@ async def test_read_float_handles_unavailable(hass):
     assert coordinator.read_float(hass, "sensor.missing") is None
 
 
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf"])
+async def test_read_float_rejects_non_finite(hass, raw):
+    hass.states.async_set("sensor.x", raw)
+    assert coordinator.read_float(hass, "sensor.x") is None
+
+
 async def test_read_plant_inputs(hass):
     d = _data()
     hass.states.async_set(d[const.CONF_ENT_SOC], "42")
