@@ -746,3 +746,9 @@ def test_price_prior_gate_respects_reserve_anchor(monkeypatch):
     calls["n"] = 0
     _call(_cfg(reserve_anchor="legacy"), soc=20.0)
     assert calls["n"] >= 1, "legacy anchor must still CALL _apply_price_prior"
+
+
+def test_compute_decision_refills_on_flat_prices():
+    out: dict = {}
+    _call_compute_decision(_cfg(backup_reserve_soc=30.0), soc=12.0, prices=[0.25] * 9, out=out)
+    assert out["grid_request"].get(BASE, 0.0) > 0.0

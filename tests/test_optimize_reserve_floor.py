@@ -97,3 +97,26 @@ def test_reserve_length_mismatch_raises():
             window_len=3,
             reserve_by_hour=[5.0, 5.0],  # len 2 != 3
         )
+
+
+def _ride_out(cfg: Config) -> float:
+    from datetime import UTC, datetime, timedelta
+
+    from custom_components.anker_x1_smartgrid import energy
+    from custom_components.anker_x1_smartgrid.models import ForecastInterval
+
+    now = datetime(2026, 11, 17, 18, tzinfo=UTC)
+    ivs = [ForecastInterval(now + timedelta(hours=i), pv_w=0.0, load_w=300.0, dt_h=1.0) for i in range(6)]
+    return energy.ride_out_reserve_kwh(now, ivs, cfg)
+
+
+def test_ride_out_reserve_sits_on_backup_reserve():
+    from custom_components.anker_x1_smartgrid.dp_common import reserve_wall_kwh
+
+    off = _cfg(soc_floor=5.0)
+    on = _cfg(soc_floor=5.0, backup_reserve_soc=30.0)
+    assert _ride_out(on) == pytest.approx(_ride_out(off) + reserve_wall_kwh(on) - off.floor_kwh)
+
+
+def test_ride_out_reserve_unchanged_when_reserve_below_floor():
+    assert _ride_out(_cfg(soc_floor=20.0, backup_reserve_soc=10.0)) == _ride_out(_cfg(soc_floor=20.0))

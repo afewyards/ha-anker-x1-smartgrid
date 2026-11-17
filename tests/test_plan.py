@@ -1822,3 +1822,51 @@ def test_row_emits_self_discharge_kwh_matching_its_power():
     assert out[0]["self_discharge_kwh"] == pytest.approx(0.4)
     for r in out:
         assert r["self_discharge_kwh"] == pytest.approx(round(r["self_discharge_w"] * 1.0 / 1000.0, 3))
+
+
+def _reserve_cfg(**kw):
+    d = dict(
+        capacity_kwh=10.0, soc_floor=5.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, round_trip_eff=1.0
+    )
+    d.update(kw)
+    return Config(**d)
+
+
+def _deficit_plan(cfg, soc, hours=6, **kw):
+    ivs = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=2000.0, dt_h=1.0) for i in range(hours)]
+    return plan.build_plan_horizon(_slots(hours), ivs, [], soc, BASE + timedelta(hours=hours), cfg, **kw)
+
+
+def test_plan_soc_flattens_at_backup_reserve():
+    assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 80.0)) == 30.0
+    assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(), 80.0)) == 5.0
+
+
+def test_plan_start_under_reserve_not_lifted():
+    out = _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 12.0)
+    assert [e["soc"] for e in out] == [12.0] * 6
+
+
+def test_plan_reserve_soc_at_least_backup_reserve():
+    cfg = _reserve_cfg(backup_reserve_soc=30.0)
+    rsv = {BASE + timedelta(hours=i): cfg.pct_to_kwh(30.0) for i in range(6)}
+    out = _deficit_plan(cfg, 80.0, reserve_by_hour=rsv)
+    assert all(e["reserve_soc"] >= 30.0 for e in out)
+
+
+def test_plan_reserve_soc_estimated_rows_start_from_backup_reserve():
+    cfg = _reserve_cfg(backup_reserve_soc=30.0)
+    out = _deficit_plan(
+        cfg, 80.0, est_starts=frozenset(BASE + timedelta(hours=i) for i in (4, 5)), terminal_need_kwh=1.0
+    )
+    est = [e for e in out if e["estimated"]]
+    assert est and all(e["reserve_soc"] >= 40.0 for e in est)
+
+
+def test_plan_parks_at_the_snapped_reserve_on_a_20_kwh_pack():
+    from custom_components.anker_x1_smartgrid.dp_common import reserve_wall_kwh
+
+    cfg = _reserve_cfg(capacity_kwh=20.48, backup_reserve_soc=25.0)
+    snapped = cfg.kwh_to_pct(reserve_wall_kwh(cfg))
+    assert snapped > 25.0
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12)) == pytest.approx(snapped, abs=0.05)

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from . import const
 from .interp import MidpointLinear
+from .dp_common import reserve_wall_kwh
 from .models import Config, ForecastInterval, PriceSlot
 from .parsers import build_pv_curve_from_watts, build_two_day_pv_curve
 from .resolution import floor_to_slot, hour_floor
@@ -293,6 +294,7 @@ def build_plan_horizon(
     # (byte-identical parity rule; see D4/D5 refactor report).
     eta_discharge = min(cfg.round_trip_eff / cfg.eta_charge, 1.0) if cfg.eta_charge > 1e-9 else 1.0
     soc_sim = soc
+    reserve_wall_pct = cfg.kwh_to_pct(reserve_wall_kwh(cfg)) if cap_wh > 0 else 0.0
     out: list[dict] = []
     for slot in sorted(slots, key=lambda s: s.start):
         hour = hour_floor(slot.start)
@@ -359,6 +361,7 @@ def build_plan_horizon(
         load_w = iv.load_w if iv is not None else None
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
         is_grid = slot_key in selected_set
+        wall_pct = max(const.FIRMWARE_SOC_FLOOR, min(reserve_wall_pct, soc_sim))
         is_est = hour in est_set
         # Duration the model may still act for. A slot that has already STARTED
         # is only modelled over the minutes it has left: the live ``soc`` this
@@ -421,7 +424,7 @@ def build_plan_horizon(
                     ceil_headroom_w - solar_charge_w,
                 ),
             )
-        elif iv is not None and iv.load_w > iv.pv_w and not held and soc_sim > const.FIRMWARE_SOC_FLOOR:
+        elif iv is not None and iv.load_w > iv.pv_w and not held and soc_sim > wall_pct:
             self_discharge_w = min(iv.load_w - iv.pv_w, cfg.max_charge_w)
         total_w = solar_charge_w + grid_charge_w
         if cap_wh > 0:
@@ -447,10 +450,10 @@ def build_plan_horizon(
             soc_sim -= (grid_export_w / max(_eta_de, 1e-6)) * model_h / cap_wh * 100.0 / _band
         # SoC drift-hedge debit (display): mirror the DP's forward SoC sag. Past slots
         # `continue` above (excluded). Empty/None → no change (parity-safe).
-        unhedged_soc = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
+        unhedged_soc = min(max(soc_sim, wall_pct), cfg.soc_target)
         if hedge_by_hour and cfg.capacity_kwh > 0:
             soc_sim -= cfg.kwh_to_pct(hedge_by_hour.get(slot_key, 0.0))
-        soc_sim = min(max(soc_sim, const.FIRMWARE_SOC_FLOOR), cfg.soc_target)
+        soc_sim = min(max(soc_sim, wall_pct), cfg.soc_target)
         # reserve_soc: ride-out reserve as % on the SoC axis, or cfg.soc_floor as default.
         if rsv_by_hour:
             rsv_kwh = rsv_by_hour.get(hour, cfg.floor_kwh)
@@ -461,7 +464,7 @@ def build_plan_horizon(
             # Estimated tail rows show the firmware floor plus the still-needed
             # terminal energy converted to SoC, instead of the usual reserve line.
             need_pct = terminal_need_kwh / cap_kwh * 100.0 if cap_kwh > 0 else 0.0
-            reserve_soc = min(const.FIRMWARE_SOC_FLOOR + need_pct, cfg.soc_target)
+            reserve_soc = min(max(const.FIRMWARE_SOC_FLOOR, reserve_wall_pct) + need_pct, cfg.soc_target)
         if is_est:
             mode = "estimated"
         elif is_grid:

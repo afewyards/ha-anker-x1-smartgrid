@@ -63,6 +63,7 @@ from .recorder import DataRecorder
 # Pure planner core (Task C2): re-exported so existing call sites / test
 # imports (`from .controller import compute_decision`, `controller._trough_by_hour`,
 # etc.) keep working unchanged after the move to decision.py.
+from .dp_common import reserve_wall_kwh
 from .decision import (
     _DP_EPSILON_SCHEDULE_KWH,
     _apply_price_prior,
@@ -2663,7 +2664,7 @@ class Controller:
                 charge_margin=cfg.charge_margin_eur_per_kwh,
                 kept_value=(self._kept_by_slot or {}).get,
                 kept_source=(self._kept_src_by_slot or {}).get,
-                backup_reserve_soc=cfg.backup_reserve_soc,
+                backup_reserve_soc=cfg.kwh_to_pct(reserve_wall_kwh(cfg)) if cfg.capacity_kwh > 0 else 0.0,
             )
             self._why_failed = False
         except Exception:

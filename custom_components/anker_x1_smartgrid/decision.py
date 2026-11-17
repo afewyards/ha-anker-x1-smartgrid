@@ -475,6 +475,7 @@ def _dp_select_slots(
         terminal_mode=terminal_mode,
         water_value=water_value,
         reserve_by_hour=padded_reserve,  # UNCHANGED: export discharge floor
+        refill_ok=_price_valid,
         grid_charge_ceiling=grid_charge_ceiling,
         hedge_drain_kwh=hedge_drain_kwh,
         dt_h=dt_h,

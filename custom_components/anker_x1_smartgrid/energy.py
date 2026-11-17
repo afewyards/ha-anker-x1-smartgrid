@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from .models import Config, ForecastInterval
 from . import const, resolution
+from .dp_common import reserve_wall_kwh
 
 
 def simulate_soc(
@@ -81,7 +82,7 @@ def ride_out_reserve_kwh(
       signal doesn't see). ``0.0`` reproduces the walk byte-identically.
     """
     cap_kwh = cfg.capacity_kwh
-    floor_kwh = cfg.floor_kwh
+    floor_kwh = max(cfg.floor_kwh, reserve_wall_kwh(cfg))
     eta_c = cfg.eta_charge_safe()
     eta_d = cfg.eta_discharge_static()
 
