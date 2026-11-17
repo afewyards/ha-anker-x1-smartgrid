@@ -45,6 +45,7 @@ from . import (
     scheduler,
     snapshot,
     soc_drift,
+    tick_calibration,
     tick_publish,
     tick_remote,
     usecost,
@@ -1968,7 +1969,7 @@ class Controller:
         # failsafe ticks return before this point: accepted spec limitation.
         self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
 
-        new_plan = await calibration.tick_override(
+        new_plan = await tick_calibration.tick_override(
             self,
             now,
             horizon=horizon,
