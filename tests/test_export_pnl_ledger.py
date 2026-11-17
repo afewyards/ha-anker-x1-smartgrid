@@ -894,10 +894,11 @@ async def test_persisted_totals_survive_restart():
     from homeassistant.util import dt as dt_util
 
     old_tz = dt_util.DEFAULT_TIME_ZONE
-    dt_util.set_default_time_zone(dt_util.get_time_zone("UTC"))
+    dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Amsterdam"))
     try:
         ctrl, _act, store, _rec = _make_controller(_StubHass())
         ctrl.restore(dict(_SAVED_TOTALS))
+        assert ctrl.balance_base_eur == 41.5
 
         await ctrl._persist()
         written = store.saved
@@ -921,13 +922,13 @@ async def test_persisted_totals_survive_restart():
             "soc_glitch",
         }
 
-        # same local day: nothing resets
-        ctrl._rollover_daily_ledgers(datetime(2026, 6, 25, 23, 0, tzinfo=UTC))
+        # 23:30 local (UTC+2), same local day: nothing resets
+        ctrl._rollover_daily_ledgers(datetime(2026, 6, 25, 21, 30, tzinfo=UTC))
         for name in (*_PER_DAY, "total_net_eur"):
             assert getattr(ctrl, name) == _SAVED_TOTALS[name], name
 
-        # next local day: per-day totals reset, running total intact
-        ctrl._rollover_daily_ledgers(datetime(2026, 6, 26, 0, 5, tzinfo=UTC))
+        # 00:05 local on 06-26, same UTC date: per-day totals reset, running total intact
+        ctrl._rollover_daily_ledgers(datetime(2026, 6, 25, 22, 5, tzinfo=UTC))
         assert ctrl.total_net_eur == 41.5
         assert ctrl._export_pnl_day == "2026-06-26"
         for name in _PER_DAY:
