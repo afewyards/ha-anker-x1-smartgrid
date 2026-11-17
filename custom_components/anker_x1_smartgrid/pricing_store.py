@@ -17,7 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from . import optimize
 from .models import Config, PriceSlot
-from .regret import windowed_peak_prices
+from .dp_common import windowed_peak_prices
 
 
 # ── B1: rolling realized-price store ──────────────────────────────────────────

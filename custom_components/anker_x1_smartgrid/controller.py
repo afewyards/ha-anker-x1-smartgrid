@@ -2659,7 +2659,7 @@ class Controller:
             del h["grid_bought_eur"], h["grid_sold_eur"]
         cfg = self.cfg
         # The DP's own export gate and terminal-refill prices, per stored kWh.
-        eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve)
+        eta_d = optimize_mod.eta_discharge_at(cfg.max_export_w, cfg, curve)
         eta_c = optimize_mod.refill_eta_charge(cfg, curve)
         try:
             reasons = why.hour_reasons(
@@ -2831,8 +2831,8 @@ class Controller:
         try:
             curve = self._planner_curve()
             eta = {
-                "eta_charge": optimize_mod._eta_charge_at(cfg.max_charge_w, cfg, curve),
-                "eta_discharge": optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, curve),
+                "eta_charge": optimize_mod.eta_charge_at(cfg.max_charge_w, cfg, curve),
+                "eta_discharge": optimize_mod.eta_discharge_at(cfg.max_export_w, cfg, curve),
             }
         except Exception:
             _LOGGER.debug("power card debug: efficiencies unavailable", exc_info=True)

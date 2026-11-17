@@ -65,6 +65,8 @@ from . import const
 from .dp_common import (
     KEEP_TIE_EUR_PER_KWH,
     discharge_wall_kwh,
+    eta_charge_at,
+    eta_discharge_at,
     export_leg_precompute,
     reserve_urgency_by_bin,
     reserve_wall_kwh,
@@ -78,8 +80,6 @@ from .models import Config
 from .regret import (
     _BIN_KWH,
     _apply_solar_load,
-    _eta_charge_at,
-    _eta_discharge_at,
     _load_eta_d,
     _max_grid_dc,
     band_shortfall_dc,
@@ -127,7 +127,7 @@ def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None)
     """
     if deficit_w <= 0.0:
         return 0.0
-    dc_w = deficit_w / _eta_discharge_at(deficit_w, cfg, eta_curve) + cfg.idle_drain_w
+    dc_w = deficit_w / eta_discharge_at(deficit_w, cfg, eta_curve) + cfg.idle_drain_w
     return price * (deficit_w + cfg.idle_drain_w) / dc_w - cfg.cycle_cost_eur_per_kwh
 
 
@@ -757,7 +757,7 @@ def optimize_grid(
         byte-identical to the legacy hardcoded ``// 24`` arithmetic.
     day_index :
         Optional explicit per-slot calendar-day id (same length as the
-        window), passed straight through to :func:`regret.windowed_peak_prices`
+        window), passed straight through to :func:`dp_common.windowed_peak_prices`
         for the export peak-band reference.  When ``None`` (default) it is
         derived from ``window_start_h`` and ``slots_per_day``.
     chargeable :
@@ -1132,7 +1132,7 @@ def optimize_grid(
                     floor_import_cost = floor_import_kwh_step * price_h
                     new_soc = max(new_soc_pre, wall)
                     new_b = to_bin(new_soc)
-                    eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
+                    eta_g = eta if eta_curve is None else eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                     g_ac = g_dc / eta_g
                     # Subtract export credit from transition cost; add the below-floor
                     # direct-import cost.  When feed_in=None, hour_credit=0.0; when the
@@ -1205,7 +1205,7 @@ def optimize_grid(
                             break  # monotonically discharging — safe to stop
                         new_b = to_bin(new_soc)
                         eta_d_step = (
-                            eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+                            eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
                         )
                         e_ac = e_dc * eta_d_step
                         export_revenue = e_ac * ep_h
@@ -1313,7 +1313,7 @@ def optimize_grid(
 
     if _do_export:
         export_schedule_ac = [
-            e_dc * (eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
+            e_dc * (eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
             for e_dc in export_dc_sched
         ]
         total_export_kwh = sum(export_schedule_ac)

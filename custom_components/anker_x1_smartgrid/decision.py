@@ -23,12 +23,12 @@ from datetime import datetime, timedelta
 
 from . import (
     const,
+    dp_common as dp_common_mod,
     energy,
     guard,
     optimize as optimize_mod,
     plan as plan_mod,
     pricing_store,
-    regret as regret_mod,
     resolution,
     scheduler,
 )
@@ -82,7 +82,7 @@ def _trough_by_hour(
     prices_grid = [price_by_h.get(start_h + k * stride, float("inf")) for k in range(grid_len)]
     _base_day = start_h.date()
     _day_index = [((start_h + k * stride).date() - _base_day).days for k in range(grid_len)]
-    trough_grid = regret_mod.windowed_trough_prices(prices_grid, lookback_slots, day_index=_day_index)
+    trough_grid = dp_common_mod.windowed_trough_prices(prices_grid, lookback_slots, day_index=_day_index)
     return {now_h + j * stride: trough_grid[lookback_slots + j] for j in range(window_len)}
 
 
@@ -419,7 +419,7 @@ def _dp_select_slots(
         window_pv, window_load_reserve, cfg, cycle_end_idx=cycle_end_idx, dt_h=dt_h
     )
     _deficit_w = [(window_load_reserve[h] - window_pv[h]) / dt_h * 1000.0 for h in range(window_len)]
-    _eta_d = optimize_mod._eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
+    _eta_d = optimize_mod.eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
     # Same refills kept_values counts: later slots the DP may charge in.
     _refills = [(p, h) for h, (p, ok) in enumerate(zip(window_price, chargeable, strict=True)) if ok and h > 0]
     _stored = optimize_mod.hold_stored_value(water_value, terminal_segments) if water_value is not None else 0.0

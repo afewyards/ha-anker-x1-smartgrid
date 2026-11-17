@@ -32,6 +32,8 @@ from . import const
 from .dp_common import (
     _BIN_KWH,
     discharge_wall_kwh,
+    eta_charge_at,
+    eta_discharge_at,
     export_leg_precompute,
     grid_floor_kwh,
     reserve_urgency_by_bin,
@@ -95,23 +97,6 @@ def _validate_day_len(seq: tuple | list, name: str, expected: int) -> None:
         raise ValueError(f"{name} must have exactly {expected} elements, got {len(seq)}")
 
 
-def _eta_charge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
-    """Charge-side eta at *dc_power_w* — measured curve if provided, else the
-    static config scalar (eta_curve=None keeps today's behaviour)."""
-    if eta_curve is not None:
-        return eta_curve.eta_charge(dc_power_w)
-    return cfg.eta_charge_safe()
-
-
-def _eta_discharge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
-    """Discharge-side eta at *dc_power_w* — measured curve if provided, else
-    the static round-trip-derived scalar (eta_curve=None keeps today's
-    behaviour)."""
-    if eta_curve is not None:
-        return eta_curve.eta_discharge(dc_power_w)
-    return cfg.eta_discharge_static()
-
-
 def _apply_solar_load(
     soc_kwh: float,
     net_kwh: float,
@@ -150,14 +135,14 @@ def _apply_solar_load(
     target_kwh = cfg.target_kwh
     rate_kwh_slot = cfg.max_charge_w / 1000.0 * dt_h
     if net_kwh > 0.0:
-        eta = _eta_charge_at(net_kwh / dt_h * 1000.0, cfg, eta_curve)
+        eta = eta_charge_at(net_kwh / dt_h * 1000.0, cfg, eta_curve)
         dc_solar = min(net_kwh, rate_kwh_slot) * eta
         return min(soc_kwh + dc_solar, target_kwh)
     idle_dc = cfg.idle_drain_w * dt_h / 1000.0
     if eta_curve is None:
         return soc_kwh + net_kwh - idle_dc  # discharge 1:1, no efficiency factor — PARITY PATH, do not change
     ac_deficit = -net_kwh
-    eta_d = _eta_discharge_at(ac_deficit / dt_h * 1000.0, cfg, eta_curve)
+    eta_d = eta_discharge_at(ac_deficit / dt_h * 1000.0, cfg, eta_curve)
     dc_draw = ac_deficit / eta_d
     return soc_kwh - dc_draw - idle_dc
 
@@ -166,7 +151,7 @@ def _load_eta_d(net_kwh: float, cfg: Config, dt_h: float, eta_curve) -> float:
     """AC per DC kWh on :func:`_apply_solar_load`'s load leg (1.0 on its 1:1 path)."""
     if eta_curve is None or net_kwh >= 0.0:
         return 1.0
-    return _eta_discharge_at(-net_kwh / dt_h * 1000.0, cfg, eta_curve)
+    return eta_discharge_at(-net_kwh / dt_h * 1000.0, cfg, eta_curve)
 
 
 def _max_grid_dc(
@@ -207,7 +192,7 @@ def _max_grid_dc(
     Grid charge is always full-rate, so eta is looked up at cfg.max_charge_w.
     """
     rate_kwh_slot = cfg.max_charge_w / 1000.0 * dt_h
-    eta = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
+    eta = eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
     target_kwh = cfg.target_kwh
     solar_ac_used = max(0.0, soc_after_kwh - soc_kwh) / eta  # AC absorbed by solar
     remaining_ac = max(0.0, rate_kwh_slot - solar_ac_used)
@@ -221,81 +206,6 @@ def _max_grid_dc(
 # ---------------------------------------------------------------------------
 # Public functions
 # ---------------------------------------------------------------------------
-
-
-def windowed_peak_prices(
-    prices: list[float],
-    lookback: int,
-    day_index: list[int] | None = None,
-) -> list[float]:
-    """Per-hour peak reference for the export band.
-
-    Returns ``peak[h] = max(prices[max(0, h - lookback):])`` (when
-    ``day_index`` is None) — the forward suffix-max extended ``lookback``
-    hours into the recent past, so a DOWN-SLOPE hour after a peak is measured
-    against that peak (and blocked by the band) instead of forgetting it.
-    ``lookback=0`` reproduces the legacy forward-only suffix-max byte-for-byte.
-
-    When ``day_index`` is given (same length as ``prices``, non-decreasing day
-    ids), the suffix is computed WITHIN each day only and the look-back never
-    reaches into a prior day, so a higher peak on a later day does not suppress
-    an earlier day's band.  ``None`` = single day = legacy global behavior.
-    """
-    n = len(prices)
-    if n == 0:
-        return []
-    if day_index is None:
-        day_index = [0] * n
-    suffix = [0.0] * n
-    run = float("-inf")
-    for h in range(n - 1, -1, -1):
-        if h == n - 1 or day_index[h] != day_index[h + 1]:
-            run = prices[h]  # reset suffix at the day boundary
-        else:
-            run = max(run, prices[h])
-        suffix[h] = run
-    day_start = [0] * n
-    for h in range(n):
-        day_start[h] = h if (h == 0 or day_index[h] != day_index[h - 1]) else day_start[h - 1]
-    return [suffix[max(day_start[h], h - lookback)] for h in range(n)]
-
-
-def windowed_trough_prices(
-    prices: list[float],
-    lookback: int,
-    day_index: list[int] | None = None,
-) -> list[float]:
-    """Per-hour trough reference for the charge band.
-
-    Returns ``trough[h] = min(prices[max(0, h - lookback):])`` (when
-    ``day_index`` is None) — the forward suffix-min extended ``lookback``
-    hours into the recent past, so an UP-SLOPE hour after a trough is measured
-    against that trough (and blocked by the band) instead of forgetting it.
-    ``lookback=0`` reproduces the forward-only suffix-min.  Mirror of
-    :func:`windowed_peak_prices` (suffix-MAX).
-
-    When ``day_index`` is given (same length as ``prices``, non-decreasing day
-    ids), the suffix is computed WITHIN each day only and the look-back never
-    reaches into a prior day, so a cheaper trough on a later day does not
-    suppress an earlier day's band.  ``None`` = single day = legacy global.
-    """
-    n = len(prices)
-    if n == 0:
-        return []
-    if day_index is None:
-        day_index = [0] * n
-    suffix = [0.0] * n
-    run = float("inf")
-    for h in range(n - 1, -1, -1):
-        if h == n - 1 or day_index[h] != day_index[h + 1]:
-            run = prices[h]  # reset suffix at the day boundary
-        else:
-            run = min(run, prices[h])
-        suffix[h] = run
-    day_start = [0] * n
-    for h in range(n):
-        day_start[h] = h if (h == 0 or day_index[h] != day_index[h - 1]) else day_start[h - 1]
-    return [suffix[max(day_start[h], h - lookback)] for h in range(n)]
 
 
 def hindsight_optimal_grid(
@@ -559,7 +469,7 @@ def hindsight_optimal_grid(
                 ) * price_h
                 new_soc = max(new_soc_pre, wall)
                 new_b = to_bin(new_soc)
-                eta_g = eta if eta_curve is None else _eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
+                eta_g = eta if eta_curve is None else eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
                 g_ac = g_dc / eta_g
                 new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh + house_wear
                 if urgency is not None:
@@ -610,7 +520,7 @@ def hindsight_optimal_grid(
 
                         new_b = to_bin(new_soc)
                         eta_d_step = (
-                            eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+                            eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
                         )
                         e_ac = e_dc * eta_d_step  # DC → AC: 1 DC kWh → eta_d AC kWh
                         export_revenue = e_ac * ep_h
@@ -710,7 +620,7 @@ def hindsight_optimal_grid(
         floor_import_eur += floor_import_step * day.price[h]
         floor_import_kwh += floor_import_step
         if e_dc > 0.0:
-            eta_d_h = eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
+            eta_d_h = eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
             floor_import_eur += (
                 band_shortfall_dc(soc_after_hb, from_bin(cur_b), wall_h, band_top) * eta_d_h * export_price[h]  # type: ignore[index]
             )
@@ -724,7 +634,7 @@ def hindsight_optimal_grid(
     # reported schedule matches the objective the DP actually optimised).
     if _do_export:
         export_schedule_ac: list[float] = [
-            e_dc * (eta_d if eta_curve is None else _eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
+            e_dc * (eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve))
             for e_dc in export_dc_sched
         ]
         total_export_kwh = sum(export_schedule_ac)

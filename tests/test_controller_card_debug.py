@@ -139,8 +139,8 @@ async def test_debug_internals_carry_the_planner_efficiencies(tmp_path):
     await _tick(ctrl, NOW)
     internals = (await ctrl.power_card_debug())["internals"]
     cfg, curve = ctrl.cfg, ctrl._planner_curve()
-    assert internals["eta_charge"] == optimize._eta_charge_at(cfg.max_charge_w, cfg, curve)
-    assert internals["eta_discharge"] == optimize._eta_discharge_at(cfg.max_export_w, cfg, curve)
+    assert internals["eta_charge"] == optimize.eta_charge_at(cfg.max_charge_w, cfg, curve)
+    assert internals["eta_discharge"] == optimize.eta_discharge_at(cfg.max_export_w, cfg, curve)
     keys = list(internals)
     assert keys.index("eta_charge") + 2 == keys.index("eta_discharge") + 1 == keys.index("cycle_cost_eur_per_kwh")
 
@@ -152,7 +152,7 @@ async def test_debug_internals_without_efficiencies_when_they_fail(tmp_path, mon
     def _boom(*_a):
         raise ValueError("no curve")
 
-    monkeypatch.setattr(optimize, "_eta_charge_at", _boom)
+    monkeypatch.setattr(optimize, "eta_charge_at", _boom)
     out = await ctrl.power_card_debug()
     assert out["slots"] and out["internals"]["built_at"] == NOW.isoformat()
     assert not {"eta_charge", "eta_discharge"} & set(out["internals"])

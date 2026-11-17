@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from custom_components.anker_x1_smartgrid.regret import windowed_trough_prices
+from custom_components.anker_x1_smartgrid.dp_common import windowed_trough_prices
 
 
 def test_lookback_zero_is_suffix_min():

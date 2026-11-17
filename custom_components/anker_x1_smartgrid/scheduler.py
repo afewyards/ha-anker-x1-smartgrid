@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from . import const, dp_common
 from .models import Config, ControllerState, ExportState, ForecastInterval, PlanState, PriceSlot
-from .regret import _eta_charge_at, _eta_discharge_at
+from .dp_common import eta_charge_at, eta_discharge_at
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ def charge_price_ceiling(peak, cfg, eta_curve=None):
     (the default) preserves today's byte-identical behaviour."""
     if peak is None:
         return None
-    eta_c = _eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
-    eta_d = _eta_discharge_at(const.DEFAULT_FALLBACK_LOAD_W, cfg, eta_curve)
+    eta_c = eta_charge_at(cfg.max_charge_w, cfg, eta_curve)
+    eta_d = eta_discharge_at(const.DEFAULT_FALLBACK_LOAD_W, cfg, eta_curve)
     return peak * eta_c * eta_d
 
 

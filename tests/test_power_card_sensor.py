@@ -136,8 +136,8 @@ async def test_planned_hours_carry_the_planners_reason():
 
     ctrl, hours = await _card_with_reasons(0.30)
     cfg, curve = ctrl.cfg, ctrl._planner_curve()
-    sell = 0.60 * optimize._eta_discharge_at(cfg.max_export_w, cfg, curve) - cfg.cycle_cost_eur_per_kwh
-    cost = 0.25 / optimize._eta_charge_at(cfg.max_charge_w, cfg, curve) + cfg.charge_margin_eur_per_kwh
+    sell = 0.60 * optimize.eta_discharge_at(cfg.max_export_w, cfg, curve) - cfg.cycle_cost_eur_per_kwh
+    cost = 0.25 / optimize.eta_charge_at(cfg.max_charge_w, cfg, curve) + cfg.charge_margin_eur_per_kwh
     charge, export, *rest = [h for h in hours if h["plan"]]
     assert all("why" not in h for h in hours if not h["plan"])
     assert charge["why"] == {
@@ -160,8 +160,8 @@ async def test_the_build_ups_price_the_kept_value_with_the_planners_figures(monk
     monkeypatch.setattr(why, "hour_reasons", lambda *a, **k: built.append(real(*a, **k)) or built[-1])
     ctrl, hours = await _card_with_reasons(0.30)
     cfg, curve = ctrl.cfg, ctrl._planner_curve()
-    eta_d = optimize._eta_discharge_at(cfg.max_export_w, cfg, curve)
-    eta_c = optimize._eta_charge_at(cfg.max_charge_w, cfg, curve)
+    eta_d = optimize.eta_discharge_at(cfg.max_export_w, cfg, curve)
+    eta_c = optimize.eta_charge_at(cfg.max_charge_w, cfg, curve)
     fee, wear = cfg.export_fee_eur_per_kwh, cfg.cycle_cost_eur_per_kwh
     rows = {r["kind"]: r for r in reversed(built[-1].values())}
     (charge,), (sell,), (house, _) = (rows[k]["beats"] for k in ("charge", "export", "hold"))

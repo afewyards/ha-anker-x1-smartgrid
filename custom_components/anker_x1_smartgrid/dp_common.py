@@ -10,13 +10,10 @@ must be remembered to change together.
 
 No Home Assistant imports — pure stdlib (see tests/test_import_boundaries.py).
 
-The SoC grid (``_BIN_KWH``, :func:`grid_floor_kwh`) lives here; regret.py
-re-exports it. Physics helpers referenced by the functions below
-(``_eta_discharge_at``, ``windowed_peak_prices``) stay owned by regret.py and
-are imported locally inside each function rather than at module scope. That
-keeps this module free of a module-level dependency on regret.py, which now
-depends on this module — a top-level import in both directions would be a
-circular import.
+The SoC grid (``_BIN_KWH``, :func:`grid_floor_kwh`), the eta lookups and the
+windowed price references live here; regret.py re-exports the SoC grid and
+imports the rest. This module must not import regret.py, which depends on it —
+an import in both directions would be a circular import.
 """
 
 from __future__ import annotations
@@ -278,7 +275,7 @@ def export_leg_precompute(
     ``day_index`` is the ONE real difference between the two callers:
     ``optimize.optimize_grid`` threads a per-hour day index (derived from its
     ``window_start_h``/``slots_per_day``, or a caller-supplied override) into
-    :func:`regret.windowed_peak_prices` so the look-back peak never reaches
+    :func:`windowed_peak_prices` so the look-back peak never reaches
     across a day boundary in a multi-day rolling window.
     ``regret.hindsight_optimal_grid`` operates on a single realized day and
     always calls with ``day_index=None`` (global, single-day suffix-max —
@@ -286,8 +283,6 @@ def export_leg_precompute(
     ``day_index`` value BEFORE calling this function; this function only
     forwards it.
     """
-    from .regret import _eta_discharge_at, windowed_peak_prices  # local: avoids a module-level cycle
-
     if export_price is not None:
         # Discharge efficiency: eta_d = min(round_trip_eff / eta_charge, 1.0)
         # on the None path (reuses `eta`, already computed by the caller with
@@ -296,7 +291,7 @@ def export_leg_precompute(
         if eta_curve is None:
             eta_d: float = min(cfg.round_trip_eff / eta, 1.0)
         else:
-            eta_d = _eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
+            eta_d = eta_discharge_at(cfg.max_export_w, cfg, eta_curve)
         cycle_cost: float = cfg.cycle_cost_eur_per_kwh
         # Max DC kWh per hour that can be exported through the inverter.
         # max_export_w is the AC-side export rate cap; DC discharged = AC / eta_d.
@@ -324,3 +319,95 @@ def export_leg_precompute(
         peak_from = []
 
     return eta_d, cycle_cost, max_export_dc_h, ac_cap, band, peak_from
+
+
+def eta_charge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
+    """Charge-side eta at *dc_power_w* — measured curve if provided, else the
+    static config scalar (eta_curve=None keeps today's behaviour)."""
+    if eta_curve is not None:
+        return eta_curve.eta_charge(dc_power_w)
+    return cfg.eta_charge_safe()
+
+
+def eta_discharge_at(dc_power_w: float, cfg: Config, eta_curve) -> float:
+    """Discharge-side eta at *dc_power_w* — measured curve if provided, else
+    the static round-trip-derived scalar (eta_curve=None keeps today's
+    behaviour)."""
+    if eta_curve is not None:
+        return eta_curve.eta_discharge(dc_power_w)
+    return cfg.eta_discharge_static()
+
+
+def windowed_peak_prices(
+    prices: list[float],
+    lookback: int,
+    day_index: list[int] | None = None,
+) -> list[float]:
+    """Per-hour peak reference for the export band.
+
+    Returns ``peak[h] = max(prices[max(0, h - lookback):])`` (when
+    ``day_index`` is None) — the forward suffix-max extended ``lookback``
+    hours into the recent past, so a DOWN-SLOPE hour after a peak is measured
+    against that peak (and blocked by the band) instead of forgetting it.
+    ``lookback=0`` reproduces the legacy forward-only suffix-max byte-for-byte.
+
+    When ``day_index`` is given (same length as ``prices``, non-decreasing day
+    ids), the suffix is computed WITHIN each day only and the look-back never
+    reaches into a prior day, so a higher peak on a later day does not suppress
+    an earlier day's band.  ``None`` = single day = legacy global behavior.
+    """
+    n = len(prices)
+    if n == 0:
+        return []
+    if day_index is None:
+        day_index = [0] * n
+    suffix = [0.0] * n
+    run = float("-inf")
+    for h in range(n - 1, -1, -1):
+        if h == n - 1 or day_index[h] != day_index[h + 1]:
+            run = prices[h]  # reset suffix at the day boundary
+        else:
+            run = max(run, prices[h])
+        suffix[h] = run
+    day_start = [0] * n
+    for h in range(n):
+        day_start[h] = h if (h == 0 or day_index[h] != day_index[h - 1]) else day_start[h - 1]
+    return [suffix[max(day_start[h], h - lookback)] for h in range(n)]
+
+
+def windowed_trough_prices(
+    prices: list[float],
+    lookback: int,
+    day_index: list[int] | None = None,
+) -> list[float]:
+    """Per-hour trough reference for the charge band.
+
+    Returns ``trough[h] = min(prices[max(0, h - lookback):])`` (when
+    ``day_index`` is None) — the forward suffix-min extended ``lookback``
+    hours into the recent past, so an UP-SLOPE hour after a trough is measured
+    against that trough (and blocked by the band) instead of forgetting it.
+    ``lookback=0`` reproduces the forward-only suffix-min.  Mirror of
+    :func:`windowed_peak_prices` (suffix-MAX).
+
+    When ``day_index`` is given (same length as ``prices``, non-decreasing day
+    ids), the suffix is computed WITHIN each day only and the look-back never
+    reaches into a prior day, so a cheaper trough on a later day does not
+    suppress an earlier day's band.  ``None`` = single day = legacy global.
+    """
+    n = len(prices)
+    if n == 0:
+        return []
+    if day_index is None:
+        day_index = [0] * n
+    suffix = [0.0] * n
+    run = float("inf")
+    for h in range(n - 1, -1, -1):
+        if h == n - 1 or day_index[h] != day_index[h + 1]:
+            run = prices[h]  # reset suffix at the day boundary
+        else:
+            run = min(run, prices[h])
+        suffix[h] = run
+    day_start = [0] * n
+    for h in range(n):
+        day_start[h] = h if (h == 0 or day_index[h] != day_index[h - 1]) else day_start[h - 1]
+    return [suffix[max(day_start[h], h - lookback)] for h in range(n)]

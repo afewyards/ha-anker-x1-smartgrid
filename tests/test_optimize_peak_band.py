@@ -8,7 +8,7 @@ from custom_components.anker_x1_smartgrid.optimize import (
     effective_export_price,
     optimize_grid,
 )
-from custom_components.anker_x1_smartgrid.regret import windowed_peak_prices, windowed_trough_prices
+from custom_components.anker_x1_smartgrid.dp_common import windowed_peak_prices, windowed_trough_prices
 
 
 def _cfg(**kw):
