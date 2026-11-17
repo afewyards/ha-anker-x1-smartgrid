@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from custom_components.anker_x1_smartgrid import const
-from custom_components.anker_x1_smartgrid import controller as controller_mod
+from custom_components.anker_x1_smartgrid import controller as controller_mod, tick_remote
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.remote_forecast import (
     RemoteForecastPredictor,
@@ -623,7 +623,7 @@ async def test_coverage_counted_even_when_remote_tier_active():
 # Supervisor started the forecast add-on container 17s AFTER this
 # integration's hourly health poll already ran and failed, latching
 # "unreachable" on the card for up to an hour even though the add-on was
-# healthy the entire time it was up (see controller._MAX_ADDON_HEALTH_RETRIES
+# healthy the entire time it was up (see tick_remote._MAX_ADDON_HEALTH_RETRIES
 # / Controller._poll_addon_health). These tests lock the bounded-retry
 # behaviour: retry the cheap /health call on later same-hour ticks while it
 # keeps failing, stop once it succeeds, and give up after the retry cap so a
@@ -720,7 +720,7 @@ async def test_health_no_retry_once_already_reachable_same_hour():
 @pytest.mark.asyncio
 async def test_health_retry_capped_within_hour():
     """A genuinely-dead add-on must not be hammered every tick for the whole
-    hour -- retries stop at controller._MAX_ADDON_HEALTH_RETRIES."""
+    hour -- retries stop at tick_remote._MAX_ADDON_HEALTH_RETRIES."""
     ctrl = _make_controller(addon_enabled=True)
 
     async def always_down(session, url, timeout):
@@ -749,10 +749,10 @@ async def test_health_retry_capped_within_hour():
     ):
         # 1 initial (hourly-gate) attempt + enough same-hour ticks to blow
         # past the retry cap several times over.
-        for _ in range(controller_mod._MAX_ADDON_HEALTH_RETRIES + 5):
+        for _ in range(tick_remote._MAX_ADDON_HEALTH_RETRIES + 5):
             await ctrl.tick()
 
-    assert mock_health.call_count == 1 + controller_mod._MAX_ADDON_HEALTH_RETRIES
+    assert mock_health.call_count == 1 + tick_remote._MAX_ADDON_HEALTH_RETRIES
 
 
 @pytest.mark.asyncio
