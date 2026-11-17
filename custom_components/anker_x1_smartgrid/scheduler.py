@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import statistics
 from datetime import datetime, timedelta
 
@@ -62,66 +61,6 @@ def _slot_start(dt: datetime, slot_minutes: int = 60) -> datetime:
     """Floor `dt` to the `slot_minutes` grid. At 60 == byte-identical hour floor."""
     minute = (dt.minute // slot_minutes) * slot_minutes
     return dt.replace(minute=minute, second=0, microsecond=0)
-
-
-def _percentile(values: list[float], pct: float) -> float:
-    """Linear-interpolation percentile (numpy-default method). Pure stdlib."""
-    if not values:
-        return 0.0
-    s = sorted(values)
-    if len(s) == 1:
-        return s[0]
-    k = (len(s) - 1) * (pct / 100.0)
-    f = math.floor(k)
-    c = math.ceil(k)
-    if f == c:
-        return s[int(k)]
-    return s[f] + (s[c] - s[f]) * (k - f)
-
-
-def find_next_trough(now: datetime, slots: list[PriceSlot], cfg: Config) -> tuple[datetime, float]:
-    """Next local price minimum that defines the optimization horizon.
-
-    Scans a fixed ``trough_lookahead_h`` window of forward prices, finds the
-    earliest local minimum below the ``trough_percentile`` threshold that is at
-    least ``min_horizon_h`` hours out, and returns ``(trough_hour_start,
-    trough_price)``.  ``trough_hour_start`` is hour-aligned; the window
-    ``[now, trough]`` is inclusive of the trough hour.
-
-    Fallback (no qualifying trough, or fewer than two slots): horizon = the last
-    known price slot, reference price = the minimum remaining price.
-    """
-    now_h = _slot_start(now)
-    horizon_end = now_h + timedelta(hours=cfg.trough_lookahead_h)
-    window = [s for s in slots if now_h <= s.start < horizon_end]
-
-    if len(window) < 2:
-        remaining = [s for s in slots if s.start >= now_h]
-        if not remaining:
-            return now_h, 0.0
-        last = max(remaining, key=lambda s: s.start)
-        return _slot_start(last.start), min(s.price for s in remaining)
-
-    prices = [s.price for s in window]
-    threshold = _percentile(prices, cfg.trough_percentile)
-    min_start = now_h + timedelta(hours=cfg.min_horizon_h)
-    n = len(window)
-
-    candidates: list[PriceSlot] = []
-    for i, s in enumerate(window):
-        left = window[i - 1].price if i > 0 else float("inf")
-        right = window[i + 1].price if i + 1 < n else float("inf")
-        is_local_min = s.price <= left and s.price <= right
-        if is_local_min and s.price < threshold and s.start >= min_start:
-            candidates.append(s)
-
-    if candidates:
-        chosen = min(candidates, key=lambda s: s.start)
-        return _slot_start(chosen.start), chosen.price
-
-    # No qualifying local min: fall back to the end of known prices.
-    last = max(window, key=lambda s: s.start)
-    return _slot_start(last.start), min(prices)
 
 
 _PV_SURPLUS_THRESHOLD_W = 200.0

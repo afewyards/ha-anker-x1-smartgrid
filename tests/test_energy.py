@@ -10,36 +10,6 @@ def _iv(pv, load, dt=1.0, i=0):
     return ForecastInterval(T0 + timedelta(hours=i), pv, load, dt)
 
 
-def test_no_solar_no_change():
-    cfg = Config()
-    assert energy.simulate_soc(50.0, [_iv(0, 0, 1, 0)], cfg) == 50.0
-
-
-def test_surplus_charges_with_efficiency():
-    # 10 kWh pack, 2000 W surplus for 1 h, eta 0.92 => 1.84 kWh => 18.4% SoC rise
-    cfg = Config(capacity_kwh=10.0, eta_charge=0.92, soc_target=100.0)
-    soc = energy.simulate_soc(50.0, [_iv(2500, 500, 1.0, 0)], cfg)
-    assert abs(soc - (50.0 + 1.84 / 10.0 * 100.0)) < 1e-6
-
-
-def test_load_exceeds_pv_no_charge():
-    cfg = Config()
-    assert energy.simulate_soc(50.0, [_iv(300, 1000, 1.0, 0)], cfg) == 50.0
-
-
-def test_charge_power_capped():
-    # surplus 10 kW but max_charge 6 kW => only 6 kW * eta lands
-    cfg = Config(capacity_kwh=10.0, max_charge_w=6000.0, eta_charge=1.0, soc_target=100.0)
-    soc = energy.simulate_soc(0.0, [_iv(12000, 2000, 1.0, 0)], cfg)
-    assert abs(soc - 60.0) < 1e-6  # 6 kWh into 10 kWh
-
-
-def test_soc_capped_at_target():
-    cfg = Config(capacity_kwh=10.0, soc_target=97.0, eta_charge=1.0)
-    soc = energy.simulate_soc(95.0, [_iv(6000, 0, 5.0, 0)], cfg)
-    assert soc == 97.0
-
-
 # ---------------------------------------------------------------------------
 # export_surplus_kwh (B2)
 # ---------------------------------------------------------------------------

@@ -544,7 +544,7 @@ async def run_forcing_and_export(
             # Economic hurdle: does exporting now beat holding for later use?
             # Anchored to the MINIMUM price over the remaining horizon — the
             # same convention as the DP's terminal water value (decision.py)
-            # and the oracle (regret_job.py) — NOT find_next_trough's earliest
+            # and the oracle (regret_job.py) — NOT the earliest
             # qualifying local minimum, which can be far shallower than a
             # deeper refill sitting later in the same horizon (that mismatch
             # would price this ledger's opportunity cost differently than the

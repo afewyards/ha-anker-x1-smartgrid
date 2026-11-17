@@ -5,7 +5,7 @@ All functions are pure (no side effects, no I/O).
 
 Discharge-model note  (INTENTIONAL divergence from energy.py)
 -------------------------------------------------------------
-energy.py's simulate_soc is a *charge-only* model: it processes solar
+energy.py is a *charge-only* model: it processes solar
 surplus only and has no discharge term.  regret.py models the FULL day:
 solar surplus charges (same eta_charge and rate conventions as energy.py),
 and load deficit discharges the battery 1 DC kWh per 1 AC kWh consumed

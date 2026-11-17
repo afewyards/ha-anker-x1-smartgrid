@@ -65,7 +65,7 @@ def derive_house_load_w(row: dict) -> float | None:
     absent (key missing, not just zero) **and** the row is an export row, we cannot
     distinguish "no PV" from "sensor unavailable" — silently defaulting to 0 would
     under-count load and poison the ML model.  In that case this function returns
-    ``None`` so the caller (``house_load_w`` / ``clean_rows``) can discard the row.
+    ``None`` so the caller (``house_load_w``) can discard the row.
     Non-export rows may default missing ``pv_w`` to 0 safely (no PV generation is
     the common case for those rows).
     """
@@ -116,34 +116,6 @@ def house_load_w(row: dict) -> float | None:
     return derive_house_load_w(row)
 
 
-def clean_rows(rows: list[dict]) -> list[FeatureRow]:
-    """Parse, validate, outlier-clamp recorded rows into FeatureRows."""
-    out: list[FeatureRow] = []
-    for row in rows:
-        ts_raw = row.get("ts")
-        if not ts_raw:
-            continue
-        load = house_load_w(row)
-        if load is None:
-            continue
-        try:
-            ts = datetime.fromisoformat(str(ts_raw))
-        except (ValueError, TypeError):
-            continue
-        load = min(max(0.0, load), _LOAD_MAX_W)
-        temp = row.get("temp")
-        out.append(
-            FeatureRow(
-                ts=ts,
-                hour=ts.hour,
-                is_weekend=ts.weekday() >= 5,
-                load_w=load,
-                temp=float(temp) if temp is not None else None,
-            )
-        )
-    return out
-
-
 def clean_hourly_rows(rows: list[dict]) -> list[FeatureRow]:
     """Parse ``samples_hourly`` rollup rows into FeatureRows for the bucketed tier.
 
@@ -152,7 +124,7 @@ def clean_hourly_rows(rows: list[dict]) -> list[FeatureRow]:
     ``featureset.hourly_load_w``) then ``house_load_mean`` (fallback, e.g.
     pre-rollup rows or a partial hour). Temp comes from ``temp_mean``. Rows
     missing ``hour_ts`` or both load fields are dropped; outlier-clamped (after
-    rescaling) the same way as ``clean_rows``.
+    rescaling) the same way as the raw-row path.
     """
     out: list[FeatureRow] = []
     for row in rows:

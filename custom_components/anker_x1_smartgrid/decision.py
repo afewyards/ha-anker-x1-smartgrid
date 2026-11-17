@@ -985,15 +985,11 @@ def compute_decision(
 
     # Terminal water value is anchored to the MINIMUM price over the REMAINING
     # horizon (same convention as the oracle in regret_job.py), NOT the next
-    # LOCAL price trough: find_next_trough returns the EARLIEST qualifying
-    # local minimum, which can be far shallower than a deeper refill sitting
-    # later in the same horizon. That mismatch let the DP value holding
+    # LOCAL price trough: the earliest qualifying local minimum can be far
+    # shallower than a deeper refill sitting later in the same horizon. That mismatch let the DP value holding
     # energy above selling it even at the horizon's own top price hour (the
     # DP had already scheduled the deeper refill for charging, but priced the
     # terminal SoC off the shallower, earlier dip instead).
-    # find_next_trough (scheduler.py) has no production callers left after
-    # this change; it is retained for its unit-test coverage and possible
-    # future reuse only.
     _remaining_prices = [s.price for s in slots if s.start >= now_h]
     # The optimization horizon is the FULL forecast, not [now, trough]: tomorrow's
     # evening peak (best export hour) sits past any local trough and must be in-window.

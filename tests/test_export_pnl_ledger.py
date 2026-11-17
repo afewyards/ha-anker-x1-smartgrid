@@ -16,14 +16,12 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
-from custom_components.anker_x1_smartgrid import scheduler as sch_mod
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     ControllerState,
     ExportState,
     PlanState,
-    PriceSlot,
 )
 from custom_components.anker_x1_smartgrid.optimize import compute_water_value, export_pnl_eur
 from tests.helpers import (
@@ -628,12 +626,11 @@ class TestExportKeepValueHorizonMinAnchor:
         assert ac_kwh and ac_kwh > 0
 
         cfg = ctrl.cfg
-        slots = [PriceSlot(BASE + timedelta(hours=i), p) for i, p in enumerate(prices)]
-        _, old_trough_price = sch_mod.find_next_trough(BASE, slots, cfg)
+        old_trough_price = 0.09
         keep_old = compute_water_value(old_trough_price, cfg)
         keep_new = compute_water_value(min(prices), cfg)
         assert old_trough_price == pytest.approx(0.09) and min(prices) == pytest.approx(0.02), (
-            "fixture precondition: find_next_trough must disagree with the horizon min"
+            "fixture precondition: old anchor must disagree with the horizon min"
         )
         assert keep_old != pytest.approx(keep_new), "fixture must actually distinguish the two anchors"
 

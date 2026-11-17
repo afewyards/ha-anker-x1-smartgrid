@@ -9,36 +9,6 @@ from . import const, resolution
 from .dp_common import reserve_wall_kwh
 
 
-def simulate_soc(
-    soc: float,
-    intervals: list[ForecastInterval],
-    cfg: Config,
-    *,
-    eta_curve=None,
-) -> float:
-    """Simulate SoC% forward over intervals using solar surplus only.
-
-    Surplus (pv - load) is clamped to [0, max_charge_w], multiplied by
-    eta_charge to get DC power into the battery, integrated over dt, and the
-    SoC is capped at cfg.soc_target.
-
-    ``eta_curve``, when given, supplies a power-dependent ``eta_charge(w)``
-    (duck-typed; energy.py does not import efficiency to avoid a cycle).
-    ``None`` reproduces the static ``cfg.eta_charge`` scalar byte-identically.
-    """
-    soc_sim = soc
-    cap_wh = cfg.capacity_kwh * 1000.0
-    for iv in intervals:
-        surplus = max(0.0, iv.pv_w - iv.load_w)
-        ac_power = min(surplus, cfg.max_charge_w)
-        eta_c = cfg.eta_charge if eta_curve is None else eta_curve.eta_charge(ac_power)
-        dc_energy_wh = ac_power * eta_c * iv.dt_h
-        soc_sim += dc_energy_wh / cap_wh * 100.0
-        if soc_sim >= cfg.soc_target:
-            return cfg.soc_target
-    return soc_sim
-
-
 def ride_out_reserve_kwh(
     now: datetime,
     intervals: list[ForecastInterval],

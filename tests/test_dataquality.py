@@ -53,7 +53,7 @@ def test_derive_fallback_export_row_missing_pv_returns_none():
 
     If pv_w is absent during export we cannot distinguish zero-PV from no-data,
     and silently defaulting to 0 would under-count load (polluting the ML model).
-    Returning None causes the row to be dropped by clean_rows, which is safer.
+    Returning None causes the row to be dropped, which is safer.
     """
     row = {"p1_w": -2500.0, "batt_w": 3000.0}  # pv_w absent, no load_w
     result = dq.house_load_w(row)
@@ -65,22 +65,6 @@ def test_derive_fallback_non_export_row_missing_pv_defaults_zero():
     # Grid import 800 W, battery idle, no PV sensor → typical non-PV house.
     row = {"p1_w": 800.0, "batt_w": 0.0}  # pv_w absent
     assert dq.house_load_w(row) == 800.0
-
-
-def test_clean_rows_drops_export_row_with_missing_pv():
-    """clean_rows discards a derive-fallback export row where pv_w is absent."""
-    rows = [
-        # Good row: load_w present during export
-        {"ts": "2026-06-25T14:00:00+00:00", "load_w": 500.0, "p1_w": -2500.0, "batt_w": 3000.0, "pv_w": 0.0},
-        # Bad row: no load_w, grid export, pv_w absent → must be dropped
-        {"ts": "2026-06-25T14:05:00+00:00", "p1_w": -2500.0, "batt_w": 3000.0},
-        # Good row: non-export derive (pv_w absent is safe)
-        {"ts": "2026-06-25T15:00:00+00:00", "p1_w": 800.0, "batt_w": 0.0},
-    ]
-    out = dq.clean_rows(rows)
-    assert len(out) == 2
-    assert out[0].load_w == 500.0
-    assert out[1].load_w == 800.0
 
 
 # ---------------------------------------------------------------------------
@@ -121,20 +105,6 @@ def test_derive_house_load_export_while_charging():
 def test_derive_house_load_missing_batt_and_pv_default_zero():
     row = {"p1_w": 400.0}
     assert dq.derive_house_load_w(row) == 400.0
-
-
-def test_clean_rows_filters_and_parses():
-    rows = [
-        {"ts": "2026-06-20T08:00:00+00:00", "p1_w": 500.0, "batt_w": 0.0, "pv_w": 0.0, "temp": 12.0},
-        {"ts": None, "p1_w": 500.0},  # dropped: no ts
-        {"ts": "2026-06-21T08:00:00+00:00"},  # dropped: no load
-        {"ts": "2026-06-20T09:00:00+00:00", "p1_w": 99999.0, "batt_w": 0.0, "pv_w": 0.0, "temp": 12.0},  # clamped
-    ]
-    out = dq.clean_rows(rows)
-    assert len(out) == 2
-    assert out[0].load_w == 500.0
-    assert out[0].is_weekend is True  # 2026-06-20 is Saturday
-    assert out[1].load_w == 25000.0  # clamped
 
 
 # ---------------------------------------------------------------------------
