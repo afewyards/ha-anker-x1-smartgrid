@@ -1968,178 +1968,20 @@ class Controller:
         # failsafe ticks return before this point: accepted spec limitation.
         self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
 
-        # ── Periodic full-charge calibration override ──────────────────────
-        # Deliberately non-economic, and the ONLY force-charge path left after
-        # economic-only charging removed the rest.  Quarantined here rather
-        # than expressed as a DP constraint so the parity-gated core is
-        # untouched.  See the spec for the stranded-capacity evidence.
-        #
-        # Was self.plan FORCING because of calibration, as of the end of the
-        # PREVIOUS tick? Captured before self._calibration_engaged updates
-        # below and before self.plan is reassigned further down.
-        _calibration_was_engaged = self._calibration_engaged
-        self._calibration_last_success = None
-        self._calibration_days_since = None
-        if self.cfg.calibration_enabled and self._recorder is not None:
-            # F5: the never-calibrated fallback (calibration.compute_days_since)
-            # requires history_span_days >= calibration_interval_days, and span
-            # is capped by recorder retention -- so this combo can never become
-            # due from a cold start. Log once; config doesn't change without a
-            # restart, so no re-arm is needed.
-            if not self._calibration_retention_warned and self.cfg.retention_days < self.cfg.calibration_interval_days:
-                self._calibration_retention_warned = True
-                _LOGGER.warning(
-                    "retention_days=%d < calibration_interval_days=%d; a pack that has "
-                    "never completed a calibration dwell can never become due "
-                    "(history can't span the interval) until one of these is changed",
-                    self.cfg.retention_days,
-                    self.cfg.calibration_interval_days,
-                )
-            try:
-                _since_iso = (now - timedelta(days=self.cfg.calibration_interval_days * 3)).isoformat()
-                _price_hist = self._price_store.history if self._price_store is not None else {}
-                # Window PLACEMENT and cost both read the DP's own plan so a
-                # window at the solar top is not costed as though it still had
-                # to charge from this morning's empty pack. One-directional:
-                # the DP never sees calibration back. Estimated rows,
-                # past-actual rows, and rows that have already fully elapsed
-                # are excluded -- that tail is display-only synthesis (or
-                # already-measured history), and sizing or costing a real
-                # charge against fabricated or stale numbers no optimiser
-                # produced would place or price the window on nothing real.
-                _cal_slots = calibration.build_calib_slots(
-                    horizon,
-                    now,
-                    inputs.soc,
-                    _slot_minutes,
-                    self._export_price_fn(
-                        now, horizon, _export_price, _export_slots, _slot_minutes, _export_matches_import
-                    ),
-                    self._delivered_fn(delivered_now, _slot_minutes),
-                )
-                (
-                    self._calibration_last_success,
-                    self._calibration_plan,
-                    _span_days,
-                ) = await self._hass.async_add_executor_job(
-                    self._calibration_compute_sync,
-                    _since_iso,
-                    now,
-                    inputs.soc,
-                    _cal_slots,
-                    _price_hist,
-                    _calibration_prev,
-                    _dp_out.get("water_value"),
-                )
-                # Narrowing: `scheduled` and `idle` yield None, so nothing
-                # below can actuate on a window that has not started.
-                self._calibration = self._calibration_plan.action
-                # Shared with calibration_action's own days-since fallback (F3):
-                # both sites call calibration.compute_days_since so they cannot
-                # drift out of sync.
-                self._calibration_days_since = calibration.compute_days_since(
-                    self._calibration_last_success, _span_days, now, self.cfg
-                )
-                self._calibration_fail_logged = False
-
-                # Past interval+grace `force` is set unconditionally, so the
-                # cheapest window is bought every day regardless of price. That
-                # is correct while converging on a cycle, but a pack that can
-                # never reach calibration_top_soc would sit here indefinitely
-                # with nothing in the log. Warn once, re-arm on success.
-                _overdue_at = self.cfg.calibration_interval_days + const.CALIBRATION_GRACE_DAYS
-                _since = self._calibration_days_since
-                if _since is not None and _since >= _overdue_at:
-                    if not self._calibration_overdue_warned:
-                        self._calibration_overdue_warned = True
-                        # The start-SoC gate is HARD: past interval+grace it
-                        # still suppresses every window, so the forcing message
-                        # below would be false. plan_peak_soc approximates --
-                        # it is not identical to -- the policy's own
-                        # per-candidate soc_start gate (select_window skips a
-                        # candidate whose plan SoC at ITS OWN start is below
-                        # CALIBRATION_MIN_START_SOC); this reads the plan's
-                        # single overall peak, which is enough for this log
-                        # line without a second reading of the horizon.
-                        _peak = calibration.plan_peak_soc(inputs.soc, _cal_slots)
-                        if _peak < const.CALIBRATION_MIN_START_SOC:
-                            _LOGGER.warning(
-                                "Calibration overdue by %.1f days (past interval %d + grace %d) but the plan "
-                                "peaks at %.0f%% (< %.0f%%): no window will be planned until the plan climbs, "
-                                "since the grid would otherwise buy the whole charge to "
-                                "calibration_top_soc=%.0f%%",
-                                _since,
-                                self.cfg.calibration_interval_days,
-                                const.CALIBRATION_GRACE_DAYS,
-                                _peak,
-                                const.CALIBRATION_MIN_START_SOC,
-                                self.cfg.calibration_top_soc,
-                            )
-                        else:
-                            _LOGGER.warning(
-                                "Calibration overdue by %.1f days (past interval %d + grace %d): taking the "
-                                "cheapest window up to €%.2f with the price bar bypassed. If this persists, check "
-                                "calibration_cost_eur — either the pack is not reaching "
-                                "calibration_top_soc=%.0f%% (check batt_w during the hold) or every window costs "
-                                "more than the cap and the cycle is waiting it out",
-                                _since,
-                                self.cfg.calibration_interval_days,
-                                const.CALIBRATION_GRACE_DAYS,
-                                const.CALIBRATION_OVERDUE_COST_CAP_EUR,
-                                self.cfg.calibration_top_soc,
-                            )
-                elif _since is not None and _since < self.cfg.calibration_interval_days:
-                    self._calibration_overdue_warned = False
-            except Exception:
-                # Fail-closed: never force a charge on a failed read. F2: log
-                # once per failure streak (not every 60s tick), re-arm on the
-                # next success.
-                if not self._calibration_fail_logged:
-                    self._calibration_fail_logged = True
-                    _LOGGER.warning("Calibration policy failed; skipping this tick", exc_info=True)
-                self._calibration = None
-                self._calibration_plan = calibration.CalibPlan(phase="idle", window_start=None, window_end=None)
-                self._calibration_last_success = None
-                self._calibration_days_since = None
-
-        if self._calibration is not None:
-            self._calibration_engaged = True
-            if new_plan.state is not ControllerState.FORCING:
-                # Reuse self.plan.state_since whenever self.plan is already
-                # FORCING (economic or calibration) so a scheduler bail to
-                # PASSIVE doesn't re-stamp `now` every tick and corrupt the
-                # dwell timer. Only a genuine PASSIVE->FORCING entry gets `now`.
-                _since = self.plan.state_since if self.plan.state is ControllerState.FORCING else now
-                new_plan = dataclasses.replace(new_plan, state=ControllerState.FORCING, state_since=_since)
-            # else: already FORCING (scheduler coasting, or a genuine
-            # economic FORCING coincides with calibration) -- leave it.
-        else:
-            self._calibration_engaged = False
-            if (
-                _calibration_was_engaged
-                and new_plan is self.plan
-                and new_plan.state is ControllerState.FORCING
-                and not _dp_out.get("now_selected", False)
-            ):
-                # scheduler.decide_state's dwell/now_selected short-circuits
-                # return the SAME PlanState object on every coasting tick, not
-                # just on entry -- so identity alone can't tell "coasting on
-                # calibration's own mandate" from "coasting on a still-wanted
-                # economic FORCING". `_dp_out["now_selected"]` (decision.py,
-                # from the same selected_slots passed to decide_state this
-                # tick) is the extra, real signal: only cancel when the DP
-                # does not currently want this hour.
-                #
-                # state_since=self.plan.state_since, not `now`: decide_state's
-                # own PASSIVE->FORCING re-entry is dwell-gated on that same
-                # timestamp, so a fresh `now` would lock out a legitimate
-                # re-charge for up to min_dwell_min instead of one tick.
-                # state_since's only other reader is that same dwell_elapsed
-                # check (plus PlanState.to_dict/from_dict round-tripping it
-                # through persistence) -- nothing else surfaces it.
-                new_plan = dataclasses.replace(
-                    new_plan, state=ControllerState.PASSIVE, state_since=self.plan.state_since
-                )
+        new_plan = await calibration.tick_override(
+            self,
+            now,
+            horizon=horizon,
+            inputs=inputs,
+            _slot_minutes=_slot_minutes,
+            _export_price=_export_price,
+            _export_slots=_export_slots,
+            _export_matches_import=_export_matches_import,
+            delivered_now=delivered_now,
+            _calibration_prev=_calibration_prev,
+            _dp_out=_dp_out,
+            new_plan=new_plan,
+        )
 
         # ── Hard-floor rescue (safety; hardcoded, no config option) ───────────
         # A pack that has sagged BELOW const.FIRMWARE_SOC_FLOOR is protected,
