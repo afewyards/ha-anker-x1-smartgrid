@@ -137,6 +137,11 @@ def estimate_day_after_horizon(
         return blend_price_prior(
             {**history, tomorrow.isoformat(): published}, tomorrow + timedelta(days=1), weight_today=weight_today
         )
+    # The history's today entry only lands at the day rollover; the feed already holds today.
+    today = tomorrow - timedelta(days=1)
+    realized = extract_realized_day(slots, today)
+    if len(realized) >= 24:
+        history = {**history, today.isoformat(): realized}
     return blend_price_prior(history, tomorrow, weight_today=weight_today)
 
 

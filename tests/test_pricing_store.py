@@ -475,3 +475,22 @@ def test_estimate_unchanged_when_tomorrow_incomplete():
     slots = [PriceSlot(start + timedelta(hours=h), 0.26) for h in range(10)]
     history = {"2026-11-15": _full_day(0.38)}
     assert _estimate(history, slots, tomorrow) == pricing_store.blend_price_prior(history, tomorrow, weight_today=0.5)
+
+
+def test_estimate_uses_today_from_slots_when_tomorrow_unpublished():
+    tomorrow = _date(2026, 11, 16)
+    start = datetime(2026, 11, 15, tzinfo=UTC)
+    slots = [PriceSlot(start + timedelta(hours=h), 0.50 + 0.001 * h) for h in range(24)]
+    history = {"2026-11-14": _full_day(0.30)}
+    est = _estimate(history, slots, tomorrow)
+    # one stored day plus today: same weekday absent, so the estimate is today's prices
+    assert est == [pytest.approx(0.50 + 0.001 * h) for h in range(24)]
+    assert "2026-11-15" not in history
+
+
+def test_estimate_ignores_partial_today_in_slots():
+    tomorrow = _date(2026, 11, 16)
+    start = datetime(2026, 11, 15, tzinfo=UTC)
+    slots = [PriceSlot(start + timedelta(hours=h), 0.50) for h in range(10)]
+    history = {"2026-11-14": _full_day(0.30)}
+    assert _estimate(history, slots, tomorrow) == pricing_store.blend_price_prior(history, tomorrow, weight_today=0.5)
