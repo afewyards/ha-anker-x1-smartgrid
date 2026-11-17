@@ -1597,6 +1597,33 @@ class Controller:
             ivs_reserve=_ivs_reserve,
         )
 
+    async def _tick_account(
+        self,
+        now: datetime,
+        *,
+        inputs: PlantInputs,
+        slots: list[PriceSlot],
+        _slot_minutes: int,
+        _export_price: float | None,
+    ) -> None:
+        """Roll the per-day ledgers, refresh the closed-day caches and book this tick's cash flows."""
+        # E3 + cash ledger: reset ALL per-day € accumulators on local-day
+        # rollover, BEFORE accumulating this tick.
+        self._rollover_daily_ledgers(now)
+
+        # Per-day statistics: refresh the closed-day cache when the local day
+        # key moves. Placed right after the ledger rollover so the cache and
+        # the ledger agree on which day "today" is.
+        await self._refresh_daily_actuals(now)
+        await self._refresh_battery_margin(now)
+
+        # Cash ledger: realized battery €-flows, accumulated on every enabled
+        # tick past the failsafe guard — independent of the executor branches
+        # below, so it also catches exports the executor never commanded
+        # (the 2026-07-06 invisible decisive-drain class).  Disabled-path and
+        # failsafe ticks return before this point: accepted spec limitation.
+        self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
+
     async def _tick_impl(self) -> dict:
         now = dt_util.utcnow()
         # The previous tick's calibration plan, threaded into calibration_plan
@@ -1947,22 +1974,9 @@ class Controller:
         if self._house_load_fresh:
             self._hold_deficit_w.append((now, _house_load_now_w - self._last_pv_w))
 
-        # E3 + cash ledger: reset ALL per-day € accumulators on local-day
-        # rollover, BEFORE accumulating this tick.
-        self._rollover_daily_ledgers(now)
-
-        # Per-day statistics: refresh the closed-day cache when the local day
-        # key moves. Placed right after the ledger rollover so the cache and
-        # the ledger agree on which day "today" is.
-        await self._refresh_daily_actuals(now)
-        await self._refresh_battery_margin(now)
-
-        # Cash ledger: realized battery €-flows, accumulated on every enabled
-        # tick past the failsafe guard — independent of the executor branches
-        # below, so it also catches exports the executor never commanded
-        # (the 2026-07-06 invisible decisive-drain class).  Disabled-path and
-        # failsafe ticks return before this point: accepted spec limitation.
-        self._accumulate_cash_ledger(now, inputs, slots, _slot_minutes, _export_price)
+        await self._tick_account(
+            now, inputs=inputs, slots=slots, _slot_minutes=_slot_minutes, _export_price=_export_price
+        )
 
         new_plan = await tick_calibration.tick_override(
             self,

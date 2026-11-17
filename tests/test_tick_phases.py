@@ -73,3 +73,7 @@ async def test_gather_exception_reaches_tick_wrapper(monkeypatch, caplog):
 
 async def test_decide_exception_reaches_tick_wrapper(monkeypatch, caplog):
     await _assert_phase_failure_reaches_wrapper(monkeypatch, caplog, lambda ctrl: (ctrl, "_tick_decide"))
+
+
+async def test_account_exception_reaches_tick_wrapper(monkeypatch, caplog):
+    await _assert_phase_failure_reaches_wrapper(monkeypatch, caplog, lambda ctrl: (ctrl, "_tick_account"))
