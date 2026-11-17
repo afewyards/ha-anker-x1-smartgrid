@@ -1055,26 +1055,76 @@ async def test_executor_export_winding_down_hands_over_to_the_hold_next_tick():
 async def test_executor_pv_crossover_does_not_flap_the_work_mode():
     ctrl, act = _reserve_ctrl()
     ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(hours=1))
-    for i in range(20):
+    release_ticks = []
+    for i in range(40):
         t = T + timedelta(minutes=i)
         ctrl._hold_deficit_w.clear()
         ctrl._hold_deficit_w.append((t, 60.0 if i % 2 else -60.0))
+        n0 = len(act.calls)
         await _run_at(ctrl, 25.0, now=t)
-    assert [c[0] for c in act.calls].count("release_to_self") <= 2  # one per 15-min dwell, not one per tick
+        if any(c[0] == "release_to_self" for c in act.calls[n0:]):
+            release_ticks.append(i)
+    assert len(release_ticks) >= 2
+    assert all(b - a >= 15 for a, b in itertools.pairwise(release_ticks))
 
 
-async def test_executor_forced_refill_ending_inside_the_band_hands_straight_back():
+@pytest.mark.parametrize("held_before", [True, False])
+async def test_executor_forced_refill_ending_inside_the_band_hands_straight_back(held_before):
     ctrl, act = _reserve_ctrl()
-    ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(minutes=5))
+    ctrl.hold_state = ExportState(engaged=held_before, state_since=T - timedelta(minutes=5))
     ctrl.plan = PlanState(ControllerState.PASSIVE, T, ())
     await _run_at(ctrl, 29.0, new_state=ControllerState.FORCING)
-    assert ctrl.hold_state.engaged
+    assert not ctrl.hold_state.engaged  # charging is not a hold
     ctrl.plan = PlanState(ControllerState.FORCING, T, ())
     later = T + timedelta(minutes=1)
     ctrl._hold_deficit_w.append((later, 250.0))
     await _run_at(ctrl, 30.5, now=later)
     assert [c[0] for c in act.calls] == ["engage_and_charge", "engage_hold"]
     assert ctrl.hold_state.engaged
+
+
+async def test_executor_forced_charge_ending_high_releases_once_without_a_hold():
+    ctrl, act = _reserve_ctrl()
+    ctrl.plan = PlanState(ControllerState.FORCING, T, ())
+    await _run_at(ctrl, 60.0)
+    assert [c[0] for c in act.calls] == ["release_to_self"]
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_forced_charge_ending_in_pv_surplus_releases():
+    ctrl, act = _reserve_ctrl(load=-400.0)
+    ctrl.plan = PlanState(ControllerState.FORCING, T, ())
+    await _run_at(ctrl, 30.5)
+    assert [c[0] for c in act.calls] == ["release_to_self"]
+
+
+async def test_executor_forced_charge_ending_in_an_export_slot_writes_one_mode():
+    ctrl, act = _reserve_ctrl()
+    ctrl.cfg = replace(ctrl.cfg, enable_export=True)
+    ctrl.plan = PlanState(ControllerState.FORCING, T, ())
+    await _run_at(ctrl, 30.5, export={T: 3000.0}, export_price=0.10)
+    assert [c[0] for c in act.calls] == ["engage_hold"]
+
+
+async def test_executor_hold_inside_its_dwell_yields_to_a_firing_export():
+    ctrl, act = _reserve_ctrl()
+    ctrl.cfg = replace(ctrl.cfg, enable_export=True)
+    ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(minutes=5))
+    await _run_at(ctrl, 80.0, export={T: 3000.0}, export_price=0.5)
+    assert [c[0] for c in act.calls] == ["engage_export"]
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_failing_engage_hold_retries_once_per_dwell():
+    ctrl, act = _reserve_ctrl()
+    act.fail_on = {"engage_hold"}
+    for i in range(30):
+        t = T + timedelta(minutes=i)
+        ctrl._hold_deficit_w.append((t, 250.0))
+        await _run_at(ctrl, 25.0, now=t)
+    # one attempt (and one recovery release) per 15-min dwell, not per tick
+    assert [c[0] for c in act.calls].count("release_to_self") == 2
+    assert len([c for c in act.calls if c[0].startswith("engage_hold")]) == 2
 
 
 async def test_executor_stale_load_holds():

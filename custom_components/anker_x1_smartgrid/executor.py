@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from statistics import fmean
 from typing import TYPE_CHECKING
 
-from . import const, coordinator, energy, guard, optimize as optimize_mod, resolution, scheduler
+from . import const, coordinator, dp_common, energy, guard, optimize as optimize_mod, resolution, scheduler
 from .decision import _build_is_cheap_by_hour
 from .models import ControllerState, ExportState, PlanState, PlantInputs, PriceSlot
 
@@ -253,18 +253,24 @@ async def run_forcing_and_export(
         dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
         paused=new_plan.state is ControllerState.FORCING,
     )
-    # A forced charge only carries an engaged hold across: a refill ending just over the reserve hands straight back.
+    # Never while charging; the tick a forced charge ends under reserve + 1 hands straight to the hold.
     if (
         controller.cfg.backup_reserve_soc > 0.0
         and inputs.soc is not None
+        and new_plan.state is not ControllerState.FORCING
         and not controller.export_state.engaged
-        and (new_plan.state is not ControllerState.FORCING or _prev_hold.engaged)
+        and (controller._reserve_hold_retry_at is None or now >= controller._reserve_hold_retry_at)
     ):
         _recent = recent_deficits_w(controller, now)
+        _surplus = bool(_recent) and fmean(_recent) < 0.0
+        _after_charge = controller.plan.state is ControllerState.FORCING
+        _band = controller.cfg.kwh_to_pct(dp_common.reserve_wall_kwh(controller.cfg)) + 1.0
         _reserve_hold = scheduler.backup_reserve_hold(
-            _prev_hold,
+            ExportState(engaged=True, state_since=now)
+            if _after_charge and not _surplus and inputs.soc < _band
+            else _prev_hold,
             soc=inputs.soc,
-            pv_surplus=bool(_recent) and fmean(_recent) < 0.0,
+            pv_surplus=_surplus,
             now=now,
             cfg=controller.cfg,
             slot_minutes=_slot_minutes,
@@ -273,7 +279,6 @@ async def run_forcing_and_export(
             controller.hold_state = _reserve_hold
     _hold = controller.hold_state.engaged
     _hold_state = controller.hold_state
-    _committed_slots = _dp_out.get("export_request") or {}
     controller.last_hold_values = (_discharge_v, _stored_v)
     if new_plan.state is ControllerState.FORCING:
         # Grid charging is grid import: bound the FORCING request by whichever
@@ -321,7 +326,7 @@ async def run_forcing_and_export(
         setpoint = 0.0
         # A hold re-engages at 0 W below; releasing first would just flap the workmode.
         _released_for_forcing = False
-        if controller.plan.state is ControllerState.FORCING and not (_hold and _dp_slot not in _committed_slots):
+        if controller.plan.state is ControllerState.FORCING and not _hold:
             _released_for_forcing = True
             await safe_release(
                 controller,
@@ -568,6 +573,7 @@ async def run_forcing_and_export(
                 controller.hold_state = _hold_state
             except Exception:
                 _LOGGER.error("Actuator engage_hold failed (low-power hold)", exc_info=True)
+                controller._reserve_hold_retry_at = now + timedelta(minutes=controller.cfg.export_dwell_min)
                 await safe_release(
                     controller,
                     now,

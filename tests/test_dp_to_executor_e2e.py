@@ -485,3 +485,32 @@ class TestBackupReserve:
         assert not ctrl.hold_state.engaged
         collapsed = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
         assert collapsed == ["engage_hold", "engage_and_charge", "engage_hold", "release_to_self"]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_refill_ticks_are_recorded_as_forcing_not_hold(self, monkeypatch):
+        hass = StubHass()
+        ctrl, act = _make_controller(
+            hass, cfg_overrides={"backup_reserve_soc": 30.0, "enable_export": False, "export_dwell_min": 15}
+        )
+        ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+        ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
+        recorded = []
+        original = ctrl._record_sample
+
+        async def spy(now, inputs, **kw):
+            recorded.append(kw.get("state"))
+            return await original(now, inputs, **kw)
+
+        ctrl._record_sample = spy
+        prices = [0.30, 0.30, 0.30, 0.02] + [0.30] * 8
+        window = prices[3:] + [0.30] * 3
+        at = self.BASE + timedelta(hours=3)
+        for i, soc in enumerate(["12.0", "18.0", "24.0"]):
+            await self._tick(monkeypatch, ctrl, hass, at + timedelta(minutes=i), soc, window)
+            assert not ctrl.hold_state.engaged
+        assert [getattr(s, "value", s) for s in recorded] == ["forcing"] * 3
+        n0 = len(act.calls)
+        await self._tick(monkeypatch, ctrl, hass, at + timedelta(hours=1), "30.5", prices[4:] + [0.30] * 4)
+        assert ctrl.hold_state.engaged
+        assert [c[0] for c in act.calls[n0:]] == ["engage_hold"]

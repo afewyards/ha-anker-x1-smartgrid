@@ -325,6 +325,7 @@ class Controller:
         self.export_state: ExportState = ExportState.initial(dt_util.utcnow())
         # Low-power hold dwell/hysteresis state (engaged = holding; persisted).
         self.hold_state: ExportState = ExportState.initial(dt_util.utcnow())
+        self._reserve_hold_retry_at: datetime | None = None
         # Master switch turned off: battery held idle (VPP at 0 W) rather than released.
         # Stays False on a fresh install so a never-toggled switch never actuates.
         self.standby = False
