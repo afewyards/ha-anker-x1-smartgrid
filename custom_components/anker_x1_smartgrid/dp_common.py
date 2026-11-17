@@ -10,8 +10,9 @@ must be remembered to change together.
 
 No Home Assistant imports — pure stdlib (see tests/test_import_boundaries.py).
 
-Physics constants/helpers referenced by the functions below (``_BIN_KWH``,
-``_eta_discharge_at``, ``windowed_peak_prices``) stay owned by regret.py and
+The SoC grid (``_BIN_KWH``, :func:`grid_floor_kwh`) lives here; regret.py
+re-exports it. Physics helpers referenced by the functions below
+(``_eta_discharge_at``, ``windowed_peak_prices``) stay owned by regret.py and
 are imported locally inside each function rather than at module scope. That
 keeps this module free of a module-level dependency on regret.py, which now
 depends on this module — a top-level import in both directions would be a
@@ -20,10 +21,27 @@ circular import.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 from . import const
 from .models import Config
+
+# Discretisation resolution for the SoC DP (kWh per bin).
+# 0.05 kWh → ≤ 201 states per 10 kWh battery; exact for inputs that are
+# multiples of 0.05 kWh (e.g. eta=1.0 with load/PV in 0.5 kWh steps).
+_BIN_KWH: float = 0.05
+
+
+def grid_floor_kwh(floor_kwh: float) -> float:
+    """``floor_kwh`` rounded UP onto the DP's SoC grid.
+
+    Every DP state is binned, so a floor that falls between bins re-bins below
+    itself each slot and books a phantom import against it; rounding up instead
+    of to-nearest keeps the pack from being modelled as usable below the real
+    floor.
+    """
+    return math.ceil(floor_kwh / _BIN_KWH - 1e-9) * _BIN_KWH
 
 
 def soc_bins(
@@ -36,8 +54,6 @@ def soc_bins(
     — the two DP cores must discretise SoC identically for their outputs to
     stay byte-parity (see ``tests/test_optimize_parity.py``).
     """
-    from .regret import _BIN_KWH  # local import: avoids a module-level cycle
-
     bin_kwh = _BIN_KWH
     n_states = round(cap_kwh / bin_kwh) + 1
 
@@ -52,8 +68,6 @@ def soc_bins(
 
 def reserve_wall_kwh(cfg: Config) -> float:
     """The backup reserve in DC kWh, rounded up onto the SoC grid; ``0.0`` when off."""
-    from .regret import grid_floor_kwh  # local import: avoids a module-level cycle
-
     reserve = cfg.backup_reserve_kwh
     return grid_floor_kwh(reserve) if reserve > 0.0 else 0.0
 
@@ -63,13 +77,24 @@ def discharge_wall_kwh(soc_kwh: float, firmware_floor_kwh: float, reserve_kwh: f
     return max(firmware_floor_kwh, min(reserve_kwh, soc_kwh))
 
 
-def wall_import_kwh(soc_kwh: float, wall_kwh: float, firmware_floor_kwh: float, eta_load: float) -> float:
+def wall_ac_per_dc(net_kwh: float, eta_load: float, idle_kwh: float) -> float:
+    """AC the meter buys per DC kWh the pack does not deliver at the wall in a slot.
+
+    The pack would have drawn the deficit at *eta_load* plus the standby 1:1; held,
+    the meter buys both as AC, as the low-power hold books them. 1.0 on the 1:1 path.
+    """
+    deficit = max(0.0, -net_kwh)
+    dc = deficit / eta_load + idle_kwh
+    return (deficit + idle_kwh) / dc if dc > 0.0 else 1.0
+
+
+def wall_import_kwh(soc_kwh: float, wall_kwh: float, firmware_floor_kwh: float, ac_per_dc: float) -> float:
     """AC the meter buys for the house when the pack stops at *wall_kwh* instead of falling to *soc_kwh*.
 
     Under the firmware floor the shortfall is booked 1:1; between it and the wall the DC the pack
-    did not deliver is converted at the load leg's *eta_load*.
+    did not deliver is converted at *ac_per_dc* (:func:`wall_ac_per_dc`).
     """
-    return max(0.0, firmware_floor_kwh - soc_kwh) + max(0.0, wall_kwh - max(soc_kwh, firmware_floor_kwh)) * eta_load
+    return max(0.0, firmware_floor_kwh - soc_kwh) + max(0.0, wall_kwh - max(soc_kwh, firmware_floor_kwh)) * ac_per_dc
 
 
 def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float, reserve_kwh: float) -> float:

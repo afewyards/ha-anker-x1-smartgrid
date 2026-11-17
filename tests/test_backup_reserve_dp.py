@@ -160,15 +160,21 @@ def test_export_never_sells_reserve():
     assert sum(off["export_schedule"]) / eta_d > 2.5
 
 
-def test_wall_import_with_eta_curve():
-    # 250 W deficits discharge at eta 0.6: the wall must book the AC the meter buys, not the DC the pack lost.
+@pytest.mark.parametrize("idle_w", [0.0, 100.0])
+def test_wall_import_with_eta_curve(idle_w):
+    # 250 W deficits discharge at eta 0.6: the wall must book the AC the meter buys, not the DC the pack lost,
+    # and the standby 1:1, as a held pack books it.
+    cfg = Config(capacity_kwh=10.0, backup_reserve_soc=30.0, idle_drain_w=idle_w)
     n = 6
     load = [0.25] * n
     price = [0.30, 0.25, 0.10, 0.40, 0.35, 0.20]
-    passive = _opt(load, price, 30.0, chargeable=[False] * n, eta_curve=_Curve())
-    held = _opt(load, price, 30.0, chargeable=[False] * n, eta_curve=_Curve(), hold=[True] * n)
+    bought = sum((d + idle_w / 1000.0) * p for d, p in zip(load, price))
+    passive = _opt(load, price, 30.0, cfg=cfg, chargeable=[False] * n, eta_curve=_Curve())
+    held = _opt(load, price, 30.0, cfg=cfg, chargeable=[False] * n, eta_curve=_Curve(), hold=[True] * n)
     assert passive["eur"] == pytest.approx(held["eur"], abs=1e-6)
-    assert passive["eur"] == pytest.approx(sum(d * p for d, p in zip(load, price)), abs=1e-6)
+    assert passive["eur"] == pytest.approx(bought, abs=1e-6)
+    day = DayData(pv_kwh=(0.0,) * n, load_kwh=tuple(load), price=tuple(price), soc_start=30.0)
+    assert realized_grid_cost(day, [0.0] * n, cfg, eta_curve=_Curve())["eur"] == pytest.approx(bought, abs=1e-9)
 
 
 _PV = [0.0] * 8 + [0.5, 1.5, 2.5, 3.0, 3.0, 2.5, 1.5, 0.5] + [0.0] * 8
@@ -195,6 +201,22 @@ def test_parity_with_reserve(export_on, soc_start):
     off_cfg = Config(capacity_kwh=10.0)
     off = optimize_grid(list(_PV), list(_LOAD), list(_PRICE), soc_start, off_cfg, window_start_h=0, window_len=24, **kw)
     assert off["eur"] != pytest.approx(opt["eur"], abs=1e-6)
+
+
+@pytest.mark.parametrize("soc_start", [25.0, 24.0, 40.0])
+def test_parity_with_reserve_quarter_hourly(soc_start):
+    # 25% of 20.48 kWh is off the SoC grid; 15-min slots scale the urgency and the standby by dt.
+    cfg = Config(capacity_kwh=20.48, backup_reserve_soc=25.0, idle_drain_w=100.0)
+    pv, load = ([x / 4 for x in a for _ in range(4)] for a in (_PV, _LOAD))
+    price = [p for p in _PRICE for _ in range(4)]
+    kw: dict = dict(terminal_mode="water_value", water_value=0.12, export_price=[p - 0.02 for p in price], dt_h=0.25)
+    day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=soc_start)
+    hind = hindsight_optimal_grid(day, cfg, **kw)
+    opt = optimize_grid(pv, load, price, soc_start, cfg, window_start_h=0, window_len=96, slots_per_day=96, **kw)
+    assert opt["schedule"] == pytest.approx(hind["schedule"], abs=1e-9)
+    assert opt["export_schedule"] == pytest.approx(hind["export_schedule"], abs=1e-9)
+    assert opt["kwh"] == pytest.approx(hind["kwh"], abs=1e-9)
+    assert opt["eur"] == pytest.approx(hind["eur"], abs=1e-9)
 
 
 def test_realized_cost_respects_reserve():

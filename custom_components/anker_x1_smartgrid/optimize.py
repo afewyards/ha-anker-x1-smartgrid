@@ -71,6 +71,7 @@ from .dp_common import (
     select_end_state,
     soc_bins,
     start_soc_kwh,
+    wall_ac_per_dc,
     wall_import_kwh,
 )
 from .models import Config
@@ -958,8 +959,9 @@ def optimize_grid(
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_credit_eur, export_dc_kwh,
     #                 floor_import_eur, floor_import_kwh, held_ac_kwh).
     # export_dc_kwh is 0.0 for all grid-charge / idle transitions (no export).
-    # held_ac_kwh > 0.0 marks a low-power-hold transition (0.0 everywhere else):
-    # the AC the meter buys for the house, deficit plus displaced standby.
+    # held_ac_kwh > 0.0 marks a held transition (0.0 everywhere else): a low-power
+    # hold, or a deficit slot parked at or under the backup reserve. It is the AC the
+    # meter buys for the house, deficit plus displaced standby.
     # floor_import_eur/kwh are stored from the HEDGED forward pass so the backtrack
     # sums them (no unhedged _apply_solar_load recompute needed; parity safe at hedge=None
     # because the stored values equal the old recompute when no hedge is applied).
@@ -974,6 +976,7 @@ def optimize_grid(
         price_h = price[h]
         net = window_pv[h] - window_load[h]
         eta_load = _load_eta_d(net, cfg, dt_h, eta_curve)
+        wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # A deficit slot that starts at or under the reserve is a hold, whatever the mask says.
         wall_holds = reserve_kwh > 0.0 and net <= 0.0
 
@@ -1119,7 +1122,7 @@ def optimize_grid(
                     floor_import_kwh_step = (
                         held_kwh
                         + (
-                            wall_import_kwh(new_soc_pre, wall, firmware_floor_kwh, eta_load)
+                            wall_import_kwh(new_soc_pre, wall, firmware_floor_kwh, wall_eta)
                             if new_soc_pre < wall
                             else 0.0
                         )
@@ -1224,8 +1227,6 @@ def optimize_grid(
                             + band_eur
                             + house_wear
                         )
-                        if urgency is not None:
-                            new_cost += urgency[new_b]
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
                             # Export requires soc_after > export_floor_h >= floor, so the
