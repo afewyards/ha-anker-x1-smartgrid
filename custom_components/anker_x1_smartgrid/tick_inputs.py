@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from . import coordinator, resolution
+from . import coordinator, resolution, tick_remote
 
 if TYPE_CHECKING:
     from .controller import Controller
@@ -114,18 +114,23 @@ async def gather(controller: Controller, now: datetime) -> TickInputs:
         await controller._hass.async_add_executor_job(controller._recorder.wal_checkpoint)
 
     # A4: the learned model is always on, but sklearn is NOT an integration
-    # requirement (musl is why the addon exists) and the addon defaults off — a
-    # stock install then silently falls back to the bucketed model forever.
+    # requirement (musl is why the addon exists) — without the add-on a stock
+    # install silently falls back to the bucketed model forever. This runs before
+    # the probe, so a set address only counts as missing once its retries are spent.
     if (
         not controller._learned_model_warned
-        and not controller.cfg.addon_enabled
+        and not controller._addon_seen
+        and (
+            not controller.cfg.addon_url
+            or controller._addon_health_retry_count >= tick_remote._MAX_ADDON_HEALTH_RETRIES
+        )
         and importlib.util.find_spec("sklearn") is None
     ):
         controller._learned_model_warned = True
         _LOGGER.warning(
             "The learned load model needs scikit-learn, which is unavailable in the "
-            "integration and the forecast add-on is disabled — falling back to "
-            "the bucketed load model. Enable the Anker X1 Forecast add-on to "
+            "integration, and no forecast add-on answered — falling back to "
+            "the bucketed load model. Install the Anker X1 Forecast add-on to "
             "use the learned model."
         )
 

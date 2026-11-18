@@ -22,16 +22,18 @@ _MAX_ADDON_HEALTH_RETRIES = 5
 
 async def refresh(controller: Controller, now: datetime, _wf_list: list[dict], _persons_home_now: int | None) -> None:
     """Run the hourly add-on health poll and remote forecast fetch, plus their same-hour catch-ups."""
-    # Health poll + remote forecast fetch: once per clock-hour when the add-on
-    # is enabled. Uses the weather forecast gathered by tick_inputs.gather as the
-    # feature payload (no POST while it is empty; the fetch is then owed to a
-    # later same-hour tick). A failed fetch (network error, timeout, non-200,
+    # Health poll + remote forecast fetch: once per clock-hour while an add-on
+    # address is set; the fetch waits until /health has answered once. Uses
+    # the weather forecast gathered by tick_inputs.gather as the feature payload
+    # (no POST while it is empty; the fetch is then owed to a later same-hour
+    # tick). A failed fetch (network error, timeout, non-200,
     # bad JSON) returns None and leaves the map unchanged; a {} map, or a
     # health reading of not ready/promoted, replaces it so the tier falls back
     # (see _refresh_remote_forecast). This never raises; any exception is
     # swallowed here as a final backstop even though fetch_forecast and
     # fetch_health already guarantee non-raising.
-    _addon_hour_ran = controller.cfg.addon_enabled and now.hour != controller._last_remote_forecast_hour
+    _addon_on = bool(controller.cfg.addon_url)
+    _addon_hour_ran = _addon_on and now.hour != controller._last_remote_forecast_hour
     if _addon_hour_ran:
         controller._last_remote_forecast_hour = now.hour
         # RACE 2 bookkeeping: a fresh hour resets the bounded same-hour
@@ -43,11 +45,12 @@ async def refresh(controller: Controller, now: datetime, _wf_list: list[dict], _
             # in which a dead addon_url would otherwise hide.
             await controller._poll_addon_health(now)
 
-            await controller._refresh_remote_forecast(now, _wf_list, _persons_home_now)
+            if controller._addon_seen:
+                await controller._refresh_remote_forecast(now, _wf_list, _persons_home_now)
         except Exception:
             _LOGGER.debug("remote_forecast fetch raised unexpectedly", exc_info=True)
     elif (
-        controller.cfg.addon_enabled
+        _addon_on
         and controller._addon_health is None
         and controller._addon_health_retry_count < _MAX_ADDON_HEALTH_RETRIES
     ):
@@ -76,7 +79,7 @@ async def refresh(controller: Controller, now: datetime, _wf_list: list[dict], _
         if controller._addon_health is not None:
             controller._remote_forecast_pending = True
 
-    if controller.cfg.addon_enabled and controller._remote_forecast_pending and not _addon_hour_ran:
+    if controller._addon_seen and controller._remote_forecast_pending and not _addon_hour_ran:
         try:
             await controller._refresh_remote_forecast(now, _wf_list, _persons_home_now)
         except Exception:

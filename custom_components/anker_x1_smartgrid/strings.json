@@ -169,7 +169,6 @@
               "occ_adapt_fraction": "Occupancy correction fraction (0-1)",
               "occ_persistence_h": "Occupancy persistence (h)",
               "current_hour_blend": "Blend current hour with observed load",
-              "addon_enabled": "Use forecast add-on",
               "addon_url": "Add-on URL",
               "addon_timeout": "Add-on timeout (seconds)"
             },
@@ -181,7 +180,6 @@
               "occ_adapt_fraction": "How strongly the occupancy corrector scales the load forecast by current vs typical presence (0–1, 0 = off). Default 0.",
               "occ_persistence_h": "Hours the current occupancy count persists into the forecast before reverting to climatology. Default 4.",
               "current_hour_blend": "Blend the in-progress hour's observed load into the forecast as it accumulates. Default off.",
-              "addon_enabled": "Offload ML training and forecasting to the Anker X1 Forecast add-on instead of running in-process. Default off.",
               "addon_url": "Base URL of the Anker X1 Forecast add-on. Default http://local-anker_x1_forecast:8099.",
               "addon_timeout": "HTTP timeout for add-on requests, 1–60 seconds. Default 5."
             }

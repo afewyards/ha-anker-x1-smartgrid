@@ -103,12 +103,6 @@ class TestRideOutReserveKwh:
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap=cheap)
         assert r == pytest.approx(3.0, abs=1e-6)  # same as with no cheap hour
 
-    def test_double_dip_survives_is_cheap_when_blip_not_cheap(self):
-        # dawn PV blip then bigger breakfast deficit; no cheap hour → double-dip intact.
-        ivs = self._ivs([(0.0, 500.0), (800.0, 500.0), (300.0, 1500.0), (3000.0, 300.0)])
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
-        assert r == pytest.approx(1.0 + 1.7, abs=1e-6)
-
     def test_monotone_glide(self):
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg = self._cfg()

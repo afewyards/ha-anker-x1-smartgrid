@@ -2268,13 +2268,13 @@ async def test_status_exposes_efficiency_curve_table():
 
 @pytest.mark.asyncio
 async def test_learned_model_unavailable_warns_once(monkeypatch, caplog):
-    """A4: addon disabled + sklearn unavailable in-process
+    """A4: no add-on address + sklearn unavailable in-process
     is the silent bucketed-fallback case — warn ONCE, not every tick."""
     from dataclasses import replace
 
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
-    ctrl.cfg = replace(ctrl.cfg, addon_enabled=False)
+    ctrl.cfg = replace(ctrl.cfg, addon_url="")
     monkeypatch.setattr(tick_inputs.importlib.util, "find_spec", lambda name: None)
     with caplog.at_level("WARNING"):
         await ctrl.tick()

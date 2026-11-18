@@ -1,9 +1,9 @@
 """Tests for P3-T3: RemoteForecastPredictor wired into Controller.
 
 Covers:
-  (a) addon_enabled=True + fetched non-empty map → active_model_name=="remote"
+  (a) add-on address set + fetched non-empty map → active_model_name=="remote"
       and predictor is a RemoteForecastPredictor.
-  (b) addon_enabled=False → remote tier skipped; falls through to bucketed/profile.
+  (b) empty addon_url → remote tier skipped; falls through to bucketed/profile.
   (c) fetch returns None (add-on down) → falls through; active_model_name != "remote".
   (d) fetch fires at most once per clock-hour (guard).
   (e) C2 alignment: build_hours_payload → map → predict(HH:23:07) resolves to HH:00 entry.
@@ -127,11 +127,10 @@ _BASE_DATA = {
 }
 
 
-def _make_controller(*, addon_enabled: bool = False) -> Controller:
-    """Build a Controller with addon_enabled flag in cfg."""
+def _make_controller(*, addon_url: str = "http://test-addon:8099") -> Controller:
+    """Build a Controller pointed at *addon_url* (empty = no add-on)."""
     data = dict(_BASE_DATA)
-    data["addon_enabled"] = addon_enabled
-    data["addon_url"] = "http://test-addon:8099"
+    data["addon_url"] = addon_url
     data["addon_timeout"] = 5
     return Controller(
         hass=_StubHass(),
@@ -159,13 +158,13 @@ def _weather_entry(hour: datetime) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# (a) addon_enabled=True + non-empty map → Tier-0 selected
+# (a) add-on address set + non-empty map → Tier-0 selected
 # ---------------------------------------------------------------------------
 
 
 def test_retrain_sync_tier0_selects_remote_predictor():
-    """When addon_enabled and a non-empty map is cached, _retrain_sync picks Tier-0."""
-    ctrl = _make_controller(addon_enabled=True)
+    """When an add-on address is set and a non-empty map is cached, _retrain_sync picks Tier-0."""
+    ctrl = _make_controller()
     ctrl._remote_forecast_map = _sample_forecast_map(_NOW)
 
     # _retrain_sync is synchronous; call directly.
@@ -178,19 +177,19 @@ def test_retrain_sync_tier0_selects_remote_predictor():
 
 
 # ---------------------------------------------------------------------------
-# (b) addon_enabled=False → Tier-0 skipped; falls through to bucketed/profile
+# (b) empty addon_url → Tier-0 skipped; falls through to bucketed/profile
 # ---------------------------------------------------------------------------
 
 
 def test_retrain_sync_skips_remote_when_addon_disabled():
-    """When addon_enabled=False, _retrain_sync ignores the cached map entirely."""
-    ctrl = _make_controller(addon_enabled=False)
+    """With an empty addon_url, _retrain_sync ignores the cached map entirely."""
+    ctrl = _make_controller(addon_url="")
     # Plant a non-empty map — should be ignored
     ctrl._remote_forecast_map = _sample_forecast_map(_NOW)
 
     ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
 
-    assert ctrl.active_model_name != "remote", "Remote tier must be skipped when addon_enabled=False"
+    assert ctrl.active_model_name != "remote", "Remote tier must be skipped when addon_url is empty"
     assert not isinstance(ctrl.predictor, RemoteForecastPredictor)
 
 
@@ -201,7 +200,7 @@ def test_retrain_sync_skips_remote_when_addon_disabled():
 
 def test_retrain_sync_skips_remote_when_map_is_none():
     """When _remote_forecast_map is None (fetch never succeeded), Tier-0 is bypassed."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     assert ctrl._remote_forecast_map is None  # default
 
     ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
@@ -212,7 +211,7 @@ def test_retrain_sync_skips_remote_when_map_is_none():
 
 def test_retrain_sync_skips_remote_when_map_is_empty():
     """An empty dict (all predictions filtered) also falls through — empty is falsy."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     ctrl._remote_forecast_map = {}  # empty dict from partial decode
 
     ctrl._retrain_sync(since_iso=(_NOW - timedelta(days=30)).isoformat())
@@ -228,7 +227,8 @@ def test_retrain_sync_skips_remote_when_map_is_empty():
 @pytest.mark.asyncio
 async def test_tick_fetch_fires_at_most_once_per_clock_hour():
     """Two ticks in the same clock-hour must call fetch_forecast exactly once."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
+    ctrl._addon_seen = True
 
     # Pre-seed the _last_remote_forecast_hour so the guard fires on the FIRST tick,
     # then the second tick (same hour) is suppressed.
@@ -268,7 +268,8 @@ async def test_tick_fetch_fires_at_most_once_per_clock_hour():
 @pytest.mark.asyncio
 async def test_tick_fetch_fires_again_on_new_clock_hour():
     """A tick at a new clock-hour must trigger a second fetch."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
+    ctrl._addon_seen = True
 
     hour_a = _NOW  # hour 11
     hour_b = _NOW.replace(hour=12)  # hour 12
@@ -452,8 +453,8 @@ def _tick_env(health_fn, *, now=_NOW):
 
 @pytest.mark.asyncio
 async def test_health_polled_and_status_attrs_present():
-    """After a tick with addon_enabled, last_status carries ml-status attrs."""
-    ctrl = _make_controller(addon_enabled=True)
+    """After a tick with the add-on answering, last_status carries ml-status attrs."""
+    ctrl = _make_controller()
     health = {
         "ready": False,
         "promoted": False,
@@ -475,25 +476,115 @@ async def test_health_polled_and_status_attrs_present():
 
 
 @pytest.mark.asyncio
-async def test_health_unreachable_flagged():
-    """fetch_health returning None (add-on down) surfaces as unreachable."""
-    ctrl = _make_controller(addon_enabled=True)
+async def test_no_addon_quiet():
+    """/health never answering since start reads as no add-on: quiet status,
+    no forecast POST, but the probe keeps running for a later install."""
+    ctrl = _make_controller()
+    probes = []
 
-    async def fake_health(session, url, timeout):
+    async def _no_answer(session, url, timeout):
+        probes.append(url)
         return None
 
-    with _tick_env(fake_health):
-        await ctrl.tick()
+    with _addon_env(_steady_weather, health_fn=_no_answer) as (fetch, _weather):
+        await _tick_at(ctrl)
+        await _tick_at(ctrl, _NOW + timedelta(minutes=1))
 
     status = ctrl.last_status
-    assert status["addon_reachable"] is False
+    assert status["ml_status"] == "add-on not installed"
+    assert status["addon_reachable"] is None
+    assert fetch.call_count == 0
+    assert len(probes) == 2  # hourly probe + one same-hour retry
+
+
+@pytest.mark.asyncio
+async def test_addon_lost_after_seen():
+    ctrl = _make_controller()
+    up = [True]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED if up[0] else None
+
+    with _addon_env(_steady_weather, health_fn=_health):
+        await _tick_at(ctrl)
+        up[0] = False
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+
+    status = ctrl.last_status
     assert status["ml_status"] == "⚠ unreachable"
+    assert status["addon_reachable"] is False
+
+
+@pytest.mark.asyncio
+async def test_empty_url_is_off():
+    ctrl = _make_controller(addon_url="")
+    probes = []
+
+    async def _health(session, url, timeout):
+        probes.append(url)
+        return _HEALTH_PROMOTED
+
+    with _addon_env(_steady_weather, health_fn=_health) as (fetch, _weather):
+        await _tick_at(ctrl)
+        await _tick_at(ctrl, _NOW + timedelta(hours=1))
+
+    assert probes == []
+    assert fetch.call_count == 0
+    assert ctrl.last_status["ml_status"] == "add-on off"
+
+
+@pytest.mark.asyncio
+async def test_seen_enables_fetch():
+    """An add-on that answered /health gets the fetch owed while weather was empty."""
+    ctrl = _disabled_controller()
+    reads = []
+
+    async def _weather(hass, data):
+        reads.append(1)
+        return [] if len(reads) == 1 else [_weather_entry(_NOW)]
+
+    with _addon_env(_weather) as (fetch, _w):
+        await _tick_at(ctrl)
+        assert ctrl._addon_seen and ctrl._remote_forecast_pending
+        assert fetch.call_count == 0
+        await _tick_at(ctrl, _NOW + timedelta(minutes=1))
+
+    assert fetch.call_count == 1
+    assert ctrl.active_model_name == "remote"
+
+
+@pytest.mark.asyncio
+async def test_sklearn_warning_waits_for_the_addon_probe(monkeypatch, caplog):
+    """The gather step runs before the probe, so a healthy add-on must not be
+    reported missing on the first tick; a silent one is, once its retries are spent."""
+    monkeypatch.setattr(tick_inputs.importlib.util, "find_spec", lambda name: None)
+    up = [True]
+
+    async def _health(session, url, timeout):
+        return _HEALTH_PROMOTED if up[0] else None
+
+    def _hits():
+        return [r for r in caplog.records if "scikit-learn" in r.getMessage()]
+
+    with caplog.at_level("WARNING"), _addon_env(_steady_weather, health_fn=_health):
+        found = _make_controller()
+        for minute in range(10):
+            await _tick_at(found, _NOW + timedelta(minutes=minute))
+        assert _hits() == []
+        up[0] = False
+        missing = _make_controller()
+        for minute in range(1 + tick_remote._MAX_ADDON_HEALTH_RETRIES):
+            await _tick_at(missing, _NOW + timedelta(minutes=minute))
+        assert _hits() == []
+        await _tick_at(missing, _NOW + timedelta(minutes=10))
+
+    assert len(_hits()) == 1
 
 
 @pytest.mark.asyncio
 async def test_health_fetch_failure_never_breaks_tick():
     """A raising fetch_health must be swallowed; the tick still produces a plan."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
 
     async def exploding_health(session, url, timeout):
         raise RuntimeError("must be swallowed by the tick backstop")
@@ -512,7 +603,7 @@ async def test_health_polled_before_forecast_predict_path():
     the hourly add-on block's ``try:``, so reachability keeps updating even
     when the predict path fails.
     """
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     health = {"ready": True, "promoted": True, "n_rows": 900, "last_trained": None}
 
     async def fake_health(session, url, timeout):
@@ -554,7 +645,7 @@ async def test_health_poll_failure_reports_unreachable_not_stale():
     unreachable with a FRESH timestamp — not silently keep the prior
     successful reading (the stale-health regression).
     """
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     good_health = {"ready": False, "promoted": False, "n_rows": 10, "last_trained": "t0"}
 
     hour_a = _NOW  # hour 11, poll succeeds
@@ -610,7 +701,7 @@ async def test_coverage_counted_even_when_remote_tier_active():
     early return in ``_retrain_sync``.  With a cached remote map the method
     returns immediately, yet coverage_days must still be refreshed.
     """
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     ctrl._remote_forecast_map = _sample_forecast_map(_NOW)
 
     # Two lag-complete rows 168 h apart on two distinct Amsterdam dates.
@@ -648,7 +739,8 @@ async def test_health_retried_on_later_tick_same_hour_after_failure():
     """First tick's health poll fails; a second tick in the SAME clock-hour
     must retry /health (not wait for the next hour); an unpromoted retry
     must not POST a forecast request."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
+    ctrl._addon_seen = True  # it answered before going down
 
     call_count = 0
 
@@ -694,7 +786,7 @@ async def test_health_retried_on_later_tick_same_hour_after_failure():
 async def test_health_no_retry_once_already_reachable_same_hour():
     """A successful health poll must not be retried on later same-hour
     ticks -- only a FAILURE re-arms the retry."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     call_count = 0
 
     async def always_ok(session, url, timeout):
@@ -733,7 +825,7 @@ async def test_health_no_retry_once_already_reachable_same_hour():
 async def test_health_retry_capped_within_hour():
     """A genuinely-dead add-on must not be hammered every tick for the whole
     hour -- retries stop at tick_remote._MAX_ADDON_HEALTH_RETRIES."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
 
     async def always_down(session, url, timeout):
         return None
@@ -773,7 +865,7 @@ async def test_health_retry_writes_fresh_timestamp_each_attempt():
     from THAT tick -- never carry forward a stale timestamp (mirrors
     test_health_poll_failure_reports_unreachable_not_stale, but within the
     same hour via the retry path instead of the next-hour path)."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
 
     async def always_down(session, url, timeout):
         return None
@@ -854,7 +946,7 @@ def _addon_env(weather_fn, *, fetch_fn=None, health_fn=None):
 def _disabled_controller() -> Controller:
     """The stub plant has no sensors, so an enabled tick ends at the failsafe
     before the model refresh; the disabled path reaches the real call site."""
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     ctrl.enabled = False
     return ctrl
 
@@ -888,7 +980,7 @@ async def test_remote_tier_picked_once_weather_arrives_after_empty_first_tick():
 
 @pytest.mark.asyncio
 async def test_weather_read_retried_after_empty_but_once_per_hour_after_success():
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     reads = []
 
     async def _weather(hass, data):
@@ -1077,12 +1169,12 @@ async def test_late_starting_addon_fetched_on_the_tick_its_health_recovers():
         await _tick_at(ctrl, _NOW + timedelta(minutes=2))
 
     assert ctrl.active_model_name == "remote"
-    assert fetch.call_count == 2
+    assert fetch.call_count == 1  # none before the first /health answer
 
 
 @pytest.mark.asyncio
 async def test_empty_weather_reads_capped_per_hour():
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     budget = tick_inputs._MAX_WEATHER_READ_RETRIES
 
     async def _no_weather(hass, data):
@@ -1099,7 +1191,7 @@ async def test_empty_weather_reads_capped_per_hour():
 
 @pytest.mark.asyncio
 async def test_empty_weather_reads_not_retried_once_a_forecast_is_cached():
-    ctrl = _make_controller(addon_enabled=True)
+    ctrl = _make_controller()
     empty = [False]
 
     async def _weather(hass, data):

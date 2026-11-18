@@ -167,7 +167,7 @@ Colours have built-in defaults; a theme can override `--smartgrid-power-charge-c
 
 **The integration works fine without it** — it falls back to in-process forecasting tiers (profile averages, then a locally trained model once ~2 days of hourly history accumulate).
 
-To enable: install the add-on, then toggle **Use forecast add-on** in the integration's options under Load model & ML.
+To enable: install the add-on and set the add-on address in **Add-on URL** in the integration's options under Load model & ML (the default already points at the add-on); leave it empty to disable.
 
 See [`addon/anker_x1_forecast/README.md`](addon/anker_x1_forecast/README.md) for deployment instructions and API reference.
 

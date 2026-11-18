@@ -293,6 +293,8 @@ class Controller:
         # once a reachable add-on reports itself not ready/promoted.
         self._addon_health: dict | None = None
         self._addon_health_ts: datetime | None = None
+        # /health has answered since start; until then the add-on reads as not installed.
+        self._addon_seen = False
         # RACE 2: bounded same-hour retry budget for a failed health poll;
         # reset to 0 each time the normal once-per-hour block runs. See
         # _MAX_ADDON_HEALTH_RETRIES / _poll_addon_health / tick_remote.refresh.
@@ -853,7 +855,7 @@ class Controller:
 
         Four-tier fallback chain:
 
-        0. **Remote** (Tier-0) — when ``addon_enabled`` is True and the latest
+        0. **Remote** (Tier-0) — when ``addon_url`` is set and the latest
            stored forecast map is non-empty, the add-on's ML forecast wins.  It
            does NOT short-circuit the local chain any more
            (see below): the local tier is fitted first and handed to
@@ -897,7 +899,7 @@ class Controller:
             except Exception:
                 self.coverage_lag_complete_days = None
 
-        remote_map = self._remote_forecast_map if self.cfg.addon_enabled else None
+        remote_map = self._remote_forecast_map if self.cfg.addon_url else None
         prev_backtest = self.backtest_result
         local_ok = True
         try:
@@ -1137,6 +1139,8 @@ class Controller:
                 self.cfg.addon_url,
                 min(self.cfg.addon_timeout, 5),
             )
+            if self._addon_health is not None:
+                self._addon_seen = True
         except Exception:
             _LOGGER.debug("remote_forecast: health poll raised unexpectedly", exc_info=True)
             self._addon_health = None
@@ -2254,7 +2258,7 @@ class Controller:
             backtest_result=self.backtest_result,
             active_model_name=self.active_model_name,
             ml_status_attrs=ml_status.build_ml_status_attrs(
-                addon_enabled=self.cfg.addon_enabled,
+                addon_seen=self._addon_seen,
                 addon_url=self.cfg.addon_url,
                 health=self._addon_health,
                 health_ts=self._addon_health_ts,

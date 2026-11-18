@@ -104,7 +104,7 @@ def _coerce_metric_int(value: object) -> int | None:
 
 def build_ml_status_attrs(
     *,
-    addon_enabled: bool,
+    addon_seen: bool,
     addon_url: str | None,
     health: dict | None,
     health_ts: datetime | None,
@@ -113,10 +113,10 @@ def build_ml_status_attrs(
 ) -> dict:
     """Build the diagnostic attribute dict for the active-load-model sensor.
 
-    Priority order (spec §4): off → unreachable → active/promoted →
+    Priority order (spec §4): off → not installed → unreachable → active/promoted →
     backtest gate → coverage ETA → collecting data.  Never raises.
     """
-    configured = bool(addon_enabled) and bool(addon_url)
+    configured = bool(addon_url)
     # When the add-on is not configured, health-derived fields must not leak a
     # stale reading from a previous (enabled) session — force them all to
     # None rather than trusting whatever the caller happened to pass in.
@@ -125,7 +125,9 @@ def build_ml_status_attrs(
         health_ts = None
 
     checked = health_ts is not None
-    reachable: bool | None = (health is not None) if checked else None
+    # No answer since start means no add-on, not a fault: reachability stays unknown.
+    not_installed = checked and health is None and not addon_seen
+    reachable: bool | None = (health is not None) if checked and not not_installed else None
     ready: bool | None = bool(health.get("ready")) if health else None
     promoted: bool | None = bool(health.get("promoted")) if health else None
     eta_days = max(0, COVERAGE_REQUIRED_DAYS - coverage_days) if coverage_days is not None else None
@@ -141,6 +143,8 @@ def build_ml_status_attrs(
 
     if not configured:
         status = "add-on off"
+    elif not_installed:
+        status = "add-on not installed"
     elif checked and health is None:
         status = "⚠ unreachable"
     elif promoted and active_model == "remote":

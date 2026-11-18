@@ -175,13 +175,13 @@ class _BoomRec(_Rec):
         raise RuntimeError("recorder unavailable")
 
 
-def _make_ctl(rec, *, addon_enabled: bool = True):
+def _make_ctl(rec, *, addon_url: str = const.DEFAULT_ADDON_URL):
     from custom_components.anker_x1_smartgrid.controller import Controller
 
     data = {
         "train_days": 14,
         "backtest_test_days": 3,
-        "addon_enabled": addon_enabled,
+        "addon_url": addon_url,
     }
     ctl = Controller.__new__(Controller)
     ctl._hass = None
@@ -263,8 +263,8 @@ def test_retrain_sync_without_remote_map_is_unchanged():
     assert ctl.backtest_result is not None
 
 
-def test_retrain_sync_addon_disabled_ignores_map_and_keeps_local_predictor():
-    ctl = _make_ctl(_Rec(_shaped_hourly_rows()), addon_enabled=False)
+def test_retrain_sync_without_addon_url_ignores_map_and_keeps_local_predictor():
+    ctl = _make_ctl(_Rec(_shaped_hourly_rows()), addon_url="")
     ctl._remote_forecast_map = {_HOUR_A: (400.0, 550.0)}
 
     ctl._retrain_sync("2026-05-01T00:00:00+00:00")

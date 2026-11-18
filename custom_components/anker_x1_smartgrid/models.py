@@ -41,7 +41,6 @@ class Config:
     idle_drain_w: float = const.DEFAULT_IDLE_DRAIN_W
     ent_weather_forecast: str = const.DEFAULT_ENT_WEATHER_FORECAST
     retention_hourly_days: int = const.DEFAULT_RETENTION_HOURLY_DAYS
-    addon_enabled: bool = const.DEFAULT_ADDON_ENABLED
     addon_url: str = const.DEFAULT_ADDON_URL
     addon_timeout: int = const.DEFAULT_ADDON_TIMEOUT
     ent_export_price: str = const.DEFAULT_ENT_EXPORT_PRICE

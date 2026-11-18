@@ -68,7 +68,7 @@ def test_sections_cover_all_option_fields():
     # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
     # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
     # +2 battery_charge_limit_w / battery_export_limit_w, +2 tracked-device pickers
-    assert len(section_keys) == 65
+    assert len(section_keys) == 64
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -211,18 +211,8 @@ def test_schema_includes_weather_forecast():
 
 
 # ---------------------------------------------------------------------------
-# P3-T1 — CONF_ADDON_ENABLED / CONF_ADDON_URL / CONF_ADDON_TIMEOUT
+# P3-T1 — CONF_ADDON_URL / CONF_ADDON_TIMEOUT
 # ---------------------------------------------------------------------------
-
-
-def test_addon_enabled_config_default():
-    cfg = Config()
-    assert cfg.addon_enabled is False
-
-
-def test_addon_enabled_config_override():
-    cfg = Config.from_dict({"addon_enabled": True})
-    assert cfg.addon_enabled is True
 
 
 def test_addon_url_config_default():
@@ -248,7 +238,6 @@ def test_addon_timeout_config_override():
 def test_addon_config_all_defaults_when_absent():
     """from_dict with unrelated keys leaves all addon fields at defaults."""
     cfg = Config.from_dict({"soc_target": 80.0})
-    assert cfg.addon_enabled is False
     assert cfg.addon_url == "http://local-anker_x1_forecast:8099"
     assert cfg.addon_timeout == 5
 
@@ -256,22 +245,12 @@ def test_addon_config_all_defaults_when_absent():
 def test_addon_config_all_overrides_honoured():
     cfg = Config.from_dict(
         {
-            "addon_enabled": True,
             "addon_url": "http://custom:9000",
             "addon_timeout": 10,
         }
     )
-    assert cfg.addon_enabled is True
     assert cfg.addon_url == "http://custom:9000"
     assert cfg.addon_timeout == 10
-
-
-def test_options_schema_includes_addon_enabled():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_ADDON_ENABLED in keys
 
 
 def test_options_schema_includes_addon_url():
@@ -288,14 +267,6 @@ def test_options_schema_includes_addon_timeout():
     schema_obj = _options_schema({})
     keys = _flat_keys(schema_obj)
     assert const.CONF_ADDON_TIMEOUT in keys
-
-
-def test_options_schema_addon_enabled_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_ADDON_ENABLED].default() is False
 
 
 def test_options_schema_addon_url_default():
@@ -325,7 +296,6 @@ def test_options_schema_addon_timeout_rejects_below_range():
         _validate_flat(
             schema_obj,
             {
-                const.CONF_ADDON_ENABLED: False,
                 const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
                 const.CONF_ADDON_TIMEOUT: 0,
             },
@@ -343,7 +313,6 @@ def test_options_schema_addon_timeout_rejects_above_range():
         _validate_flat(
             schema_obj,
             {
-                const.CONF_ADDON_ENABLED: False,
                 const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
                 const.CONF_ADDON_TIMEOUT: 61,
             },
@@ -351,19 +320,17 @@ def test_options_schema_addon_timeout_rejects_above_range():
 
 
 def test_options_schema_addon_roundtrip():
-    """All three addon fields must round-trip through the options schema."""
+    """Both addon fields must round-trip through the options schema."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
     schema_obj = _options_schema({})
     result = _validate_flat(
         schema_obj,
         {
-            const.CONF_ADDON_ENABLED: True,
             const.CONF_ADDON_URL: "http://192.168.1.50:8099",
             const.CONF_ADDON_TIMEOUT: 15,
         },
     )
-    assert result[const.CONF_ADDON_ENABLED] is True
     assert result[const.CONF_ADDON_URL] == "http://192.168.1.50:8099"
     assert result[const.CONF_ADDON_TIMEOUT] == 15
 

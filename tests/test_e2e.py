@@ -58,7 +58,7 @@ async def test_e2e_low_soc_charges(hass):
     when the price is good, not because of any survival obligation.
     """
     data = {**DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES}
-    data.update({"soc_target": 100.0, "eta_charge": 1.0, "min_dwell_min": 0})
+    data.update({"soc_target": 100.0, "eta_charge": 1.0, "min_dwell_min": 0, "addon_url": ""})
     entry = MockConfigEntry(domain=DOMAIN, data=data)
     entry.add_to_hass(hass)
     # soc=5.0 == soc_floor=5.0 (DEFAULT_SOC_FLOOR lowered 10→5 in economic-only
@@ -81,7 +81,7 @@ async def test_e2e_low_soc_charges(hass):
 
 async def test_e2e_high_soc_releases(hass):
     data = {**DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES}
-    data.update({"soc_target": 97.0, "min_dwell_min": 0})
+    data.update({"soc_target": 97.0, "min_dwell_min": 0, "addon_url": ""})
     entry = MockConfigEntry(domain=DOMAIN, data=data)
     entry.add_to_hass(hass)
     _seed_states(hass, data, soc=96.0, pv_remaining=0.0, cheap_now=True)

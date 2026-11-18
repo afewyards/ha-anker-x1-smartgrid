@@ -49,6 +49,7 @@ def _make_ctl(rec, **cfg_overrides) -> Controller:
     ctl.predictor = forecast.LoadPredictor.from_profile({})
     ctl._profile_predictor = forecast.LoadPredictor.from_profile({})
     ctl.backtest_result = None
+    ctl._remote_forecast_map = None
     ctl.active_model_name = "profile"
     return ctl
 

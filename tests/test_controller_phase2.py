@@ -255,6 +255,7 @@ async def test_retrain_switches_to_model_with_enough_data():
     ctl.predictor = forecast.LoadPredictor.from_profile({})
     ctl._profile_predictor = forecast.LoadPredictor.from_profile({})
     ctl.backtest_result = None
+    ctl._remote_forecast_map = None
     await ctl.retrain()
     assert ctl.backtest_result is not None
     assert ctl.predictor._model is not None
@@ -468,6 +469,7 @@ def _make_retrain_ctl(rec, *, min_train_samples=100):
     ctl.predictor = forecast.LoadPredictor.from_profile({})
     ctl._profile_predictor = forecast.LoadPredictor.from_profile({})
     ctl.backtest_result = None
+    ctl._remote_forecast_map = None
     ctl.active_model_name = "profile"
     return ctl
 

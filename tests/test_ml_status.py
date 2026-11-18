@@ -78,7 +78,7 @@ HEALTH_PROMOTED = {**HEALTH_DORMANT, "ready": True, "promoted": True}
 
 def _attrs(**overrides):
     kw = dict(
-        addon_enabled=True,
+        addon_seen=True,
         addon_url="http://x:8099",
         health=HEALTH_DORMANT,
         health_ts=NOW,
@@ -90,15 +90,23 @@ def _attrs(**overrides):
 
 
 def test_status_addon_off():
-    assert _attrs(addon_enabled=False)["ml_status"] == "add-on off"
-    assert _attrs(addon_url="")["ml_status"] == "add-on off"
-    assert _attrs(addon_enabled=False)["addon_configured"] is False
+    a = _attrs(addon_url="")
+    assert a["ml_status"] == "add-on off"
+    assert a["addon_configured"] is False
+
+
+def test_status_not_installed_is_quiet():
+    a = _attrs(addon_seen=False, health=None)
+    assert a["ml_status"] == "add-on not installed"
+    assert a["addon_configured"] is True
+    assert a["addon_reachable"] is None  # the card flags only reachable False
+    assert a["last_health_check"] == NOW.isoformat()
 
 
 def test_status_addon_off_clears_stale_health_fields():
     """Not-configured must not leak a previous (enabled) session's health
     reading — health-derived fields all report None, not stale values."""
-    a = _attrs(addon_enabled=False, health=HEALTH_PROMOTED, health_ts=NOW)
+    a = _attrs(addon_url="", health=HEALTH_PROMOTED, health_ts=NOW)
     assert a["ml_status"] == "add-on off"
     assert a["addon_reachable"] is None
     assert a["addon_ready"] is None
@@ -304,7 +312,7 @@ def test_metrics_ignored_when_promoted():
 
 
 def test_metric_attrs_cleared_when_addon_off():
-    a = _attrs(addon_enabled=False, health=HEALTH_GATE)
+    a = _attrs(addon_url="", health=HEALTH_GATE)
     assert a["addon_improvement_pct"] is None
     assert a["addon_origins_24h"] is None
     assert a["addon_origins_required"] == 8  # constant, not health-derived

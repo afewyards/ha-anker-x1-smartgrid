@@ -31,7 +31,6 @@ CONF_CALIBRATION_TOP_SOC = "calibration_top_soc"
 CONF_CALIBRATION_DWELL_H = "calibration_dwell_h"
 CONF_RESERVE_CHEAP_BAND = "reserve_cheap_band"
 CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
-CONF_ADDON_ENABLED = "addon_enabled"
 CONF_ADDON_URL = "addon_url"
 CONF_ADDON_TIMEOUT = "addon_timeout"
 CONF_FORECAST_SERVICE = "forecast_service"  # persisted list of forecast config-entry ids
@@ -170,7 +169,6 @@ CALIBRATION_MAX_DWELL_H = 0.5
 DEFAULT_ENT_WEATHER_FORECAST = "weather.forecast_home"
 DEFAULT_ENT_EXPORT_PRICE = ""  # empty = no dedicated sensor; controller mirrors import price
 DEFAULT_RETENTION_HOURLY_DAYS = 730
-DEFAULT_ADDON_ENABLED = False
 DEFAULT_ADDON_URL = "http://local-anker_x1_forecast:8099"
 DEFAULT_ADDON_TIMEOUT = 5
 
