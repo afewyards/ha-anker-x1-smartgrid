@@ -53,6 +53,18 @@ class _RollupRecorder:
         self.rollup_calls.append(now_iso)
         return 0
 
+    def append_device_samples(self, ts, rows):
+        pass
+
+    def rollup_device_hours(self, now_iso):
+        return 0
+
+    def purge_device_samples(self, cutoff_iso):
+        return 0
+
+    def purge_device_hourly(self, cutoff_iso):
+        return 0
+
     def purge_hourly_older_than(self, cutoff_iso: str) -> int:
         self.purge_hourly_calls.append(cutoff_iso)
         return 0

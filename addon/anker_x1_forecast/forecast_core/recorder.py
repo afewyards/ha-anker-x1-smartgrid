@@ -220,6 +220,15 @@ _SCHEMA_DAILY_REGRET = (
     "realized_kwh REAL, realized_eur REAL, infeasible INTEGER, computed_ts TEXT)"
 )
 
+_SCHEMA_DEVICE_SAMPLES = (
+    "CREATE TABLE IF NOT EXISTS device_samples "
+    "(ts TEXT NOT NULL, entity_id TEXT NOT NULL, watts REAL, state TEXT, PRIMARY KEY (ts, entity_id))"
+)
+_SCHEMA_DEVICE_HOURLY = (
+    "CREATE TABLE IF NOT EXISTS device_hourly "
+    "(hour_ts TEXT NOT NULL, entity_id TEXT NOT NULL, w_mean REAL NOT NULL, n INTEGER NOT NULL, "
+    "PRIMARY KEY (hour_ts, entity_id))"
+)
 _SCHEMA_PLAN_SNAPSHOTS = "CREATE TABLE IF NOT EXISTS plan_snapshots (day TEXT PRIMARY KEY, ts TEXT, rows_json TEXT)"
 
 _DAILY_REGRET_COLUMNS = [
@@ -240,7 +249,7 @@ _DAILY_REGRET_COLUMNS = [
 ]
 
 # Increment this when adding new migration steps.
-_VERSION_TARGET = 12
+_VERSION_TARGET = 13
 
 # v9 energy deltas: clamp dt so a restart/stall undercounts (honest, visible
 # as a gap) instead of crediting one giant tick. 2 × TICK_SECONDS.
@@ -485,6 +494,12 @@ class DataRecorder:
             if "reasons_json" not in {row[1] for row in self._conn.execute("PRAGMA table_info(plan_snapshots)")}:
                 self._conn.execute("ALTER TABLE plan_snapshots ADD COLUMN reasons_json TEXT")
             self._conn.execute("PRAGMA user_version = 12")
+
+        if version < 13:
+            # v12 → v13: per-device watts, raw per tick and rolled up per hour.
+            self._conn.execute(_SCHEMA_DEVICE_SAMPLES)
+            self._conn.execute(_SCHEMA_DEVICE_HOURLY)
+            self._conn.execute("PRAGMA user_version = 13")
 
         self._conn.commit()
 
@@ -895,6 +910,48 @@ class DataRecorder:
         """
         with self._lock:
             cur = self._conn.execute("DELETE FROM samples_hourly WHERE hour_ts < ?", (cutoff_iso,))
+            self._conn.commit()
+            return cur.rowcount
+
+    def append_device_samples(self, ts: str, rows: dict[str, tuple[float | None, str | None]]) -> None:
+        ts = _normalize_utc_iso(ts)
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO device_samples (ts, entity_id, watts, state) VALUES (?, ?, ?, ?)",
+                [(ts, ent, watts, state) for ent, (watts, state) in rows.items()],
+            )
+            self._conn.commit()
+
+    def rollup_device_hours(self, now_iso: str) -> int:
+        """Roll completed clock-hours of device_samples into device_hourly (mean of non-null watts)."""
+        current_hour_iso = datetime.fromisoformat(now_iso).replace(minute=0, second=0, microsecond=0).isoformat()
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM device_hourly WHERE hour_ts >= ? "
+                "AND hour_ts >= (SELECT strftime('%Y-%m-%dT%H:00:00+00:00', MIN(ts)) FROM device_samples)",
+                (current_hour_iso,),
+            )
+            wm = self._conn.execute("SELECT MAX(hour_ts) FROM device_hourly").fetchone()[0]
+            since = (datetime.fromisoformat(wm) + timedelta(hours=1)).isoformat() if wm else ""
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO device_hourly (hour_ts, entity_id, w_mean, n) "
+                "SELECT strftime('%Y-%m-%dT%H:00:00+00:00', ts), entity_id, AVG(watts), COUNT(watts) "
+                "FROM device_samples WHERE ts >= ? AND ts < ? AND watts IS NOT NULL "
+                "GROUP BY 1, entity_id",
+                (since, current_hour_iso),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def purge_device_samples(self, cutoff_iso: str) -> int:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM device_samples WHERE ts < ?", (cutoff_iso,))
+            self._conn.commit()
+            return cur.rowcount
+
+    def purge_device_hourly(self, cutoff_iso: str) -> int:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM device_hourly WHERE hour_ts < ?", (cutoff_iso,))
             self._conn.commit()
             return cur.rowcount
 

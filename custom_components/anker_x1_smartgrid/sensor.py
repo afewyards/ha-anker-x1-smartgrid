@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -288,6 +288,20 @@ class X1HouseLoadSensor(_Base):
         )
 
 
+class X1TrackedDevicesSensor(_Base):
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _unrecorded_attributes = frozenset({"devices"})
+
+    def __init__(self, c, e):
+        super().__init__(c, e, "tracked_devices_w", "SmartGrid tracked devices")
+
+    @property
+    def extra_state_attributes(self):
+        return {"devices": self._controller.last_status.get("tracked_devices")}
+
+
 class X1PlanSensor(_Base):
     _attr_native_unit_of_measurement = "h"
     # ~150 slots at 15-min blow HA's 16KB recorded-attribute cap and bloat the
@@ -476,6 +490,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             spec_sensors["pinball_p80"],
             spec_sensors["active_model"],
             X1PlanSensor(controller, entry.entry_id),
+            X1TrackedDevicesSensor(controller, entry.entry_id),
             X1FictivePlanSensor(controller, entry.entry_id),
             X1DailyStatsSensor(controller, entry.entry_id),
             X1PowerCardSensor(controller, entry.entry_id),

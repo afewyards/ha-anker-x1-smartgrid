@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from datetime import datetime, timedelta, UTC
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -253,6 +255,57 @@ def count_persons_home(hass: HomeAssistant, data: dict) -> int | None:
         if state is not None and str(state.state) == "home":
             count += 1
     return count
+
+
+DeviceReading = tuple[float | None, str | None]
+
+_DEVICE_ON_STATES = frozenset(
+    {"on", "playing", "run", "running", "heating", "cooling", "active", "in_use", "preheating", "defrosting", "drying"}
+)
+_WARNED_NO_HVAC_ACTION: set[str] = set()
+
+
+def _read_state_device(hass: HomeAssistant, entity_id: str, watts: Any) -> DeviceReading:
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None, None
+    value = state.state
+    if entity_id.split(".", 1)[0] in ("climate", "water_heater"):
+        value = state.attributes.get("hvac_action")
+        if value is None:
+            if entity_id not in _WARNED_NO_HVAC_ACTION:
+                _WARNED_NO_HVAC_ACTION.add(entity_id)
+                _LOGGER.warning(
+                    "%s has no hvac_action, so its usage cannot be read; track a power sensor instead", entity_id
+                )
+            return None, str(state.state)
+    raw = str(value)
+    low = raw.strip().lower()
+    if low in _BAD:
+        return None, raw
+    try:
+        float(low)
+        return None, raw
+    except ValueError:
+        pass
+    if low not in _DEVICE_ON_STATES:
+        return 0.0, raw
+    try:
+        return float(watts), raw
+    except (TypeError, ValueError):
+        return None, raw
+
+
+def read_device_watts(hass: HomeAssistant, data: Mapping[str, Any]) -> dict[str, DeviceReading]:
+    """(watts, raw state) per tracked device; watts is None when unreadable, never 0 for a missing reading."""
+    out: dict[str, DeviceReading] = {}
+    for ent in data.get(const.CONF_DEVICE_POWER_ENTITIES) or []:
+        out[ent] = (read_power_w(hass, ent), None)
+    typed = data.get(const.CONF_DEVICE_STATE_WATTS) or {}
+    for ent in data.get(const.CONF_DEVICE_STATE_ENTITIES) or []:
+        if ent not in out:
+            out[ent] = _read_state_device(hass, ent, typed.get(ent))
+    return out
 
 
 def read_pv_remaining_kwh(hass: HomeAssistant, data: dict) -> float | None:

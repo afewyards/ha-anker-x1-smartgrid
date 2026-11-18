@@ -1526,7 +1526,7 @@ def test_migrates_v11_db_to_v12_keeping_the_snapshots(tmp_path):
     assert rec.read_plan_snapshots("2026-11-15") == [("2026-11-15", "t", "[1]", None)]
     rec.close()
     conn = sqlite3.connect(db)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == _VERSION_TARGET == 13
     conn.close()
 
 

@@ -202,6 +202,18 @@
               "addon_timeout": "HTTP timeout for add-on requests, 1–60 seconds. Default 5."
             }
           },
+          "tracked_devices": {
+            "name": "Tracked devices",
+            "description": "Devices whose usage is recorded for later load forecasting. Nothing uses the history yet.",
+            "data": {
+              "device_power_entities": "Devices with a power sensor",
+              "device_state_entities": "Devices with only an on/off state"
+            },
+            "data_description": {
+              "device_power_entities": "Power sensors (W or kW); their reading is recorded every minute.",
+              "device_state_entities": "Switches, appliance states or climate devices without a power sensor. Water heaters need a power sensor. You are asked for a typical draw next."
+            }
+          },
           "system": {
             "name": "System",
             "description": "Slot resolution, data retention and drift correction.",
@@ -225,6 +237,11 @@
             }
           }
         }
+      },
+      "device_watts": {
+        "title": "Typical draw while on",
+        "description": "Typical average draw in watts while each device is on: {devices}",
+        "data": {}
       }
     },
     "error": {

@@ -30,6 +30,26 @@ class TickInputs:
     temp_by_hour: dict[datetime, float | None]
 
 
+async def _record_devices(controller: Controller, now: datetime) -> None:
+    """Read tracked devices on the loop and store one row each off it; never raises into the tick."""
+    try:
+        readings = coordinator.read_device_watts(controller._hass, controller._data)
+    except Exception:
+        controller._log_failure("device usage read")
+        return
+    controller._failed_once.discard("device usage read")
+    controller._device_watts_now = {ent: watts for ent, (watts, _state) in readings.items()}
+    if not readings or controller._recorder is None:
+        return
+    try:
+        await controller._hass.async_add_executor_job(
+            controller._recorder.append_device_samples, now.isoformat(), readings
+        )
+        controller._failed_once.discard("device usage write")
+    except Exception:
+        controller._log_failure("device usage write")
+
+
 async def gather(controller: Controller, now: datetime) -> TickInputs:
     """Refresh the tick's inputs and run the once-per-hour recorder upkeep."""
     # RACE 1: retry device-derived capacity/limit resolution while it
@@ -66,6 +86,7 @@ async def gather(controller: Controller, now: datetime) -> TickInputs:
     # Home-presence count for this tick (on-loop state reads).
     _persons_home_now = coordinator.count_persons_home(controller._hass, controller._data)
     controller._persons_home_now = _persons_home_now
+    await _record_devices(controller, now)
     # Per-hour temperature map derived from the hourly weather forecast.
     # Keys are hour-start UTC datetimes; values are temp_forecast (float | None).
     # Passed to compute_decision so each forecast interval uses its own hourly
@@ -83,7 +104,10 @@ async def gather(controller: Controller, now: datetime) -> TickInputs:
     if controller._recorder is not None and now.hour != controller._last_rollup_hour:
         controller._last_rollup_hour = now.hour
         _hourly_cutoff = (now - timedelta(days=controller.cfg.retention_hourly_days)).isoformat()
-        await controller._hass.async_add_executor_job(controller._rollup_hourly_sync, now.isoformat(), _hourly_cutoff)
+        _raw_cutoff = (now - timedelta(days=controller.cfg.retention_days)).isoformat()
+        await controller._hass.async_add_executor_job(
+            controller._rollup_hourly_sync, now.isoformat(), _hourly_cutoff, _raw_cutoff
+        )
 
     # H3a: periodic WAL checkpoint so a read-only immutable reader (the addon,
     # mounted config:ro) sees recent rows. Once per clock-hour, off-loop.

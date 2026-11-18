@@ -97,6 +97,7 @@ def build_status(
     load_adapt_pinned_h: float,
     occ_table,
     persons_home_now: int | None,
+    device_watts_now: dict[str, float | None],
     occ_persistence_h: float,
     occ_adapt_fraction: float,
     regret: dict | None,
@@ -138,6 +139,12 @@ def build_status(
             occ_persistence_h,
             occ_adapt_fraction,
         ),
+        "tracked_devices_w": (
+            sum(w for w in device_watts_now.values() if w is not None)
+            if any(w is not None for w in device_watts_now.values())
+            else None
+        ),
+        "tracked_devices": device_watts_now,
         "regret_eur": _regret.get("regret_eur"),
         "over_buy_kwh": _regret.get("over_buy_kwh"),
         "under_buy_kwh": _regret.get("under_buy_kwh"),

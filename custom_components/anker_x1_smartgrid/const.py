@@ -58,6 +58,9 @@ CONF_ENT_SUN = "ent_sun"
 CONF_ENT_TEMP = "ent_temp"
 CONF_ENT_WEATHER_FORECAST = "ent_weather_forecast"
 CONF_ENT_EXPORT_PRICE = "ent_export_price"
+CONF_DEVICE_POWER_ENTITIES = "device_power_entities"
+CONF_DEVICE_STATE_ENTITIES = "device_state_entities"
+CONF_DEVICE_STATE_WATTS = "device_state_watts"
 CONF_PERSON_ENTITIES = "person_entities"  # list of person.* entity ids (options-only)
 
 # Charge trough look-back config key

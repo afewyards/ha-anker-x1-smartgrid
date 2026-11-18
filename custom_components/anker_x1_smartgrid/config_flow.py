@@ -13,6 +13,9 @@ from homeassistant.helpers.selector import (
     DeviceSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -138,6 +141,7 @@ SECTION_BATTERY = "battery"
 SECTION_EXPORT = "export"
 SECTION_PRICE = "price_anticipation"
 SECTION_LOAD_ML = "load_ml"
+SECTION_TRACKED = "tracked_devices"
 SECTION_SYSTEM = "system"
 
 # Section -> option keys.  Single source of truth for grouping: the sectioned
@@ -219,6 +223,10 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_ADDON_ENABLED,
         const.CONF_ADDON_URL,
         const.CONF_ADDON_TIMEOUT,
+    ),
+    SECTION_TRACKED: (
+        const.CONF_DEVICE_POWER_ENTITIES,
+        const.CONF_DEVICE_STATE_ENTITIES,
     ),
     SECTION_SYSTEM: (
         const.CONF_SLOT_RESOLUTION,
@@ -530,6 +538,18 @@ def _options_fields(defaults: dict, services=None) -> dict:
             },
         ): EntitySelector(EntitySelectorConfig(domain="sensor", multiple=True)),
     }
+    fields[
+        vol.Optional(
+            const.CONF_DEVICE_POWER_ENTITIES,
+            description={"suggested_value": defaults.get(const.CONF_DEVICE_POWER_ENTITIES, [])},
+        )
+    ] = EntitySelector(EntitySelectorConfig(domain="sensor", device_class="power", multiple=True))
+    fields[
+        vol.Optional(
+            const.CONF_DEVICE_STATE_ENTITIES,
+            description={"suggested_value": defaults.get(const.CONF_DEVICE_STATE_ENTITIES, [])},
+        )
+    ] = EntitySelector(EntitySelectorConfig(multiple=True))
     for key, default, validator in _TUNABLES:
         value = defaults.get(key, default)
         if key == const.CONF_CALIBRATION_DWELL_H:
@@ -639,6 +659,7 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
+        self._pending: dict = {}
 
     async def async_step_init(self, user_input=None):
         errors: dict[str, str] = {}
@@ -698,7 +719,11 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
                 ) or []
                 _apply_forecast_pv_derivation(self.hass, user_input, chosen, stored)
                 # CONF_FORECAST_SERVICE stays in user_input → persisted for next open.
-                return self.async_create_entry(title="", data=user_input)
+                self._pending = user_input
+                state_entities = user_input.get(const.CONF_DEVICE_STATE_ENTITIES) or []
+                if not state_entities:
+                    return self.async_create_entry(title="", data={**user_input, const.CONF_DEVICE_STATE_WATTS: {}})
+                return await self.async_step_device_watts()
         # Merge entry data + existing options so repeated opens show current values.
         # services is only needed here (schema rendering), not on submit.
         services = forecast_sources.list_forecast_services(self.hass)
@@ -707,4 +732,31 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=_options_schema(defaults, services),
             errors=errors,
+        )
+
+    async def async_step_device_watts(self, user_input=None):
+        power = set(self._pending.get(const.CONF_DEVICE_POWER_ENTITIES) or [])
+        entities = [e for e in self._pending.get(const.CONF_DEVICE_STATE_ENTITIES) or [] if e not in power]
+        if user_input is not None or not entities:
+            watts = {e: float(v) for e, v in (user_input or {}).items() if e in entities}
+            return self.async_create_entry(title="", data={**self._pending, const.CONF_DEVICE_STATE_WATTS: watts})
+        stored = {**self._config_entry.data, **self._config_entry.options}.get(const.CONF_DEVICE_STATE_WATTS) or {}
+        schema = {}
+        for entity_id in entities:
+            marker = (
+                vol.Required(entity_id)
+                if entity_id not in stored
+                else vol.Required(entity_id, default=stored[entity_id])
+            )
+            schema[marker] = NumberSelector(
+                NumberSelectorConfig(min=1, max=20000, step=1, unit_of_measurement="W", mode=NumberSelectorMode.BOX)
+            )
+        names = []
+        for entity_id in entities:
+            state = self.hass.states.get(entity_id)
+            names.append(f"{state.name} ({entity_id})" if state else entity_id)
+        return self.async_show_form(
+            step_id="device_watts",
+            data_schema=vol.Schema(schema),
+            description_placeholders={"devices": ", ".join(names)},
         )

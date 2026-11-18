@@ -429,6 +429,8 @@ class Controller:
         # ── Layer B occupancy corrector state (occupancy.py) ─────────────────────────
         self._occ_table: occupancy.OccupancyTable | None = None
         self._persons_home_now: int | None = None
+        self._device_watts_now: dict[str, float | None] = {}
+        self._failed_once: set[str] = set()
         # ── Current-hour kWh accumulator (intra_hour.py; blend gated by cfg.current_hour_blend) ──
         self._hour_acc = intra_hour.HourAccumulator()
         self._soc_drift_last_update: datetime | None = None
@@ -2163,15 +2165,31 @@ class Controller:
         )
         return last_success, plan, calibration.history_span_days(soc_rows)
 
-    def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str) -> None:
+    def _rollup_hourly_sync(self, now_iso: str, cutoff_iso: str, raw_cutoff_iso: str) -> None:
         """Synchronous: roll up completed clock-hours into samples_hourly and purge old rows.
 
         Called once per clock-hour via async_add_executor_job (blocking sqlite calls).
-        ``now_iso``    — current UTC time as ISO string (upper bound for rollup).
-        ``cutoff_iso`` — delete samples_hourly rows whose hour_ts < this value.
+        ``now_iso``        — current UTC time as ISO string (upper bound for rollup).
+        ``cutoff_iso``     — delete samples_hourly / device_hourly rows whose hour_ts < this value.
+        ``raw_cutoff_iso`` — delete device_samples rows whose ts < this value.
         """
         self._recorder.rollup_hours(now_iso)
         self._recorder.purge_hourly_older_than(cutoff_iso)
+        self._guarded("device usage roll-up", self._recorder.rollup_device_hours, now_iso)
+        self._guarded("device samples purge", self._recorder.purge_device_samples, raw_cutoff_iso)
+        self._guarded("device hourly purge", self._recorder.purge_device_hourly, cutoff_iso)
+
+    def _guarded(self, what: str, fn, *args) -> None:
+        """Run fn; log a failure as a warning once, then at debug until it succeeds again."""
+        try:
+            fn(*args)
+            self._failed_once.discard(what)
+        except Exception:
+            self._log_failure(what)
+
+    def _log_failure(self, what: str) -> None:
+        _LOGGER.log(logging.DEBUG if what in self._failed_once else logging.WARNING, "%s failed", what, exc_info=True)
+        self._failed_once.add(what)
 
     def _run_daily_regret_sync(self, day: str, computed_ts: str) -> None:
         """Synchronous: compute and persist the regret score for a completed local calendar day.
@@ -2268,6 +2286,7 @@ class Controller:
             load_adapt_pinned_h=load_adapt.pinned_hours(self._load_adapt_pinned_since, now),
             occ_table=self._occ_table,
             persons_home_now=self._persons_home_now,
+            device_watts_now=self._device_watts_now,
             occ_persistence_h=self.cfg.occ_persistence_h,
             occ_adapt_fraction=self.cfg.occ_adapt_fraction,
             regret=self.last_regret,

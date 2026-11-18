@@ -67,8 +67,8 @@ def test_sections_cover_all_option_fields():
     assert field_keys == section_keys
     # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
     # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
-    # +2 battery_charge_limit_w / battery_export_limit_w
-    assert len(section_keys) == 71
+    # +2 battery_charge_limit_w / battery_export_limit_w, +2 tracked-device pickers
+    assert len(section_keys) == 73
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1950,3 +1950,103 @@ async def test_options_flow_backup_reserve_saved_and_zero_accepted(hass):
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def _open_options(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    return entry, result
+
+
+async def _close(hass, entry):
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_tracked_devices_without_state_entities_creates_entry(hass):
+    entry, result = await _open_options(hass)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_SOC_TARGET: 88.0, const.CONF_DEVICE_POWER_ENTITIES: ["sensor.pc_power"]}),
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_DEVICE_POWER_ENTITIES] == ["sensor.pc_power"]
+    assert entry.options[const.CONF_DEVICE_STATE_WATTS] == {}
+    assert entry.options[const.CONF_SOC_TARGET] == 88.0
+    await _close(hass, entry)
+
+
+async def test_tracked_devices_state_entities_open_watts_step(hass):
+    hass.states.async_set("switch.oven", "off", {"friendly_name": "Oven"})
+    hass.states.async_set("sensor.pc_power", "5", {"friendly_name": "PC"})
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, const.CONF_HISTORY_DAYS: 5})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest(
+            {
+                const.CONF_SOC_TARGET: 88.0,
+                const.CONF_DEVICE_POWER_ENTITIES: ["sensor.pc_power"],
+                const.CONF_DEVICE_STATE_ENTITIES: ["switch.oven", "sensor.pc_power"],
+            }
+        ),
+    )
+    assert result2["type"] == "form"
+    assert result2["step_id"] == "device_watts"
+    assert [k.schema for k in result2["data_schema"].schema] == ["switch.oven"]
+    assert "Oven" in result2["description_placeholders"]["devices"]
+    assert "PC" not in result2["description_placeholders"]["devices"]
+    result3 = await hass.config_entries.options.async_configure(result["flow_id"], user_input={"switch.oven": 2400})
+    assert result3["type"] == "create_entry"
+    assert entry.options[const.CONF_DEVICE_STATE_WATTS] == {"switch.oven": 2400.0}
+    assert entry.options[const.CONF_SOC_TARGET] == 88.0
+    assert entry.options[const.CONF_DEVICE_STATE_ENTITIES] == ["switch.oven", "sensor.pc_power"]
+    assert entry.options[const.CONF_HISTORY_DAYS] == 5
+    await _close(hass, entry)
+
+
+async def test_tracked_devices_wattage_prefilled_and_dropped_with_entity(hass):
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_DEVICE_STATE_ENTITIES: ["switch.oven", "switch.kettle"]}),
+    )
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"switch.oven": 2400, "switch.kettle": 2000}
+    )
+    assert entry.options[const.CONF_DEVICE_STATE_WATTS] == {"switch.oven": 2400.0, "switch.kettle": 2000.0}
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    form = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=_nest({const.CONF_DEVICE_STATE_ENTITIES: ["switch.oven"]})
+    )
+    marker = next(iter(form["data_schema"].schema))
+    assert marker.default() == 2400.0
+    done = await hass.config_entries.options.async_configure(result["flow_id"], user_input={"switch.oven": 2400})
+    assert done["type"] == "create_entry"
+    assert entry.options[const.CONF_DEVICE_STATE_WATTS] == {"switch.oven": 2400.0}
+    await _close(hass, entry)
+
+
+async def test_tracked_devices_reopen_shows_stored_lists(hass):
+    entry, result = await _open_options(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input=_nest({const.CONF_DEVICE_POWER_ENTITIES: ["sensor.pc_power"]}),
+    )
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    markers = _flat_markers(result["data_schema"])
+    assert markers[const.CONF_DEVICE_POWER_ENTITIES].description["suggested_value"] == ["sensor.pc_power"]
+    assert markers[const.CONF_DEVICE_STATE_ENTITIES].description["suggested_value"] == []
+    await _close(hass, entry)
+
+
+def test_strings_cover_device_watts_step():
+    import json
+    import pathlib
+
+    strings = json.loads(pathlib.Path("custom_components/anker_x1_smartgrid/strings.json").read_text())
+    step = strings["options"]["step"]["device_watts"]
+    assert step["title"] and "{devices}" in step["description"]
