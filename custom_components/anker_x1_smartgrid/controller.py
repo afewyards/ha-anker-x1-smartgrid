@@ -2492,7 +2492,7 @@ class Controller:
                 if not self._live_failed:
                     _LOGGER.warning("power card live: build failed", exc_info=True)
                 self._live_failed = True
-                card["live"] = {"pv": [], "meter": None, "battery": None, "price": None, "next": None}
+                card["live"] = {"pv": [], "meter": None, "battery": None, "range": None, "price": None, "next": None}
                 with contextlib.suppress(Exception):
                     card["live"] |= self._live_sensors()
             else:
@@ -2517,7 +2517,10 @@ class Controller:
         current = next((s for s in slots if s.start <= now < s.start + timedelta(minutes=s.duration_min or step)), None)
         end = current.start + timedelta(minutes=current.duration_min or step) if current else None
         upcoming = resolution.price_at(slots, end, step) if end else None
+        day = dt_util.as_local(now).date()
+        today = [s.price for s in slots if dt_util.as_local(s.start).date() == day]
         return self._live_sensors() | {
+            "range": {"lo": round(min(today), 4), "hi": round(max(today), 4)} if today else None,
             "price": None if price is None else round(price, 4),
             "next": None if upcoming is None else {"price": round(upcoming, 4), "at": end.isoformat()},
         }

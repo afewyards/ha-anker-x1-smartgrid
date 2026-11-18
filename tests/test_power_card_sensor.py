@@ -417,6 +417,28 @@ async def test_live_names_the_battery_power_sensor():
     assert live["battery"] == "sensor.my_battery"
 
 
+async def test_live_range_is_todays_lowest_and_highest_slot_price():
+    from custom_components.anker_x1_smartgrid.models import PriceSlot
+
+    from homeassistant.util import dt as dt_util
+
+    local = dt_util.as_local(NOW)
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    slots = [
+        PriceSlot(
+            midnight + timedelta(minutes=15 * i), 0.5 if i < 96 else 0.1 + 0.001 * (i - 96) if i < 192 else 0.9, 15.0
+        )
+        for i in range(288)
+    ]
+    live = await _live(slots)
+    assert live["range"] == {"lo": 0.1, "hi": 0.195}
+
+
+async def test_live_range_is_none_without_slots():
+    live = await _live([], inputs=False)
+    assert live["range"] is None
+
+
 async def test_live_price_is_the_current_slot_and_the_next():
     live = await _live(_slots(), now=NOW + timedelta(minutes=20))
     assert live["price"] == 0.11
@@ -446,6 +468,7 @@ async def test_a_failing_live_line_still_names_the_sensors(monkeypatch):
         "pv": ["sensor.a"],
         "meter": "sensor.meter_power",
         "battery": "sensor.battery_power",
+        "range": None,
         "price": None,
         "next": None,
     }
