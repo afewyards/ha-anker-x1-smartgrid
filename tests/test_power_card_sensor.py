@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -242,52 +244,12 @@ async def test_a_failing_build_clears_the_card_and_warns_once(monkeypatch, caplo
     assert sum("power card" in r.getMessage() for r in caplog.records) == 1
 
 
-def test_payload_fits_the_16_kb_attribute_budget():
-    hour = {
-        "start": "2026-11-12T00:00:00+01:00",
-        "price": 0.2345,
-        "soc": 55.5,
-        "state": "charge_solar",
-        "use_kwh": 1.234,
-        "solar_kwh": 2.345,
-        "plan": False,
-        "grid_in_house_kwh": 1.23,
-        "grid_in_charge_kwh": 2.35,
-        "grid_out_kwh": 3.46,
-    }
-    day = {
-        "date": "2026-11-12",
-        "use_kwh": 12.345,
-        "use_cost_eur": 2.345,
-        "saved_eur": 0.456,
-        "solar_gain_eur": 0.123,
-        "avg_price": 0.2345,
-        "solar_kwh": 3.456,
-        "planned": "partial",
-        "grid_in_kwh": 12.345,
-        "grid_out_kwh": 3.456,
-        "grid_bought_eur": 13.7,
-        "grid_sold_eur": 7.3,
-        "grid_bill_eur": 6.4,
-    }
-    battery = {
-        "soc": 55.5,
-        "stored_kwh": 11.37,
-        "stored_cost_eur_per_kwh": 0.1987,
-        "state": "charge_solar",
-        "margin_30d_eur": 12.345,
-        "solar_gain_30d_eur": 1.234,
-    }
-    live = {
-        "pv": ["sensor.goodwe_inverter_solar_power", "sensor.envoy_current_power_production"],
-        "meter": "sensor.anker_solix_smart_meter_power",
-        "price": 0.2345,
-        "next": {"price": 0.2456, "at": "2026-11-12T00:15:00+01:00"},
-    }
-    card = {"built_at": NOW.isoformat(), "battery": battery, "live": live, "days": [day] * 3, "hours": [hour] * 72}
-    sensor = X1PowerCardSensor(_Stub(card), "entry")
-    # Home Assistant serialises attributes compactly (orjson).
-    assert len(json.dumps(sensor.extra_state_attributes, separators=(",", ":"))) < 16_000
+async def test_payload_fits_our_32_kb_dashboard_budget():
+    # Our own guard against the payload growing unnoticed. Home Assistant has no limit for unrecorded
+    # attributes; the rows reach an open dashboard when they change and on page load.
+    ctrl, _hours = await _card_with_reasons(0.30)
+    attrs = X1PowerCardSensor(_Stub(ctrl.power_card), "entry").extra_state_attributes
+    assert len(json.dumps(attrs, separators=(",", ":"))) < 32_000
 
 
 async def test_a_tick_publishes_the_card(monkeypatch):
@@ -505,3 +467,37 @@ async def test_a_static_tariff_tick_prices_the_live_line_from_the_synthesized_sl
     # The fixture leaves the static tariff at its default: flat import price.
     assert price == const.DEFAULT_STATIC_PRICE_IMPORT
     assert ctrl.power_card["live"]["next"]["price"] == const.DEFAULT_STATIC_PRICE_IMPORT
+
+
+def test_trim_rows_drops_the_defaults_the_card_assumes():
+    row = {"start": "s", "state": "idle", "price": None, "soc": None, "use_kwh": 0.0, "solar_kwh": 0, "plan": False}
+    row |= {"grid_in_house_kwh": None, "grid_in_charge_kwh": None, "grid_out_kwh": None, "batt_house_kwh": 0.0}
+    assert usecost.trim_rows([row]) == [{"start": "s", "state": "idle", "batt_house_kwh": 0.0}]
+
+
+def test_trim_rows_keeps_a_null_use_or_solar_figure():
+    row = {"start": "s", "use_kwh": None, "solar_kwh": None}
+    assert usecost.trim_rows([row]) == [row]
+
+
+def test_trim_rows_keeps_zero_and_false_where_they_are_measurements():
+    row = {"start": "s", "price": 0.0, "soc": 0.0, "grid_in_house_kwh": 0.0, "grid_in_charge_kwh": 0.0}
+    row |= {"grid_out_kwh": 0.0, "use_kwh": 1.2, "solar_kwh": 0.4, "plan": True, "why": {}}
+    assert usecost.trim_rows([row]) == [row]
+
+
+def test_the_sensor_trims_a_copy_and_leaves_the_controllers_rows():
+    hour = {"start": "s", "price": None, "plan": False, "use_kwh": 0.0}
+    card = {"built_at": "x", "battery": {}, "live": {}, "days": [], "hours": [hour]}
+    assert X1PowerCardSensor(_Stub(card), "entry").extra_state_attributes["hours"] == [{"start": "s"}]
+    assert card["hours"] == [{"start": "s", "price": None, "plan": False, "use_kwh": 0.0}]
+
+
+def test_the_card_defaults_match_what_the_backend_drops():
+    root = Path(usecost.__file__).parent / "frontend"
+    body = re.search(r"const ROW_DEFAULTS = \{(.*?)\};", (root / "smartgrid-power-card.js").read_text()).group(1)
+    want = {k: None for k in usecost._NULL_KEYS} | {k: 0 for k in usecost._ZERO_KEYS} | {"plan": False}
+    got = {k: json.loads(v) for k, v in re.findall(r"(\w+):\s*(null|0|false)", body)}
+    assert got == want
+    gone = re.search(r"const gone = \{(.*?)\};", (root / "harness.html").read_text()).group(1)
+    assert {k: json.loads(v) for k, v in re.findall(r"(\w+):\s*(null|0|false)", gone)} == want

@@ -2368,7 +2368,7 @@ class Controller:
         )
         days = usecost.merge_days(days, planned, dt_util.as_local(now).date(), hours)
         for h in hours:
-            # The day totals carry them; per hour they would push the sensor past its 16 KB attribute budget.
+            # The day totals carry them; per hour they would bloat the card payload.
             del h["grid_bought_eur"], h["grid_sold_eur"]
         cfg = self.cfg
         # The DP's own export gate and terminal-refill prices, per stored kWh.
@@ -2405,7 +2405,7 @@ class Controller:
         self._card_reasons = reasons
         for h in hours:
             if h["start"] in reasons:
-                # Build-ups would push the sensor past its 16 KB attribute budget.
+                # Build-ups would bloat the card payload.
                 h["why"] = {
                     k: v for k, v in reasons[h["start"]].items() if k not in ("beats", "kept_price", "kept_estimated")
                 }

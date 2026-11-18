@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from . import const, coordinator, daily_stats
+from . import const, coordinator, daily_stats, usecost
 from .const import DOMAIN
 
 
@@ -435,7 +435,10 @@ class X1PowerCardSensor(_Base):
     @property
     def extra_state_attributes(self):
         card = self._controller.power_card or {}
-        return {key: card.get(key) for key in ("battery", "live", "days", "hours")}
+        attrs = {key: card.get(key) for key in ("battery", "live", "days", "hours")}
+        if attrs["hours"]:
+            attrs["hours"] = usecost.trim_rows(attrs["hours"])
+        return attrs
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:

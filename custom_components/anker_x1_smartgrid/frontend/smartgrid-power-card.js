@@ -1,5 +1,7 @@
 const TAG = 'smartgrid-power-card';
 const H = 3600e3;
+// The server leaves these out of an hourly row when they hold the value given here.
+const ROW_DEFAULTS = { price: null, soc: null, use_kwh: 0, solar_kwh: 0, plan: false, grid_in_house_kwh: null, grid_in_charge_kwh: null, grid_out_kwh: null };
 const DASH = '–';
 const PAD = 6;
 const LIVE_NARROW = 440;
@@ -1010,7 +1012,7 @@ class SmartgridPowerCard extends HTMLElement {
     for (const h of hours) {
       const t = Date.parse(h && h.start);
       const i = Number.isFinite(t) ? colOf(t) : -1;
-      if (i >= 0) rows.push({ ...h, t, i, x0: X(i, t, 0), x1: X(i, t + H, 0), p0: X(i, t, PAD), p1: X(i, t + H, PAD) });
+      if (i >= 0) rows.push({ ...ROW_DEFAULTS, ...h, t, i, x0: X(i, t, 0), x1: X(i, t + H, 0), p0: X(i, t, PAD), p1: X(i, t + H, PAD) });
     }
     const nowCol = colOf(now);
     const geo = { dates, today, cx, cw, W, tz, X };

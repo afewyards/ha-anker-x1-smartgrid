@@ -478,6 +478,23 @@ def hourly_series(
     return out
 
 
+# Keys the card re-defaults to the same value; a zero price, level or grid figure is a measurement, so only None goes.
+_NULL_KEYS = ("price", "soc", "grid_in_house_kwh", "grid_in_charge_kwh", "grid_out_kwh")
+_ZERO_KEYS = ("use_kwh", "solar_kwh")
+
+
+def trim_rows(rows: list[dict]) -> list[dict]:
+    """Copies of the hourly rows without the values the card assumes when a key is missing."""
+    return [
+        {
+            k: v
+            for k, v in r.items()
+            if not ((k in _NULL_KEYS and v is None) or (k in _ZERO_KEYS and v == 0) or (k == "plan" and v is False))
+        }
+        for r in rows
+    ]
+
+
 def _add_grid(bucket: dict, price: float | None, export_price: float | None, *kwh: float) -> None:
     bucket["grid"] = [a + x for a, x in zip(bucket["grid"] or (0.0,) * 3, kwh, strict=True)]
     bought = kwh[0] + kwh[1]

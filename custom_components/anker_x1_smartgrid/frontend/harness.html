@@ -13,6 +13,7 @@
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
     &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
     &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
+  ?trim=1  leaves the values the server omits out of the card sensor's hourly rows (price, soc and the grid figures when null, use and solar when 0, plan when false); the debug answer still gets the full rows, and a trimmed run must draw the same as an untrimmed one
   ?live=import|export|big|zero|nopv|none  the live row's fixture (default import): the meter reads 1840, -3200, 12000 (big: checks the Grid cell reads 12.0 kW import) or 20 W; nopv makes the first solar sensor unavailable; none leaves the live attribute off the card sensor, so no row and today's cheap slot in the Today column; every run checks the Price cell reads €0.27
   ?push=1  after mount, gives the house sensor a new state of 950 W in a new hass and checks that the House cell reads 950 W without the card re-rendering
   ?price=next  puts the next quarter's price in the past and checks that the Price cell shows it; with push=1 the quarter is still ahead at mount, then the clock moves past it with the house push and the check is that the Price cell shows it without a re-render
@@ -383,7 +384,13 @@
   if (CASE === 'noattrs') {
     states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { battery: null, days: null, hours: null } };
   } else if (CASE !== 'missing') {
-    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { ...build(), ...window.LIVE_EXTRA } };
+    const card = build();
+    window.FULL_HOURS = card.hours;
+    if (q.get('trim') === '1') {
+      const gone = { price: null, soc: null, grid_in_house_kwh: null, grid_in_charge_kwh: null, grid_out_kwh: null, use_kwh: 0, solar_kwh: 0, plan: false };
+      card.hours = card.hours.map((h) => Object.fromEntries(Object.entries(h).filter(([k, v]) => !(k in gone && v === gone[k]))));
+    }
+    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { ...card, ...window.LIVE_EXTRA } };
   }
   if (CASE !== 'missing' && CASE !== 'noswitch') {
     states['switch.smartgrid_enabled'] = { state: CASE === 'disabled' ? 'off' : 'on', attributes: { friendly_name: 'SmartGrid enabled' } };
@@ -401,7 +408,7 @@
     WS.push(msg.type);
     if (CASE === 'debug-fail') return Promise.reject(new Error('Unknown command.'));
     const st = states['sensor.smartgrid_power_card'];
-    return new Promise((ok) => setTimeout(() => ok(debugData((st && st.attributes.hours) || [])), 30));
+    return new Promise((ok) => setTimeout(() => ok(debugData((st && window.FULL_HOURS) || [])), 30));
   };
   window.HASS = { states, config: { time_zone: TZ }, callService: (d, s, data) => CALLS.push(`${d}.${s} ${data.entity_id}`), callWS };
   window.CASE = CASE;
