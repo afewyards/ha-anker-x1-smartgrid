@@ -448,3 +448,55 @@ async def test_live_price_is_none_without_prices():
     live = await _live([], inputs=False)
     assert live["price"] is None and live["next"] is None
     assert live["pv"] == ["sensor.pv_power"]
+
+
+async def test_a_failing_live_line_still_names_the_sensors(monkeypatch):
+    from custom_components.anker_x1_smartgrid import resolution
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("unhappy")
+
+    monkeypatch.setattr(resolution, "price_at", _boom)
+    live = await _live(_slots(), overrides={"ent_pv_power": ["sensor.a"]})
+    assert live == {"pv": ["sensor.a"], "meter": "sensor.meter_power", "price": None, "next": None}
+
+
+async def test_a_failing_live_line_leaves_battery_days_and_hours(monkeypatch, caplog):
+    from custom_components.anker_x1_smartgrid import resolution
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller()
+    ctrl.power_card = stale_card()
+    ctrl._card_slots = _slots()
+    monkeypatch.setattr(resolution, "price_at", lambda *_a, **_k: 1 / 0)
+    for _ in range(2):
+        await ctrl._publish_power_card(NOW, card_inputs(50.0), "hold", False)
+    card = ctrl.power_card
+    assert card is not None and card["battery"]["soc"] == 50.0
+    assert "days" in card and "hours" in card and card["live"]["price"] is None
+    assert sum("power card live" in r.getMessage() for r in caplog.records) == 1
+
+
+async def test_a_tick_publishes_the_current_slot_price(monkeypatch):
+    ctrl, _act, _ = _tick_setup(monkeypatch)
+    await ctrl.tick()
+    live = ctrl.power_card["live"]
+    assert live["price"] == 0.30
+    assert live["next"]["price"] == 0.30
+
+
+async def test_a_disabled_tick_publishes_the_current_slot_price(monkeypatch):
+    ctrl, _act, _ = _tick_setup(monkeypatch, enabled=False)
+    ctrl.power_card = stale_card()
+    await ctrl.tick()
+    assert ctrl.power_card["live"]["price"] == 0.30
+
+
+async def test_a_static_tariff_tick_prices_the_live_line_from_the_synthesized_slots(monkeypatch):
+    from custom_components.anker_x1_smartgrid import const
+
+    ctrl, _act, _ = _tick_setup(monkeypatch)
+    ctrl._data[const.CONF_PRICE_MODE] = const.PRICE_MODE_STATIC
+    await ctrl.tick()
+    price = ctrl.power_card["live"]["price"]
+    assert price is not None and price != 0.30

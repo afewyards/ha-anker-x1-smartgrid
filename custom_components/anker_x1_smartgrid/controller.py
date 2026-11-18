@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import functools
 import json
@@ -393,6 +394,7 @@ class Controller:
         self._kept_src_by_slot: dict[datetime, tuple[str, datetime | None]] | None = None
         self._card_rows_end: str | None = None
         self._card_slots: list = []
+        self._live_failed = False
         self._card_reasons: dict[str, dict] = {}
         # The ledger total the card's balance counts from: set by restore(),
         # or on a fresh install by the first card publish.
@@ -2484,7 +2486,17 @@ class Controller:
                 "solar_gain_30d_eur": (self.last_status.get("battery_solar_gain_30d") or (None, None))[0],
                 "balance_eur": round(self.balance_base_eur - self.total_net_eur, 2),
             }
-            card["live"] = self._live_line(now)
+            try:
+                card["live"] = self._live_line(now)
+            except Exception:
+                if not self._live_failed:
+                    _LOGGER.warning("power card live: build failed", exc_info=True)
+                self._live_failed = True
+                card["live"] = {"pv": [], "meter": None, "price": None, "next": None}
+                with contextlib.suppress(Exception):
+                    card["live"] |= self._live_sensors()
+            else:
+                self._live_failed = False
             self._card_failed = False
         except Exception:
             if not self._card_failed:
@@ -2492,16 +2504,19 @@ class Controller:
             self._card_failed = True
             self.power_card = None
 
+    def _live_sensors(self) -> dict:
+        meter = self._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER])
+        return {"pv": const.resolve_pv_power_entities(self._data), "meter": meter}
+
     def _live_line(self, now) -> dict:
         slots = self._card_slots
-        step = resolution.resolve_slot_minutes(slots, self.cfg.slot_resolution) if slots else 60
+        # The latched value the tick last used; calling _resolve_slot_minutes here would move the latch.
+        step = self._detected_slot_minutes
         price = resolution.price_at(slots, now, step)
         current = next((s for s in slots if s.start <= now < s.start + timedelta(minutes=s.duration_min or step)), None)
         end = current.start + timedelta(minutes=current.duration_min or step) if current else None
         upcoming = resolution.price_at(slots, end, step) if end else None
-        return {
-            "pv": const.resolve_pv_power_entities(self._data),
-            "meter": self._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]),
+        return self._live_sensors() | {
             "price": None if price is None else round(price, 4),
             "next": None if upcoming is None else {"price": round(upcoming, 4), "at": end.isoformat()},
         }
