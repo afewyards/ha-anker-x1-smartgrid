@@ -141,7 +141,8 @@ ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size
 .bat .sc { color: var(--sg-charge); }
 .bat .sd { color: var(--sg-dim); }
 .live { display: grid; grid-template-columns: .85fr .85fr 1.2fr 2.1fr; margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
-.live > div { padding: 0 8px; border-left: 1px solid var(--sg-rule); min-width: 0; }
+.live.nr { grid-template-columns: .8fr .75fr 1.3fr 1.2fr; }
+.live > div { padding: 0 8px; border-left: 1px solid var(--sg-rule); min-width: 0; overflow: hidden; }
 .live > div:first-child { border-left: 0; padding-left: 0; }
 .live .k { display: flex; align-items: center; gap: 5px; color: var(--sg-dim); white-space: nowrap; overflow: hidden; }
 .live .k::before { content: ""; flex: none; width: 9px; height: 2px; border-radius: 1px; background: var(--m); }
@@ -791,11 +792,11 @@ class SmartgridPowerCard extends HTMLElement {
     }
   }
 
-  _liveRow(a, days, today, tz) {
+  _liveRow(a, days, today, tz, narrow) {
     const v = a.live ? this._liveValues() : null;
     if (!v) return '';
     const c = this._cheapText((days.find((d) => d && d.date === today) || {}).cheap, tz);
-    return `<div class="live">${liveCell('house', 'House', v.house)}${liveCell('solar', 'Solar', v.solar)}${liveCell('grid', 'Grid', v.grid)}${liveCell('price', 'Price now', v.price, c ? `<span class="lc">${c}</span>` : '')}</div>`;
+    return `<div class="live${narrow ? ' nr' : ''}">${liveCell('house', 'House', v.house)}${liveCell('solar', 'Solar', v.solar)}${liveCell('grid', 'Grid', v.grid)}${liveCell('price', 'Price now', v.price, c ? `<span class="lc">${c}</span>` : '')}</div>`;
   }
 
   connectedCallback() {
@@ -1018,7 +1019,7 @@ class SmartgridPowerCard extends HTMLElement {
       }
     }
 
-    const liveRow = this._liveRow(a, days, today, tz);
+    const liveRow = this._liveRow(a, days, today, tz, width < 400);
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
