@@ -442,7 +442,7 @@ class Controller:
         # Intervals are built inside compute_decision, so we cache the result to use next tick.
         # Not persisted — rebuilt from DP output every successful tick.
         self._soc_drift_last_intervals: list | None = None
-        # ── Measured efficiency curve (gated by cfg.use_measured_eta, default OFF) ────
+        # ── Measured efficiency curve ────
         # Built from the static fallback until the first successful recorder read;
         # refreshed at most once per EFFICIENCY_CACHE_SECONDS (see _refresh_efficiency_curve).
         self._eta_curve: EfficiencyCurve = EfficiencyCurve.static(self.cfg)
@@ -574,13 +574,8 @@ class Controller:
     async def _refresh_efficiency_curve(self, now: datetime) -> None:
         """Rebuild the measured efficiency curve from recent recorder samples.
 
-        Skipped entirely when ``use_measured_eta`` is off (the default): the
-        planner uses the static scalar curve via ``_planner_curve()`` returning
-        None, so no read is needed. When on, cached for
-        ``EFFICIENCY_CACHE_SECONDS`` and the SQLite read runs off-loop.
+        Cached for ``EFFICIENCY_CACHE_SECONDS``; the SQLite read runs off-loop.
         """
-        if not self.cfg.use_measured_eta:
-            return
         if (
             self._eta_curve_built_at is not None
             and (now - self._eta_curve_built_at).total_seconds() < const.EFFICIENCY_CACHE_SECONDS
@@ -595,24 +590,13 @@ class Controller:
             self._eta_curve = EfficiencyCurve.static(self.cfg)
         self._eta_curve_built_at = now
 
-    def _planner_curve(self) -> EfficiencyCurve | None:
-        """The measured curve to pass to the DP planner/reserve, gated by cfg.
-
-        ``None`` when ``use_measured_eta`` is off (default) — every downstream
-        eta_curve consumer treats ``None`` as "use the static scalar eta",
-        which is the byte-identical parity path.
-        """
-        return self._eta_curve if self.cfg.use_measured_eta else None
+    def _planner_curve(self) -> EfficiencyCurve:
+        """The curve passed to the DP planner/reserve (static until measured)."""
+        return self._eta_curve
 
     def _eta_d_at(self, power_w: float) -> float:
-        """Discharge efficiency at ``power_w``, gated by ``cfg.use_measured_eta``.
-
-        Mirrors ``_planner_curve()``'s gate: the static scalar
-        ``optimize.eta_discharge(cfg)`` when the flag is off (byte-identical
-        parity), the measured curve's power-dependent value when on.
-        """
-        c = self._planner_curve()
-        return optimize_mod.eta_discharge(self.cfg) if c is None else c.eta_discharge(power_w)
+        """Discharge efficiency at ``power_w`` from the planner curve."""
+        return self._planner_curve().eta_discharge(power_w)
 
     async def _refresh_past_actuals(self, now, slot_minutes: int = 60) -> None:
         """Rebuild both past-actuals caches from ONE 48h recorder read.
@@ -1239,8 +1223,7 @@ class Controller:
                 # Intervals change at most hourly; stale-by-one-tick is functionally identical.
                 _fc_pv_w, _fc_load_w = soc_drift.forecast_rate_at(self._soc_drift_last_intervals, now)
                 # Curve-derived discharge eta at the forecast deficit power (only used
-                # by expected_soc_delta_kwh on the deficit branch); static scalar when
-                # the flag is off (_eta_d_at's own gate) — byte-identical parity.
+                # by expected_soc_delta_kwh on the deficit branch).
                 _eta_d = self._eta_d_at(max(0.0, _fc_load_w - _fc_pv_w))
                 # A held step (hold_state is still last tick's here) left the pack idle on
                 # purpose, and a held pack measures flat: expect no change at all.
@@ -2298,7 +2281,6 @@ class Controller:
             planned_export_revenue_eur=self.planned_export_revenue_eur,
             slot_minutes=self._detected_slot_minutes,
             efficiency_curve_attrs=self._eta_curve.as_attributes(),
-            use_measured_eta=self.cfg.use_measured_eta,
         )
         if _prev_daily_stats is not None:
             self.last_status["daily_stats"] = _prev_daily_stats

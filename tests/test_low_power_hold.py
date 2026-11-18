@@ -12,6 +12,7 @@ import pytest
 from custom_components.anker_x1_smartgrid import const, executor, optimize, plan, scheduler
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 from custom_components.anker_x1_smartgrid.actuator import Actuator
+from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 from custom_components.anker_x1_smartgrid.models import (
     Config,
     ControllerState,
@@ -251,6 +252,7 @@ def _exec_ctrl(act=None, **cfg_over):
         cycle_cost_eur_per_kwh=0.0,
         **cfg_over,
     )
+    ctrl._eta_curve = EfficiencyCurve.static(ctrl.cfg)
     ctrl._house_load_fresh = True
     ctrl._hold_deficit_w.append((T, 250.0))
     ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=T - timedelta(hours=1))

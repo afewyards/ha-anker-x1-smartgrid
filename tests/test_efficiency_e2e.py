@@ -10,11 +10,9 @@ ts/soc/batt_w/residual_w shape ``EfficiencyCurve.build()`` expects ->
 enough episodes clear EFFICIENCY_MIN_RUNS / EFFICIENCY_MIN_DC_KWH, and falls
 back to the static scalar when they don't.
 
-Controller-level gating (``cfg.use_measured_eta`` decides whether
-``EfficiencyCurve.build`` is even called — see controller.py's
-``_refresh_efficiency_curve``/``_planner_curve``) is out of scope here;
-``EfficiencyCurve.build`` itself is a pure function of ``rows``/``cfg``/``now``
-and does not read that flag.
+Controller-level wiring (``_refresh_efficiency_curve``/``_planner_curve``) is
+out of scope here; ``EfficiencyCurve.build`` is a pure function of
+``rows``/``cfg``/``now``.
 """
 
 from __future__ import annotations
@@ -86,7 +84,6 @@ def _write_idle_break(rec: DataRecorder, ts: datetime, soc: float) -> None:
 def _make_cfg() -> Config:
     return Config(
         capacity_kwh=10.0,
-        use_measured_eta=True,
         idle_drain_w=_IDLE_DRAIN_W,
         eta_charge=0.92,
         round_trip_eff=0.85,

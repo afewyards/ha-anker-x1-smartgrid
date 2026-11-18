@@ -360,10 +360,9 @@ class X1PlanSensor(_Base):
             "occ_expected_state": self._controller.last_status.get("occ_expected_state"),
             "occ_multiplier": self._controller.last_status.get("occ_multiplier"),
             "occ_cells_ready": self._controller.last_status.get("occ_cells_ready"),
-            # T18: measured efficiency curve bin table + gate flag, for
+            # T18: measured efficiency curve bin table, for
             # dashboard/diagnostic observability only.
             "efficiency_curve": self._controller.last_status.get("efficiency_curve"),
-            "use_measured_eta": self._controller.last_status.get("use_measured_eta"),
             # Low-power hold: discharge value is None whenever a hold isn't allowed this tick.
             "low_power_hold_active": self._controller.last_status.get("low_power_hold_active"),
             "hold_discharge_value_eur_per_kwh": self._controller.last_status.get("hold_discharge_value_eur_per_kwh"),

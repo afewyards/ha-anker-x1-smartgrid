@@ -315,12 +315,6 @@ CONF_LOAD_ADAPT_PARTIAL_HOUR = "load_adapt_partial_hour"
 DEFAULT_CURRENT_HOUR_BLEND = False
 DEFAULT_LOAD_ADAPT_PARTIAL_HOUR = False
 
-# Measured efficiency curve (eta as a function of DC power) config key + tunables.
-# use_measured_eta=False keeps the static eta_charge/round_trip_eff behavior
-# (byte-identical / parity-safe); True switches to the recorder-derived curve.
-CONF_USE_MEASURED_ETA = "use_measured_eta"
-DEFAULT_USE_MEASURED_ETA = False
-
 # Low-power hold: idle the battery (VPP, setpoint 0) while price × eta_discharge
 # at the live deficit is worth less than a stored kWh. Off = today's passive path.
 CONF_LOW_POWER_HOLD = "low_power_hold"

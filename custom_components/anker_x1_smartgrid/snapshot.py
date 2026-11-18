@@ -109,7 +109,6 @@ def build_status(
     planned_export_revenue_eur: float,
     slot_minutes: int,
     efficiency_curve_attrs: dict,
-    use_measured_eta: bool,
     ml_status_attrs: dict | None = None,
 ) -> dict:
     _regret = regret or {}
@@ -167,7 +166,6 @@ def build_status(
         "planned_export_revenue_eur": round(planned_export_revenue_eur, 6),
         "slot_minutes": slot_minutes,
         # T18: measured efficiency curve bin table, for observability only
-        # (does not drive behaviour — that's gated by use_measured_eta below).
+        # (does not drive behaviour).
         "efficiency_curve": efficiency_curve_attrs,
-        "use_measured_eta": use_measured_eta,
     }

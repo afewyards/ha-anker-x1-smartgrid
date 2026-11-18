@@ -2139,29 +2139,22 @@ def test_resolve_slot_minutes_day_rollover_resets_latch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_efficiency_read_skipped_when_measured_eta_off():
-    """use_measured_eta defaults False → the blocking efficiency read is skipped
-    entirely (not just wrapped)."""
-    hass = _StubHass()
-    ctrl, act = _make_controller(hass)
-    assert ctrl.cfg.use_measured_eta is False
-    await ctrl.tick()
-    assert getattr(ctrl._recorder, "efficiency_calls", 0) == 0
-
-
-@pytest.mark.asyncio
-async def test_efficiency_curve_built_only_when_measured_eta_on():
-    """Skip-when-off: OFF (default) does NOT build from the recorder; ON builds
-    and _planner_curve surfaces it."""
-    from dataclasses import replace
+async def test_planner_curve_static_when_unmeasured():
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-    await ctrl._refresh_efficiency_curve(BASE)
-    assert ctrl._eta_curve_built_at is None  # skipped
-    assert ctrl._planner_curve() is None
-    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
+    _seed_valid_inputs(hass, soc="50.0")
+    assert ctrl._planner_curve().as_attributes() == EfficiencyCurve.static(ctrl.cfg).as_attributes()
+    assert (await ctrl.tick())["reason"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_efficiency_curve_built_on_refresh():
+    from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
+
+    hass = _StubHass()
+    ctrl, _ = _make_controller(hass)
     await ctrl._refresh_efficiency_curve(BASE)
     assert isinstance(ctrl._eta_curve, EfficiencyCurve)
     assert ctrl._eta_curve_built_at == BASE
@@ -2170,11 +2163,8 @@ async def test_efficiency_curve_built_only_when_measured_eta_on():
 
 @pytest.mark.asyncio
 async def test_refresh_efficiency_curve_is_cached_within_window():
-    from dataclasses import replace
-
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
     await ctrl._refresh_efficiency_curve(BASE)
     curve_after_first = ctrl._eta_curve
     built_at_first = ctrl._eta_curve_built_at
@@ -2193,7 +2183,6 @@ async def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error()
 
     hass = _StubHass()
     ctrl, _ = _make_controller(hass)
-    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True)
 
     def _boom(since_iso=None):
         raise RuntimeError("recorder unavailable")
@@ -2211,22 +2200,20 @@ async def test_refresh_efficiency_curve_falls_back_to_static_on_recorder_error()
 
 @pytest.mark.asyncio
 async def test_executor_runs_with_measured_eta_on(monkeypatch):
-    """Full tick with use_measured_eta=True (and export enabled) must complete
+    """Full tick with export enabled must complete
     without raising, exercising the eta_curve threaded into
     ride_out_reserve_kwh/export_net_target_w (C3 executor) and the PnL/net-out
     eta_discharge call sites.
 
     Also a genuine (not merely smoke) regression gate: it spies on
     energy.ride_out_reserve_kwh to prove the LIVE executor's reserve call
-    actually receives the measured curve — before T17's wiring, that call
-    site never passed eta_curve, silently ignoring the measured curve even
-    with the flag ON."""
+    actually receives the measured curve."""
     from dataclasses import replace
     from custom_components.anker_x1_smartgrid.efficiency import EfficiencyCurve
 
     hass = _StubHass()
     ctrl, act = _make_controller(hass, data_overrides={const.CONF_ENT_EXPORT_PRICE: "sensor.export_price"})
-    ctrl.cfg = replace(ctrl.cfg, use_measured_eta=True, enable_export=True)
+    ctrl.cfg = replace(ctrl.cfg, enable_export=True)
     curve = EfficiencyCurve.static(ctrl.cfg)
     ctrl._eta_curve = curve
     ctrl._eta_curve_built_at = BASE
@@ -2264,9 +2251,8 @@ async def test_executor_runs_with_measured_eta_on(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_status_exposes_efficiency_curve_table():
-    """last_status must expose the efficiency curve bin table + the
-    use_measured_eta flag so the sensor layer can surface them as attributes
-    for observability (flag stays OFF by default — parity-safe)."""
+    """last_status must expose the efficiency curve bin table so the sensor
+    layer can surface it as an attribute for observability."""
     hass = _StubHass()
     ctrl, act = _make_controller(hass)
     _seed_valid_inputs(hass, soc="50.0")
@@ -2278,7 +2264,6 @@ async def test_status_exposes_efficiency_curve_table():
     assert len(status["efficiency_curve"]["charge"]) == 6
     assert len(status["efficiency_curve"]["discharge"]) == 6
     assert status["efficiency_curve"]["any_over_unity"] is False
-    assert status["use_measured_eta"] is False
 
 
 @pytest.mark.asyncio

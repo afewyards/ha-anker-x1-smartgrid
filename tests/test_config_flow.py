@@ -68,7 +68,7 @@ def test_sections_cover_all_option_fields():
     # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
     # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
     # +2 battery_charge_limit_w / battery_export_limit_w, +2 tracked-device pickers
-    assert len(section_keys) == 73
+    assert len(section_keys) == 72
 
 
 def test_options_schema_is_sectioned_devices_expanded():

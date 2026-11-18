@@ -58,9 +58,7 @@ async def gather(controller: Controller, now: datetime) -> TickInputs:
     # regardless of self.enabled so a re-enable always sees correct cfg.
     controller._maybe_reresolve_anker()
     # Refresh the measured efficiency curve off-loop (cached; cheap no-op most
-    # ticks). Skipped entirely when use_measured_eta is off (default) — the
-    # planner uses the static scalar; the curve rebuilds on the first tick after
-    # the flag is flipped on.
+    # ticks).
     await controller._refresh_efficiency_curve(now)
     # Hour-gate: the hourly forecast changes at most hourly, and an unbounded
     # await here (a hung weather integration) would otherwise wedge every 60 s
