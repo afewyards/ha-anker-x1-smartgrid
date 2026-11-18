@@ -1042,7 +1042,7 @@ class SmartgridPowerCard extends HTMLElement {
       card.innerHTML = `${this._battery(null, this._swState(), false)}<div class="empty">The planner has no data yet.</div>`;
     }
     const el = refocus && card.querySelector(refocus);
-    if (el) el.focus();
+    if (el) el.focus({ preventScroll: true });
     if (this._at) this._point(this._at);
   }
 
