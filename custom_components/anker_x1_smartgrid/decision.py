@@ -626,7 +626,9 @@ def _dp_select_slots(
         if _kept:
             _out["kept_by_slot"] = {now_h + h * stride: v for h, v in enumerate(_kept)}
             _out["kept_src_by_slot"] = {
-                now_h + h * stride: (kind, None if i is None else now_h + i * stride)
+                now_h + h * stride: ("next_day", None)
+                if i is not None and i <= h
+                else (kind, None if i is None else now_h + i * stride)
                 for h, (kind, i) in enumerate(_kept_src)
             }
     return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots

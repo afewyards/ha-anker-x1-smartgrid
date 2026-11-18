@@ -251,6 +251,13 @@ def test_only_a_later_slot_the_dp_may_charge_in_caps_the_value_kept_past_the_hor
     assert flat["kept_by_slot"][LAST] == pytest.approx(stored)
 
 
+def test_a_value_capped_by_an_earlier_refill_is_named_the_next_day_for_the_slots_after_it():
+    cfg = _cfg(charge_margin_eur_per_kwh=0.0, charge_window_price_band=1.0)
+    source = _run(cfg, [0.40, 0.10, *TODAY[2:]], est=0.80)["kept_src_by_slot"]
+    assert source[LAST] == ("next_day", None)
+    assert all(src is None or src > slot for slot, (_, src) in source.items())
+
+
 def test_a_tie_with_the_refill_counts_as_the_refill_and_a_capped_end_value_names_it():
     cfg = Config(eta_charge=1.0, round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.0)
     price, deficit = [0.40, 0.50, 0.10, 0.30], [500.0, 500.0, 0.0, 0.0]
