@@ -193,7 +193,7 @@ svg { display: block; }
 .tip .hu { border-top: 1px solid var(--sg-rule); margin-top: 6px; padding-top: 4px; }
 .tip .split { display: flex; height: 7px; border-radius: 3px; overflow: hidden; background: var(--sg-rule); margin: 2px 0; }
 .tip .split .g { background: var(--sg-dim); } .tip .split .b { background: var(--sg-pos); } .tip .split .s { background: var(--sg-sun); }
-.more { display: flex; align-items: center; justify-content: center; gap: 6px; width: calc(100% + 20px); height: 30px; margin: 6px -10px -6px; padding: 0; font: inherit; font-size: 11px; color: var(--sg-dim); background: none; border: 0; border-top: 1px solid var(--sg-rule); cursor: pointer; }
+.more { border-radius: 0 0 var(--ha-card-border-radius, 12px) var(--ha-card-border-radius, 12px); display: flex; align-items: center; justify-content: center; gap: 6px; width: calc(100% + 20px); height: 30px; margin: 6px -10px -6px; padding: 0; font: inherit; font-size: 11px; color: var(--sg-dim); background: none; border: 0; border-top: 1px solid var(--sg-rule); cursor: pointer; }
 .more:hover { color: var(--sg-ink); }
 .more:focus-visible { outline: 2px solid var(--sg-charge); outline-offset: -2px; }
 .more i { width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); }
@@ -522,7 +522,7 @@ function until(v, tz, today) {
   if (!Number.isFinite(t)) return esc(v);
   const d = dateOf(t - 1, tz);
   const c = clock(t, tz);
-  return `${d === today ? 'today' : d === addDays(today, 1) ? 'tomorrow' : weekday(t - 1, tz)} ${c === '00:00' ? '24:00' : c}`;
+  return `${d === today ? 'today' : d === addDays(today, 1) ? 'tomorrow' : weekday(t - 1, tz)} ${endOfDay(c)}`;
 }
 // Label, value, and when the value is stale; inputs first. A value of null leaves its chip out.
 const INTERNALS = new Map([
@@ -670,8 +670,8 @@ class SmartgridPowerCard extends HTMLElement {
     } catch (e) {
       console.debug(TAG, e);
     }
+    if (this._open && this._dbg.err) this._dbg = { for: null, data: null, err: null };
     if (this._open) this._fetch();
-    this._drawn = null;
     this._render();
   }
 
@@ -824,7 +824,7 @@ class SmartgridPowerCard extends HTMLElement {
     return `${s}<div class="hu"><span class="k">House ${use.toFixed(2)} kWh</span>${bar}${line.length ? `<span class="k">${line.join(' · ')}</span>` : ''}</div>`;
   }
 
-  // In rows of 50 px: about 340 px, or about 940 px with the detail panel and two build-ups.
+  // In rows of 50 px: about 400 px, or about 1000 px with the hour detail open.
   getCardSize() {
     return this._open ? 20 : 8;
   }
@@ -886,7 +886,7 @@ class SmartgridPowerCard extends HTMLElement {
     const sw = this._swState();
     const off = sw ? sw.state === 'off' : !!a.battery && a.battery.state === 'disabled';
     if (!days.length && !hours.length) {
-      return `${title}${this._battery(a.battery, sw, off)}<div class="empty">The planner has no data yet.</div>`;
+      return `<div class="${off ? 'off' : ''}">${title}${this._battery(a.battery, sw, off)}<div class="empty">The planner has no data yet.</div></div>`;
     }
 
     const tz = this._hass.config && this._hass.config.time_zone;
@@ -929,7 +929,7 @@ class SmartgridPowerCard extends HTMLElement {
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
-      this._battery(a.battery, sw, off, planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
+      this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
       this._headers(days, fr, geo, a.battery) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +

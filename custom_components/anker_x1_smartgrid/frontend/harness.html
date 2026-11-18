@@ -6,7 +6,8 @@
   Fixture page for the power card, not served by Home Assistant.
   ?case=normal|unpublished|dst|wide|missing|noattrs|disabled|noswitch|late|debug-empty|debug-fail|debug-gap|debug-mixed|debug-stale|debug-throw  ?theme=dark|light  ?title=1  ?w=<card px>  ?fonts=<url of a folder with Roboto-*.woff2>
   ?model=active|unreachable|waiting|gate|gate-thin|off|missing  the stubbed sensor.smartgrid_active_load_model (default active); checks the forecast line under the legend
-  ?debug=1  sets debug: true; the stubbed websocket answers with the hours perturbed as the day's first plan, each hour's reason and the slots' grid cost (debug-empty: no plan stored, no past reasons, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan and no export price in export hours, debug-mixed: yesterday's plan in hourly slots, debug-stale: stale inputs, debug-throw: an answer the inspector cannot format)
+  ?detail=0|1  stores the card's hour-detail open state before it mounts (without it the stored state is cleared, so the card starts as debug says)
+  ?debug=1  sets debug: true, the default open state when no detail is given; the stubbed websocket answers with the hours perturbed as the day's first plan, each hour's reason and the slots' grid cost (debug-empty: no plan stored, no past reasons, debug-fail: the call fails, debug-gap: one mid-hour slot missing from the plan and no export price in export hours, debug-mixed: yesterday's plan in hourly slots, debug-stale: stale inputs, debug-throw: an answer the inspector cannot format)
   ?view=cost|use|sun  with debug, presses that panel switch (cost is the default) and checks it reads pressed
   ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed (today 14 and 15: selling blocked by the reserve, a rule; past hours: a stored reason)
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
@@ -391,6 +392,14 @@
   window.HASS = { states, config: { time_zone: TZ }, callService: (d, s, data) => CALLS.push(`${d}.${s} ${data.entity_id}`), callWS };
   window.CASE = CASE;
   window.DEBUG = !!q.get('debug');
+  // The card keeps its open state per browser and that beats debug: so the URL decides.
+  try {
+    const d = q.get('detail');
+    if (d === '0' || d === '1') localStorage.setItem('smartgrid-power-card.detail', d);
+    else localStorage.removeItem('smartgrid-power-card.detail');
+  } catch (e) {
+    console.debug(e);
+  }
   window.THEME = q.get('theme') === 'light' ? 'light' : 'dark';
   window.TITLE = !!q.get('title');
   window.WIDTH = q.get('w');
