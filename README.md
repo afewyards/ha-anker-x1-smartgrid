@@ -129,19 +129,9 @@ The `sensor.smartgrid_daily_stats` entity exposes the per-day table as attribute
 
 ## Dashboard
 
-A ready-to-use [ApexCharts](https://github.com/RomRider/apexcharts-card) plan visualization card is included in [`lovelace/apexcharts-plan-card.yaml`](lovelace/apexcharts-plan-card.yaml). It shows the price curve, charge/export schedule (kWh per slot), and SoC trajectory on a single chart. The chart now ends at the last real tariff slot — the estimated-tomorrow tail is no longer drawn.
-
-**Requires** two HACS frontend cards:
-- `apexcharts-card`
-- `config-template-card`
-
-A second card, [`lovelace/daily-stats-card.yaml`](lovelace/daily-stats-card.yaml), shows a per-day table of grid charge, export, and net € (paste it below the chart card). It needs no HACS dependency — `markdown` is a core Lovelace card.
-
-### Power card
-
 ![Power card](custom_components/anker_x1_smartgrid/frontend/power-card.png)
 
-The integration ships its own card for yesterday, today and tomorrow. The top line shows the battery level as a bar, with a tick where today's plan peaks, and what the stored energy cost per kWh. Below it are the battery level over the three days (held hours hatched), and per day what the house's use cost and what the battery saved (today also what stored solar earned, the average price, kWh used, from the grid and sold), over the price line coloured by what the battery did and one grid bar per hour: import up (house grey, battery charge in the charge colour), export down, cut at 2.5 kWh, with each charge and export block's total beside it. What the battery gave the house is a green segment on the grey import bar. House use is a bold line over the bars, solar a thin outline behind them. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
+The integration ships its own card for yesterday, today and tomorrow. The top line shows the battery level as a bar, with a tick where today's plan peaks, and what the stored energy cost per kWh. Below it are the battery level over the three days (held hours hatched), and per day what the house's use cost and what the battery saved (today also what stored solar earned, the average price, kWh used, from the grid and sold), and the price line coloured by what the battery did. Charge (up) and export (down) bars hang off the price line on a compressed scale, with each block's total beside it. Under it, one grid bar per hour: grey for the house's import, with what the battery gave the house as a green segment. House use is a bold line over the bars, solar a thin outline behind them. It is in the card picker as "SmartGrid power" once the integration is loaded, with no resource to add:
 
 ```yaml
 type: custom:smartgrid-power-card
@@ -164,7 +154,7 @@ Under Today and Tomorrow, a green line gives the cheapest three consecutive hour
 
 The switch at the top right turns the planner on and off. While it is off the battery is held idle (no charge, no discharge) and the card dims below the top line and shows "SmartGrid disabled" over the battery level.
 
-Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color`, `--smartgrid-power-solar-color` and `--smartgrid-power-debug-color` (the hour detail panel); saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday.
+Colours have built-in defaults; a theme can override `--smartgrid-power-charge-color` (battery level and charging), `--smartgrid-power-house-color`, `--smartgrid-power-export-color`, `--smartgrid-power-solar-color` and `--smartgrid-power-debug-color` (the hour detail panel); saved is `--success-color` when positive and `--warning-color` when negative. Below 400 px wide the card drops yesterday. A legend under the charts names the lines and bars, and the peak hour on each chart shows its kWh. At the bottom, a line says which house-use forecast is in use and how it did against hour averages in the last replay.
 
 ## Add-on
 
