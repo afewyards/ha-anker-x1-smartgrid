@@ -391,11 +391,12 @@
   };
   window.HASS = { states, config: { time_zone: TZ }, callService: (d, s, data) => CALLS.push(`${d}.${s} ${data.entity_id}`), callWS };
   window.CASE = CASE;
-  window.DEBUG = !!q.get('debug');
+  const DETAIL = q.get('detail');
+  window.CONFIG_DEBUG = !!q.get('debug');
+  window.DEBUG = DETAIL === '1' ? true : DETAIL === '0' ? false : window.CONFIG_DEBUG;
   // The card keeps its open state per browser and that beats debug: so the URL decides.
   try {
-    const d = q.get('detail');
-    if (d === '0' || d === '1') localStorage.setItem('smartgrid-power-card.detail', d);
+    if (DETAIL === '0' || DETAIL === '1') localStorage.setItem('smartgrid-power-card.detail', DETAIL);
     else localStorage.removeItem('smartgrid-power-card.detail');
   } catch (e) {
     console.debug(e);
@@ -425,7 +426,7 @@
     const card = document.createElement('smartgrid-power-card');
     // Headless Chrome never makes the viewport narrower than 500 px, so a small window means the wall's 456 px card.
     if (window.WIDTH || innerWidth <= 500) card.style.width = `${window.WIDTH || 456}px`;
-    card.setConfig({ ...(window.TITLE && { title: true }), ...(window.DEBUG && { debug: true }) });
+    card.setConfig({ ...(window.TITLE && { title: true }), ...(window.CONFIG_DEBUG && { debug: true }) });
     card.hass = window.HASS;
     document.body.append(card);
     new ResizeObserver(() => {
