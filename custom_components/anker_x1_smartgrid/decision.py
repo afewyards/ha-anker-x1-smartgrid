@@ -1111,29 +1111,21 @@ def compute_decision(
     # forward-min window has no later data to compare against) and the
     # ride-out walk breaks right there, collapsing the reserve to a few hours
     # instead of the true overnight need ("is_cheap stub collapse", design doc
-    # point 4). Gated by the same terminal_overnight_credit flag as the
-    # terminal credit below (one umbrella: "use estimates pre-publication");
-    # flag OFF -> _est_slot_list stays [] -> today's real-only map, byte
-    # identical. `_pickup` only needs `horizon_edge` + `intervals_reserve`,
+    # point 4). `_pickup` only needs `horizon_edge` + `intervals_reserve`,
     # both already built above.
-    _est_slot_list: list[PriceSlot] = []
-    _pickup: datetime | None = None
-    if cfg.terminal_overnight_credit:
-        _pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or _next_synthetic_pickup(
-            horizon_edge
-        )
-        _est_slot_list = (
-            pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)
-            if estimated_tomorrow is not None
-            else []
-        )
+    _pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or _next_synthetic_pickup(horizon_edge)
+    _est_slot_list: list[PriceSlot] = (
+        pricing_store.build_estimated_slots(estimated_tomorrow, horizon_edge, _pickup)
+        if estimated_tomorrow is not None
+        else []
+    )
     # The estimated night is a refill too: a kWh kept past it is worth no more than buying it there.
     _refill_prices = _remaining_prices + [s.price for s in _est_slot_list]
     _horizon_min_price = min(_refill_prices) if _refill_prices else 0.0
     water_value: float | None = optimize_mod.compute_water_value(_horizon_min_price, cfg, eta_curve)
 
     # rev-2 ride-to-trough: precompute the cheap-relief map ONCE, thread to the walk.
-    # Widened with the estimated tail (when present, i.e. flag ON) so the
+    # Widened with the estimated tail (when present) so the
     # forward-min window sees the estimated tomorrow trough -- estimated slot
     # OBJECTS still never reach the DP; only their hour/price pair feeds this
     # dict[datetime, bool] (test_dp_never_sees_estimated_slots stays green).
@@ -1199,7 +1191,7 @@ def compute_decision(
     ]
 
     # --- Overnight terminal credit (piecewise per-hour segments, spec rev-3) ---
-    # When the flag is ON, credit end-of-horizon energy that serves the post-
+    # Credit end-of-horizon energy that serves the post-
     # horizon overnight gap [horizon_edge → next solar pickup) with one
     # (dc_kwh, value) segment per PRICED gap hour -- dp_common.select_end_state
     # consumes the segments richest-first -- replacing the legacy scalar
@@ -1208,30 +1200,23 @@ def compute_decision(
     # persistence estimate (estimated_tomorrow, non-None on the live tick
     # only; `_pickup`/`_est_slot_list` were already built above, feeding the
     # widened is_cheap map).  With no estimate (or no priced gap hour) the
-    # builder still runs (flag ON) and returns ([], 0.0, v_lo) --
-    # terminal_segments=[] (empty, NOT None) so the credit anchor still shifts
-    # from the soft floor_kwh down to the HARD firmware_floor_kwh (spec F4),
-    # matching the legacy degraded behaviour in valuation terms.  The parity
-    # boundary is the FLAG: OFF → terminal_segments=None → select_end_state
-    # takes the byte-identical legacy branch.
-    terminal_segments: list[tuple[float, float]] | None = None
-    need_kwh: float = 0.0
-    v_hi_mean: float | None = None
-    if cfg.terminal_overnight_credit:
-        _est_price_by_hour = {s.start: s.price for s in _est_slot_list}
-        # Predicted hour-of-day load (W), same source the reserve walk uses.
-        _load_by_hod: dict[int, float] = {}
-        for _iv in intervals_reserve:
-            _load_by_hod[_iv.start.hour] = _iv.load_w
-        terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
-            gap_start=horizon_edge,
-            pickup=_pickup,
-            est_price_by_hour=_est_price_by_hour,
-            load_w_by_hod=_load_by_hod,
-            v_lo=water_value,
-            cfg=cfg,
-            eta_curve=eta_curve,
-        )
+    # builder returns ([], 0.0, v_lo) -- terminal_segments=[] (empty, NOT
+    # None) so the credit anchor still shifts from the soft floor_kwh down to
+    # the HARD firmware_floor_kwh (spec F4).
+    _est_price_by_hour = {s.start: s.price for s in _est_slot_list}
+    # Predicted hour-of-day load (W), same source the reserve walk uses.
+    _load_by_hod: dict[int, float] = {}
+    for _iv in intervals_reserve:
+        _load_by_hod[_iv.start.hour] = _iv.load_w
+    terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
+        gap_start=horizon_edge,
+        pickup=_pickup,
+        est_price_by_hour=_est_price_by_hour,
+        load_w_by_hod=_load_by_hod,
+        v_lo=water_value,
+        cfg=cfg,
+        eta_curve=eta_curve,
+    )
 
     live_grid_request: dict[datetime, float] | None = None
     live_export_request: dict[datetime, float] | None = None

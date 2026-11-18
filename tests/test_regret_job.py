@@ -2,15 +2,15 @@
 
 The nightly regret job runs the DP core **twice** — the perfect-foresight oracle
 (``regret.hindsight_optimal_grid``) and a shadow ``optimize.optimize_grid`` whose
-schedule is scored into ``dp_regret_eur`` (fed to the 7-day HGBR gate).  With the
-overnight-terminal flag ON, BOTH calls MUST receive the **identical**
+schedule is scored into ``dp_regret_eur`` (fed to the 7-day HGBR gate).  BOTH
+calls MUST receive the **identical**
 ``terminal_segments`` list or the shadow schedule diverges from the oracle and
 ``dp_regret_eur`` acquires phantom bias.
 
 Gap prices are the **realized D+1 prices** bucketed from the job's own 38 h read
 window (the persistence estimator is not reconstructible at job time).  When D+1
-gap prices are absent (old backfill data) the day degrades to the byte-identical
-legacy single-segment terminal (``terminal_segments=None``) — never guessed.
+gap prices are absent (old backfill data) the day degrades to the single-segment
+terminal (``terminal_segments=None``) — never guessed.
 """
 
 from custom_components.anker_x1_smartgrid import regret_job
@@ -29,7 +29,6 @@ def _cfg(**overrides) -> Config:
         soc_target=80.0,
         max_charge_w=3000.0,
         eta_charge=1.0,
-        terminal_overnight_credit=True,
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -100,7 +99,7 @@ def _assert_none_terminal_segments(captured: dict, leg: str) -> None:
 
 
 def test_internal_dp_symmetry(monkeypatch):
-    """Flag ON + D+1 prices present -> both internal DP calls receive the
+    """D+1 prices present -> both internal DP calls receive the
     IDENTICAL, non-None ``terminal_segments`` list, and ``dp_regret_eur`` is
     approximately 0 on a synthetic hold night (symmetric params means the
     shadow schedule mirrors the oracle)."""
@@ -111,7 +110,7 @@ def test_internal_dp_symmetry(monkeypatch):
     # Day-D: uniform-price hold night, modest load, no charging -> both DP cores agree.
     _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
     # D+1 overnight prices present in the 38 h window (local hours 0-13) -> the
-    # flag path builds real segments rather than degrading to legacy.
+    # job builds real segments rather than degrading to single-segment.
     _seed_day(rec, NEXT, soc_start=60.0, load_w=500.0, import_price=0.30, hours=range(14))
 
     regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
@@ -135,7 +134,7 @@ def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
     monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
     captured = _spy_terminal_params(monkeypatch)
     rec = StubRecorder()
-    cfg = _cfg()  # flag ON
+    cfg = _cfg()
     # Only day-D samples -- no D+1 rows at all (backfill exceeded retention).
     _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
 
@@ -151,24 +150,8 @@ def test_backfill_without_next_day_prices_degrades_to_legacy(monkeypatch):
     assert "last_regret" in updates
 
 
-def test_flag_off_passes_none_to_both_cores(monkeypatch):
-    """Flag OFF -> ``terminal_segments=None`` for BOTH cores even when D+1
-    prices are present in the window."""
-    monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
-    captured = _spy_terminal_params(monkeypatch)
-    rec = StubRecorder()
-    cfg = _cfg(terminal_overnight_credit=False)
-    _seed_day(rec, DAY, soc_start=60.0, load_w=500.0, import_price=0.20)
-    _seed_day(rec, NEXT, soc_start=60.0, load_w=500.0, import_price=0.30, hours=range(14))
-
-    regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
-
-    _assert_none_terminal_segments(captured, "oracle")
-    _assert_none_terminal_segments(captured, "shadow")
-
-
 def test_empty_segments_preserved_not_collapsed_to_none(monkeypatch):
-    """Flag ON + D+1 prices present, but every priced gap hour resolves to
+    """D+1 prices present, but every priced gap hour resolves to
     zero DC draw (zero load, zero idle drain) -> the builder returns real
     (empty) segments, ``([], 0.0, v_lo)``. Both cores must receive
     ``terminal_segments == []`` UNCHANGED, not collapsed to None: per design

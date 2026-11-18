@@ -1,15 +1,15 @@
 """Task 5 — overnight terminal credit live wiring in ``compute_decision``.
 
 The DP horizon always ends at ``horizon_edge`` (last priced slot + 1h), so an
-unpriced post-horizon night exists on essentially every plan.  When
-``cfg.terminal_overnight_credit`` is ON, ``compute_decision`` builds one
+unpriced post-horizon night exists on essentially every plan.
+``compute_decision`` builds one
 ``(dc_kwh, value)`` piecewise segment per PRICED gap hour
 ``[horizon_edge, next solar pickup)`` from the persistence price estimate
 (spec rev-3, :func:`optimize.overnight_terminal_segments`) and threads them
 through ``_dp_select_slots -> optimize_grid -> select_end_state`` so
 end-of-horizon energy that serves the overnight load earns the richer
-per-hour credit.  The same flag also widens the reserve ``is_cheap`` map
-(``decision._build_is_cheap_by_hour``) with the estimated tail so a
+per-hour credit.  The reserve ``is_cheap`` map
+(``decision._build_is_cheap_by_hour``) is also widened with the estimated tail so a
 truncated real price horizon's last hour no longer reads "cheap" purely
 because there is no later real data to compare against (design doc point 4,
 "is_cheap tail collapse").
@@ -31,8 +31,7 @@ Scenarios:
   * truncated real horizon ("stub") + a genuine estimated trough deep in the
     gap → the widened is_cheap map stops the reserve from collapsing at the
     stub's edge
-  * is_cheap map is widened only when the flag is ON
-  * flag explicitly False → terminal_segments=None → byte-identical legacy
+  * is_cheap map is widened with the estimated tail
 """
 
 from __future__ import annotations
@@ -337,43 +336,29 @@ def test_truncated_reserve_no_collapse():
     forward-min window has nothing past the stub to compare against, so the
     stub's last hour reads "cheap" trivially and the ride-out walk breaks
     there -- collapsing the reserve to a few hours instead of the true
-    overnight need. Widening the map with the estimated tail (flag ON) fixes
+    overnight need. Widening the map with the estimated tail fixes
     this: a genuine estimated trough deep in the gap (near the solar pickup)
     pulls the forward-min down so the stub's tail no longer reads cheap, and
     the walk correctly carries the reserve through to the real relief point.
     """
-    cfg_on = _cfg()  # terminal_overnight_credit defaults ON
-    cfg_off = _cfg(terminal_overnight_credit=False)
     # Expensive gap except right before the synthetic pickup (08:00 UTC) --
     # the genuine relief sits deep in the gap, not at the real-price edge.
     est = _estimate([0.30, 0.30, 0.30, 0.30, 0.02])
 
-    _, _, _, horizon_on, _, _ = _call(cfg_on, soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
-    _, _, _, horizon_off, _, _ = _call(cfg_off, soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
+    _, _, _, horizon, _, _ = _call(_cfg(), soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
+    row = next(r for r in horizon if _row_start(r) == BASE)
 
-    row_on = next(r for r in horizon_on if _row_start(r) == BASE)
-    row_off = next(r for r in horizon_off if _row_start(r) == BASE)
-
-    # OFF: real-only is_cheap trivially flags the stub's last hour cheap --
-    # the reserve collapses to (near) the short stub's own ride-out.
-    assert row_off["reserve_soc"] < 20.0
-    # ON: widened is_cheap sees past the stub into the genuine overnight need
-    # -- reserve at this (burst) hour reaches materially further than the
-    # collapsed OFF figure.
-    assert row_on["reserve_soc"] > 50.0
-    assert row_on["reserve_soc"] > row_off["reserve_soc"] + 20.0
+    # A real-only map would collapse this to the stub's own ride-out (< 20%).
+    assert row["reserve_soc"] == pytest.approx(78.6)
 
 
 # ---------------------------------------------------------------------------
-# 5. The is_cheap map is widened with the estimated tail ONLY when the flag
-#    is ON.
+# 5. The is_cheap map is widened with the estimated tail.
 # ---------------------------------------------------------------------------
 
 
-def test_is_cheap_real_only_when_flag_off(monkeypatch):
-    """``_build_is_cheap_by_hour`` receives ``slots + est slots`` only when
-    ``terminal_overnight_credit`` is ON; flag OFF keeps today's real-only map
-    (same slot count as the real price horizon)."""
+def test_is_cheap_widened_with_est_tail(monkeypatch):
+    """``_build_is_cheap_by_hour`` receives ``slots + est slots``."""
     real_build = decision._build_is_cheap_by_hour
     captured_lens: list[int] = []
 
@@ -388,53 +373,13 @@ def test_is_cheap_real_only_when_flag_off(monkeypatch):
     n_est_slots = len(pricing_store.build_estimated_slots(est, _HORIZON_EDGE, pickup))
     assert n_est_slots > 0, "the gap must be estimate-priced for this to be a real check"
 
-    cfg_on = _cfg()  # terminal_overnight_credit defaults ON
-    captured_lens.clear()
-    _call(cfg_on, soc=80.0, prices=_PRICES, estimated_tomorrow=est)
+    _call(_cfg(), soc=80.0, prices=_PRICES, estimated_tomorrow=est)
     assert captured_lens, "is_cheap map must be built (reserve_anchor defaults to trough)"
     assert captured_lens[-1] == len(_PRICES) + n_est_slots
 
-    cfg_off = _cfg(terminal_overnight_credit=False)
-    captured_lens.clear()
-    _call(cfg_off, soc=80.0, prices=_PRICES, estimated_tomorrow=est)
-    assert captured_lens, "is_cheap map must still be built when the credit flag is off"
-    assert captured_lens[-1] == len(_PRICES)
-
 
 # ---------------------------------------------------------------------------
-# 6. Flag explicitly False → byte-identical legacy terminal
-# ---------------------------------------------------------------------------
-
-
-def test_flag_off_byte_identical(monkeypatch):
-    """Flag False → terminal_segments=None, builder never called, legacy schedule."""
-    calls: list = []
-    real_builder = optimize_mod.overnight_terminal_segments
-
-    def _tracking_builder(*a, **k):
-        calls.append(1)
-        return real_builder(*a, **k)
-
-    monkeypatch.setattr(optimize_mod, "overnight_terminal_segments", _tracking_builder)
-
-    cfg = _cfg(terminal_overnight_credit=False)
-    out_est: dict = {}
-    out_none: dict = {}
-    _call(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=_expensive_estimate(), out=out_est)
-    _call(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=None, out=out_none)
-
-    assert calls == [], "builder must not run when the flag is OFF"
-    assert out_est["terminal_v_hi"] is None
-    assert out_est["terminal_need_kwh"] == 0.0
-    assert out_est["terminal_segments"] is None
-    # The estimate must not leak into the DP result when the flag is OFF.
-    assert out_est["export_request"] == out_none["export_request"]
-    assert out_est["grid_request"] == out_none["grid_request"]
-    assert out_est["dp_selected"] == out_none["dp_selected"]
-
-
-# ---------------------------------------------------------------------------
-# 7. Task 3 — the estimated tomorrow tail reaches the live DISPLAY horizon
+# 6. Task 3 — the estimated tomorrow tail reaches the live DISPLAY horizon
 #
 # ``compute_decision`` only threads the tail through ``build_display_horizon``
 # (the ``sun_times is not None`` branch); the degraded ``sun_times=None``
@@ -453,10 +398,10 @@ _SUN_TIMES = (
 
 
 def test_live_horizon_grows_est_tail():
-    """sun_times present + estimate + credit ON → horizon rows extend past
+    """sun_times present + estimate → horizon rows extend past
     horizon_edge, every tail row is ``estimated=True``, and tail prices equal
     the estimated-slot prices built for the gap (no display munging)."""
-    cfg = _cfg()  # terminal_overnight_credit defaults ON
+    cfg = _cfg()
     est = _expensive_estimate()
     _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
 
@@ -482,12 +427,12 @@ def test_live_horizon_grows_est_tail():
 
 
 def test_dp_never_sees_estimated_slots(monkeypatch):
-    """Core wave invariant: with the estimated tail ACTIVE (flag on + estimate +
+    """Core wave invariant: with the estimated tail ACTIVE (estimate +
     sun_times set, the same scenario as ``test_live_horizon_grows_est_tail``),
     ``decision._dp_select_slots`` must be invoked with ONLY the real price
     slots — the estimated tail must never reach the DP, no matter that the
     display horizon appends it afterwards."""
-    cfg = _cfg()  # terminal_overnight_credit defaults ON
+    cfg = _cfg()
     est = _expensive_estimate()
 
     real_dp_select_slots = decision._dp_select_slots
@@ -519,18 +464,6 @@ def test_no_estimate_no_tail():
     """estimated_tomorrow=None → no est slots are built → last row unchanged."""
     cfg = _cfg()
     _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=None, sun_times=_SUN_TIMES)
-
-    assert horizon
-    assert max(_row_start(r) for r in horizon) == BASE + timedelta(hours=len(_PRICES) - 1)
-    assert all(r["estimated"] is False for r in horizon)
-
-
-def test_flag_off_no_tail():
-    """terminal_overnight_credit=False → _est_slot_list never built → no tail
-    even though an estimate is supplied."""
-    cfg = _cfg(terminal_overnight_credit=False)
-    est = _expensive_estimate()
-    _, _, _, horizon, _, _ = _call(cfg, soc=80.0, prices=_PRICES, estimated_tomorrow=est, sun_times=_SUN_TIMES)
 
     assert horizon
     assert max(_row_start(r) for r in horizon) == BASE + timedelta(hours=len(_PRICES) - 1)

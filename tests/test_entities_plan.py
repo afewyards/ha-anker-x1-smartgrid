@@ -85,7 +85,7 @@ def test_plan_sensor_terminal_attrs_present():
 
 
 def test_plan_sensor_terminal_attrs_missing_is_none():
-    """terminal_v_hi/terminal_need_kwh are None when absent from last_status (DP failure / flag off)."""
+    """terminal_v_hi/terminal_need_kwh are None when absent from last_status (DP failure)."""
     horizon = [{"start": "2026-06-25T10:00:00+00:00", "price": 0.28, "mode": "grid", "soc": 60.0}]
     status = {
         "plan": {"horizon": horizon, "deadline": "2026-06-25T18:00:00+00:00", "planned_grid_hours": 1},

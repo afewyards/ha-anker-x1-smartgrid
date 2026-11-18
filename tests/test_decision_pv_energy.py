@@ -60,9 +60,6 @@ def _cfg(**overrides) -> Config:
             "min_dwell_min": 0,
             "max_charge_w": 6000.0,
             "cycle_cost_eur_per_kwh": 0.10,
-            # Keep the pre-DP wiring minimal -- the overnight terminal credit
-            # is irrelevant to window_pv bucketing, which is what this file pins.
-            "terminal_overnight_credit": False,
             **overrides,
         }
     )

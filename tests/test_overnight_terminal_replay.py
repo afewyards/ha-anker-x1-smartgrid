@@ -1,9 +1,8 @@
 """Replay evidence: overnight terminal value against 2026-07-18 morning fixture.
 
 Validates:
-1. Flag OFF → byte-identical to live baseline (charge 12+13 UTC, export 19 UTC)
-2. Flag ON → burst reduced, end SoC ≈ fw_floor + need
-3. Tall-peak variant (evening prices ×1.5) → burst fires even with flag ON
+1. Terminal credit → burst reduced, end SoC ≈ fw_floor + need
+2. Tall-peak variant (evening prices ×1.5) → burst still fires
 """
 
 from __future__ import annotations
@@ -11,6 +10,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from custom_components.anker_x1_smartgrid import optimize
 from custom_components.anker_x1_smartgrid.efficiency import BinStat, EfficiencyCurve
@@ -103,43 +104,35 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
 
     water_value = optimize.compute_water_value(min(window_price), cfg)
 
-    water_value_hi = None
-    overnight_need_kwh = 0.0
+    horizon_edge = slots[-1].start + timedelta(hours=1)
+    pickup = horizon_edge + timedelta(hours=11)
 
-    if cfg.terminal_overnight_credit:
-        horizon_edge = slots[-1].start + timedelta(hours=1)
-        pickup = horizon_edge + timedelta(hours=11)
+    load_by_hod: dict[int, float] = {}
+    for iv in intervals:
+        load_by_hod[iv.start.hour] = iv.load_w
 
-        load_by_hod: dict[int, float] = {}
-        for iv in intervals:
-            load_by_hod[iv.start.hour] = iv.load_w
+    # Descending gap prices with a single cheap tail hour. The is_cheap
+    # formula uses fwd_min * (1+band): early hours at 0.45+ are >20% above
+    # the tail (0.10), so the walk accumulates ~4h of need before breaking.
+    # The high prices push load-weighted mean above the v_lo threshold.
+    _gap_prices = [0.50, 0.48, 0.45, 0.42, 0.10]
+    est_price_by_hour: dict[datetime, float] = {}
+    gap_h = horizon_edge
+    idx = 0
+    while gap_h < pickup and idx < len(_gap_prices):
+        est_price_by_hour[gap_h] = _gap_prices[idx]
+        gap_h += timedelta(hours=1)
+        idx += 1
 
-        # Descending gap prices with a single cheap tail hour. The is_cheap
-        # formula uses fwd_min * (1+band): early hours at 0.45+ are >20% above
-        # the tail (0.10), so the walk accumulates ~4h of need before breaking.
-        # The high prices push load-weighted mean above the v_lo threshold.
-        _gap_prices = [0.50, 0.48, 0.45, 0.42, 0.10]
-        est_price_by_hour: dict[datetime, float] = {}
-        gap_h = horizon_edge
-        idx = 0
-        while gap_h < pickup and idx < len(_gap_prices):
-            est_price_by_hour[gap_h] = _gap_prices[idx]
-            gap_h += timedelta(hours=1)
-            idx += 1
-
-        terminal_segments, overnight_need_kwh, water_value_hi = optimize.overnight_terminal_segments(
-            gap_start=horizon_edge,
-            pickup=pickup,
-            est_price_by_hour=est_price_by_hour,
-            load_w_by_hod=load_by_hod,
-            v_lo=water_value,
-            cfg=cfg,
-            eta_curve=eta_curve,
-        )
-        if not terminal_segments:
-            terminal_segments = None
-    else:
-        terminal_segments = None
+    terminal_segments, overnight_need_kwh, water_value_hi = optimize.overnight_terminal_segments(
+        gap_start=horizon_edge,
+        pickup=pickup,
+        est_price_by_hour=est_price_by_hour,
+        load_w_by_hod=load_by_hod,
+        v_lo=water_value,
+        cfg=cfg,
+        eta_curve=eta_curve,
+    )
 
     result = optimize.optimize_grid(
         window_pv,
@@ -153,7 +146,7 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
         export_price=eff_export,
         terminal_mode="water_value",
         water_value=water_value,
-        terminal_segments=terminal_segments,
+        terminal_segments=terminal_segments or None,
         dt_h=1.0,
         eta_curve=eta_curve,
     )
@@ -163,47 +156,19 @@ def _run_dp(cfg: Config, attrs: dict, price_multiplier: float = 1.0):
 class TestReplayEvidence:
     """Offline replay against 2026-07-18 morning fixture."""
 
-    def test_flag_off_reproduces_baseline(self):
-        """Flag OFF → charge at 12+13 UTC, export at 19 UTC."""
+    def test_terminal_credit_values_terminal_energy(self):
+        """v_hi > v_lo, meaningful need, pinned grid charge."""
         attrs, options = _load_fixture()
-        cfg = _build_config(options, terminal_overnight_credit=False)
-        result, v_hi, _ = _run_dp(cfg, attrs)
+        result, v_hi, need = _run_dp(_build_config(options), attrs)
 
-        assert v_hi is None
-        schedule = result["schedule"]
-        export_schedule = result.get("export_schedule", [0.0] * len(schedule))
-
-        charge_hours = [i for i, g in enumerate(schedule) if g > 0.1]
-        assert 5 in charge_hours  # hour index 5 = 12:00 UTC (window starts at 07:00)
-        assert 6 in charge_hours  # hour index 6 = 13:00 UTC
-
-        export_hours = [i for i, e in enumerate(export_schedule) if e > 0.1]
-        assert 12 in export_hours  # hour index 12 = 19:00 UTC
-
-    def test_flag_on_values_terminal_energy(self):
-        """Flag ON → v_hi > v_lo, meaningful need, DP charges at least as much."""
-        attrs, options = _load_fixture()
-        cfg_on = _build_config(options, terminal_overnight_credit=True)
-        result_on, v_hi, need = _run_dp(cfg_on, attrs)
-
-        cfg_off = _build_config(options, terminal_overnight_credit=False)
-        result_off, v_hi_off, _ = _run_dp(cfg_off, attrs)
-
-        assert v_hi_off is None
-        assert v_hi is not None
         assert v_hi > 0.139, f"v_hi={v_hi:.4f} should exceed v_lo"
         assert need > 1.0, f"need={need:.2f} kWh should bridge multiple hours"
-
-        charge_on = sum(result_on["schedule"])
-        charge_off = sum(result_off["schedule"])
-        assert charge_on >= charge_off, (
-            f"Flag ON should charge at least as much: {charge_on:.3f} vs OFF {charge_off:.3f}"
-        )
+        assert sum(result["schedule"]) == pytest.approx(8.2065217)
 
     def test_tall_peak_still_exports(self):
         """Evening prices ×1.5 → export still fires (econ-F1 band exercised)."""
         attrs, options = _load_fixture()
-        cfg = _build_config(options, terminal_overnight_credit=True)
+        cfg = _build_config(options)
 
         horizon = attrs["horizon"]
         now = datetime(2026, 7, 18, 7, 0, tzinfo=UTC)

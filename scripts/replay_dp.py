@@ -273,15 +273,10 @@ def replay(
     # est_price_by_hour (already parsed by _split_horizon) stands in for
     # decision.py's `_est_slot_list` here — see _split_horizon's docstring. The
     # estimated slot OBJECTS feed only this is_cheap map, never the DP itself.
-    pickup: datetime | None = None
-    est_slot_list: list[PriceSlot] = []
-    if cfg.terminal_overnight_credit:
-        pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or decision._next_synthetic_pickup(
-            horizon_edge
-        )
-        est_slot_list = [
-            PriceSlot(start=h, price=p) for h, p in est_price_by_hour.items() if horizon_edge <= h < pickup
-        ]
+    pickup = scheduler.find_next_solar_pickup(horizon_edge, intervals_reserve) or decision._next_synthetic_pickup(
+        horizon_edge
+    )
+    est_slot_list = [PriceSlot(start=h, price=p) for h, p in est_price_by_hour.items() if horizon_edge <= h < pickup]
 
     is_cheap = (
         decision._build_is_cheap_by_hour(real_slots + est_slot_list, cfg, slot_minutes)
@@ -315,23 +310,19 @@ def replay(
     # replaces the retired scalar (water_value_hi, overnight_need_kwh) two-segment
     # credit. No max_export_dc_value clamp derivation: the new builder has no
     # upper clamp to feed.
-    terminal_segments: list[tuple[float, float]] | None = None
-    need_kwh = 0.0
-    v_hi_mean: float | None = None
-    if cfg.terminal_overnight_credit:
-        load_by_hod: dict[int, float] = {}
-        for iv in intervals_reserve:
-            load_by_hod[iv.start.hour] = iv.load_w
+    load_by_hod: dict[int, float] = {}
+    for iv in intervals_reserve:
+        load_by_hod[iv.start.hour] = iv.load_w
 
-        terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
-            gap_start=horizon_edge,
-            pickup=pickup,
-            est_price_by_hour=est_price_by_hour,
-            load_w_by_hod=load_by_hod,
-            v_lo=water_value,
-            cfg=cfg,
-            eta_curve=eta_curve,
-        )
+    terminal_segments, need_kwh, v_hi_mean = optimize_mod.overnight_terminal_segments(
+        gap_start=horizon_edge,
+        pickup=pickup,
+        est_price_by_hour=est_price_by_hour,
+        load_w_by_hod=load_by_hod,
+        v_lo=water_value,
+        cfg=cfg,
+        eta_curve=eta_curve,
+    )
 
     peak = max((s.price for s in real_slots if now_h <= s.start < horizon_edge), default=None)
     ceiling = scheduler.charge_price_ceiling(peak, cfg)

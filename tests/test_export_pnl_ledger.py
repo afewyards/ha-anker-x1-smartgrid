@@ -778,7 +778,7 @@ class TestExportKeepValueHorizonMinAnchor:
 
     @pytest.mark.asyncio
     async def test_keep_value_legacy_when_keys_absent(self, monkeypatch):
-        """No terminal keys in _dp_out (flag off / stale plan) -> legacy
+        """No terminal keys in _dp_out (stale plan) -> legacy
         expression is used unchanged, regardless of how low SoC is."""
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", lambda *a, **k: 0.0)

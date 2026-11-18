@@ -554,7 +554,7 @@ async def run_forcing_and_export(
             # walks them sorted by value descending, cumulating from the
             # firmware floor — the marginal kWh above the floor is priced at
             # whichever segment it falls into. Beyond the last segment, or
-            # when the key is absent/falsy (flag off / stale plan), the
+            # when the key is absent/falsy (stale plan), the
             # legacy horizon-min expression is unchanged.
             _segs = _dp_out.get("terminal_segments")
             _keep_value = None
@@ -565,7 +565,7 @@ async def run_forcing_and_export(
                         _keep_value = _v
                         break
                     _above_fw -= _kwh
-            if _keep_value is None:  # beyond all segments, or keys absent/flag off → legacy, unchanged
+            if _keep_value is None:  # beyond all segments, or keys absent → legacy, unchanged
                 _now_h_keep = resolution.hour_floor(now)
                 _remaining_prices_keep = [s.price for s in slots if s.start >= _now_h_keep]
                 _keep_value = optimize_mod.compute_water_value(

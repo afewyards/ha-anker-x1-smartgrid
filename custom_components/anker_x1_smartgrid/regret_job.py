@@ -368,11 +368,10 @@ def run_daily_regret(
         # time — no history handle, backfill days exceed retention).  BOTH
         # internal DP calls (oracle + shadow) MUST get the IDENTICAL
         # terminal_segments list or dp_regret_eur acquires phantom bias feeding
-        # the 7-day HGBR gate.  D+1 gap prices absent (old backfill) or flag OFF
-        # → terminal_segments=None → byte-identical legacy single-segment
-        # terminal, never guessed.
+        # the 7-day HGBR gate.  D+1 gap prices absent (old backfill)
+        # → terminal_segments=None → single-segment terminal, never guessed.
         _terminal_segments: list[tuple[float, float]] | None = None
-        if cfg.terminal_overnight_credit and nextday_local_midnight is not None:
+        if nextday_local_midnight is not None:
             _gap_start = nextday_local_midnight
             _pickup = _next_synthetic_pickup(_gap_start)
             # Priced gap hours only (mean per LOCAL hour-of-day), keyed by local
