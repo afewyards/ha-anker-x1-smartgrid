@@ -96,7 +96,6 @@ def test_export_dwell_and_eps_band_defaults():
 def test_export_conf_key_strings():
     assert const.CONF_ENABLE_EXPORT == "enable_export"
     assert const.CONF_MAX_EXPORT_W == "max_export_w"
-    assert const.CONF_GRID_EXPORT_LIMIT_W == "grid_export_limit_w"
     assert const.CONF_CYCLE_COST_EUR_PER_KWH == "cycle_cost_eur_per_kwh"
     assert const.CONF_EXPORT_EPS_LO_KWH == "export_eps_lo_kwh"
     assert const.CONF_EXPORT_EPS_HI_KWH == "export_eps_hi_kwh"
@@ -106,7 +105,6 @@ def test_export_conf_key_strings():
 def test_export_default_values():
     assert const.DEFAULT_ENABLE_EXPORT is True
     assert const.DEFAULT_MAX_EXPORT_W == 6000.0
-    assert const.DEFAULT_GRID_EXPORT_LIMIT_W == 6000.0
     assert const.DEFAULT_CYCLE_COST_EUR_PER_KWH == 0.10
     # eps/dwell shared with standalone constants above
     assert const.DEFAULT_EXPORT_EPS_LO_KWH == 0.2

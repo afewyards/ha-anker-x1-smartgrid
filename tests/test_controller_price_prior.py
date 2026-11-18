@@ -21,7 +21,6 @@ def _cfg(**kw) -> Config:
         export_fee_eur_per_kwh=0.0,
         export_peak_band_frac=0.5,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         anticipation_confidence_haircut=0.15,
         anticipation_margin_eur_per_kwh=0.02,
     )

@@ -31,6 +31,7 @@ copies of the richest existing implementation, not new behavior):
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone, UTC
 from types import SimpleNamespace
 
@@ -65,9 +66,11 @@ class StubActuator:
         self.calls: list[tuple] = []
         self.last_setpoint_w: float = 0.0
         self.engaged: bool = False
+        self.last_write_at: float = float("-inf")
         self.fail_on = fail_on or set()
 
     async def engage_and_charge(self, setpoint_w: float) -> None:
+        self.last_write_at = time.monotonic()
         if "engage_and_charge" in self.fail_on:
             self.calls.append(("engage_and_charge", setpoint_w))
             raise RuntimeError("modbus busy")
@@ -78,6 +81,7 @@ class StubActuator:
     async def engage_export(self, setpoint_w: float) -> None:
         if setpoint_w <= 0:
             raise ValueError(f"export-only: setpoint must be > 0, got {setpoint_w}")
+        self.last_write_at = time.monotonic()
         if "engage_export" in self.fail_on:
             self.calls.append(("engage_export_attempt", setpoint_w))
             raise RuntimeError("set_value failed mid-engage")
@@ -86,6 +90,7 @@ class StubActuator:
         self.engaged = True
 
     async def engage_hold(self) -> None:
+        self.last_write_at = time.monotonic()
         if "engage_hold" in self.fail_on:
             self.calls.append(("engage_hold_attempt",))
             raise RuntimeError("modbus busy")

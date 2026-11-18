@@ -74,7 +74,6 @@ def test_live_horizon_carries_non_flat_reserve_soc_and_export_when_committed():
         round_trip_eff=0.90,
         enable_export=True,
         max_export_w=3000.0,
-        grid_export_limit_w=6000.0,
         min_dwell_min=0,
     )
     inputs = PlantInputs(soc=90.0, meter_w=0.0, now=BASE)

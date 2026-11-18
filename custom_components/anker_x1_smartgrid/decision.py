@@ -1391,7 +1391,7 @@ def compute_decision(
         # Grid charging is grid import: bound the FORCING request by whichever
         # is tighter, the inverter rate or the grid connection's own rating
         # (mirrors regret._max_grid_dc's two-cap structure).
-        setpoint = guard.command_setpoint(min(cfg.max_charge_w, cfg.grid_import_limit_w), prev, cfg)
+        setpoint = guard.command_setpoint(min(cfg.grid_charge_max_w, cfg.grid_import_limit_w), prev, cfg)
     else:
         setpoint = 0.0
     if sun_times is not None:

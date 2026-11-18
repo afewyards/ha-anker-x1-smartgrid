@@ -1138,7 +1138,6 @@ def test_build_display_horizon_export_request_sets_grid_export_w():
         eta_charge=1.0,
         round_trip_eff=1.0,
         max_export_w=3000.0,
-        grid_export_limit_w=6000.0,
     )
     export_hour = now.replace(minute=0, second=0, microsecond=0)
     export_req = {export_hour: 2000.0}
@@ -1181,7 +1180,6 @@ def test_build_display_horizon_export_drains_soc():
         eta_charge=1.0,
         round_trip_eff=1.0,
         max_export_w=3000.0,
-        grid_export_limit_w=6000.0,
     )
     export_hour = now.replace(minute=0, second=0, microsecond=0)
     export_req = {export_hour: 2000.0}  # 2000 W for 1 hour = 2 kWh = 20% of 10 kWh
@@ -1908,3 +1906,18 @@ def test_delivered_grid_charge_is_not_clipped_by_the_forecast_house_draw():
     )
     # 5 kWh measured + 3 kW modelled for the last half hour.
     assert out[0]["grid_charge_w"] == pytest.approx(6500.0)
+
+
+def test_battery_charge_limit_caps_the_grid_bar_not_the_solar_bar():
+    cfg = Config(
+        capacity_kwh=10.0, soc_target=100.0, max_charge_w=6000.0, eta_charge=1.0, battery_charge_limit_w=2000.0
+    )
+    out = plan.build_plan_horizon(
+        _slots(1),
+        [ForecastInterval(BASE, pv_w=3000.0, load_w=0.0, dt_h=1.0)],
+        [BASE],
+        0.0,
+        BASE + timedelta(hours=1),
+        cfg,
+    )
+    assert (out[0]["solar_charge_w"], out[0]["grid_charge_w"]) == (3000.0, 2000.0)

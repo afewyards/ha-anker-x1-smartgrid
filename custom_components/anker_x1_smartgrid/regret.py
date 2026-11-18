@@ -197,6 +197,8 @@ def _max_grid_dc(
          that deficit sits inside the grid charge and is not subtracted again;
          only house energy bought from the meter outside it
          (``house_import_kwh``, the DP's held branch) shares the connection.
+         The user's battery charge limit (cfg.grid_charge_max_w) bounds the
+         same grid remainder.
     Finally, headroom to soc_target bounds whichever of the two is tighter.
 
     soc_kwh / soc_after_kwh are DC kWh before / after the solar-load step
@@ -212,7 +214,7 @@ def _max_grid_dc(
     # Grid-connection cap applies ONLY to this remaining (grid) AC — solar_ac_used
     # above already carries the full inverter rate and is untouched by it.
     grid_import_cap_kwh_slot = cfg.grid_import_limit_w / 1000.0 * dt_h - house_import_kwh
-    grid_ac = min(remaining_ac, grid_import_cap_kwh_slot)
+    grid_ac = min(remaining_ac, grid_import_cap_kwh_slot, cfg.grid_charge_max_w / 1000.0 * dt_h)
     return max(0.0, min(grid_ac * eta, target_kwh - soc_after_kwh))
 
 
@@ -591,7 +593,7 @@ def hindsight_optimal_grid(
                     export_headroom_dc = max(0.0, soc_after - export_floor_h)
                     # Cap battery export so combined AC feed-in (solar spill +
                     # battery) does not exceed ac_cap = min(max_export_w,
-                    # grid_export_limit_w)/1000.  Mirror of optimize.py:722-727.
+                    # grid_import_limit_w)/1000.  Mirror of optimize.py:722-727.
                     batt_ac_headroom = max(0.0, ac_cap - solar_export_ac)
                     batt_dc_cap = batt_ac_headroom / eta_d if eta_d > 1e-9 else batt_ac_headroom
                     max_e_dc = min(export_headroom_dc, max_export_dc_h, batt_dc_cap)

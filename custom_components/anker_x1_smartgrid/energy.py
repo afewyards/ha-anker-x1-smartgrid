@@ -149,7 +149,7 @@ def export_net_target_w(surplus_kwh: float, cfg: Config, *, eta_curve=None) -> f
     (closed-loop on measured SoC; the executor's eps_lo dead-band and one-tick
     granularity bound the stop just above the reserve).
     ``export_drain_window_h = 1.0`` reproduces the legacy ~1-hour
-    exponential. Capped by ``max_export_w`` / ``grid_export_limit_w``.
+    exponential. Capped by ``max_export_w`` / ``grid_import_limit_w`` (the grid connection limit).
 
     ``eta_d`` uses ``Config.eta_discharge_static()`` (mirrors
     ``optimize.eta_discharge``), matching ``ride_out_reserve_kwh``.
@@ -164,9 +164,13 @@ def export_net_target_w(surplus_kwh: float, cfg: Config, *, eta_curve=None) -> f
     else:
         _eta_d = eta_curve.eta_discharge(surplus_kwh * 1000.0 / drain_h)
         surplus_w = surplus_kwh * _eta_d * 1000.0 / drain_h
-    return min(surplus_w, cfg.max_export_w, cfg.grid_export_limit_w)
+    return min(surplus_w, cfg.max_export_w, cfg.grid_import_limit_w)
 
 
 def grid_charge_request_w(cfg: Config, net_house_draw_w: float) -> float:
-    """Grid-charge request (W) that keeps total meter import (charge + net house draw) within grid_import_limit_w."""
-    return min(cfg.max_charge_w, max(0.0, cfg.grid_import_limit_w - net_house_draw_w))
+    """Grid-charge request (W) that keeps total meter import (charge + net house draw) within grid_import_limit_w.
+
+    It is the TOTAL charge setpoint, solar consumed first, so capping it at the
+    battery charge limit holds the grid share under that limit with PV present too.
+    """
+    return min(cfg.grid_charge_max_w, max(0.0, cfg.grid_import_limit_w - net_house_draw_w))

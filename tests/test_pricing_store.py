@@ -221,7 +221,6 @@ def _b4_cfg(**kw) -> Config:
         export_fee_eur_per_kwh=0.0,
         export_peak_band_frac=0.5,  # wide band so all evening hours are eligible
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         anticipation_confidence_haircut=0.15,
         anticipation_margin_eur_per_kwh=0.02,
     )
@@ -336,7 +335,7 @@ def test_anticipation_includes_late_local_peak_via_window():
     from custom_components.anker_x1_smartgrid import optimize as _opt
 
     eta_d = _opt.eta_discharge(cfg)
-    per_hour_dc = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0 / eta_d
+    per_hour_dc = min(cfg.max_export_w, cfg.grid_import_limit_w) / 1000.0 / eta_d
 
     held = pricing_store.compute_anticipation_held_extra(
         estimated_slots=est_slots,
@@ -419,7 +418,7 @@ def test_held_extra_eta_curve_lower_export_eta_raises_held():
     )
     base = EfficiencyCurve.static(cfg)
     disch = list(base._discharge)
-    bin_i = 4  # [2500, 4000) W — covers min(max_export_w, grid_export_limit_w)=3000W
+    bin_i = 4  # [2500, 4000) W — covers min(max_export_w, grid_import_limit_w)=3000W
     disch[bin_i] = BinStat(
         disch[bin_i].lo_w,
         disch[bin_i].hi_w,

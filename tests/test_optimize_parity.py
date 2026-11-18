@@ -748,7 +748,6 @@ def _make_export_cfg(**overrides) -> Config:
         round_trip_eff=1.0,  # AC == DC on discharge side (eta_d = 1.0)
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -1001,11 +1000,11 @@ class TestExportCapBindingParity:
     """
 
     def test_export_cap_binds_via_grid_limit(self):
-        # grid_export_limit_w (1000) < max_export_w (3000) → ac_cap = 1.0 kWh AC/h.
+        # grid_import_limit_w (1000) < max_export_w (3000) → ac_cap = 1.0 kWh AC/h.
         # Single rich hour: without the cap the oracle exports up to max_export_dc_h
         # (3.0 kWh); optimize_grid caps battery export at 1.0 kWh.
-        cfg = _make_export_cfg(grid_export_limit_w=1000.0)  # max_export_w stays 3000
-        assert cfg.grid_export_limit_w < cfg.max_export_w  # binding condition holds
+        cfg = _make_export_cfg(grid_import_limit_w=1000.0)  # max_export_w stays 3000
+        assert cfg.grid_import_limit_w < cfg.max_export_w  # binding condition holds
         pv = [0.0] * 24
         load = [0.0] * 24
         price = [0.20] * 24
@@ -1145,7 +1144,6 @@ class TestChargeMarginEurPerKwh:
             soc_target=80.0,
             max_charge_w=3000.0,
             max_export_w=3000.0,
-            grid_export_limit_w=3000.0,
             eta_charge=1.0,
             round_trip_eff=1.0,  # eta_discharge = 1.0
             cycle_cost_eur_per_kwh=0.04,
@@ -1537,3 +1535,17 @@ def test_parity_house_draw_does_not_shrink_the_gross_grid_cap(dt_h):
     assert_parity(opt, hind, tol=1e-6, label=f"house_draw_dt{dt_h}")
     # Above limit − house (the double count), at most the inverter cap.
     assert (12.0 - 5.3) * dt_h < opt["schedule"][0] <= 11.0 * dt_h + 1e-9
+
+
+@pytest.mark.parametrize("dt_h", [HOURLY_DT_H, 0.25])
+def test_parity_battery_charge_limit_caps_only_the_grid_portion(dt_h):
+    cfg = make_cfg(capacity_kwh=40.0, soc_target=100.0, max_charge_w=11000.0, battery_charge_limit_w=2000.0)
+    n = 24
+    pv = [5.0 * dt_h] + [0.0] * (n - 1)
+    load = [0.0] + [4.0 * dt_h] * (n - 1)
+    price = [0.05] + [0.40] * (n - 1)
+    day = DayData(pv_kwh=tuple(pv), load_kwh=tuple(load), price=tuple(price), soc_start=20.0)
+    hind = hindsight_optimal_grid(day, cfg, dt_h=dt_h)
+    opt = optimize_grid(pv, load, price, soc_start=20.0, cfg=cfg, window_start_h=0, window_len=n, dt_h=dt_h)
+    assert_parity(opt, hind, tol=1e-6, label=f"battery_charge_limit_dt{dt_h}")
+    assert opt["schedule"][0] == pytest.approx(2.0 * dt_h)

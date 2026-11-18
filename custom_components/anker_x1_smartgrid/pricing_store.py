@@ -236,7 +236,7 @@ def compute_anticipation_held_extra(
         ),
         key=lambda s: s.price,  # cheapest export hour first
     )
-    ac_cap_w = min(cfg.max_export_w, cfg.grid_export_limit_w)
+    ac_cap_w = min(cfg.max_export_w, cfg.grid_import_limit_w)
     eta_d = optimize.eta_discharge(cfg) if eta_curve is None else eta_curve.eta_discharge(ac_cap_w)
     ac_cap_kwh = ac_cap_w / 1000.0
     per_hour_dc = ac_cap_kwh / eta_d if eta_d > 1e-9 else 0.0

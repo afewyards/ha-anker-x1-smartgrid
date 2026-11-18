@@ -172,6 +172,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_IDLE_DRAIN_W,
         const.CONF_TERMINAL_OVERNIGHT_CREDIT,
         const.CONF_GRID_IMPORT_LIMIT_W,
+        const.CONF_BATTERY_CHARGE_LIMIT_W,
         const.CONF_CHARGE_WINDOW_PRICE_BAND,
         const.CONF_RESTORE_WORKMODE,
         const.CONF_CALIBRATION_ENABLED,
@@ -181,7 +182,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
     ),
     SECTION_EXPORT: (
         const.CONF_ENABLE_EXPORT,
-        const.CONF_GRID_EXPORT_LIMIT_W,
+        const.CONF_BATTERY_EXPORT_LIMIT_W,
         const.CONF_EXPORT_FEE_EUR_PER_KWH,
         const.CONF_CYCLE_COST_EUR_PER_KWH,
         const.CONF_RESERVE_ANCHOR,
@@ -271,20 +272,9 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (const.CONF_HISTORY_DAYS, const.DEFAULT_HISTORY_DAYS, cv.positive_int),
     (const.CONF_ENABLE_EXPORT, const.DEFAULT_ENABLE_EXPORT, cv.boolean),
     (
-        const.CONF_GRID_EXPORT_LIMIT_W,
-        const.DEFAULT_GRID_EXPORT_LIMIT_W,
-        # Sane ceiling added here (review LOW, deliberate): previously
-        # min-only. 20000W comfortably covers a 3-phase 32A grid connection.
-        # SETPOINT_MAX_W (20000.0) is a generous absolute backstop, not a
-        # device ceiling — real per-install limits are device-derived into
-        # cfg.max_charge_w/max_export_w (see const.py's SETPOINT_MIN_W/MAX_W
-        # comment).
-        vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
-    ),
-    (
         const.CONF_GRID_IMPORT_LIMIT_W,
         const.DEFAULT_GRID_IMPORT_LIMIT_W,
-        # Import-side mirror of the export limit above; same sane ceiling.
+        # 20000 W comfortably covers a 3-phase 32A grid connection.
         vol.All(vol.Coerce(float), vol.Range(min=0, max=20000.0)),
     ),
     (
@@ -551,6 +541,11 @@ def _options_fields(defaults: dict, services=None) -> dict:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key, [])})] = EntitySelector(
             EntitySelectorConfig(domain=domain, multiple=True)
         )
+    for key in (const.CONF_BATTERY_CHARGE_LIMIT_W, const.CONF_BATTERY_EXPORT_LIMIT_W):
+        # No default, so clearing the field drops the key and the device value applies.
+        fields[vol.Optional(key, description={"suggested_value": defaults.get(key)})] = vol.All(
+            vol.Coerce(float), vol.Range(min=100.0, max=20000.0)
+        )
     for key, domain in _CLEARABLE_ENTITY_PICKERS:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key) or None})] = (
             _ClearableEntitySelector(EntitySelectorConfig(domain=domain))
@@ -591,6 +586,8 @@ def _flatten_sections(user_input: dict) -> dict:
 
 class X1SmartGridConfigFlow(config_entries.ConfigFlow, domain=const.DOMAIN):
     VERSION = 1
+    # 2: the dropped grid export limit carried over as the battery export limit (see async_migrate_entry).
+    MINOR_VERSION = 2
 
     @staticmethod
     def async_get_options_flow(

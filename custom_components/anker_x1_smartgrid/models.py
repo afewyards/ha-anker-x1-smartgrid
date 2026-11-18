@@ -65,13 +65,13 @@ class Config:
     # Export / arbitrage options (A2)
     enable_export: bool = const.DEFAULT_ENABLE_EXPORT
     max_export_w: float = const.DEFAULT_MAX_EXPORT_W
-    grid_export_limit_w: float = const.DEFAULT_GRID_EXPORT_LIMIT_W
-    # Import-side mirror of grid_export_limit_w: the grid connection's own
-    # rating, distinct from the device-derived inverter charge rate
-    # (max_charge_w). Bounds TOTAL meter import (grid charge + net house draw),
-    # so grid charging shrinks to make room for the house; solar-absorbed
-    # charge is unaffected. See energy.grid_charge_request_w.
+    # Grid connection limit for both directions (see const.DEFAULT_GRID_IMPORT_LIMIT_W):
+    # bounds TOTAL meter import, so grid charging shrinks to make room for the
+    # house (solar-absorbed charge is unaffected), and caps net export with
+    # max_export_w. See energy.grid_charge_request_w / export_net_target_w.
     grid_import_limit_w: float = const.DEFAULT_GRID_IMPORT_LIMIT_W
+    # Optional user cap on GRID charging; solar charging keeps max_charge_w. See grid_charge_max_w.
+    battery_charge_limit_w: float | None = None
     cycle_cost_eur_per_kwh: float = const.DEFAULT_CYCLE_COST_EUR_PER_KWH
     export_eps_lo_kwh: float = const.DEFAULT_EXPORT_EPS_LO_KWH
     export_eps_hi_kwh: float = const.DEFAULT_EXPORT_EPS_HI_KWH
@@ -126,6 +126,9 @@ class Config:
     def from_dict(cls, d: dict) -> Config:
         fields = {f for f in cls.__dataclass_fields__}
         cfg = cls(**{k: v for k, v in d.items() if k in fields})
+        # The user's battery export limit only ever lowers the device-derived ceiling.
+        if d.get(const.CONF_BATTERY_EXPORT_LIMIT_W) is not None:
+            cfg = dataclasses.replace(cfg, max_export_w=min(cfg.max_export_w, d[const.CONF_BATTERY_EXPORT_LIMIT_W]))
         # Stored options are not re-validated, so a dwell above
         # const.CALIBRATION_MAX_DWELL_H is clamped here.
         if cfg.calibration_dwell_h > const.CALIBRATION_MAX_DWELL_H:
@@ -152,6 +155,13 @@ class Config:
     def kwh_to_pct(self, kwh: float) -> float:
         """Convert DC kWh to a SoC percentage at this pack's capacity."""
         return kwh / self.capacity_kwh * 100.0
+
+    @property
+    def grid_charge_max_w(self) -> float:
+        """Grid-charge rate ceiling (W): the inverter rate, lowered by the user's battery charge limit."""
+        if self.battery_charge_limit_w is None:
+            return self.max_charge_w
+        return min(self.max_charge_w, self.battery_charge_limit_w)
 
     @property
     def floor_kwh(self) -> float:

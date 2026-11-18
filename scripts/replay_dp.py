@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from custom_components.anker_x1_smartgrid import const
+from custom_components.anker_x1_smartgrid import const, migrate_options
 from custom_components.anker_x1_smartgrid import decision
 from custom_components.anker_x1_smartgrid import resolution, scheduler
 from custom_components.anker_x1_smartgrid.efficiency import BinStat, EfficiencyCurve
@@ -64,7 +64,8 @@ optimize_mod = decision.optimize_mod  # the exact module object _dp_select_slots
 # Defaults below mirror the live lab pack (memory `battery-20kwh-startup-race`: 4
 # modules / 20 kWh) and the rates implied by the fixture's own observed
 # grid_charge_w/grid_export_w peaks (9.3 kW / 11.8 kW, the latter pinned near the
-# configured grid_export_limit_w=12000 in options-2026-08-01.json).
+# old grid_export_limit_w=12000 in options-2026-08-01.json, which replays as the
+# battery export limit, as the config-entry migration carries it over).
 CAPACITY_KWH_DEFAULT = 20.0
 MAX_CHARGE_W_DEFAULT = 12000.0
 MAX_EXPORT_W_DEFAULT = 12000.0
@@ -220,6 +221,9 @@ def replay(
     hedge_drain_hour_override: str | None = None,
 ) -> dict:
     plan_root, attrs, options_raw = _load_fixtures(plan_path, options_path)
+    # Only a file that still names the old key predates the migration; a newer one without a limit means none.
+    if "grid_export_limit_w" in options_raw:
+        options_raw = migrate_options(options_raw)
     options = {
         **options_raw,
         "capacity_kwh": capacity_kwh,

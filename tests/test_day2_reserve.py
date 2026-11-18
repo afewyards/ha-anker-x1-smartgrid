@@ -75,7 +75,6 @@ def test_acceptance_a_day2_export_is_reserve_bounded():
         cycle_cost_eur_per_kwh=0.04,
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg)
     n = 3  # window 17:00 d2 .. 19:00 d2
@@ -112,7 +111,6 @@ def test_acceptance_b_solar_first_no_grid_charge_for_export():
         cycle_cost_eur_per_kwh=0.04,
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     n = 4  # hour0 cheap import, hours1-2 solar block, hour3 export peak
     pv = [0.0, 6000.0, 6000.0, 0.0]

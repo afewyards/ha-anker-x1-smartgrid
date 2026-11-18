@@ -831,7 +831,6 @@ def test_optimize_grid_export_keys_present_and_absent():
         round_trip_eff=1.0,
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     pv = [0.0] * 24
     load = [0.0] * 24
@@ -863,7 +862,6 @@ def test_optimize_grid_48h_export_runtime_under_2s():
         round_trip_eff=0.85,
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=6000.0,
-        grid_export_limit_w=6000.0,
     )
     n = 48
     pv = ([0.0] * 8 + [2.0] * 8 + [0.0] * 8) * 2

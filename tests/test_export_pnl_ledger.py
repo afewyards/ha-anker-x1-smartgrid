@@ -60,7 +60,6 @@ def _make_export_cfg(**overrides) -> Config:
         soc_target=97.0,
         max_charge_w=3000.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         eta_charge=1.0,
         round_trip_eff=1.0,  # eta_discharge=1.0 for simple arithmetic
         cycle_cost_eur_per_kwh=0.04,

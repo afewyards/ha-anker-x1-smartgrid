@@ -16,6 +16,7 @@ async def test_setup_applies_anker_resolution_without_persisting(hass):
             const.CONF_CAPACITY_KWH: 10.0,  # stale; device reports 15.0
             const.CONF_ENT_SOC: "sensor.stale_soc",
         },
+        minor_version=2,  # current entry: no migration write to tell apart from a setup write
     )
     entry.add_to_hass(hass)
     data_before = dict(entry.data)

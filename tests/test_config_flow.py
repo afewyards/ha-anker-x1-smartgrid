@@ -1,5 +1,7 @@
 """Tests for Anker X1 SmartGrid config flow."""
 
+import dataclasses
+
 import pytest
 import voluptuous as vol
 from homeassistant import config_entries
@@ -64,8 +66,9 @@ def test_sections_cover_all_option_fields():
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
     # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
-    # +1 restore_workmode, +4 calibration_*, +1 history_days
-    assert len(section_keys) == 70
+    # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
+    # +2 battery_charge_limit_w / battery_export_limit_w
+    assert len(section_keys) == 71
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -590,38 +593,11 @@ def test_options_schema_enable_export_default():
     assert schema_keys[const.CONF_ENABLE_EXPORT].default() is True
 
 
-def test_options_schema_includes_grid_export_limit_w():
+def test_options_schema_exposes_one_grid_connection_limit():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_GRID_EXPORT_LIMIT_W in keys
-
-
-def test_options_schema_grid_export_limit_w_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_GRID_EXPORT_LIMIT_W].default() == const.DEFAULT_GRID_EXPORT_LIMIT_W
-
-
-def test_options_schema_grid_export_limit_w_roundtrip():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: 4500.0})
-    assert result[const.CONF_GRID_EXPORT_LIMIT_W] == 4500.0
-
-
-def test_options_schema_grid_export_limit_w_rejects_negative():
-    import pytest
-    import voluptuous as vol
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {const.CONF_GRID_EXPORT_LIMIT_W: -100.0})
+    keys = _flat_keys(_options_schema({}))
+    assert [k for k in keys if k.startswith("grid_")] == [const.CONF_GRID_IMPORT_LIMIT_W]
 
 
 def test_options_schema_includes_grid_import_limit_w():
@@ -810,7 +786,6 @@ def test_options_schema_export_all_roundtrip():
         schema_obj,
         {
             const.CONF_ENABLE_EXPORT: False,
-            const.CONF_GRID_EXPORT_LIMIT_W: 3500.0,
             const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
             const.CONF_EXPORT_DWELL_MIN: 20,
             const.CONF_EXPORT_EPS_LO_KWH: 0.25,
@@ -818,7 +793,6 @@ def test_options_schema_export_all_roundtrip():
         },
     )
     assert result[const.CONF_ENABLE_EXPORT] is False
-    assert result[const.CONF_GRID_EXPORT_LIMIT_W] == 3500.0
     assert result[const.CONF_CYCLE_COST_EUR_PER_KWH] == 0.05
     assert result[const.CONF_EXPORT_DWELL_MIN] == 20
     assert result[const.CONF_EXPORT_EPS_LO_KWH] == 0.25
@@ -830,7 +804,6 @@ def test_config_reflects_export_defaults():
     cfg = Config()
     assert cfg.enable_export is True
     assert cfg.max_export_w == const.DEFAULT_MAX_EXPORT_W
-    assert cfg.grid_export_limit_w == const.DEFAULT_GRID_EXPORT_LIMIT_W
     assert cfg.cycle_cost_eur_per_kwh == const.DEFAULT_CYCLE_COST_EUR_PER_KWH
     assert cfg.export_dwell_min == const.DEFAULT_EXPORT_DWELL_MIN
     assert cfg.export_eps_lo_kwh == const.DEFAULT_EXPORT_EPS_LO_KWH
@@ -843,7 +816,6 @@ def test_config_reflects_submitted_export_values():
         {
             "enable_export": False,
             "max_export_w": 3000.0,
-            "grid_export_limit_w": 2500.0,
             "cycle_cost_eur_per_kwh": 0.06,
             "export_dwell_min": 10,
             "export_eps_lo_kwh": 0.3,
@@ -852,7 +824,6 @@ def test_config_reflects_submitted_export_values():
     )
     assert cfg.enable_export is False
     assert cfg.max_export_w == 3000.0
-    assert cfg.grid_export_limit_w == 2500.0
     assert cfg.cycle_cost_eur_per_kwh == 0.06
     assert cfg.export_dwell_min == 10
     assert cfg.export_eps_lo_kwh == 0.3
@@ -872,6 +843,17 @@ def test_config_reflects_submitted_grid_import_limit_w():
     """Config.from_dict correctly applies a submitted grid_import_limit_w."""
     cfg = Config.from_dict({"grid_import_limit_w": 4000.0})
     assert cfg.grid_import_limit_w == 4000.0
+
+
+def test_stored_import_limit_is_the_connection_limit_both_ways():
+    """The stored import limit bounds both directions; the old export key alone is ignored (setup reseeds it)."""
+    from custom_components.anker_x1_smartgrid import energy
+
+    cfg = Config.from_dict({"grid_import_limit_w": 11000.0, "grid_export_limit_w": 6000.0, "max_export_w": 13200.0})
+    assert energy.grid_charge_request_w(dataclasses.replace(cfg, max_charge_w=20000.0), 0.0) == 11000.0
+    assert energy.export_net_target_w(100.0, cfg) == 11000.0
+    # Export stays bounded by the device's own rating too.
+    assert energy.export_net_target_w(100.0, dataclasses.replace(cfg, max_export_w=6000.0)) == 6000.0
 
 
 # ---------------------------------------------------------------------------

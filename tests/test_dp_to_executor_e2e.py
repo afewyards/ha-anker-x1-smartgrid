@@ -22,13 +22,14 @@ docstrings for the economic mechanism that makes the outcome unambiguous.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone, UTC
 
 import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+from custom_components.anker_x1_smartgrid import executor
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
@@ -49,7 +50,7 @@ from tests.helpers import StubActuator, StubHass, StubRecorder, StubStore
 def _make_cfg(**overrides) -> Config:
     """Config with simple, generous limits so DP arithmetic stays legible.
 
-    max_charge_w == max_export_w == grid_export_limit_w == 6000 (== the
+    max_charge_w == max_export_w == 6000 (== the
     hardware ceiling const.SETPOINT_MAX_W) so a clamped executor setpoint of
     6000 W in the export cases is unambiguously the hardware clamp, not a
     narrower cfg limit.
@@ -60,7 +61,6 @@ def _make_cfg(**overrides) -> Config:
         soc_target=97.0,
         max_charge_w=6000.0,
         max_export_w=6000.0,
-        grid_export_limit_w=6000.0,
         eta_charge=0.92,
         round_trip_eff=0.85,
         cycle_cost_eur_per_kwh=0.04,
@@ -247,6 +247,55 @@ class TestCheapHourGridCharge:
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
+    async def test_tick_after_a_meter_cut_keeps_the_charge_down_while_the_meter_sits_at_the_limit(self, monkeypatch):
+        """The fast path cuts a load step between ticks; the next tick must not raise the charge back."""
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        hass.set_state("sensor.meter_power", "1300.0")
+        await ctrl.tick()
+        assert act.last_setpoint_w == -10700.0
+        # +4 kW house load lands mid-tick: the meter reads 16 kW against a 12 kW limit.
+        hass.set_state("sensor.battery_power", "-10700.0")
+        hass.set_state("sensor.meter_power", "16000.0")
+        act.last_write_at = float("-inf")
+        await executor.cut_to_connection_limit(ctrl)
+        assert act.last_setpoint_w == -6700.0
+        hass.set_state("sensor.battery_power", "-6700.0")
+        hass.set_state("sensor.meter_power", "12000.0")
+        await ctrl.tick()
+
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [-10700.0, -6700.0, -6700.0]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_tick_and_meter_cut_stay_under_the_battery_charge_limit(self, monkeypatch):
+        hass = StubHass()
+        ctrl, act = self._hvac_controller(monkeypatch, hass)
+        ctrl.cfg = Config.from_dict({**asdict(ctrl.cfg), const.CONF_BATTERY_CHARGE_LIMIT_W: 4000.0})
+        # The limit bounds grid charging only; the planner keeps the inverter rate for solar.
+        assert (ctrl.cfg.max_charge_w, ctrl.cfg.grid_charge_max_w) == (11000.0, 4000.0)
+        hass.set_state("sensor.meter_power", "1300.0")
+        await ctrl.tick()
+        # House jumps by 8 kW: meter 13300 against the 12000 connection limit.
+        hass.set_state("sensor.battery_power", "-4000.0")
+        hass.set_state("sensor.meter_power", "13300.0")
+        act.last_write_at = float("-inf")
+        await executor.cut_to_connection_limit(ctrl)
+        # Load gone: the tick raises again, but only to the battery limit.
+        hass.set_state("sensor.battery_power", "-2700.0")
+        hass.set_state("sensor.meter_power", "4000.0")
+        await ctrl.tick()
+        # 5 kW of PV over the 1.3 kW house: the setpoint is a TOTAL charge target, so solar sits inside the limit.
+        hass.set_state("sensor.pv_power", "5000.0")
+        hass.set_state("sensor.battery_power", "-4000.0")
+        hass.set_state("sensor.meter_power", "300.0")
+        await ctrl.tick()
+
+        assert ctrl.plan.state is ControllerState.FORCING
+        assert [c[1] for c in act.calls if c[0] == "engage_and_charge"] == [-4000.0, -2700.0, -4000.0, -4000.0]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
     async def test_forcing_charge_reads_the_house_draw_off_the_live_meter(self, monkeypatch):
         """A stale PV must not cancel a stale house load: the cap takes the house's draw from the live meter."""
         hass = StubHass()
@@ -346,7 +395,7 @@ class TestExportHour:
             cfg_overrides={
                 "capacity_kwh": 60.0,
                 "max_export_w": const.SETPOINT_MAX_W + 5000.0,
-                "grid_export_limit_w": const.SETPOINT_MAX_W + 5000.0,
+                "grid_import_limit_w": const.SETPOINT_MAX_W + 5000.0,
             },
         )
         _seed_common(hass, self.BASE, soc="85.0", export_price="0.55", sunset_h=6.0)
@@ -400,7 +449,7 @@ class TestExportHour:
             hass,
             cfg_overrides={
                 "max_export_w": const.SETPOINT_MAX_W + 5000.0,
-                "grid_export_limit_w": const.SETPOINT_MAX_W + 5000.0,
+                "grid_import_limit_w": const.SETPOINT_MAX_W + 5000.0,
             },
         )
         _seed_common(hass, self.BASE, soc="85.0", export_price="0.55", sunset_h=6.0)

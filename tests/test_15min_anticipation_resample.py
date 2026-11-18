@@ -32,7 +32,6 @@ def _cfg(**kw) -> Config:
         export_fee_eur_per_kwh=0.0,
         export_peak_band_frac=0.5,  # wide band: only the est_morning walk gates inclusion
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         anticipation_confidence_haircut=0.0,
         anticipation_margin_eur_per_kwh=0.02,
     )
@@ -83,7 +82,7 @@ def _mixed_real_slots():
 
 def _per_hour_dc(cfg: Config) -> float:
     eta_d = opt.eta_discharge(cfg)
-    ac_cap_kwh = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0
+    ac_cap_kwh = min(cfg.max_export_w, cfg.grid_import_limit_w) / 1000.0
     return ac_cap_kwh / eta_d if eta_d > 1e-9 else 0.0
 
 

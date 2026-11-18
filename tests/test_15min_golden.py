@@ -39,7 +39,6 @@ def _cfg():
         eta_charge=1.0,
         round_trip_eff=0.9,
         max_export_w=4000.0,
-        grid_export_limit_w=6000.0,
         enable_export=True,
         export_peak_band_frac=0.10,
         export_peak_lookback_h=4,

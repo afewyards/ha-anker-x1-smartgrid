@@ -17,7 +17,6 @@ def _cfg(**kw):
         cycle_cost_eur_per_kwh=0.04,
         export_fee_eur_per_kwh=0.02,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         export_peak_band_frac=0.12,
     )
     d.update(kw)

@@ -26,9 +26,7 @@ def _curve(cfg, disch_low=0.80):
 
 
 def test_reserve_and_export_regression_report(capsys):
-    cfg = Config(
-        eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0, max_export_w=6000.0, grid_export_limit_w=6000.0
-    )
+    cfg = Config(eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0, max_export_w=6000.0)
     curve = _curve(cfg)
 
     now = datetime(2026, 7, 1, 22, 0, 0)

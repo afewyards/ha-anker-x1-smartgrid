@@ -692,14 +692,13 @@ def _make_export_cfg_for_cap_test(**overrides) -> Config:
         round_trip_eff=1.0,  # eta_d = 1.0 (simplifies arithmetic)
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     defaults.update(overrides)
     return Config(**defaults)
 
 
 class TestCombinedSolarBatteryExportCap:
-    """Battery export is bounded so solar_export_ac + e_ac ≤ min(max_export_w, grid_export_limit_w)/1000.
+    """Battery export is bounded so solar_export_ac + e_ac ≤ min(max_export_w, grid_import_limit_w)/1000.
 
     Physics recap:
     - solar_export_ac: AC kWh of un-storable PV surplus that spills to grid (computed from
@@ -718,7 +717,7 @@ class TestCombinedSolarBatteryExportCap:
         Setup (1-hour window):
           soc_start=80% (8 kWh = target, battery is full).
           pv=5.0 kWh — all 5 kWh spills (battery at target, _apply_solar_load absorbs 0).
-          max_export_w=grid_export_limit_w=3000 W → ac_cap=3.0 kWh/h.
+          max_export_w=3000 W → ac_cap=3.0 kWh/h.
           export_price=[0.50] (very profitable — DP would export if it could).
 
         solar_export_ac=5 already exceeds ac_cap=3, so battery headroom=max(0,3−5)=0.
@@ -750,7 +749,7 @@ class TestCombinedSolarBatteryExportCap:
         # solar_export_ac = 5.0 kWh (verified from physics: battery full, all PV spills)
         # ac_cap = min(3000, 3000)/1000 = 3.0 kWh; batt_headroom = max(0, 3−5) = 0
         solar_export_ac = 5.0
-        ac_cap = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0
+        ac_cap = min(cfg.max_export_w, cfg.grid_import_limit_w) / 1000.0
         expected_max_batt_export = max(0.0, ac_cap - solar_export_ac)  # = 0.0
 
         battery_export_ac = result["export_schedule"][0]
@@ -768,7 +767,7 @@ class TestCombinedSolarBatteryExportCap:
           pv=4.0 kWh: _apply_solar_load absorbs min(4, rate=3)*eta=3 DC kWh,
             soc_after=min(6+3, 8)=8 kWh (hits target cap).
             delta_soc=2 kWh → ac_for_battery=2 → solar_export_ac=max(0,4−2)=2.0 kWh.
-          max_export_w=grid_export_limit_w=3000 W → ac_cap=3.0 kWh.
+          max_export_w=3000 W → ac_cap=3.0 kWh.
           Battery AC headroom = max(0, 3−2) = 1.0 kWh → batt_dc_cap = 1.0 kWh.
 
         Expected: battery export ≤ 1.0 kWh (DP maximises profit → exactly 1.0 kWh).
@@ -801,7 +800,7 @@ class TestCombinedSolarBatteryExportCap:
         # solar_export_ac = 2.0 kWh (2 kWh absorbed, 2 kWh spills from 4 kWh PV)
         # ac_cap = 3.0 kWh; batt_headroom = max(0, 3−2) = 1.0 kWh
         solar_export_ac = 2.0
-        ac_cap = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0
+        ac_cap = min(cfg.max_export_w, cfg.grid_import_limit_w) / 1000.0
         expected_max_batt_export = max(0.0, ac_cap - solar_export_ac)  # = 1.0 kWh
 
         battery_export_ac = result["export_schedule"][0]

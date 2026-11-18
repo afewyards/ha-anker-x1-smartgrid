@@ -97,7 +97,6 @@ _BASE_CFG = dict(
     eta_charge=0.92,
     max_charge_w=6000.0,
     max_export_w=6000.0,
-    grid_export_limit_w=6000.0,
     enable_export=True,
     export_fee_eur_per_kwh=0.02,
     export_peak_band_frac=0.12,

@@ -36,7 +36,7 @@ def test_helper_solar_saturates_rate():
 
 
 # ---------------------------------------------------------------------------
-# grid_import_limit_w — the import-side mirror of grid_export_limit_w
+# grid_import_limit_w — the grid connection limit, import side
 # ---------------------------------------------------------------------------
 
 
@@ -120,3 +120,15 @@ def test_optimize_grid_caps_solar_plus_grid_at_rate():
     out = opt.optimize_grid(pv, load, price, soc_start=0.0, cfg=cfg, window_start_h=0, window_len=2)
     # grid in hour 0 (AC) <= rate - solar_ac = 6 - 4 = 2
     assert out["schedule"][0] <= 2.0 + 1e-6
+
+
+def test_battery_charge_limit_caps_only_the_grid_portion():
+    cfg = _cfg(battery_charge_limit_w=2000.0)
+    assert _max_grid_dc(0.0, 0.0, cfg) == 2.0
+    assert _max_grid_dc(0.0, 3.0, cfg) == 2.0  # 3 kWh of inverter rate left after solar; the limit binds
+    assert _max_grid_dc(0.0, 5.0, cfg) == 1.0  # the rate left after solar binds first
+    assert _max_grid_dc(0.0, 0.0, cfg, dt_h=0.25) == 0.5
+    # Solar still charges at the full inverter rate.
+    from custom_components.anker_x1_smartgrid.regret import _apply_solar_load
+
+    assert _apply_solar_load(0.0, 5.0, cfg) == 5.0

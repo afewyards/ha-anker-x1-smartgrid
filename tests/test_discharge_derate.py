@@ -89,7 +89,6 @@ def test_dp_oracle_parity_through_the_band(dt_h, curve, monkeypatch):
         round_trip_eff=0.85,
         enable_export=True,
         max_export_w=6000.0,
-        grid_export_limit_w=6000.0,
         export_peak_band_frac=0.5,
         cycle_cost_eur_per_kwh=0.03,
     )
@@ -113,7 +112,7 @@ def test_dp_oracle_parity_through_the_band(dt_h, curve, monkeypatch):
 
 def test_realized_replay_of_the_oracle_books_its_cost():
     """A band export and a band drain, replayed through realized_grid_cost: regret 0."""
-    cfg = _cfg(enable_export=True, max_export_w=6000.0, grid_export_limit_w=6000.0, cycle_cost_eur_per_kwh=0.0)
+    cfg = _cfg(enable_export=True, max_export_w=6000.0, cycle_cost_eur_per_kwh=0.0)
     price = (0.50, 0.05, 0.05, 0.05, 0.05)
     export = [0.50, 0.0, 0.0, 0.0, 0.0]
     day = DayData((0.0,) * 5, (0.0, 0.1, 0.1, 0.1, 0.1), price, 10.0)
@@ -134,7 +133,6 @@ def test_band_is_not_sold_to_buy_the_load_back():
         eta_charge=0.95,
         round_trip_eff=0.90,
         max_export_w=6000.0,
-        grid_export_limit_w=6000.0,
         enable_export=True,
         export_peak_band_frac=0.9,
         cycle_cost_eur_per_kwh=0.03,

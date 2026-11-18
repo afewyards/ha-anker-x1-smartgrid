@@ -436,3 +436,55 @@ async def test_engage_export_pathological_live_max_clamps_to_zero_not_flipped(ha
     await act.engage_export(7000.0)
     assert hass_stub.services.calls[1][2]["value"] == 0.0
     assert act.last_setpoint_w == 0.0
+
+
+async def test_failed_workmode_restore_still_books_the_zero_setpoint():
+    """The 0 W write landed, so a later reader (the meter fast path) must not see the old charge."""
+
+    class _Svc:
+        async def async_call(self, domain, service, data, blocking=True):
+            if domain == "select":
+                raise RuntimeError("select failed")
+
+    class _H:
+        def __init__(self):
+            self.services = _Svc()
+            self.states = _NoStates()
+
+    act = Actuator(_H(), {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    act.engaged, act.last_setpoint_w = True, -7500.0
+    with pytest.raises(RuntimeError):
+        await act.release_to_self()
+    assert act.last_setpoint_w == 0.0
+    assert act.engaged is True
+
+
+async def test_every_engage_stamps_the_write_time(hass_stub):
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    assert act.last_write_at == float("-inf")
+    await act.engage_hold()
+    assert act.last_write_at > float("-inf")
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_the_write_time_is_stamped_when_a_slow_write_ends(hass_stub, monkeypatch, fails):
+    from types import SimpleNamespace
+
+    from custom_components.anker_x1_smartgrid import actuator as actuator_mod
+
+    clock = [100.0]
+    monkeypatch.setattr(actuator_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    async def _slow(domain, service, data, blocking=True):
+        clock[0] += 4.0
+        if fails and service == "set_value":
+            raise RuntimeError("modbus timeout")
+
+    hass_stub.services.async_call = _slow
+    act = Actuator(hass_stub, {**const.DEFAULT_ENTITIES, **ANKER_TEST_ENTITIES})
+    if fails:
+        with pytest.raises(RuntimeError):
+            await act.engage_and_charge(-3000.0)
+    else:
+        await act.engage_and_charge(-3000.0)
+    assert act.last_write_at == 108.0

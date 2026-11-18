@@ -271,7 +271,6 @@ class TestFloor10ExportFloorUnchanged:
             round_trip_eff=1.0,  # eta_discharge = 1.0
             cycle_cost_eur_per_kwh=0.0,
             max_export_w=6000.0,
-            grid_export_limit_w=6000.0,
         )
         pv = [0.0]
         load = [0.0]  # net=0 -> soc_after == soc_start exactly

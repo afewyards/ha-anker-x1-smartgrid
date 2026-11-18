@@ -13,17 +13,25 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
+from . import executor
 from .actuator import Actuator
 from .anker_resolver import apply_anker_resolution
 from .const import (
+    CONF_BATTERY_EXPORT_LIMIT_W,
+    CONF_ENT_METER_POWER,
     CONF_HISTORY_DAYS,
     CONF_MAX_CHARGE_W,
     CONF_MAX_EXPORT_W,
     CONF_PRICE_HISTORY_DAYS,
+    DEFAULT_ENTITIES,
     DEFAULT_HISTORY_DAYS,
     DEFAULT_MAX_CHARGE_W,
     DEFAULT_MAX_EXPORT_W,
@@ -77,6 +85,19 @@ async def _purge_house_load_history(hass: HomeAssistant, history_days: int) -> N
             )
     except Exception as err:
         _LOGGER.warning("house-load recorder purge failed: %s", err)
+
+
+def migrate_options(options: dict) -> dict:
+    """Carry the dropped grid export limit (6000 W when never saved) over as the battery export limit."""
+    return {CONF_BATTERY_EXPORT_LIMIT_W: options.get("grid_export_limit_w", 6000.0), **options}
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        hass.config_entries.async_update_entry(entry, options=migrate_options(dict(entry.options)), minor_version=2)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -140,6 +161,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await controller.tick()
 
         cancel = async_track_time_interval(hass, _tick, timedelta(seconds=TICK_SECONDS))
+
+        async def _on_meter(_event) -> None:
+            await executor.cut_to_connection_limit(controller)
+
+        meter_entity = data.get(CONF_ENT_METER_POWER, DEFAULT_ENTITIES[CONF_ENT_METER_POWER])
+        entry.async_on_unload(async_track_state_change_event(hass, [meter_entity], _on_meter))
 
         hass.data[DOMAIN][entry.entry_id] = {
             "controller": controller,

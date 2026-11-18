@@ -13,6 +13,7 @@ Release protocol (from any engaged state):
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.core import HomeAssistant
 
@@ -27,6 +28,8 @@ class Actuator:
         self._data = data
         self.last_setpoint_w: float = 0.0
         self.engaged: bool = False
+        # Monotonic time the last setpoint write attempt finished (gates the meter fast path).
+        self.last_write_at: float = float("-inf")
 
     def _clamp_to_live_limits(self, setpoint_w: float) -> float:
         """Clamp *setpoint_w* into the setpoint entity's LIVE min/max attributes.
@@ -93,28 +96,32 @@ class Actuator:
         The only difference between charge and export is setpoint sign; the
         VPP/modbus engage sequence is identical (A1: no separate export workmode).
         """
-        await self._hass.services.async_call(
-            "switch",
-            "turn_on",
-            {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
-            blocking=True,
-        )
-        # Set the control flag BEFORE writing the setpoint.  If set_value fails,
-        # engaged=True ensures the next disabled/failsafe tick fires release_to_self
-        # (no stuck-in-VPP).  turn_on failing above raises before this line, so a
-        # failed engage never reports engaged.
-        self.engaged = True
-        setpoint_w = self._clamp_to_live_limits(setpoint_w)
-        await self._hass.services.async_call(
-            "number",
-            "set_value",
-            {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": setpoint_w},
-            blocking=True,
-        )
-        # Record the setpoint only AFTER the write lands.  If set_value raises,
-        # last_setpoint_w keeps its previous value — we didn't actually command
-        # the new one, even though engaged is already True (N1).
-        self.last_setpoint_w = setpoint_w
+        try:
+            await self._hass.services.async_call(
+                "switch",
+                "turn_on",
+                {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+                blocking=True,
+            )
+            # Set the control flag BEFORE writing the setpoint.  If set_value fails,
+            # engaged=True ensures the next disabled/failsafe tick fires release_to_self
+            # (no stuck-in-VPP).  turn_on failing above raises before this line, so a
+            # failed engage never reports engaged.
+            self.engaged = True
+            setpoint_w = self._clamp_to_live_limits(setpoint_w)
+            await self._hass.services.async_call(
+                "number",
+                "set_value",
+                {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": setpoint_w},
+                blocking=True,
+            )
+            # Record the setpoint only AFTER the write lands.  If set_value raises,
+            # last_setpoint_w keeps its previous value — we didn't actually command
+            # the new one, even though engaged is already True (N1).
+            self.last_setpoint_w = setpoint_w
+        finally:
+            # The fast path's gap runs from when a write lands (or fails), not from when a slow one started.
+            self.last_write_at = time.monotonic()
 
     async def engage_and_charge(self, setpoint_w: float) -> None:
         """Engage VPP control for grid charging.  setpoint_w must be <= 0."""
@@ -162,6 +169,8 @@ class Actuator:
             {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": 0.0},
             blocking=True,
         )
+        # The pack is at 0 W from here even if the workmode restore fails, so nothing reads a stale charge/export.
+        self.last_setpoint_w = 0.0
         await self._hass.services.async_call(
             "select",
             "select_option",
@@ -183,5 +192,4 @@ class Actuator:
                 {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
                 blocking=True,
             )
-        self.last_setpoint_w = 0.0
         self.engaged = False

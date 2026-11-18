@@ -1188,7 +1188,7 @@ def optimize_grid(
                 if net_rev_per_dc > 1e-9 and ep_h >= band_floor - 1e-9 and soc_after > export_floor_h + bin_kwh - 1e-9:
                     export_headroom_dc = max(0.0, soc_after - export_floor_h)
                     # Cap battery export so combined AC feed-in (solar spill + battery)
-                    # does not exceed ac_cap = min(max_export_w, grid_export_limit_w)/1000.
+                    # does not exceed ac_cap = min(max_export_w, grid_import_limit_w)/1000.
                     # solar_export_ac is state-specific (varies with soc before solar step).
                     batt_ac_headroom = max(0.0, ac_cap - solar_export_ac)
                     batt_dc_cap = batt_ac_headroom / eta_d if eta_d > 1e-9 else batt_ac_headroom

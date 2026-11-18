@@ -211,8 +211,10 @@ DEFAULT_CHARGE_TROUGH_LOOKBACK_H = 8
 # Export / arbitrage config keys (A2)
 CONF_ENABLE_EXPORT = "enable_export"
 CONF_MAX_EXPORT_W = "max_export_w"
-CONF_GRID_EXPORT_LIMIT_W = "grid_export_limit_w"
 CONF_GRID_IMPORT_LIMIT_W = "grid_import_limit_w"
+# Optional user caps on the device-derived max_charge_w / max_export_w; unset = the device value.
+CONF_BATTERY_CHARGE_LIMIT_W = "battery_charge_limit_w"
+CONF_BATTERY_EXPORT_LIMIT_W = "battery_export_limit_w"
 CONF_CYCLE_COST_EUR_PER_KWH = "cycle_cost_eur_per_kwh"
 CONF_EXPORT_EPS_LO_KWH = "export_eps_lo_kwh"
 CONF_EXPORT_EPS_HI_KWH = "export_eps_hi_kwh"
@@ -234,13 +236,12 @@ DEFAULT_ENABLE_EXPORT = True
 # __init__.py, never a UI option.  Nominal discharge is 6600 W but the
 # net-export setpoint ceiling is ~6000 W — kept at 6000 for parity.
 DEFAULT_MAX_EXPORT_W = 6000.0
-DEFAULT_GRID_EXPORT_LIMIT_W = 6000.0  # configurable grid-connection cap
-# Import-side mirror of DEFAULT_GRID_EXPORT_LIMIT_W: the grid connection's own
-# rating (TOTAL meter import: grid charge + net house draw), independent of the
-# (now device-derived, per-install) inverter charge rate.  17250 W = 3-phase
-# 25A x 230V, a generous default connection size so it stays inert at ordinary
-# house loads unless the user narrows it. See energy.grid_charge_request_w
-# (solar-absorbed charge is never bounded by it).
+# Grid connection limit, both directions: TOTAL meter import (grid charge + net
+# house draw) and net export (also bounded by the device-derived max_export_w).
+# The key keeps its import-only name so stored options carry over unmigrated.
+# 17250 W = 3-phase 25A x 230V, a generous default so it stays inert at
+# ordinary house loads unless the user narrows it. See
+# energy.grid_charge_request_w (solar-absorbed charge is never bounded by it).
 DEFAULT_GRID_IMPORT_LIMIT_W = 17250.0
 DEFAULT_CYCLE_COST_EUR_PER_KWH = 0.10  # battery cycle degradation cost (€/kWh stored)
 # Two-sided surplus hysteresis band (mirrors decide_state's eps_lo/eps_hi)
@@ -364,6 +365,9 @@ EFFICIENCY_HYSTERESIS_W = 150.0
 EFFICIENCY_CACHE_SECONDS = 3600
 
 SETPOINT_STEP_W = 100.0
+# Minimum gap after any setpoint write before the meter fast path may cut again:
+# the meter and pack need a moment to show the last write.
+METER_CUT_MIN_GAP_S = 5.0
 DEFAULT_FALLBACK_LOAD_W = 400.0
 # Conservative synthetic solar pickup hour (UTC) used as a ride-out endpoint when the
 # sun entity is unavailable and find_next_solar_pickup returns None.  The reserve is

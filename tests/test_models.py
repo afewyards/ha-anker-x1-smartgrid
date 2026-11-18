@@ -69,7 +69,6 @@ def test_config_export_defaults():
     cfg = Config()
     assert cfg.enable_export is const.DEFAULT_ENABLE_EXPORT
     assert cfg.max_export_w == const.DEFAULT_MAX_EXPORT_W
-    assert cfg.grid_export_limit_w == const.DEFAULT_GRID_EXPORT_LIMIT_W
     assert cfg.cycle_cost_eur_per_kwh == const.DEFAULT_CYCLE_COST_EUR_PER_KWH
     assert cfg.export_eps_lo_kwh == const.DEFAULT_EXPORT_EPS_LO_KWH
     assert cfg.export_eps_hi_kwh == const.DEFAULT_EXPORT_EPS_HI_KWH
@@ -83,7 +82,6 @@ def test_config_from_dict_max_export_w_round_trip():
     cfg = Config.from_dict({const.CONF_MAX_EXPORT_W: 3000.0})
     assert cfg.max_export_w == 3000.0
     assert cfg.enable_export is const.DEFAULT_ENABLE_EXPORT
-    assert cfg.grid_export_limit_w == const.DEFAULT_GRID_EXPORT_LIMIT_W
 
 
 def test_config_from_dict_export_eps_dwell_round_trip():

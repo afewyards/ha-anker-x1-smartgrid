@@ -54,7 +54,6 @@ def _cfg(**overrides) -> Config:
         cycle_cost_eur_per_kwh=0.04,
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         export_peak_band_frac=1.0,  # open band — only block filter in scope
         export_peak_lookback_h=0,
         export_min_block_kwh=0.5,  # default threshold under test

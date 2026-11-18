@@ -127,7 +127,7 @@ def test_b_solar_not_curtailed():
 def test_no_future_solar_ceiling_is_target():
     """No future solar -> ceiling==target -> ECONOMIC export top-up unrestricted
     (justified by a profitable export, NOT by survival)."""
-    cfg = _cfg(round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04, max_export_w=3000.0, grid_export_limit_w=3000.0)
+    cfg = _cfg(round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04, max_export_w=3000.0)
     n = 4
     pv = [0.0] * 4
     load = [0.0] * 4
@@ -178,7 +178,7 @@ def test_no_survival_grid_charge_on_no_export_night():
 def test_d_export_topup_to_max_after_solar_done():
     """(d) After the current cycle's solar finishes, ceiling==target: full grid
     inventory build for a peak export."""
-    cfg = _cfg(round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04, max_export_w=3000.0, grid_export_limit_w=3000.0)
+    cfg = _cfg(round_trip_eff=1.0, cycle_cost_eur_per_kwh=0.04, max_export_w=3000.0)
     n = 8
     pv = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # small solar @0,1
     load = [0.0] * 8
@@ -287,7 +287,6 @@ def test_ceiling_prevents_afternoon_solar_spill_live_tariff():
         round_trip_eff=1.0,
         cycle_cost_eur_per_kwh=0.04,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         export_peak_band_frac=0.12,
     )
     pv = [0.0, 0.0, 3.0, 3.0, 3.0, 0.0, 0.0, 0.0]

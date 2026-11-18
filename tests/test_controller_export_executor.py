@@ -2,7 +2,7 @@
 
 Covers:
 - surplus + gate clears → engage_export called with POSITIVE setpoint (safety-net)
-- setpoint clamped to min(max_export_w, grid_export_limit_w, surplus-limited)
+- setpoint clamped to min(max_export_w, grid_import_limit_w, surplus-limited)
 - reserve breach (low surplus) OR hurdle fail → release_to_self
 - sub-floor SoC → 0 surplus → never engage, no negative setpoint
 - enable_export=false → never engage
@@ -184,7 +184,6 @@ def _make_export_cfg(**overrides) -> Config:
         soc_target=97.0,
         max_charge_w=3000.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
         eta_charge=1.0,
         round_trip_eff=1.0,  # eta_discharge = 1.0 (simplified)
         cycle_cost_eur_per_kwh=0.04,
@@ -366,10 +365,10 @@ class TestExportEngagePositiveSetpoint:
         assert sp <= 500.0, f"setpoint must be ≤ max_export_w (500), got {sp}"
 
     @pytest.mark.asyncio
-    async def test_setpoint_clamped_to_grid_export_limit_w(self, monkeypatch):
-        """Setpoint is clamped to grid_export_limit_w even when committed rate and max_export_w are higher.
+    async def test_setpoint_clamped_to_grid_connection_limit(self, monkeypatch):
+        """Setpoint is clamped to the grid connection limit even when committed rate and max_export_w are higher.
 
-        Committed rate = 5000W, max_export_w = 3000W, grid_export_limit_w = 600W; surplus = 8kWh.
+        Committed rate = 5000W, max_export_w = 3000W, grid_import_limit_w = 600W; surplus = 8kWh.
         min(5000, 8000, 3000, 600) = 600W → engage_export must be called at ≤ 600W.
         Asserted unconditionally — if engage_export is not called the test fails.
         """
@@ -377,16 +376,16 @@ class TestExportEngagePositiveSetpoint:
         hass = _StubHass()
         ctrl, act, _ = _make_controller(
             hass,
-            cfg_overrides={"max_export_w": 3000.0, "grid_export_limit_w": 600.0},
+            cfg_overrides={"max_export_w": 3000.0, "grid_import_limit_w": 600.0},
         )
         _seed_passive_inputs(hass, soc="90.0", export_price="0.30")
         # Zero the computed house load (pv + meter_w + batt - loss) so the gross
         # setpoint == net_target exactly; this test is about the
-        # grid_export_limit_w clamp on the net target, not the house-load
+        # grid connection limit clamp on the net target, not the house-load
         # compensation add-back.
         hass.set_state("sensor.pv_power", "0.0")
         hass.set_state("sensor.meter_power", "0.0")
-        # Inject committed plan with rate >> both caps so grid_export_limit_w is the binding constraint.
+        # Inject committed plan with rate >> both caps so the connection limit is the binding constraint.
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(
             ctrl_mod,
@@ -401,7 +400,7 @@ class TestExportEngagePositiveSetpoint:
         assert export_calls, f"engage_export must be called with committed plan + ample surplus; calls={act.calls}"
         sp = export_calls[-1][1]
         assert sp > 0, f"setpoint must be positive, got {sp}"
-        assert sp <= 600.0, f"setpoint must be ≤ grid_export_limit_w (600), got {sp}"
+        assert sp <= 600.0, f"setpoint must be ≤ grid_import_limit_w (600), got {sp}"
 
     @pytest.mark.asyncio
     async def test_export_setpoint_surfaced_state_stays_passive(self, monkeypatch):
@@ -424,7 +423,7 @@ class TestExportEngagePositiveSetpoint:
 
     @pytest.mark.asyncio
     async def test_setpoint_saturates_at_real_grid_export_default(self, monkeypatch):
-        """grid_export_limit_w binds the NET export; the gross setpoint adds house load.
+        """The grid connection limit binds the NET export; the gross setpoint adds house load.
 
         The seeded inputs give a 2300 W house load (pv 2000 + meter 300), and
         export_load_comp_factor=1.0 adds it back so the NET reaching the grid is
@@ -437,7 +436,7 @@ class TestExportEngagePositiveSetpoint:
         """
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
         hass = _StubHass()
-        ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 9000.0, "grid_export_limit_w": 6000.0})
+        ctrl, act, _ = _make_controller(hass, cfg_overrides={"max_export_w": 9000.0, "grid_import_limit_w": 6000.0})
         _seed_passive_inputs(hass, soc="97.0", export_price="0.40")
         cur_h = BASE.replace(minute=0, second=0, microsecond=0)
         monkeypatch.setattr(ctrl_mod, "compute_decision", _patched_compute_decision(export_request={cur_h: 8000.0}))
@@ -459,7 +458,7 @@ class TestExportEngagePositiveSetpoint:
                 "eta_charge": 1.0,
                 "round_trip_eff": 1.0,
                 "max_export_w": 9000.0,
-                "grid_export_limit_w": 9000.0,
+                "grid_import_limit_w": 9000.0,
             },
         )
         _seed_passive_inputs(hass, soc="80.0", export_price="0.40")

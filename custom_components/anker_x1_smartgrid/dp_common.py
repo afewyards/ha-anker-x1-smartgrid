@@ -305,7 +305,7 @@ def export_leg_precompute(
         # Combined AC grid export cap (battery + solar spill must not exceed
         # this) — the tighter of the inverter export rating and the grid
         # connection limit.
-        ac_cap: float = min(cfg.max_export_w, cfg.grid_export_limit_w) / 1000.0 * dt_h
+        ac_cap: float = min(cfg.max_export_w, cfg.grid_import_limit_w) / 1000.0 * dt_h
         # C2: peak-only gate. Export is admitted in hour h only when
         # export_price[h] is within export_peak_band_frac of the windowed
         # peak (look-back-windowed — see windowed_peak_prices).

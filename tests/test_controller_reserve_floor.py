@@ -159,7 +159,6 @@ def test_dp_export_floor_uses_continuous_overnight_reserve():
         cycle_cost_eur_per_kwh=0.04,
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
-        grid_export_limit_w=3000.0,
     )
     rsv = _summer_reserve_dict(cfg)
     n = 6  # window 19:00..00:00

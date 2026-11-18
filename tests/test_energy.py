@@ -213,9 +213,7 @@ from custom_components.anker_x1_smartgrid.energy import export_net_target_w
 
 
 def _drain_cfg(**kw):
-    base = dict(
-        round_trip_eff=0.90, eta_charge=0.95, max_export_w=6000.0, grid_export_limit_w=6000.0, export_drain_window_h=0.0
-    )
+    base = dict(round_trip_eff=0.90, eta_charge=0.95, max_export_w=6000.0, export_drain_window_h=0.0)
     base.update(kw)
     return Config(**base)
 
@@ -226,7 +224,7 @@ def test_export_net_target_decisive_caps_at_max():
 
 
 def test_export_net_target_respects_grid_limit():
-    cfg = _drain_cfg(max_export_w=6000.0, grid_export_limit_w=3000.0)
+    cfg = _drain_cfg(max_export_w=6000.0, grid_import_limit_w=3000.0)
     assert export_net_target_w(3.0, cfg) == 3000.0
 
 
@@ -257,7 +255,7 @@ def test_export_net_target_decisive_converges_vs_legacy():
     eta_d = min(0.90 / 0.95, 1.0)
 
     def _simulate(window_h, ticks):
-        cfg = _drain_cfg(export_drain_window_h=window_h, max_export_w=6000.0, grid_export_limit_w=6000.0)
+        cfg = _drain_cfg(export_drain_window_h=window_h, max_export_w=6000.0)
         soc_kwh = 9.0
         lowest = soc_kwh
         for _ in range(ticks):

@@ -424,6 +424,7 @@ def build_plan_horizon(
                 min(
                     grid_request_w,
                     cfg.max_charge_w - solar_charge_w,
+                    cfg.grid_charge_max_w,
                     import_cap_w,
                     ceil_headroom_w - solar_charge_w,
                 ),

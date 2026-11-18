@@ -18,6 +18,7 @@ mechanical ``self`` → ``controller`` move, not a rewrite.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from statistics import fmean
 from typing import TYPE_CHECKING
@@ -138,6 +139,44 @@ def grid_charge_request_w(controller: Controller, inputs: PlantInputs) -> float:
         batt_w, loss_w = commanded_w, 0.0
     net_house_draw_w = max(0.0, inputs.meter_w + batt_w - (loss_w or 0.0))
     return energy.grid_charge_request_w(controller.cfg, net_house_draw_w)
+
+
+async def cut_to_connection_limit(controller: Controller) -> None:
+    """Cut a charge or export we command by the live meter's excess over the grid connection limit.
+
+    Runs on every meter update between ticks. Only ever reduces, on the setpoint
+    step and never past 0 W; raising back is the next tick's job. Skipped while a
+    tick runs, and for ``const.METER_CUT_MIN_GAP_S`` after any setpoint write.
+    """
+    if controller._tick_lock.locked():
+        return
+    # Read under the lock: a disable or unload queued on it first must not get its setpoint overwritten.
+    async with controller._tick_lock:
+        act = controller._actuator
+        sp = act.last_setpoint_w
+        meter_w = coordinator.read_float(
+            controller._hass,
+            controller._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]),
+        )
+        if meter_w is None or not act.engaged or sp == 0.0:
+            return
+        # Meter + = import: our charge pushes it up, our export pushes it down.
+        excess_w = (meter_w if sp < 0.0 else -meter_w) - controller.cfg.grid_import_limit_w
+        if excess_w < const.SETPOINT_STEP_W or time.monotonic() - act.last_write_at < const.METER_CUT_MIN_GAP_S:
+            return
+        mag = max(0.0, abs(sp) - excess_w) // const.SETPOINT_STEP_W * const.SETPOINT_STEP_W
+        try:
+            if mag == 0.0:
+                # Stay engaged at 0 W, as the tick does at zero headroom; releasing an export would only flap.
+                await act.engage_hold()
+            elif sp < 0.0:
+                await act.engage_and_charge(-mag)
+            else:
+                await act.engage_export(mag)
+        except Exception:
+            _LOGGER.error("Meter fast path: setpoint cut failed; leaving it to the next tick", exc_info=True)
+            return
+    controller.last_status["setpoint_w" if sp < 0.0 else "export_setpoint_w"] = act.last_setpoint_w
 
 
 async def run_floor_rescue(controller: Controller, now: datetime, inputs: PlantInputs) -> float | None:
@@ -482,6 +521,10 @@ async def run_forcing_and_export(
                 # house out of the pack, so adding it to a zeroed target would
                 # discharge on a slot the plan never committed.
                 _gross_w = _net_target_w + _load_comp_w if _net_target_w > 0.0 else 0.0
+                _last_w = controller._actuator.last_setpoint_w
+                if _last_w > 0.0:
+                    # PV spill shares the connection: stay inside the room the meter shows, or this undoes a meter cut.
+                    _gross_w = max(0.0, min(_gross_w, _last_w + controller.cfg.grid_import_limit_w + inputs.meter_w))
                 _export_sp = guard.command_setpoint(
                     -_gross_w,
                     controller._actuator.last_setpoint_w,
