@@ -516,4 +516,4 @@ def live_state(recorded_state: str, exporting: bool, batt_w: float | None, p1_w:
         return "idle"
     if batt_w < 0:
         return "charge_solar"
-    return "export" if (p1_w or 0.0) < 0 else "house"
+    return "export" if (p1_w or 0.0) < -_BAND_W else "house"
