@@ -74,6 +74,13 @@ function clock(t, tz) {
   const p = parts(t, tz);
   return `${pad2(p.hour)}:${pad2(p.minute)}`;
 }
+function planPeak(rows, now, endOfToday) {
+  let best = null;
+  for (const r of rows) {
+    if (r.plan && num(r.soc) !== null && r.t + H > now && r.t < endOfToday && (!best || r.soc > best.soc)) best = { soc: r.soc, t: r.t + H };
+  }
+  return best;
+}
 function when(a, b, tz) {
   let start = clock(a, tz);
   let end = clock(b, tz);
@@ -104,8 +111,16 @@ const STYLE = `<style>
 }
 ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size: 11px; }
 .title { font-size: 16px; font-weight: 500; padding: 4px 0 6px; }
-.bat { display: flex; align-items: center; column-gap: 8px; font-size: 11.5px; line-height: 1.45; margin-bottom: 3px; white-space: nowrap; }
-.bat b { color: var(--sg-charge); }
+.bat { display: flex; align-items: center; column-gap: 8px; font-size: 11.5px; line-height: 1.45; white-space: nowrap; }
+.bat b { font-size: 17px; line-height: 1.2; }
+.bat .se { color: var(--sg-export); }
+.bat .sc { color: var(--sg-charge); }
+.bat .sd { color: var(--sg-dim); }
+.bar { position: relative; height: 6px; border-radius: 3px; background: var(--sg-rule); margin: 5px 0 2px; }
+.bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--sg-charge); }
+.bar i.ex::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 4px; border-radius: 0 3px 3px 0; background: var(--sg-export); }
+.bar u { position: absolute; top: -3px; bottom: -3px; width: 1.5px; margin-left: -1.5px; background: var(--sg-ink); opacity: .75; }
+.cap { display: flex; justify-content: space-between; column-gap: 8px; color: var(--sg-dim); font-size: 10px; line-height: 1.5; margin-bottom: 3px; white-space: nowrap; }
 .bat .b1 { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bat .m30 { flex: 0 0 auto; }
 .bat button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 6px; min-width: 44px; height: 28px; margin: -6px -9px -6px 0; display: flex; align-items: center; justify-content: center; }
@@ -911,7 +926,7 @@ class SmartgridPowerCard extends HTMLElement {
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
-      this._battery(a.battery, sw, off) +
+      this._battery(a.battery, sw, off, planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
       this._headers(days, fr, geo, a.battery) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
@@ -931,19 +946,30 @@ class SmartgridPowerCard extends HTMLElement {
     return `<button role="switch" aria-checked="${on}" aria-label="${name}" data-act="${on ? 'on' : 'off'}"><span class="trk"><i></i></span></button>`;
   }
 
-  _battery(b, sw, off) {
+  _battery(b, sw, off, peak, tz) {
     b = b || {};
     const soc = num(b.soc);
+    const state = off && (!b.state || b.state === 'idle') ? 'disabled' : b.state;
+    const cls = { export: 'se', charge_grid: 'sc', charge_solar: 'sc' }[state] || 'sd';
+    const word = STATE_TEXT[state];
     const items = [
-      soc !== null && `${soc.toFixed(0)}%`,
+      `<b>${soc !== null ? `${soc.toFixed(0)}%` : DASH}</b>`,
       num(b.stored_kwh) !== null && `${b.stored_kwh.toFixed(1)} kWh`,
-      num(b.stored_cost_eur_per_kwh) !== null && `${eur(b.stored_cost_eur_per_kwh)}/kWh`,
-      STATE_TEXT[off && (!b.state || b.state === 'idle') ? 'disabled' : b.state],
+      word && `<span class="${cls}">${word}</span>`,
     ].filter(Boolean);
     const gain = sun(b.solar_gain_30d_eur, '€');
     const margin = num(b.margin_30d_eur) !== null ? `30 days ${signed(b.margin_30d_eur, '€')}` : '';
     const m = margin || gain ? `<span class="m30">${margin}${gain && margin ? `<span class="sunp"> · ${gain}</span>` : gain}</span>` : '';
-    return `<div class="bat"><span class="b1"><b>Battery</b> ${items.join(' · ') || DASH}</span>${m}${this._control(sw)}</div>`;
+    const up = peak && soc !== null && Math.round(peak.soc) > Math.round(soc);
+    const fill = soc === null ? 0 : Math.min(100, Math.max(0, soc));
+    const cost = num(b.stored_cost_eur_per_kwh) !== null ? `stored at ${eur(b.stored_cost_eur_per_kwh)}/kWh` : '';
+    const pk = up ? `peak ${Math.round(peak.soc)}% at ${clock(peak.t, tz)}` : '';
+    const label = `Battery ${soc !== null ? `${soc.toFixed(0)}%` : 'level unknown'}${up ? `, plan peaks at ${Math.round(peak.soc)}%` : ''}`;
+    return (
+      `<div class="bat"><span class="b1">${items.join(' · ')}</span>${m}${this._control(sw)}</div>` +
+      `<div class="bar dm" role="img" aria-label="${label}"><i${state === 'export' ? ' class="ex"' : ''} style="width:${fill}%"></i>${up ? `<u style="left:${Math.min(100, Math.max(0, peak.soc))}%"></u>` : ''}</div>` +
+      (cost || pk ? `<div class="cap dm"><span>${cost}</span><span>${pk}</span></div>` : '')
+    );
   }
 
   _level(rows, { cx, W }, nowX) {
