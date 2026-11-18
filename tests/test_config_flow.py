@@ -121,7 +121,7 @@ def test_options_schema_excludes_device_derived_limits():
 def test_flatten_sections_roundtrip():
     from custom_components.anker_x1_smartgrid.config_flow import _flatten_sections
 
-    flat = {"soc_floor": 10.0, "soc_target": 90.0, "addon_timeout": 7}
+    flat = {"soc_floor": 10.0, "soc_target": 90.0, "addon_url": "http://x:8099"}
     assert _flatten_sections(_nest(flat)) == flat
 
 
@@ -1904,6 +1904,48 @@ FIXED_NUMBERS = (
     "calibration_dwell_h",
 )
 
+FIXED_VALUES = {
+    "export_dwell_min": 15,
+    "export_eps_lo_kwh": 0.2,
+    "export_eps_hi_kwh": 0.4,
+    "export_min_block_kwh": 0.5,
+    "export_peak_lookback_h": 4,
+    "export_load_comp_factor": 1.0,
+    "charge_trough_lookback_h": 8,
+    "reserve_cheap_band": 0.20,
+    "price_history_days": 8,
+    "price_blend_weight_today": 0.5,
+    "load_adapt_fade_h": 8,
+    "occ_persistence_h": 4,
+    "min_train_samples": 2000,
+    "addon_timeout": 5,
+    "soc_drift_deadband_kwh": 0.3,
+    "soc_drift_decay_halflife_h": 0.0,
+    "calibration_top_soc": 100.0,
+    "calibration_dwell_h": 0.5,
+}
+
+
+@pytest.mark.parametrize(("key", "value"), FIXED_VALUES.items())
+def test_fixed_numbers_have_their_literal_value(key, value):
+    assert getattr(Config(), key) == value
+
+
+def test_removed_option_keys_cover_the_fixed_numbers():
+    from custom_components.anker_x1_smartgrid import REMOVED_OPTION_KEYS
+
+    assert set(FIXED_VALUES) == set(FIXED_NUMBERS)
+    assert (
+        set(FIXED_NUMBERS)
+        | {
+            "anticipation_confidence_haircut",
+            "anticipation_margin_eur_per_kwh",
+            "grid_export_limit_w",
+        }
+        == REMOVED_OPTION_KEYS
+    )
+
+
 SPEC_SECTIONS = {
     "devices": ("anker_device", "ent_pv_power", "ent_weather_forecast", "person_entities"),
     "tracked_devices": ("device_power_entities", "device_state_entities"),
@@ -2009,11 +2051,14 @@ def test_old_lab_options_load():
     import json
     from pathlib import Path
 
-    from custom_components.anker_x1_smartgrid import migrate_options_v3
+    from custom_components.anker_x1_smartgrid import REMOVED_OPTION_KEYS, migrate_options_v3
 
     raw = json.loads((Path(__file__).parent / "fixtures" / "options-2026-08-01.json").read_text())
     assert "export_dwell_min" in raw
-    cfg = Config.from_dict(migrate_options_v3(raw))
+    migrated = migrate_options_v3(raw)
+    assert not REMOVED_OPTION_KEYS & set(migrated)
+    assert {"use_measured_eta", "reserve_anchor"} <= set(raw) & set(migrated)
+    cfg = Config.from_dict(migrated)
     assert cfg.export_dwell_min == const.DEFAULT_EXPORT_DWELL_MIN
 
 
@@ -2024,13 +2069,12 @@ async def test_fresh_install_stores_none_of_the_fixed_numbers(hass):
 
 
 async def test_options_save_roundtrip(hass):
-    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS, _options_schema
+    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
     entry = await _create_entry(hass)
     hass.config_entries.async_update_entry(
         entry, options={**entry.options, const.CONF_DEVICE_STATE_WATTS: {"switch.x": 5.0}}
     )
-    form_keys = {k for keys in OPTIONS_SECTIONS.values() for k in keys}
     flat = {}
     for key, marker in _flat_markers(_options_schema({**entry.data, **entry.options})).items():
         if marker.default is not vol.UNDEFINED:
@@ -2040,9 +2084,6 @@ async def test_options_save_roundtrip(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result2 = await hass.config_entries.options.async_configure(result["flow_id"], user_input=_nest(flat))
     assert result2["type"] == "create_entry"
-    stored = set(entry.options)
-    assert stored <= form_keys | {const.CONF_DEVICE_STATE_WATTS}
-    assert not stored & set(FIXED_NUMBERS)
-    assert const.CONF_DEVICE_STATE_WATTS in stored
-    assert {k for k, m in _flat_markers(_options_schema({})).items() if m.default is not vol.UNDEFINED} <= stored
+    assert set(entry.options) == set(flat) | {const.CONF_DEVICE_STATE_WATTS}
+    assert entry.options[const.CONF_DEVICE_STATE_WATTS] == {}
     await _close(hass, entry)

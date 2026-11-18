@@ -1,7 +1,7 @@
 """Plan B: the two price-prior tunables are wired the same way as
-export_peak_band_frac (const default → Config field → from_dict override → options schema)."""
+export_peak_band_frac (const default → Config field → from_dict override)."""
 
-from custom_components.anker_x1_smartgrid import config_flow, const
+from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid.models import Config
 
 

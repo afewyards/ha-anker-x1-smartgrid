@@ -348,7 +348,8 @@ def test_truncated_reserve_no_collapse():
     _, _, _, horizon, _, _ = _call(_cfg(), soc=80.0, prices=_STUB_PRICES, estimated_tomorrow=est)
     row = next(r for r in horizon if _row_start(r) == BASE)
 
-    # A real-only map would collapse this to the stub's own ride-out (< 20%).
+    # A real-only map would collapse the reserve to the stub's own short ride-out.
+    assert row["reserve_soc"] > 50.0
     assert row["reserve_soc"] == pytest.approx(78.6)
 
 
