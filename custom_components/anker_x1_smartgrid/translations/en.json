@@ -87,7 +87,7 @@
               "slot_resolution": "Price slot resolution"
             },
             "data_description": {
-              "price_mode": "Dynamic price sensor (default) reads the import price sensor above; Static tariff synthesizes prices from the values below (for installs with no dynamic price integration).",
+              "price_mode": "Dynamic price sensor (default) reads the import price sensor below; Static tariff synthesizes prices from the values below (for installs with no dynamic price integration).",
               "ent_price": "Sensor reporting the current electricity import tariff in €/kWh. Drives all charge and export planning.",
               "ent_export_price": "Sensor with the feed-in price in €/kWh. Leave empty to mirror the import price (salderen).",
               "static_price_import": "Flat price, or the peak (HP) price when off-peak hours are set. Required in static mode. Default 0.25.",
@@ -133,7 +133,7 @@
             },
             "data_description": {
               "enable_export": "Allow the planner to sell battery energy to the grid at price peaks. Default on.",
-              "cycle_cost_eur_per_kwh": "Battery wear cost per stored kWh; an export must beat this to be scheduled. Default 0.04.",
+              "cycle_cost_eur_per_kwh": "Battery wear cost per stored kWh; an export must beat this to be scheduled. Default 0.10.",
               "charge_margin_eur_per_kwh": "Minimum saving a grid charge must clear before it is scheduled; stops overnight micro-charges. Default 0.",
               "charge_window_price_band": "How far above the cheapest hour a price may sit and still be used for grid charging. Larger admits more charge hours; the charge margin and cycle cost still reject unprofitable ones. Default 0.005.",
               "export_peak_band_frac": "Export only within this fraction below the horizon peak price (0.12 = within 12% of the peak). Default 0.12.",
