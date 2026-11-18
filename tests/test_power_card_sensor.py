@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import os
 import re
-from datetime import UTC, datetime, timedelta
+import shutil
+import subprocess
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -61,14 +66,26 @@ def test_sensor_publishes_its_attributes_unrecorded():
     card = {"built_at": NOW.isoformat(), "battery": {"soc": 50}, "live": {"pv": []}, "days": [], "hours": []}
     sensor = X1PowerCardSensor(_Stub(card), "entry")
     assert sensor.native_value == NOW.isoformat()
-    assert sensor.extra_state_attributes == {"battery": {"soc": 50}, "live": {"pv": []}, "days": [], "hours": []}
-    assert X1PowerCardSensor._unrecorded_attributes == frozenset({"battery", "live", "days", "hours"})
+    assert sensor.extra_state_attributes == {
+        "battery": {"soc": 50},
+        "live": {"pv": []},
+        "days": [],
+        "hours": [],
+        "pack": None,
+    }
+    assert X1PowerCardSensor._unrecorded_attributes == frozenset({"battery", "live", "days", "hours", "pack"})
 
 
 def test_sensor_without_a_card_publishes_nothing():
     sensor = X1PowerCardSensor(_Stub(None), "entry")
     assert sensor.native_value is None
-    assert sensor.extra_state_attributes == {"battery": None, "live": None, "days": None, "hours": None}
+    assert sensor.extra_state_attributes == {
+        "battery": None,
+        "live": None,
+        "days": None,
+        "hours": None,
+        "pack": None,
+    }
 
 
 def _rebuild(horizon=None):
@@ -487,10 +504,10 @@ def test_trim_rows_keeps_zero_and_false_where_they_are_measurements():
 
 
 def test_the_sensor_trims_a_copy_and_leaves_the_controllers_rows():
-    hour = {"start": "s", "price": None, "plan": False, "use_kwh": 0.0}
+    hour = {"start": "2026-11-12T00:00:00+01:00", "price": None, "plan": False, "use_kwh": 0.0}
     card = {"built_at": "x", "battery": {}, "live": {}, "days": [], "hours": [hour]}
-    assert X1PowerCardSensor(_Stub(card), "entry").extra_state_attributes["hours"] == [{"start": "s"}]
-    assert card["hours"] == [{"start": "s", "price": None, "plan": False, "use_kwh": 0.0}]
+    assert X1PowerCardSensor(_Stub(card), "entry").extra_state_attributes["hours"] == [{"m": 0}]
+    assert card["hours"] == [{"start": "2026-11-12T00:00:00+01:00", "price": None, "plan": False, "use_kwh": 0.0}]
 
 
 def test_the_card_defaults_match_what_the_backend_drops():
@@ -501,3 +518,127 @@ def test_the_card_defaults_match_what_the_backend_drops():
     assert got == want
     gone = re.search(r"const gone = \{(.*?)\};", (root / "harness.html").read_text()).group(1)
     assert {k: json.loads(v) for k, v in re.findall(r"(\w+):\s*(null|0|false)", gone)} == want
+
+
+def _unpack(rows, pack):
+    """The card's rule, in Python; grid positions that were None are left out as trim_rows leaves them."""
+    out, off, k = [], pack["base"][-6:], 0
+    tz = pack.get("tz", [])
+    base = datetime.fromisoformat(pack["base"])
+    for i, p in enumerate(rows):
+        while k < len(tz) and tz[k][0] <= i:
+            off = tz[k][1]
+            k += 1
+        sign = -1 if off[0] == "-" else 1
+        zone = timezone(sign * timedelta(hours=int(off[1:3]), minutes=int(off[4:6])))
+        r = {key: v for key, v in p.items() if key not in ("m", "g")}
+        r["start"] = (base + timedelta(minutes=p["m"])).astimezone(zone).isoformat()
+        r |= {key: v for key, v in zip(usecost._GRID_KEYS, p.get("g", ()), strict=False) if v is not None}
+        if "kf" in p.get("why", {}):
+            r["why"] = {key: v for key, v in p["why"].items() if key != "kf"} | {"kept_for": pack["kf"][p["why"]["kf"]]}
+        out.append(r)
+    return out
+
+
+def _local_rows():
+    tz = ZoneInfo("Europe/Amsterdam")
+    start = datetime(2026, 10, 24, 22, tzinfo=UTC)
+    rows = []
+    for n in (*range(0, 8), *range(11, 14)):  # a gap of three hours, across the October clock change
+        t = (start + timedelta(hours=n)).astimezone(tz)
+        rows.append({"start": t.isoformat(), "price": 0.2, "use_kwh": 0.3, "state": "idle"})
+    grid = [(None, None, None), (1.0, None, None), (None, 0.0, None), (None, None, 2.5), (0.5, 0.5, 0.5)]
+    for r, g in zip(rows, grid, strict=False):
+        r |= dict(zip(usecost._GRID_KEYS, g, strict=True))
+    shared = {"start": rows[0]["start"], "end": None, "kind": "next_day"}
+    rows[2]["why"] = {"kind": "hold", "keep_eur": 0.3, "use_eur": 0.1, "kept_for": shared}
+    rows[3]["why"] = {"kind": "hold", "keep_eur": 0.3, "use_eur": 0.2, "kept_for": dict(shared)}
+    rows[4]["why"] = {"kind": "house", "keep_eur": 0.3, "use_eur": 0.2, "kept_for": None}
+    return rows
+
+
+async def test_packed_rows_unpack_to_the_trimmed_rows():
+    _ctrl, hours = await _card_with_reasons(0.30)
+    for rows in (hours, _local_rows()):
+        before = copy.deepcopy(rows)
+        trimmed = usecost.trim_rows(rows)
+        packed, pack = usecost.pack_rows(trimmed)
+        assert rows == before
+        assert _unpack(packed, pack) == trimmed
+    assert pack["tz"] == [[5, "+01:00"]] or pack["tz"][0][1] == "+01:00"
+    assert len(pack["kf"]) == 1
+    assert usecost.pack_rows([]) == ([], None)
+
+
+def _series(zone, start_utc, step_min, count, **over):
+    tz = ZoneInfo(zone)
+    start = datetime.fromisoformat(start_utc).replace(tzinfo=UTC)
+    return [
+        {"start": (start + timedelta(minutes=step_min * n)).astimezone(tz).isoformat(), "state": "idle", "use_kwh": 0.3}
+        | over
+        for n in range(count)
+    ]
+
+
+def _with_why_and_grid():
+    rows = _series("Europe/Amsterdam", "2026-11-12T10:00:00", 60, 6)
+    shared = {"start": rows[0]["start"], "end": None, "kind": "next_day"}
+    rows[0]["why"] = {"kind": "hold", "keep_eur": 0.3, "use_eur": 0.1, "kept_for": shared}
+    rows[1]["why"] = {"kind": "house", "keep_eur": 0.3, "use_eur": 0.2, "kept_for": None}
+    rows[2]["why"] = {"kind": "hold", "keep_eur": 0.3, "use_eur": 0.2, "kept_for": dict(shared)}
+    for r, g in zip(rows, [(None,) * 3, (1.0, None, None), (None, 0.0, None), (None, None, 2.5), (0.5, 0.5, 0.5)]):
+        r |= dict(zip(usecost._GRID_KEYS, g, strict=True))
+    return rows
+
+
+_ROW_SETS = {
+    "autumn_15min": lambda: _series("Europe/Amsterdam", "2026-10-24T23:00:00", 15, 24),
+    "spring_hourly": lambda: _series("Europe/Amsterdam", "2027-03-27T21:00:00", 60, 10),
+    "kolkata_off_the_hour": lambda: _series("Asia/Kolkata", "2026-11-12T00:15:00", 60, 5),
+    "gap": lambda: (
+        _series("Europe/Amsterdam", "2026-11-12T00:00:00", 60, 3)
+        + _series("Europe/Amsterdam", "2026-11-12T09:00:00", 60, 3)
+    ),
+    "unsorted": lambda: _series("Europe/Amsterdam", "2026-11-12T00:00:00", 60, 4)[::-1],
+    "single": lambda: _series("Europe/Amsterdam", "2026-11-12T00:00:00", 60, 1),
+    "empty": list,
+    "why_and_grid": _with_why_and_grid,
+}
+
+
+def _node_unpack(rows):
+    trimmed = usecost.trim_rows(rows)
+    packed, pack = usecost.pack_rows(trimmed)
+    js = (Path(usecost.__file__).parent / "frontend" / "smartgrid-power-card.js").read_text()
+    fn = re.search(r"function unpackRows[\s\S]*?\n}\n", js).group(0)
+    script = (
+        fn
+        + "const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));"
+        + "console.log(JSON.stringify(unpackRows(d.hours, d.pack)));"
+    )
+    out = subprocess.run(
+        ["node", "-e", script],
+        input=json.dumps({"hours": packed, "pack": pack}),
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "TZ": "Pacific/Auckland"},
+    ).stdout
+    # The card fills a packed-away grid figure with null, which ROW_DEFAULTS treats as absent.
+    got = [{k: v for k, v in r.items() if not (k in usecost._GRID_KEYS and v is None)} for r in json.loads(out)]
+    return got, trimmed
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("name", list(_ROW_SETS))
+def test_the_cards_unpack_reads_what_the_backend_packs(name):
+    got, trimmed = _node_unpack(_ROW_SETS[name]())
+    assert got == trimmed
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+async def test_the_cards_unpack_reads_the_controllers_rows():
+    _ctrl, hours = await _card_with_reasons(0.30)
+    got, trimmed = _node_unpack(hours)
+    assert got == trimmed
+    assert any("kept_for" in r.get("why", {}) for r in got)

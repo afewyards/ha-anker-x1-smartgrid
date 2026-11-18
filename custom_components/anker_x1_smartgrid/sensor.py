@@ -423,7 +423,7 @@ class X1DailyStatsSensor(_Base):
 class X1PowerCardSensor(_Base):
     """What the three-day power card draws; state is when days and hours were built."""
 
-    _unrecorded_attributes = frozenset({"battery", "live", "days", "hours"})
+    _unrecorded_attributes = frozenset({"battery", "live", "days", "hours", "pack"})
 
     def __init__(self, c, e):
         super().__init__(c, e, "power_card", "SmartGrid power card")
@@ -436,8 +436,9 @@ class X1PowerCardSensor(_Base):
     def extra_state_attributes(self):
         card = self._controller.power_card or {}
         attrs = {key: card.get(key) for key in ("battery", "live", "days", "hours")}
+        attrs["pack"] = None
         if attrs["hours"]:
-            attrs["hours"] = usecost.trim_rows(attrs["hours"])
+            attrs["hours"], attrs["pack"] = usecost.pack_rows(usecost.trim_rows(attrs["hours"]))
         return attrs
 
 

@@ -10,6 +10,34 @@ const STATE_TEXT = {
 };
 const LINE = { charge_grid: 'charge', charge_solar: 'charge', house: 'house', export: 'export' };
 
+// Rows as the server packs them: pack.base + minutes m, the offsets in pack.tz, grid figures g, why.kf into pack.kf.
+function unpackRows(hours, pack) {
+  if (!pack || typeof pack !== 'object') return hours;
+  const base = Date.parse(pack.base);
+  const tz = Array.isArray(pack.tz) ? pack.tz : [];
+  const kept = Array.isArray(pack.kf) ? pack.kf : [];
+  let off = String(pack.base).slice(-6);
+  let k = 0;
+  return hours.map((h, i) => {
+    if (!h || typeof h !== 'object') return h;
+    const r = { ...h };
+    while (k < tz.length && tz[k][0] <= i) off = tz[k++][1];
+    if (typeof r.m === 'number') {
+      const mins = (off[0] === '-' ? -1 : 1) * (Number(off.slice(1, 3)) * 60 + Number(off.slice(4, 6)));
+      r.start = new Date(base + (r.m + mins) * 60e3).toISOString().slice(0, 19) + off;
+      delete r.m;
+    }
+    if (Array.isArray(r.g)) {
+      [r.grid_in_house_kwh, r.grid_in_charge_kwh, r.grid_out_kwh] = [0, 1, 2].map((n) => r.g[n] ?? null);
+      delete r.g;
+    }
+    if (r.why && typeof r.why.kf === 'number') {
+      const { kf, ...w } = r.why;
+      r.why = { ...w, kept_for: kept[kf] };
+    }
+    return r;
+  });
+}
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
@@ -981,7 +1009,7 @@ class SmartgridPowerCard extends HTMLElement {
     const st = this._state;
     const a = st && st.state !== 'unavailable' && st.state !== 'unknown' ? st.attributes || {} : {};
     const days = Array.isArray(a.days) ? a.days : [];
-    const hours = Array.isArray(a.hours) ? a.hours : [];
+    const hours = Array.isArray(a.hours) ? unpackRows(a.hours, a.pack) : [];
     const name = cfg.title ? esc(typeof cfg.title === 'string' ? cfg.title : 'Power') : '';
     const title = cfg.title ? `<div class="title">${name}</div>` : '';
     const sw = this._swState();

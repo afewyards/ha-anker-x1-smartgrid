@@ -13,7 +13,7 @@
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
     &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
     &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
-  ?trim=1  leaves the values the server omits out of the card sensor's hourly rows (price, soc and the grid figures when null, use and solar when 0, plan when false); the debug answer still gets the full rows, and a trimmed run must draw the same as an untrimmed one
+  ?trim=1  gives the card sensor's hourly rows as the server publishes them: the values it omits left out (price, soc and the grid figures when null, use and solar when 0, plan when false), then packed (start as minutes m from pack.base with pack.tz offsets, grid figures as g, why.kept_for as why.kf into pack.kf); the debug answer still gets the full rows, and a trimmed run must draw the same as an untrimmed one
   ?live=import|export|big|zero|nopv|none  the live row's fixture (default import): the meter reads 1840, -3200, 12000 (big: checks the Grid cell reads 12.0 kW import) or 20 W; nopv makes the first solar sensor unavailable; none leaves the live attribute off the card sensor, so no row and today's cheap slot in the Today column; every run checks the Price cell reads €0.27
   ?push=1  after mount, gives the house sensor a new state of 950 W in a new hass and checks that the House cell reads 950 W without the card re-rendering
   ?price=next  puts the next quarter's price in the past and checks that the Price cell shows it; with push=1 the quarter is still ahead at mount, then the clock moves past it with the house push and the check is that the Price cell shows it without a re-render
@@ -389,6 +389,32 @@
     if (q.get('trim') === '1') {
       const gone = { price: null, soc: null, grid_in_house_kwh: null, grid_in_charge_kwh: null, grid_out_kwh: null, use_kwh: 0, solar_kwh: 0, plan: false };
       card.hours = card.hours.map((h) => Object.fromEntries(Object.entries(h).filter(([k, v]) => !(k in gone && v === gone[k]))));
+      // Then the packing: start as minutes from the first row, the grid figures as g, why.kept_for as an index into pack.kf.
+      const trimmed = card.hours;
+      const base = Date.parse(trimmed[0].start);
+      const grid = ['grid_in_house_kwh', 'grid_in_charge_kwh', 'grid_out_kwh'];
+      const pack = { base: trimmed[0].start };
+      const tz = [];
+      const kf = [];
+      let off = pack.base.slice(-6);
+      card.hours = trimmed.map(({ start, ...h }, i) => {
+        if (start.slice(-6) !== off) tz.push([i, (off = start.slice(-6))]);
+        const g = grid.map((k) => h[k] ?? null);
+        grid.forEach((k) => delete h[k]);
+        const r = { ...h, m: (Date.parse(start) - base) / 60e3 };
+        if (g.some((v) => v !== null)) r.g = g;
+        if (h.why && h.why.kept_for != null) {
+          const key = JSON.stringify(h.why.kept_for);
+          let n = kf.findIndex((x) => JSON.stringify(x) === key);
+          if (n < 0) n = kf.push(h.why.kept_for) - 1;
+          const { kept_for, ...w } = h.why;
+          r.why = { ...w, kf: n };
+        }
+        return r;
+      });
+      if (tz.length) pack.tz = tz;
+      if (kf.length) pack.kf = kf;
+      card.pack = pack;
     }
     states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { ...card, ...window.LIVE_EXTRA } };
   }

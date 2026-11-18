@@ -495,6 +495,38 @@ def trim_rows(rows: list[dict]) -> list[dict]:
     ]
 
 
+def pack_rows(rows: list[dict]) -> tuple[list[dict], dict | None]:
+    """Copies of the rows with the three grid figures as ``g``, ``start`` as minutes ``m`` from ``pack["base"]``.
+
+    ``pack["tz"]`` lists ``[row index, UTC offset]`` where the offset changes and ``pack["kf"]`` the distinct
+    ``kept_for`` values a row's ``why.kf`` points at, so the card can rebuild every row exactly.
+    """
+    if not rows:
+        return rows, None
+    base = rows[0]["start"]
+    t0, offset = datetime.fromisoformat(base), base[-6:]
+    pack: dict = {"base": base}
+    tz: list[list] = []
+    kept: list[dict] = []
+    out = []
+    for i, r in enumerate(rows):
+        if r["start"][-6:] != offset:
+            offset = r["start"][-6:]
+            tz.append([i, offset])
+        p = {k: v for k, v in r.items() if k != "start" and k not in _GRID_KEYS}
+        p["m"] = int((datetime.fromisoformat(r["start"]) - t0).total_seconds() // 60)
+        grid = [r.get(k) for k in _GRID_KEYS]
+        if any(v is not None for v in grid):
+            p["g"] = grid
+        why = r.get("why")
+        if why and why.get("kept_for") is not None:
+            if why["kept_for"] not in kept:
+                kept.append(why["kept_for"])
+            p["why"] = {k: v for k, v in why.items() if k != "kept_for"} | {"kf": kept.index(why["kept_for"])}
+        out.append(p)
+    return out, pack | ({"tz": tz} if tz else {}) | ({"kf": kept} if kept else {})
+
+
 def _add_grid(bucket: dict, price: float | None, export_price: float | None, *kwh: float) -> None:
     bucket["grid"] = [a + x for a, x in zip(bucket["grid"] or (0.0,) * 3, kwh, strict=True)]
     bought = kwh[0] + kwh[1]
