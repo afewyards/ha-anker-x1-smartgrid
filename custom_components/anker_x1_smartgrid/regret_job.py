@@ -137,6 +137,7 @@ def run_daily_regret(
         actual_export_by_hour: dict[int, list[float]] = defaultdict(list)
         export_price_by_hour: dict[int, list[float]] = defaultdict(list)
         hours_with_data: set[int] = set()
+        held_slots: set[int] = set()
 
         # R1: measured v9 per-tick energy-delta buckets (recorder.py's
         # pv_kwh/house_load_kwh/batt_charge_kwh/grid_import_kwh/
@@ -197,6 +198,8 @@ def run_daily_regret(
                 continue
             h = (local_dt.hour * 60 + local_dt.minute) // _slot_minutes
             hours_with_data.add(h)
+            if s.get("state") == "hold":
+                held_slots.add(h)
             if soc_start is None and s.get("soc") is not None:
                 soc_start = float(s["soc"])
 
@@ -505,6 +508,8 @@ def run_daily_regret(
             realized_export_by_hour=_realized_export_kwh,
             export_price=eff_export,
             dt_h=_dt_h,
+            # shortcut: one held tick walls its whole slot; replay per tick if partly held slots skew regret.
+            wall_by_hour=[h in held_slots for h in range(_spd)],
         )
         score = regret_mod.score_regret(realized, optimal)
 

@@ -192,3 +192,25 @@ def test_cheaper_next_night_anchors_both_water_values(monkeypatch):
 
     want = regret_job.optimize_mod.compute_water_value(0.10, cfg)
     assert captured["oracle"]["water_value"] == captured["shadow"]["water_value"] == want
+
+
+def test_actual_day_replays_the_reserve_where_the_executor_held(monkeypatch):
+    """Slots with a held tick stop at the backup reserve in the realized replay; the rest may dip."""
+    monkeypatch.setattr(regret_job.dt_util, "as_local", lambda dt: dt)
+    calls = []
+    _orig = regret_job.regret_mod.realized_grid_cost
+    monkeypatch.setattr(
+        regret_job.regret_mod, "realized_grid_cost", lambda *a, **kw: calls.append(kw) or _orig(*a, **kw)
+    )
+    cfg = _cfg(backup_reserve_soc=30.0)
+    eur = {}
+    for state in ("hold", "passive"):
+        rec = StubRecorder()
+        _seed_day(rec, DAY, soc_start=30.0, load_w=500.0, import_price=0.20)
+        for row in rec.rows[:20]:
+            row["state"] = state
+        regret_job.run_daily_regret(rec, cfg, DAY, COMPUTED_TS, slot_minutes=60)
+        eur[state] = rec.daily_regret_rows[DAY]["realized_eur"]
+        assert calls[-1]["wall_by_hour"] == [state == "hold" and h < 20 for h in range(24)]
+    # Held at the reserve for 20 h, the last 4 h cannot use the whole band the free pack does.
+    assert eur["hold"] > eur["passive"]
