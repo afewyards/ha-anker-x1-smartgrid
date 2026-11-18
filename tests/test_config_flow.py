@@ -269,12 +269,43 @@ def test_options_schema_includes_addon_timeout():
     assert const.CONF_ADDON_TIMEOUT in keys
 
 
-def test_options_schema_addon_url_default():
+def test_addon_url_prefilled_default_on_fresh_entry():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_ADDON_URL].default() == "http://local-anker_x1_forecast:8099"
+    def suggested(defaults):
+        return _flat_markers(_options_schema(defaults))[const.CONF_ADDON_URL].description["suggested_value"]
+
+    assert suggested({}) == const.DEFAULT_ADDON_URL
+    assert suggested({const.CONF_ADDON_URL: ""}) == ""  # a cleared address stays cleared on reopen
+
+
+@pytest.mark.parametrize("submitted", [None, "", "   "])
+async def test_addon_url_cleared_saves_empty(hass, submitted):
+    """The frontend drops an emptied optional text field; that must save "" (add-on off),
+    not bring back the stored or default URL."""
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, const.CONF_ADDON_URL: "http://addon:8099"})
+    flat = {const.CONF_SOC_TARGET: 90.0}
+    if submitted is not None:
+        flat[const.CONF_ADDON_URL] = submitted
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(result["flow_id"], user_input=_nest(flat))
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_ADDON_URL] == ""
+    assert Config.from_dict({**entry.data, **entry.options}).addon_url == ""
+    await _close(hass, entry)
+
+
+async def test_addon_url_kept_when_submitted(hass):
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, const.CONF_ADDON_URL: "http://addon:8099"})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=_nest({const.CONF_ADDON_URL: "http://addon:8099"})
+    )
+    assert result2["type"] == "create_entry"
+    assert entry.options[const.CONF_ADDON_URL] == "http://addon:8099"
+    await _close(hass, entry)
 
 
 def test_options_schema_addon_timeout_default():
@@ -1964,6 +1995,7 @@ async def test_tracked_devices_state_entities_open_watts_step(hass):
     assert entry.options[const.CONF_SOC_TARGET] == 88.0
     assert entry.options[const.CONF_DEVICE_STATE_ENTITIES] == ["switch.oven", "sensor.pc_power"]
     assert entry.options[const.CONF_HISTORY_DAYS] == 5
+    assert entry.options[const.CONF_ADDON_URL] == ""  # omitted in the first step
     await _close(hass, entry)
 
 

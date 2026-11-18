@@ -256,7 +256,6 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.DEFAULT_BACKUP_RESERVE_SOC,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
     ),
-    (const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL, cv.string),
     (const.CONF_ADDON_TIMEOUT, const.DEFAULT_ADDON_TIMEOUT, vol.All(vol.Coerce(int), vol.Range(min=1, max=60))),
     (const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET, vol.All(vol.Coerce(float), vol.Range(min=10.0, max=100.0))),
     (const.CONF_ETA_CHARGE, const.DEFAULT_ETA_CHARGE, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
@@ -533,6 +532,13 @@ def _options_fields(defaults: dict, services=None) -> dict:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key)})] = vol.All(
             vol.Coerce(float), vol.Range(min=100.0, max=20000.0)
         )
+    # No default, so clearing the field drops the key; async_step_init stores "" (add-on off).
+    fields[
+        vol.Optional(
+            const.CONF_ADDON_URL,
+            description={"suggested_value": defaults.get(const.CONF_ADDON_URL, const.DEFAULT_ADDON_URL)},
+        )
+    ] = cv.string
     for key, domain in _CLEARABLE_ENTITY_PICKERS:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key) or None})] = (
             _ClearableEntitySelector(EntitySelectorConfig(domain=domain))
@@ -631,6 +637,7 @@ class X1SmartGridOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             user_input = _flatten_sections(user_input)
+            user_input[const.CONF_ADDON_URL] = (user_input.get(const.CONF_ADDON_URL) or "").strip()
             merged = {**self._config_entry.data, **self._config_entry.options}
             device_id = user_input.get(const.CONF_ANKER_DEVICE)
             if device_id and device_id != merged.get(const.CONF_ANKER_DEVICE):
