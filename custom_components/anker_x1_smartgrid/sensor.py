@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+from time import monotonic
 from typing import NamedTuple
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 
 from . import const, coordinator, daily_stats, usecost
 from .const import DOMAIN
+
+
+HOUSE_LOAD_WRITE_INTERVAL_S = 5
 
 
 class _Base(SensorEntity):
@@ -222,11 +227,14 @@ class X1BatteryNetTotalSensor(X1StatusSensor):
 
 
 class X1HouseLoadSensor(_Base):
-    """Live house load (W), event-driven off its source entities.
+    """Live house load (W) from its source entities, independent of the 60s
+    controller tick.
 
-    Template-sensor semantics: recomputes on every state-change of any
-    pv/meter/battery/inverter-loss entity, independent of the 60s controller
-    tick. Formula mirrors the controller's tick-time ``_compute_house_load_w``
+    Source state changes only update an instantaneous value; every
+    HOUSE_LOAD_WRITE_INTERVAL_S the state is written as the time-weighted mean
+    of the unclamped value over that interval (clamped to >= 0 after
+    averaging). Time with an unavailable source does not count towards the
+    mean. Formula mirrors the controller's tick-time ``_compute_house_load_w``
     (kept tick-synchronous for actuation/recording — this sensor is
     display-only and reads live HA state directly, never last_status):
     pv + meter (+ = import) + batt (+ = discharge, - = charge) -
@@ -235,7 +243,7 @@ class X1HouseLoadSensor(_Base):
     ``pv_entities`` accepts either a single legacy entity-id string or a list
     of entity ids (mirroring const.normalize_pv_power_entities) — every PV
     entity in the list is summed together and ALL of them are subscribed, so
-    a state change of any one alone triggers a recompute. pv sums to None
+    a state change of any one alone updates the instantaneous value. pv sums to None
     only when every PV entity is unavailable (matching
     coordinator.read_pv_power_w semantics); meter/batt unavailable ->
     native_value None (HA shows unknown). inverter_loss unavailable ->
@@ -253,30 +261,55 @@ class X1HouseLoadSensor(_Base):
         self._batt_entity = batt_entity
         self._loss_entity = loss_entity
         self._value: float | None = None
+        self._cur: float | None = None
+        self._cur_t = 0.0
+        self._acc_sum = 0.0
+        self._acc_s = 0.0
 
     @property
     def native_value(self):
         return self._value
 
-    def _recompute(self) -> None:
+    def _instant(self) -> float | None:
         pv = coordinator.read_pv_power_w(self.hass, {const.CONF_ENT_PV_POWER: self._pv_entities})
         meter = coordinator.read_float(self.hass, self._meter_entity)
         batt = coordinator.read_float(self.hass, self._batt_entity)
         if pv is None or meter is None or batt is None:
-            self._value = None
-            return
+            return None
         loss = coordinator.read_float(self.hass, self._loss_entity)
-        self._value = max(0.0, pv + meter + batt - (loss if loss is not None else 0.0))
+        return pv + meter + batt - (loss if loss is not None else 0.0)
+
+    def _fold(self, now: float) -> None:
+        if self._cur is not None:
+            dt = now - self._cur_t
+            self._acc_sum += self._cur * dt
+            self._acc_s += dt
+        self._cur_t = now
+
+    def _recompute(self) -> None:
+        self._fold(monotonic())
+        self._cur = self._instant()
+        self._value = None if self._cur is None else max(0.0, self._cur)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # Prime the value at startup so it's present before the first
-        # source-entity state change fires.
         self._recompute()
+        self._acc_sum = self._acc_s = 0.0
 
         @callback
         def _handle_source_change(event) -> None:
-            self._recompute()
+            self._fold(monotonic())
+            self._cur = self._instant()
+
+        @callback
+        def _write(now) -> None:
+            self._fold(monotonic())
+            if self._cur is None:
+                self._value = None
+            else:
+                mean = self._acc_sum / self._acc_s if self._acc_s > 0 else self._cur
+                self._value = max(0.0, mean)
+            self._acc_sum = self._acc_s = 0.0
             self.async_write_ha_state()
 
         self.async_on_remove(
@@ -285,6 +318,9 @@ class X1HouseLoadSensor(_Base):
                 [*self._pv_entities, self._meter_entity, self._batt_entity, self._loss_entity],
                 _handle_source_change,
             )
+        )
+        self.async_on_remove(
+            async_track_time_interval(self.hass, _write, timedelta(seconds=HOUSE_LOAD_WRITE_INTERVAL_S))
         )
 
 

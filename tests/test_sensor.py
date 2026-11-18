@@ -213,6 +213,7 @@ async def test_house_load_sensor_subscribes_on_added_to_hass(monkeypatch):
         return lambda: None  # unsub
 
     monkeypatch.setattr(sensor_mod, "async_track_state_change_event", _fake_track)
+    monkeypatch.setattr(sensor_mod, "async_track_time_interval", lambda *a: lambda: None)
 
     await s.async_added_to_hass()
 
@@ -221,15 +222,91 @@ async def test_house_load_sensor_subscribes_on_added_to_hass(monkeypatch):
     # Primed at add time -- no controller tick required.
     assert s.native_value == 1200.0 + 100.0 + (-500.0) - 30.0
 
-    # Firing the captured handler (the state-change callback) recomputes and
-    # writes state, mirroring a live HA state-changed event.
-    written = []
-    monkeypatch.setattr(s, "async_write_ha_state", lambda: written.append(True))
-    hass.set_state(_PV_ENT, "1800.0")
-    captured["action"](None)
 
-    assert s.native_value == 1800.0 + 100.0 + (-500.0) - 30.0
-    assert written == [True]
+async def _started(monkeypatch, **states):
+    """Added-to-hass sensor with a controllable clock; returns (s, hass, clock, src_cb, write_cb, written)."""
+    from custom_components.anker_x1_smartgrid import sensor as sensor_mod
+
+    hass = _StubHass()
+    s = _make_house_load_sensor(hass)
+    _seed_house_load_states(hass, **states)
+    clock = [1000.0]
+    cbs = {}
+    monkeypatch.setattr(sensor_mod, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        sensor_mod,
+        "async_track_state_change_event",
+        lambda h, ids, action: cbs.setdefault("src", action) and (lambda: None),
+    )
+    monkeypatch.setattr(
+        sensor_mod,
+        "async_track_time_interval",
+        lambda h, action, interval: cbs.setdefault("write", action) and (lambda: None),
+    )
+    written = []
+    monkeypatch.setattr(s, "async_write_ha_state", lambda: written.append(s.native_value))
+    await s.async_added_to_hass()
+    return s, hass, clock, cbs["src"], cbs["write"], written
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_writes_time_weighted_mean_once_per_interval(monkeypatch):
+    _, hass, clock, src, write, written = await _started(monkeypatch, pv="1000.0", meter="0.0", batt="0.0", loss="0.0")
+    clock[0] += 2.0
+    hass.set_state(_METER_ENT, "100.0")
+    src(None)
+    clock[0] += 3.0
+    hass.set_state(_METER_ENT, "300.0")
+    src(None)
+    assert written == []
+    clock[0] += 0.0
+    write(None)
+    assert written == [(1000 * 2 + 1100 * 3) / 5]
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_millisecond_mixed_value_barely_moves_mean(monkeypatch):
+    _, hass, clock, src, write, written = await _started(monkeypatch, pv="0.0", meter="1000.0", batt="0.0", loss="0.0")
+    clock[0] += 2.5
+    hass.set_state(_METER_ENT, "1100.0")
+    src(None)
+    clock[0] += 0.001
+    hass.set_state(_BATT_ENT, "-1000.0")  # mixed: new meter, stale battery
+    src(None)
+    hass.set_state(_BATT_ENT, "0.0")
+    src(None)
+    clock[0] += 2.499
+    write(None)
+    assert written[0] == pytest.approx(1050.0, abs=0.5)
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_unavailable_source_writes_none(monkeypatch):
+    _, hass, clock, src, write, written = await _started(monkeypatch)
+    clock[0] += 2.0
+    hass.set_state(_PV_ENT, "unavailable")
+    src(None)
+    clock[0] += 3.0
+    write(None)
+    assert written == [None]
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_clamp_applies_to_mean_not_samples(monkeypatch):
+    _, hass, clock, src, write, written = await _started(monkeypatch, pv="0.0", meter="-100.0", batt="0.0", loss="0.0")
+    clock[0] += 2.5
+    hass.set_state(_METER_ENT, "300.0")
+    src(None)
+    clock[0] += 2.5
+    write(None)
+    assert written == [100.0]  # per-sample clamp would give 150
+
+
+@pytest.mark.asyncio
+async def test_house_load_sensor_interval_without_valid_time_writes_current(monkeypatch):
+    *_, write, written = await _started(monkeypatch)
+    write(None)
+    assert written == [1200.0 + 100.0 - 500.0 - 30.0]
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +407,13 @@ async def test_house_load_sensor_subscribes_to_all_pv_entities_in_list(monkeypat
         captured["action"] = action
         return lambda: None  # unsub
 
+    monkeypatch.setattr(sensor_mod, "monotonic", lambda: 1000.0)
     monkeypatch.setattr(sensor_mod, "async_track_state_change_event", _fake_track)
+    monkeypatch.setattr(
+        sensor_mod,
+        "async_track_time_interval",
+        lambda h, action, interval: captured.update(write=action) or (lambda: None),
+    )
 
     await s.async_added_to_hass()
 
@@ -343,8 +426,11 @@ async def test_house_load_sensor_subscribes_to_all_pv_entities_in_list(monkeypat
 
     # A state change of only the SECOND pv entity alone triggers a recompute
     # that reflects the new sum.
+    clock = iter([1000.0, 1005.0])
+    monkeypatch.setattr(sensor_mod, "monotonic", lambda: next(clock))
     hass.set_state(_PV_ENT_2, "600.0")
     captured["action"](None)
+    captured["write"](None)
 
     assert s.native_value == 800.0 + 600.0 + 100.0 + (-500.0) - 30.0
     assert written == [True]
