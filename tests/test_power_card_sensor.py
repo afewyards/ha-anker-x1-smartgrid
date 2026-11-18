@@ -55,18 +55,18 @@ def _horizon(hours=39):
     ]
 
 
-def test_sensor_publishes_the_three_attributes_unrecorded():
-    card = {"built_at": NOW.isoformat(), "battery": {"soc": 50}, "days": [], "hours": []}
+def test_sensor_publishes_its_attributes_unrecorded():
+    card = {"built_at": NOW.isoformat(), "battery": {"soc": 50}, "live": {"pv": []}, "days": [], "hours": []}
     sensor = X1PowerCardSensor(_Stub(card), "entry")
     assert sensor.native_value == NOW.isoformat()
-    assert sensor.extra_state_attributes == {"battery": {"soc": 50}, "days": [], "hours": []}
-    assert X1PowerCardSensor._unrecorded_attributes == frozenset({"battery", "days", "hours"})
+    assert sensor.extra_state_attributes == {"battery": {"soc": 50}, "live": {"pv": []}, "days": [], "hours": []}
+    assert X1PowerCardSensor._unrecorded_attributes == frozenset({"battery", "live", "days", "hours"})
 
 
 def test_sensor_without_a_card_publishes_nothing():
     sensor = X1PowerCardSensor(_Stub(None), "entry")
     assert sensor.native_value is None
-    assert sensor.extra_state_attributes == {"battery": None, "days": None, "hours": None}
+    assert sensor.extra_state_attributes == {"battery": None, "live": None, "days": None, "hours": None}
 
 
 def _rebuild(horizon=None):
@@ -278,7 +278,13 @@ def test_payload_fits_the_16_kb_attribute_budget():
         "margin_30d_eur": 12.345,
         "solar_gain_30d_eur": 1.234,
     }
-    card = {"built_at": NOW.isoformat(), "battery": battery, "days": [day] * 3, "hours": [hour] * 72}
+    live = {
+        "pv": ["sensor.goodwe_inverter_solar_power", "sensor.envoy_current_power_production"],
+        "meter": "sensor.anker_solix_smart_meter_power",
+        "price": 0.2345,
+        "next": {"price": 0.2456, "at": "2026-11-12T00:15:00+01:00"},
+    }
+    card = {"built_at": NOW.isoformat(), "battery": battery, "live": live, "days": [day] * 3, "hours": [hour] * 72}
     sensor = X1PowerCardSensor(_Stub(card), "entry")
     # Home Assistant serialises attributes compactly (orjson).
     assert len(json.dumps(sensor.extra_state_attributes, separators=(",", ":"))) < 16_000
@@ -403,3 +409,42 @@ async def test_reasons_get_the_snapped_backup_reserve_on_a_20_kwh_pack(monkeypat
     snapped = ctrl.cfg.kwh_to_pct(reserve_wall_kwh(ctrl.cfg))
     assert snapped > 25.0
     assert seen == [pytest.approx(snapped)]
+
+
+def _slots(n=4, start=NOW, minutes=15):
+    from custom_components.anker_x1_smartgrid.models import PriceSlot
+
+    return [PriceSlot(start + timedelta(minutes=minutes * i), 0.10 + 0.01 * i, float(minutes)) for i in range(n)]
+
+
+async def _live(slots, *, now=NOW, overrides=None, inputs=True):
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller(data_overrides=overrides)
+    ctrl.power_card = stale_card()
+    ctrl._card_slots = slots
+    await ctrl._publish_power_card(now, card_inputs(50.0) if inputs else None, "hold", False)
+    return ctrl.power_card["live"]
+
+
+async def test_live_names_the_configured_pv_and_meter_sensors():
+    live = await _live(_slots(), overrides={"ent_pv_power": ["sensor.a", "sensor.b"]})
+    assert live["pv"] == ["sensor.a", "sensor.b"]
+    assert live["meter"] == "sensor.meter_power"
+
+
+async def test_live_price_is_the_current_slot_and_the_next():
+    live = await _live(_slots(), now=NOW + timedelta(minutes=20))
+    assert live["price"] == 0.11
+    assert live["next"] == {"price": 0.12, "at": (NOW + timedelta(minutes=30)).isoformat()}
+
+
+async def test_live_next_is_none_at_the_end_of_known_prices():
+    live = await _live(_slots(2), now=NOW + timedelta(minutes=20))
+    assert live["price"] == 0.11 and live["next"] is None
+
+
+async def test_live_price_is_none_without_prices():
+    live = await _live([], inputs=False)
+    assert live["price"] is None and live["next"] is None
+    assert live["pv"] == ["sensor.pv_power"]

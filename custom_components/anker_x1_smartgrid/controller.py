@@ -392,6 +392,7 @@ class Controller:
         self._kept_by_slot: dict[datetime, float] | None = None
         self._kept_src_by_slot: dict[datetime, tuple[str, datetime | None]] | None = None
         self._card_rows_end: str | None = None
+        self._card_slots: list = []
         self._card_reasons: dict[str, dict] = {}
         # The ledger total the card's balance counts from: set by restore(),
         # or on a fresh install by the first card publish.
@@ -1698,7 +1699,7 @@ class Controller:
                     await self._persist()
 
             # Read all forecast/schedule data needed for shadow compute and display horizon.
-            slots = coordinator.read_price_slots(self._hass, self._data)
+            slots = self._card_slots = coordinator.read_price_slots(self._hass, self._data)
             _slot_minutes = self._resolve_slot_minutes(slots)
             pv_remaining = coordinator.read_pv_remaining_kwh(self._hass, self._data)
             tomorrow_total = coordinator.read_pv_tomorrow_kwh(self._hass, self._data)
@@ -1850,7 +1851,7 @@ class Controller:
             return status
 
         inputs = self._read_plant_inputs()
-        slots = coordinator.read_price_slots(self._hass, self._data)
+        slots = self._card_slots = coordinator.read_price_slots(self._hass, self._data)
         sunset = coordinator.read_sunset(self._hass, self._data)
         pv_remaining = coordinator.read_pv_remaining_kwh(self._hass, self._data)
         tomorrow_total = coordinator.read_pv_tomorrow_kwh(self._hass, self._data)
@@ -2483,12 +2484,27 @@ class Controller:
                 "solar_gain_30d_eur": (self.last_status.get("battery_solar_gain_30d") or (None, None))[0],
                 "balance_eur": round(self.balance_base_eur - self.total_net_eur, 2),
             }
+            card["live"] = self._live_line(now)
             self._card_failed = False
         except Exception:
             if not self._card_failed:
                 _LOGGER.warning("power card: build failed", exc_info=True)
             self._card_failed = True
             self.power_card = None
+
+    def _live_line(self, now) -> dict:
+        slots = self._card_slots
+        step = resolution.resolve_slot_minutes(slots, self.cfg.slot_resolution) if slots else 60
+        price = resolution.price_at(slots, now, step)
+        current = next((s for s in slots if s.start <= now < s.start + timedelta(minutes=s.duration_min or step)), None)
+        end = current.start + timedelta(minutes=current.duration_min or step) if current else None
+        upcoming = resolution.price_at(slots, end, step) if end else None
+        return {
+            "pv": const.resolve_pv_power_entities(self._data),
+            "meter": self._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]),
+            "price": None if price is None else round(price, 4),
+            "next": None if upcoming is None else {"price": round(upcoming, 4), "at": end.isoformat()},
+        }
 
     async def _snapshot_plan(self, now, horizon) -> None:
         """Save the day's first plan once, and on every call the reasons of the day's hours not yet started."""
