@@ -285,6 +285,7 @@ def backup_reserve_hold(
     now: datetime,
     cfg: Config,
     slot_minutes: int = 60,
+    walled: bool = True,
 ) -> ExportState | None:
     """Hold state that keeps the pack at the backup reserve; ``None`` = no opinion.
 
@@ -292,11 +293,13 @@ def backup_reserve_hold(
     once SoC is a full point above it and ``export_dwell_min`` has run, so a
     pack hovering at the reserve cannot flap the work mode. PV covering the
     house is no opinion, after the same dwell: the pack should charge from it.
+    ``walled`` False (the plan dips under the reserve in this slot) is no
+    opinion the same way.
     """
     if cfg.backup_reserve_soc <= 0.0:
         return None
     dwell = timedelta(minutes=_effective_dwell_min(cfg.export_dwell_min, slot_minutes, label="export_dwell_min"))
-    if pv_surplus:
+    if pv_surplus or not walled:
         return prev if prev.engaged and now - prev.state_since < dwell else None
     reserve, release = backup_reserve_band(cfg)
     if soc <= reserve:

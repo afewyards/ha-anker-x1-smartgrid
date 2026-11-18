@@ -29,7 +29,7 @@ import pytest
 
 from custom_components.anker_x1_smartgrid import const
 from custom_components.anker_x1_smartgrid import controller as ctrl_mod
-from custom_components.anker_x1_smartgrid import executor
+from custom_components.anker_x1_smartgrid import executor, scheduler
 from custom_components.anker_x1_smartgrid.controller import Controller
 from custom_components.anker_x1_smartgrid.models import (
     Config,
@@ -588,6 +588,16 @@ class TestBackupReserve:
         _seed_price_forecast(hass, at, prices)
         await ctrl.tick()
 
+    @staticmethod
+    def _spy_walled(monkeypatch) -> list:
+        """Record, per tick, whether the plan walled the slot the reserve hold was asked about."""
+        seen: list = []
+        real = scheduler.backup_reserve_hold
+        monkeypatch.setattr(
+            scheduler, "backup_reserve_hold", lambda *a, **kw: seen.append(kw["walled"]) or real(*a, **kw)
+        )
+        return seen
+
     @pytest.mark.e2e
     @pytest.mark.asyncio
     async def test_holds_until_the_cheap_slot_refills_then_releases_once(self, monkeypatch):
@@ -597,6 +607,7 @@ class TestBackupReserve:
         )
         ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
         ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
+        walled = self._spy_walled(monkeypatch)
         prices = [0.30, 0.30, 0.30, 0.02] + [0.30] * 8
 
         def window(h):
@@ -606,6 +617,7 @@ class TestBackupReserve:
             await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=h), "12.0", window(h))
             assert ctrl.plan.state is not ControllerState.FORCING
         assert [c[0] for c in act.calls] == ["engage_hold"] * 3
+        assert walled == [True] * 3  # the plan stops the pack where it starts, under the reserve
 
         at = self.BASE + timedelta(hours=3)
         await self._tick(monkeypatch, ctrl, hass, at, "12.0", window(3))
@@ -617,12 +629,46 @@ class TestBackupReserve:
         await self._tick(monkeypatch, ctrl, hass, at, "30.5", window(4))
         assert [c[0] for c in act.calls].count("release_to_self") == 0
         assert ctrl.hold_state.engaged
+        assert walled[-1] is True
         await self._tick(monkeypatch, ctrl, hass, at + timedelta(minutes=20), "32.0", window(4))
         names = [c[0] for c in act.calls]
         assert names.count("release_to_self") == 1
         assert not ctrl.hold_state.engaged
         collapsed = [n for i, n in enumerate(names) if i == 0 or n != names[i - 1]]
         assert collapsed == ["engage_hold", "engage_and_charge", "engage_hold", "release_to_self"]
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_planned_dip_runs_under_the_reserve_without_a_hold_then_refills(self, monkeypatch):
+        """Peak now, cheap two hours later: the plan spends the reserve and buys it back in the trough."""
+        hass = StubHass()
+        ctrl, act = _make_controller(
+            hass, cfg_overrides={"backup_reserve_soc": 30.0, "enable_export": False, "export_dwell_min": 15}
+        )
+        ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+        ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
+        walled = self._spy_walled(monkeypatch)
+        prices = [0.40, 0.40, 0.02, 0.02] + [0.30] * 8
+
+        def window(h):
+            return prices[h:] + [0.30] * h
+
+        for h, soc in ((0, "30.0"), (1, "25.0")):
+            await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=h), soc, window(h))
+            assert ctrl.plan.state is ControllerState.PASSIVE
+            assert not ctrl.hold_state.engaged
+        assert act.calls == []
+        assert walled == [False, False]
+
+        await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=2), "20.0", window(2))
+        assert ctrl.plan.state is ControllerState.FORCING
+        assert [c[0] for c in act.calls] == ["engage_and_charge"]
+
+        # Refilled into the reserve's dead band, past the trough: the plan stops there again.
+        await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=4), "29.0", window(4))
+        assert ctrl.hold_state.engaged
+        assert walled[-1] is True
+        assert [c[0] for c in act.calls] == ["engage_and_charge", "engage_hold"]
 
     @pytest.mark.e2e
     @pytest.mark.asyncio

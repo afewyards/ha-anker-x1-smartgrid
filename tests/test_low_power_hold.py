@@ -947,9 +947,9 @@ def test_hold_weighs_the_kept_kwh_at_its_terminal_credit(monkeypatch):
 # ── backup reserve hold ─────────────────────────────────────────────────────
 
 
-def _reserve_hold(prev, soc, *, surplus=False, now=T, cap=10.0, reserve=30.0):
+def _reserve_hold(prev, soc, *, surplus=False, now=T, cap=10.0, reserve=30.0, walled=True):
     cfg = Config(capacity_kwh=cap, backup_reserve_soc=reserve, export_dwell_min=15)
-    return scheduler.backup_reserve_hold(prev, soc=soc, pv_surplus=surplus, now=now, cfg=cfg)
+    return scheduler.backup_reserve_hold(prev, soc=soc, pv_surplus=surplus, now=now, cfg=cfg, walled=walled)
 
 
 def test_backup_hold_table():
@@ -970,6 +970,14 @@ def test_backup_hold_table():
     assert _reserve_hold(idle, 20.0, surplus=True) is None
 
 
+def test_backup_hold_has_no_opinion_where_the_plan_dips():
+    idle = ExportState(engaged=False, state_since=T - timedelta(hours=1))
+    on = ExportState(engaged=True, state_since=T - timedelta(minutes=5))
+    assert _reserve_hold(idle, 20.0, walled=False) is None
+    assert _reserve_hold(on, 20.0, walled=False) == on  # the release still waits out the dwell
+    assert _reserve_hold(on, 20.0, walled=False, now=T + timedelta(minutes=11)) is None
+
+
 def test_backup_hold_uses_the_snapped_reserve():
     # 25 % of 20.48 kWh snaps up to ~25.15 %: the planner parks there, so the hold must too.
     idle = ExportState(engaged=False, state_since=T - timedelta(hours=1))
@@ -987,14 +995,14 @@ def _reserve_ctrl(*, load=250.0, held=frozenset(), **cfg_over):
     return ctrl, act
 
 
-async def _run_at(ctrl, soc, *, new_state=ControllerState.PASSIVE, export=None, now=T, export_price=None):
+async def _run_at(ctrl, soc, *, new_state=ControllerState.PASSIVE, export=None, now=T, export_price=None, walled=None):
     return await executor.run_forcing_and_export(
         ctrl,
         now,
         PlanState(new_state, now, ()),
         PlantInputs(soc=soc, meter_w=250.0, now=now),
         _SLOTS,
-        {"water_value": 0.25, "held_slots": ctrl._held, "export_request": export or {}},
+        {"water_value": 0.25, "held_slots": ctrl._held, "export_request": export or {}, "walled_slots": walled},
         [],
         60,
         export_price,
@@ -1007,6 +1015,36 @@ async def test_executor_holds_at_reserve():
     await _run_at(ctrl, 29.0)
     assert act.calls == [("engage_hold",)]
     assert ctrl.hold_state.engaged
+
+
+@pytest.mark.parametrize(("walled", "holds"), [(None, True), (frozenset({T}), True), (frozenset(), False)])
+async def test_executor_reserve_hold_follows_the_plan(walled, holds):
+    """No plan (None) holds as before; a walled slot holds; a slot the plan dips through does not."""
+    ctrl, act = _reserve_ctrl()
+    ctrl.cfg = replace(ctrl.cfg, backup_reserve_soc=40.0)
+    await _run_at(ctrl, 35.0, walled=walled)
+    assert act.calls == ([("engage_hold",)] if holds else [])
+    assert ctrl.hold_state.engaged is holds
+
+
+async def test_executor_planned_dip_releases_the_reserve_hold_once_after_its_dwell():
+    ctrl, act = _reserve_ctrl()
+    ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(minutes=5))
+    await _run_at(ctrl, 29.0, walled=frozenset())
+    assert act.calls == [("engage_hold",)]
+    later = T + timedelta(minutes=11)
+    ctrl._hold_deficit_w.append((later, 250.0))
+    await _run_at(ctrl, 29.0, walled=frozenset(), now=later)
+    assert act.calls[1:] == [("release_to_self",)]
+    assert not ctrl.hold_state.engaged
+
+
+async def test_executor_forced_refill_ending_in_a_planned_dip_releases():
+    ctrl, act = _reserve_ctrl()
+    ctrl.plan = PlanState(ControllerState.FORCING, T, ())
+    await _run_at(ctrl, 29.5, walled=frozenset())
+    assert [c[0] for c in act.calls] == ["release_to_self"]
+    assert not ctrl.hold_state.engaged
 
 
 async def test_executor_no_hold_with_pv_surplus():
