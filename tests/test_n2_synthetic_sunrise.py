@@ -87,7 +87,7 @@ def test_n2_missing_sun_entity_reserve_covers_overnight():
     _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = _overnight_result(cfg)
 
     # Compute the per-hour ride-out reserve from the returned intervals_reserve.
-    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
+    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg, is_cheap={})
 
     floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 5% × 10 kWh = 0.5 kWh
     reserve_at_22 = rsv.get(NOW, floor_kwh)
@@ -113,7 +113,7 @@ def test_n2_reserve_substantially_larger_than_tonight_only():
     slots = [PriceSlot(NOW + timedelta(hours=i), 0.15) for i in range(2)]
 
     _plan, _setpoint, _deadline, _horizon, _hm, intervals_reserve = _overnight_result(cfg)
-    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
+    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg, is_cheap={})
 
     floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh
     reserve_at_22 = rsv.get(NOW, floor_kwh)

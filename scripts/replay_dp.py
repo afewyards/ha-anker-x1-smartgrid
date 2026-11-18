@@ -278,11 +278,7 @@ def replay(
     )
     est_slot_list = [PriceSlot(start=h, price=p) for h, p in est_price_by_hour.items() if horizon_edge <= h < pickup]
 
-    is_cheap = (
-        decision._build_is_cheap_by_hour(real_slots + est_slot_list, cfg, slot_minutes)
-        if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH
-        else None
-    )
+    is_cheap = decision._build_is_cheap_by_hour(real_slots + est_slot_list, cfg, slot_minutes)
 
     reserve_by_hour = decision._build_reserve_by_hour(
         now,
@@ -293,8 +289,6 @@ def replay(
         slot_minutes=slot_minutes,
         eta_curve=eta_curve,
     )
-    # _apply_price_prior is gated OFF under the trough anchor (decision.py:1059);
-    # options-2026-08-01.json sets reserve_anchor="trough" so it never fires live either.
 
     floor_kwh = cfg.floor_kwh
     slot_now_h, _, win_len = decision._dp_window(now, horizon_edge, slot_minutes)
@@ -470,7 +464,7 @@ def main() -> None:
     print(
         f"cfg: capacity_kwh={cfg.capacity_kwh} soc_floor={cfg.soc_floor}% (floor_kwh={cfg.floor_kwh:.3f}) "
         f"firmware_floor_kwh={cfg.firmware_floor_kwh:.3f} (FIRMWARE_SOC_FLOOR={const.FIRMWARE_SOC_FLOOR}%) "
-        f"soc_target={cfg.soc_target}% cycle_cost={cfg.cycle_cost_eur_per_kwh} reserve_anchor={cfg.reserve_anchor}"
+        f"soc_target={cfg.soc_target}% cycle_cost={cfg.cycle_cost_eur_per_kwh}"
     )
     _segs = r["terminal_segments"] or []
     _segs_total_dc = sum(s[0] for s in _segs)

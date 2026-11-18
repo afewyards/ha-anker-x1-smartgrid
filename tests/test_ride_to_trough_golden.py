@@ -15,7 +15,6 @@ def _cfg():
         eta_charge=0.92,
         round_trip_eff=0.85,
         reserve_cheap_band=0.20,
-        reserve_anchor="trough",
     )
 
 
@@ -53,21 +52,3 @@ def test_overnight_reserve_not_pinned_and_monotone():
     assert all(a + 1e-9 >= b for a, b in itertools.pairwise(vals)), vals
     # Collapses toward the floor at the cheap 07:00-08:00 hours.
     assert rsv[NOW + timedelta(hours=15)] < rsv[NOW]
-
-
-def test_legacy_anchor_still_pins_high():
-    slots, ivs = _fixture()
-    legacy = ctrl._build_reserve_by_hour(
-        NOW,
-        slots,
-        ivs,
-        _cfg().__class__(
-            capacity_kwh=10.0, soc_floor=5.0, eta_charge=0.92, round_trip_eff=0.85, reserve_anchor="legacy"
-        ),
-    )
-    assert (
-        legacy[NOW]
-        > ctrl._build_reserve_by_hour(NOW, slots, ivs, _cfg(), is_cheap=ctrl._build_is_cheap_by_hour(slots, _cfg()))[
-            NOW
-        ]
-    )

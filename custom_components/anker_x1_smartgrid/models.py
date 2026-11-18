@@ -81,8 +81,6 @@ class Config:
     # Persistence price prior options (Plan B)
     price_history_days: int = const.DEFAULT_PRICE_HISTORY_DAYS
     price_blend_weight_today: float = const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY
-    anticipation_confidence_haircut: float = const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT
-    anticipation_margin_eur_per_kwh: float = const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH
     # SoC drift-hedge tunables (default off: fraction=0.0 → byte-identical / parity-safe)
     soc_hedge_fraction: float = const.DEFAULT_SOC_HEDGE_FRACTION
     soc_drift_deadband_kwh: float = const.DEFAULT_SOC_DRIFT_DEADBAND_KWH
@@ -96,8 +94,7 @@ class Config:
     occ_persistence_h: int = const.PERSONS_PERSISTENCE_H
     # Current-hour blend (live-only, default off).
     current_hour_blend: bool = const.DEFAULT_CURRENT_HOUR_BLEND
-    # Ride-to-trough reserve (rev-2): anchor selector + cheap-relief band.
-    reserve_anchor: str = const.DEFAULT_RESERVE_ANCHOR
+    # Ride-to-trough reserve (rev-2): cheap-relief band.
     reserve_cheap_band: float = const.DEFAULT_RESERVE_CHEAP_BAND
     # Price-slot resolution override; "auto" -> detect per refresh from slot spacing.
     slot_resolution: str = const.DEFAULT_SLOT_RESOLUTION

@@ -520,21 +520,13 @@ async def run_forcing_and_export(
             # _ivs_reserve is the TWO-DAY reserve interval list from compute_decision
             # (6th return element).  Trough-anchored: ride_out_reserve_kwh walks
             # forward to the deepest signed-trajectory point, matching the DP floor.
-            # rev-2: under the trough anchor, hour-align now + thread the SAME
-            # cheap-relief map as the plan so the live export floor matches the
-            # planned floor at this hour. Legacy anchor keeps the raw `now` and
-            # no map → byte-identical rollback behavior (unchanged from pre-rev-2).
-            if controller.cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH:
-                _cur_h_reserve = resolution.floor_to_slot(now, _slot_minutes)
-                _reserve_is_cheap = _build_is_cheap_by_hour(slots, controller.cfg, _slot_minutes)
-            else:
-                _cur_h_reserve = now
-                _reserve_is_cheap = None
+            # Slot-align now and thread the SAME cheap-relief map as the plan so the
+            # live export floor matches the planned floor at this slot.
             _reserve = energy.ride_out_reserve_kwh(
-                _cur_h_reserve,
+                resolution.floor_to_slot(now, _slot_minutes),
                 _ivs_reserve,
                 controller.cfg,
-                is_cheap=_reserve_is_cheap,
+                is_cheap=_build_is_cheap_by_hour(slots, controller.cfg, _slot_minutes),
                 slot_minutes=_slot_minutes,
                 eta_curve=controller._planner_curve(),
             )

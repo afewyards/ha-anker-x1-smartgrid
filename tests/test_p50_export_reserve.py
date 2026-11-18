@@ -111,8 +111,8 @@ def test_p50_reserve_kwh_strictly_lower_than_p80():
     ivs_p50 = build_intervals(curve, predictor, 400.0, cfg, quantile=0.5)
     ivs_p80 = build_intervals(curve, predictor, 400.0, cfg, quantile=0.8)
 
-    rsv_p50 = energy.ride_out_reserve_kwh(NOW, ivs_p50, cfg)
-    rsv_p80 = energy.ride_out_reserve_kwh(NOW, ivs_p80, cfg)
+    rsv_p50 = energy.ride_out_reserve_kwh(NOW, ivs_p50, cfg, is_cheap={})
+    rsv_p80 = energy.ride_out_reserve_kwh(NOW, ivs_p80, cfg, is_cheap={})
 
     assert rsv_p50 < rsv_p80, (
         f"P50 reserve ({rsv_p50:.3f} kWh) must be strictly lower than P80 reserve ({rsv_p80:.3f} kWh)"

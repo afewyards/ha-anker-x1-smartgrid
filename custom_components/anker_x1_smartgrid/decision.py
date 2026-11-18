@@ -9,7 +9,7 @@ export_filter) must be importable outside HA — in the addon container, in
 backtests, and in unit tests without the HA test harness. The one
 exception is ``pricing_store``, which itself imports
 ``homeassistant.helpers.storage`` — a pre-existing transitive dependency
-of ``_apply_price_prior``'s price-prior lookup, unchanged by this move.
+of ``build_estimated_slots``, unchanged by this move.
 
 ``controller.py`` re-exports every name below (``from .decision import
 ...``) so existing call sites and test imports keep working unchanged.
@@ -48,7 +48,7 @@ _DP_EPSILON_SCHEDULE_KWH = 0.01
 
 # NOTE: the regret.py oracle has NO charge band — optimize-vs-oracle parity runs
 # with chargeable=None — so this look-back is intentionally controller-only and is
-# NOT mirrored into regret.py/pricing_store.py (unlike the export peak band).
+# NOT mirrored into regret.py (unlike the export peak band).
 def _trough_by_hour(
     slots: list[PriceSlot],
     now_h: datetime,
@@ -717,7 +717,7 @@ def _build_reserve_by_hour(
     intervals_reserve: list,
     cfg,
     *,
-    is_cheap: dict[datetime, bool] | None = None,
+    is_cheap: dict[datetime, bool],
     slot_minutes: int = 60,
     eta_curve: EfficiencyCurve | None = None,
 ) -> dict[datetime, float]:
@@ -854,63 +854,6 @@ def _build_reserve_by_hour(
         )
 
     return reserve_by_hour
-
-
-def _apply_price_prior(
-    reserve_by_hour: dict[datetime, float],
-    estimated_tomorrow: list[float] | None,
-    slots: list[PriceSlot],
-    now_h: datetime,
-    real_horizon_end: datetime,
-    intervals_reserve: list,
-    cfg,
-) -> None:
-    """Plan B (B3+B4): upside-only reserve-raise from the persistence price prior.
-
-    Builds a SEPARATE estimated-slot list bounded to [real_horizon_end, tomorrow
-    pickup) and, when the estimate beats tonight's cheapest export hours, RAISES
-    `reserve_by_hour` in place for the pre-pickup hours.  Never lowers a reserve;
-    never touches `slots`, `intervals_reserve`, or the DP price arrays.  A no-op when
-    there is no estimate / no pickup / real prices already cover tonight.
-    """
-    if estimated_tomorrow is None:
-        return
-    pickup = scheduler.find_next_solar_pickup(real_horizon_end, intervals_reserve)
-    est_slots = pricing_store.build_estimated_slots(estimated_tomorrow, real_horizon_end, pickup)
-    if not est_slots or pickup is None:  # narrows pickup to datetime below
-        return
-    # Resample-before-consume: `slots` may be a mixed 60+15-min payload during
-    # rollout (near-term fine, far-term coarse — detect_slot_minutes is MIN-based
-    # so it correctly picks the finest grid present).  compute_anticipation_held_extra
-    # applies a SINGLE dt_h_real scalar to every real_slots entry it walks, so a
-    # scalar derived from the finest grid is only valid once every entry genuinely
-    # spans that grid.  Actually upsample the real slots onto `_sm` (forward-filling
-    # coarse entries, mirroring the DP-side resample_price_map usage) before passing
-    # them on — otherwise still-60-min slots get counted at a quarter of their true
-    # DC.  `horizon_end=real_horizon_end` also expands the chronologically LAST
-    # coarse hour to its true span (real_horizon_end - last.start) instead of the
-    # resampler's no-successor default of one fine sub-slot, so the boundary hour
-    # of the horizon (always the last slot in `slots`, per `real_horizon_end`'s own
-    # `max(s.start)` derivation) counts its full DC too.  Identity at uniform
-    # resolution (all-60 or all-15) -> byte-identical.
-    _sm = resolution.detect_slot_minutes(slots)
-    _resampled = resolution.resample_price_map(slots, _sm, horizon_end=real_horizon_end)
-    _real_slots = [PriceSlot(start, price) for start, price in sorted(_resampled.items())]
-    held = pricing_store.compute_anticipation_held_extra(
-        estimated_slots=est_slots,
-        real_slots=_real_slots,
-        now_h=now_h,
-        real_horizon_end=real_horizon_end,
-        tomorrow_solar_pickup=pickup,
-        base_reserve_by_hour=reserve_by_hour,
-        cfg=cfg,
-        slot_minutes=_sm,
-    )
-    if held <= 0.0:
-        return
-    for h in list(reserve_by_hour):
-        if h < pickup:
-            reserve_by_hour[h] += held
 
 
 def compute_decision(
@@ -1129,11 +1072,7 @@ def compute_decision(
     # forward-min window sees the estimated tomorrow trough -- estimated slot
     # OBJECTS still never reach the DP; only their hour/price pair feeds this
     # dict[datetime, bool] (test_dp_never_sees_estimated_slots stays green).
-    _is_cheap = (
-        _build_is_cheap_by_hour(slots + _est_slot_list, cfg, slot_minutes)
-        if cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH
-        else None
-    )
+    _is_cheap = _build_is_cheap_by_hour(slots + _est_slot_list, cfg, slot_minutes)
     _reserve_by_hour = _build_reserve_by_hour(
         inputs.now,
         slots,
@@ -1143,25 +1082,6 @@ def compute_decision(
         slot_minutes=slot_minutes,
         eta_curve=eta_curve,
     )
-    # Plan B: upside-only reserve-raise from the persistence price prior.  Mutates
-    # only _reserve_by_hour (the DP export floor + the reserve_soc display line);
-    # estimated prices live in a separate list and never reach `slots`/window_price/
-    # _peak.  estimated_tomorrow is non-None ONLY on the live tick (shadow/recompute
-    # pass None → byte-identical, parity preserved).  horizon_edge is the real-price
-    # horizon end (water-value path); legacy path is left untouched.
-    # Price-prior "Plan B" additive raise is redundant under the trough anchor
-    # (the walk already holds through expensive stretches until real relief) and is
-    # what completed the 100% pin — GATE it off; legacy anchor keeps it for rollback.
-    if cfg.reserve_anchor != const.RESERVE_ANCHOR_TROUGH:
-        _apply_price_prior(
-            _reserve_by_hour,
-            estimated_tomorrow,
-            slots,
-            now_h,
-            horizon_edge,
-            intervals_reserve,
-            cfg,
-        )
     # Window-aligned per-SLOT reserve floor (DC kWh) for the DP export bound.
     #
     # BC1 fix: _reserve_by_hour is HOUR-keyed (built by _build_reserve_by_hour

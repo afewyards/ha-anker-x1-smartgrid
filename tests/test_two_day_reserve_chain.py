@@ -53,7 +53,7 @@ def test_ride_out_reserve_integrates_full_overnight_not_floor():
     pickup = scheduler.find_next_solar_pickup(SUNSET + timedelta(hours=1), suffix)
     assert pickup is not None and pickup > SUNSET, "tomorrow-morning PV pickup must exist"
     # ride_out walks [SUNSET, trough] debit-only; the dark night dominates the trough.
-    rsv = energy.ride_out_reserve_kwh(SUNSET, suffix, cfg)
+    rsv = energy.ride_out_reserve_kwh(SUNSET, suffix, cfg, is_cheap={})
     dark_h = (SUNRISE - SUNSET).total_seconds() / 3600.0  # 8 h
     assert rsv >= dark_h * 0.4 - 1e-6  # >= raw AC night load (ride_out divides by eta_d -> larger)
     assert rsv > floor_kwh + 1.0  # NOT floor-collapsed

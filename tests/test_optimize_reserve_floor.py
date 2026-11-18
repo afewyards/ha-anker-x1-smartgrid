@@ -106,7 +106,7 @@ def _ride_out(cfg: Config) -> float:
 
     now = datetime(2026, 11, 17, 18, tzinfo=UTC)
     ivs = [ForecastInterval(now + timedelta(hours=i), pv_w=0.0, load_w=300.0, dt_h=1.0) for i in range(6)]
-    return energy.ride_out_reserve_kwh(now, ivs, cfg)
+    return energy.ride_out_reserve_kwh(now, ivs, cfg, is_cheap={})
 
 
 def test_ride_out_reserve_sits_on_backup_reserve():

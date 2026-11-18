@@ -1046,16 +1046,10 @@ class TestExecutorReserveAnchoredToSolarPickup:
         )
 
     @pytest.mark.asyncio
-    async def test_executor_hour_align_and_is_cheap_gated_to_trough_anchor(self, monkeypatch):
-        """Hour-alignment + is_cheap threading apply ONLY under reserve_anchor=trough.
-
-        Pre-rev-2 the executor passed the raw (possibly mid-hour) `now` straight
-        through, so the walk's ``if iv.start < now: continue`` skipped the current
-        hour's interval on every non-on-the-hour tick. Unconditionally hour-aligning
-        `now` would change that skip behavior for the legacy anchor too, breaking its
-        byte-identical rollback guarantee. So a mid-hour tick must show: trough anchor
-        truncates `now` to the hour and threads is_cheap; legacy anchor keeps the raw
-        mid-hour `now` and passes is_cheap=None (unchanged from before rev-2).
+    async def test_executor_hour_aligns_mid_hour_now_and_threads_is_cheap(self, monkeypatch):
+        """A mid-hour tick truncates `now` to the hour before the ride-out walk, so
+        its ``if iv.start < now: continue`` does not skip the current hour's
+        interval, and threads the plan's is_cheap map.
         """
         mid_hour_now = BASE + timedelta(minutes=37)
         cur_h = mid_hour_now.replace(minute=0, second=0, microsecond=0)
@@ -1065,42 +1059,30 @@ class TestExecutorReserveAnchoredToSolarPickup:
         assert cur_h == BASE
         monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: mid_hour_now)
         _real_ride_out = ctrl_mod.energy.ride_out_reserve_kwh
+        calls: dict = {}
 
-        cases = (
-            # (reserve_anchor, expected now_arg passed to ride_out_reserve_kwh, is_cheap must be None)
-            ("trough", cur_h, False),
-            ("legacy", mid_hour_now, True),
+        def _spy_ride_out(now, intervals, cfg, **kw):
+            calls["now_arg"] = now
+            calls["is_cheap_kw"] = kw.get("is_cheap")
+            return _real_ride_out(now, intervals, cfg, **kw)
+
+        monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", _spy_ride_out)
+
+        hass = _StubHass()
+        ctrl, act, _ = _make_controller(hass)
+        _seed_passive_inputs(hass, soc="80.0", export_price="0.30")
+        monkeypatch.setattr(
+            ctrl_mod,
+            "compute_decision",
+            _patched_compute_decision(export_request={cur_h: 3000.0}),
         )
-        for anchor, expected_now, expect_is_cheap_none in cases:
-            calls: dict = {}
+        # Already engaged so dwell does not gate the tick.
+        ctrl.export_state = ExportState(engaged=True, state_since=mid_hour_now - timedelta(hours=1))
 
-            def _spy_ride_out(now, intervals, cfg, **kw):
-                calls["now_arg"] = now
-                calls["is_cheap_kw"] = kw.get("is_cheap")
-                return _real_ride_out(now, intervals, cfg, **kw)
+        await ctrl.tick()
 
-            monkeypatch.setattr(ctrl_mod.energy, "ride_out_reserve_kwh", _spy_ride_out)
-
-            hass = _StubHass()
-            ctrl, act, _ = _make_controller(hass, cfg_overrides={"reserve_anchor": anchor})
-            _seed_passive_inputs(hass, soc="80.0", export_price="0.30")
-            monkeypatch.setattr(
-                ctrl_mod,
-                "compute_decision",
-                _patched_compute_decision(export_request={cur_h: 3000.0}),
-            )
-            # Already engaged so dwell does not gate the tick.
-            ctrl.export_state = ExportState(engaged=True, state_since=mid_hour_now - timedelta(hours=1))
-
-            await ctrl.tick()
-
-            assert calls["now_arg"] == expected_now, (
-                f"{anchor} anchor: now_arg was {calls['now_arg']!r}, expected {expected_now!r}"
-            )
-            if expect_is_cheap_none:
-                assert calls["is_cheap_kw"] is None, f"{anchor} anchor must NOT thread is_cheap"
-            else:
-                assert calls["is_cheap_kw"] is not None, f"{anchor} anchor must thread is_cheap"
+        assert calls["now_arg"] == cur_h
+        assert calls["is_cheap_kw"] is not None, "executor must thread is_cheap"
 
     def test_executor_reserve_equals_plan_reserve(self):
         """Executor helper (energy.ride_out_reserve_kwh) matches the plan helper
@@ -1121,7 +1103,6 @@ class TestExecutorReserveAnchoredToSolarPickup:
             eta_charge=1.0,
             round_trip_eff=1.0,
             reserve_cheap_band=0.20,
-            reserve_anchor="trough",
         )
         prices = [0.30, 0.30, 0.30, 0.13, 0.13, 0.13, 0.13, 0.13]
         slots = [PriceSlot(cur + timedelta(hours=i), p) for i, p in enumerate(prices)]

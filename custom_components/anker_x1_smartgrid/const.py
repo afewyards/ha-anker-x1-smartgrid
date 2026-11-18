@@ -29,7 +29,6 @@ CONF_CALIBRATION_ENABLED = "calibration_enabled"
 CONF_CALIBRATION_INTERVAL_DAYS = "calibration_interval_days"
 CONF_CALIBRATION_TOP_SOC = "calibration_top_soc"
 CONF_CALIBRATION_DWELL_H = "calibration_dwell_h"
-CONF_RESERVE_ANCHOR = "reserve_anchor"
 CONF_RESERVE_CHEAP_BAND = "reserve_cheap_band"
 CONF_RETENTION_HOURLY_DAYS = "retention_hourly_days"
 CONF_ADDON_ENABLED = "addon_enabled"
@@ -222,8 +221,6 @@ CONF_EXPORT_LOAD_COMP_FACTOR = "export_load_comp_factor"
 # Persistence price prior config keys (Plan B)
 CONF_PRICE_HISTORY_DAYS = "price_history_days"
 CONF_PRICE_BLEND_WEIGHT_TODAY = "price_blend_weight_today"
-CONF_ANTICIPATION_CONFIDENCE_HAIRCUT = "anticipation_confidence_haircut"
-CONF_ANTICIPATION_MARGIN_EUR_PER_KWH = "anticipation_margin_eur_per_kwh"
 
 # Export / arbitrage defaults (A2; per Global Constraints)
 DEFAULT_ENABLE_EXPORT = True
@@ -270,8 +267,6 @@ DEFAULT_EXPORT_DRAIN_WINDOW_H = 0.0
 # Persistence price prior defaults (Plan B)
 DEFAULT_PRICE_HISTORY_DAYS = 8  # rolling realized-price store depth (days)
 DEFAULT_PRICE_BLEND_WEIGHT_TODAY = 0.5  # today vs recent-days median blend weight
-DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT = 0.15  # discount on the estimated morning price
-DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH = 0.02  # estimate must beat tonight by this (€/kWh)
 
 # SoC drift-hedge config keys
 CONF_SOC_HEDGE_FRACTION = "soc_hedge_fraction"
@@ -373,10 +368,7 @@ FALLBACK_SOLAR_PICKUP_HOUR_UTC = 8  # UTC hour
 RESERVE_WINDOW_MAX_H = 24  # cap the ride-out walk so a recovery-free multi-cloudy
 # stretch cannot bleed the NEXT night's drawdown into today's reserve.
 
-# Ride-to-trough reserve (rev-2) — anchor selector + cheap-relief band
-RESERVE_ANCHOR_TROUGH = "trough"  # new default: early-break at first cheap grid hour
-RESERVE_ANCHOR_LEGACY = "legacy"  # rollback: old debit-to-signed-trough + price-prior
-DEFAULT_RESERVE_ANCHOR = RESERVE_ANCHOR_TROUGH
+# Ride-to-trough reserve (rev-2) — cheap-relief band
 DEFAULT_RESERVE_CHEAP_BAND = 0.20  # a later hour is "relief" within 20% of its OWN forward trough
 RESERVE_CHEAP_BAND_EPS = 0.02  # €/kWh floor on the band denominator (near-zero/neg NL prices)
 SLOT_RESOLUTION_AUTO = "auto"

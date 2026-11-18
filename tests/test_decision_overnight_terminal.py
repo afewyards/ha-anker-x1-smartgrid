@@ -374,7 +374,7 @@ def test_is_cheap_widened_with_est_tail(monkeypatch):
     assert n_est_slots > 0, "the gap must be estimate-priced for this to be a real check"
 
     _call(_cfg(), soc=80.0, prices=_PRICES, estimated_tomorrow=est)
-    assert captured_lens, "is_cheap map must be built (reserve_anchor defaults to trough)"
+    assert captured_lens, "is_cheap map must be built"
     assert captured_lens[-1] == len(_PRICES) + n_est_slots
 
 

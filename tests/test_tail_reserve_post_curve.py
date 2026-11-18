@@ -33,7 +33,7 @@ def _slots() -> list[PriceSlot]:
 
 def test_post_curve_hours_get_real_ride_out():
     cfg = _cfg()
-    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _intervals(), cfg)
+    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _intervals(), cfg, is_cheap={})
     floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 2.0
     h20 = D1 + timedelta(hours=14)
     h21 = D1 + timedelta(hours=15)

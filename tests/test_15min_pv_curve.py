@@ -111,7 +111,7 @@ def test_synthetic_overnight_fill_stays_hourly_stride():
     cfg = Config(capacity_kwh=10.0, soc_floor=5.0, max_charge_w=3000.0, eta_charge=1.0)
     # 8 hourly synthetic rows, dt_h=1.0 (as built by the controller fills)
     ivs = [ForecastInterval(base + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(8)]
-    r = energy.ride_out_reserve_kwh(base, ivs, cfg, slot_minutes=15)
+    r = energy.ride_out_reserve_kwh(base, ivs, cfg, slot_minutes=15, is_cheap={})
     # 8h * 500W = 4 kWh AC of overnight load — reserve must reflect the full night,
     # not be ~1/4-sized from a mistaken dt_h=0.25 on hourly-stride rows.
     assert r > 3.0

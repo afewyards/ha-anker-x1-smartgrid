@@ -1850,7 +1850,7 @@ def test_plan_reserve_soc_at_least_backup_reserve():
 
     cfg = _reserve_cfg(backup_reserve_soc=30.0)
     ivs = [ForecastInterval(BASE + timedelta(hours=i), pv_w=0.0, load_w=2000.0, dt_h=1.0) for i in range(6)]
-    rsv = {iv.start: energy.ride_out_reserve_kwh(iv.start, ivs, cfg) for iv in ivs}
+    rsv = {iv.start: energy.ride_out_reserve_kwh(iv.start, ivs, cfg, is_cheap={}) for iv in ivs}
     out = _deficit_plan(cfg, 80.0, reserve_by_hour=rsv)
     assert all(e["reserve_soc"] >= 30.0 for e in out)
 

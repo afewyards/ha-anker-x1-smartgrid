@@ -31,8 +31,8 @@ def test_reserve_and_export_regression_report(capsys):
 
     now = datetime(2026, 7, 1, 22, 0, 0)
     ivs = [ForecastInterval(datetime(2026, 7, 1, 22, 0, 0), 0.0, 600.0, 6.0)]
-    r_off = ride_out_reserve_kwh(now, ivs, cfg)
-    r_on = ride_out_reserve_kwh(now, ivs, cfg, eta_curve=curve)
+    r_off = ride_out_reserve_kwh(now, ivs, cfg, is_cheap={})
+    r_on = ride_out_reserve_kwh(now, ivs, cfg, eta_curve=curve, is_cheap={})
     assert r_on >= r_off - 1e-9
 
     pv = [0.0] * 24

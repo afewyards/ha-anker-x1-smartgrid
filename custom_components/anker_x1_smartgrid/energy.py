@@ -15,7 +15,7 @@ def ride_out_reserve_kwh(
     cfg: Config,
     *,
     max_window_h: int = const.RESERVE_WINDOW_MAX_H,
-    is_cheap: dict[datetime, bool] | None = None,
+    is_cheap: dict[datetime, bool],
     slot_minutes: int = 60,
     eta_curve=None,
 ) -> float:
@@ -38,12 +38,12 @@ def ride_out_reserve_kwh(
       so a recovery-free multi-cloudy stretch cannot bleed the *next* night's
       drawdown into this reserve (drawdown past the pack → reserve pins to
       capacity → export disabled that hour — survival-correct).
-    * **Cheap-relief early-break (rev-2)**: when ``is_cheap`` is given (hour-start →
-      bool), the walk STOPS (freezing ``reserve_at_trough``) at the first hour STRICTLY
-      after ``now`` flagged cheap — so weak-solar reserves bridge to the next genuine
+    * **Cheap-relief early-break (rev-2)**: the walk STOPS (freezing
+      ``reserve_at_trough``) at the first hour STRICTLY after ``now`` that ``is_cheap``
+      (hour-start → bool) flags cheap — so weak-solar reserves bridge to the next genuine
       cheap grid hour instead of a full day's gross load.  Solar recovery is still
-      handled by the signed-trough capture (no separate solar stop).  ``is_cheap=None``
-      (or an hour absent from the map) ⇒ legacy walk (byte-identical / parity-safe).
+      handled by the signed-trough capture (no separate solar stop).  An hour absent
+      from the map is not cheap.
     * ``eta_curve``, when given, supplies power-dependent ``eta_charge(w)`` /
       ``eta_discharge(w)`` (duck-typed; no ``efficiency`` import here to avoid a
       cycle). ``eta_curve=None`` reproduces the static scalar walk byte-identically.
@@ -68,7 +68,7 @@ def ride_out_reserve_kwh(
         if iv.start >= horizon_end:
             break
         # rev-2: bridge only to the next genuinely-cheap grid hour AFTER now.
-        if is_cheap is not None and iv.start > now:
+        if iv.start > now:
             _h = resolution.floor_to_slot(iv.start, slot_minutes)
             if is_cheap.get(_h, False):
                 break

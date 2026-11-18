@@ -536,13 +536,9 @@ class TestParityRandomDays:
     # -----------------------------------------------------------------
     # D0 gate (review T3): reserve_by_hour SHAPE parity across the sweep.
     #
-    # cfg.reserve_anchor itself never reaches optimize_grid/hindsight_optimal_grid
-    # -- see test_parity_holds_across_live_cfg_permutations below, which locks
-    # that field as a DP-invariant no-op.  The anchor's ONLY DP-facing artifact
-    # is the per-hour-VARYING reserve_by_hour array that decision.py's
-    # _build_reserve_by_hour constructs under the live cfg.reserve_anchor ==
-    # const.RESERVE_ANCHOR_TROUGH default (decision.py:945-952).  reserve_by_hour
-    # is itself only read inside the export action-class branch (gated on
+    # The ride-out reserve's ONLY DP-facing artifact is the per-hour-VARYING
+    # reserve_by_hour array that decision.py's _build_reserve_by_hour
+    # constructs.  reserve_by_hour is itself only read inside the export action-class branch (gated on
     # export_price is not None -- optimize.py:814-826 / regret.py mirror), so it
     # must be swept through the EXPORT leg, not the plain charge-leg call_both.
     #
@@ -574,8 +570,7 @@ class TestParityRandomDays:
         """Hand-built ride-to-trough-style reserve_by_hour: a per-hour-VARYING
         floor that decays from target_kwh toward floor_kwh as a randomized
         next-solar-pickup hour approaches, then rises again after it -- the
-        general SHAPE decision._build_reserve_by_hour produces under the live
-        cfg.reserve_anchor == const.RESERVE_ANCHOR_TROUGH default.  Hand-built
+        general SHAPE decision._build_reserve_by_hour produces.  Hand-built
         (not imported from decision.py) so this DP-only parity file stays
         decoupled from the controller-side reserve builder while still
         exercising DP<->oracle parity under a REALISTIC non-flat reserve floor.
@@ -592,7 +587,7 @@ class TestParityRandomDays:
         """D0 gate: DP<->oracle export-leg parity under a REALISTIC (non-flat)
         reserve_by_hour, swept across 20 seeded random days -- see class
         docstring above for why this is the real (non-vacuous) stand-in for
-        "sweep the live reserve_anchor default" at this file's DP-only altitude.
+        "sweep the live ride-out reserve" at this file's DP-only altitude.
         """
         assert HOURLY_DT_H == 1.0 and HOURLY_SLOT_MINUTES == 60  # T4 pin
 
@@ -1443,8 +1438,7 @@ class TestExportEtaCurveParity:
 @pytest.mark.parametrize(
     "overrides,dt_h",
     [
-        ({"reserve_anchor": const.RESERVE_ANCHOR_TROUGH}, HOURLY_DT_H),  # live default anchor (DP-invariant)
-        ({"reserve_anchor": const.RESERVE_ANCHOR_LEGACY}, HOURLY_DT_H),  # legacy anchor (DP-invariant)
+        ({}, HOURLY_DT_H),  # live defaults
         ({"export_peak_lookback_h": 4.0}, HOURLY_DT_H),  # windowed peak w/ day_index
         ({"soc_hedge_fraction": 0.5}, HOURLY_DT_H),  # controller-level; DP-invariant
         ({}, 0.25),  # 15-min slot resolution
@@ -1452,28 +1446,15 @@ class TestExportEtaCurveParity:
 )
 def test_parity_holds_across_live_cfg_permutations(overrides, dt_h):
     """T3: parity must hold across live cfg permutations that reach production
-    but were never swept together: the live-default reserve_anchor (AND the
-    legacy rollback value), a non-zero export peak look-back, a non-zero SoC
-    drift-hedge fraction, and 15-min slot resolution.
+    but were never swept together: the live defaults, a non-zero export peak
+    look-back, a non-zero SoC drift-hedge fraction, and 15-min slot resolution.
 
-    D0 (2026-07-12): the original sweep here used the string literal
-    "ride_to_trough", which does not match either real Config.reserve_anchor
-    value (const.RESERVE_ANCHOR_TROUGH == "trough",
-    const.RESERVE_ANCHOR_LEGACY == "legacy" -- see models.py/const.py). An
-    unrecognized value silently falls through decision.py's
-    `== RESERVE_ANCHOR_TROUGH` / `!= RESERVE_ANCHOR_TROUGH` checks into the
-    non-legacy branch, so the row happened to exercise trough-adjacent
-    behavior anyway wherever it mattered -- but nowhere in THIS file does it
-    matter, so the mislabeling was silent. Fixed to the real constants + added
-    the legacy row so both live values are pinned by name.
-
-    reserve_anchor / soc_hedge_fraction are controller-level knobs that never
-    enter optimize_grid / hindsight_optimal_grid directly -- swept here to PIN
-    that DP-invariance (a future wiring of either into the DP must not
-    silently break parity). See TestParityRandomDays.
-    test_random_days_reserve_by_hour_shape_parity for the REAL (non-vacuous)
-    DP-facing artifact of the reserve_anchor default: the per-hour-varying
-    reserve_by_hour array it drives, swept there across 20 random days.
+    soc_hedge_fraction is a controller-level knob that never enters
+    optimize_grid / hindsight_optimal_grid directly -- swept here to PIN that
+    DP-invariance (a future wiring of it into the DP must not silently break
+    parity). See TestParityRandomDays.
+    test_random_days_reserve_by_hour_shape_parity for the per-hour-varying
+    reserve_by_hour array, swept there across 20 random days.
     export_peak_lookback_h and dt_h=0.25 ARE substantive: both DPs derive the
     windowed export-peak band from cfg.export_peak_lookback_h / dt_h
     (optimize.py's export routing and regret.py:413).

@@ -46,7 +46,7 @@ def _slots() -> list[PriceSlot]:
 
 def test_day2_evening_reserve_is_full_night_not_floor():
     cfg = _cfg()
-    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg)
+    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg, is_cheap={})
     floor_kwh = cfg.soc_floor / 100.0 * cfg.capacity_kwh  # 2.0 kWh
 
     h17 = D1 + timedelta(hours=23)  # 17:00 d2
@@ -76,7 +76,7 @@ def test_acceptance_a_day2_export_is_reserve_bounded():
         export_fee_eur_per_kwh=0.0,
         max_export_w=3000.0,
     )
-    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg)
+    rsv = ctrl._build_reserve_by_hour(D1, _slots(), _two_day_intervals(), cfg, is_cheap={})
     n = 3  # window 17:00 d2 .. 19:00 d2
     base = D1 + timedelta(hours=23)
     reserve_list = [rsv[base + timedelta(hours=i)] for i in range(n)]

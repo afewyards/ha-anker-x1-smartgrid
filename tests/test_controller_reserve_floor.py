@@ -28,7 +28,7 @@ def test_reserve_by_hour_spans_to_tomorrow_pickup_not_price_horizon():
     intervals_reserve = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(8)] + [
         ForecastInterval(NOW + timedelta(hours=8), 2000.0, 300.0, 1.0)
     ]
-    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
+    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg, is_cheap={})
     # NOW hour: floor (2.0) + 8h × 0.5 kWh ride-out = 6.0 kWh (was 4.0 pre-floor-stack).
     assert rsv[NOW] == 6.0
 
@@ -39,7 +39,7 @@ def test_reserve_floored_at_firmware_when_load_tiny():
     intervals_reserve = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 50.0, 1.0) for i in range(3)] + [
         ForecastInterval(NOW + timedelta(hours=3), 2000.0, 100.0, 1.0)
     ]
-    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg)
+    rsv = ctrl._build_reserve_by_hour(NOW, slots, intervals_reserve, cfg, is_cheap={})
     # 3h × 0.05 kWh = 0.15 kWh ride-out stacked on the 2.0 kWh floor → 2.15.
     assert rsv[NOW] == pytest.approx(2.15, abs=1e-6)
 
@@ -83,7 +83,7 @@ def test_cheap_night_import_does_not_collapse_reserve():
     slots = _export_hour_slots()
     intervals = _overnight_intervals()
 
-    rsv = ctrl._build_reserve_by_hour(NOW18, slots, intervals, cfg)
+    rsv = ctrl._build_reserve_by_hour(NOW18, slots, intervals, cfg, is_cheap={})
     assert rsv[NOW18] == 8.0, (  # floor 2.0 + 12h × 0.5 = 8.0 (was 6.0 pre-floor-stack)
         f"Solar anchor must produce floor + 12h × 0.5 kWh = 8.0 kWh reserve; got {rsv[NOW18]}"
     )
@@ -113,7 +113,7 @@ def _summer_reserve_dict(cfg):
     intervals_reserve = build_intervals(curve, predictor, 400.0, cfg, quantile=0.8)
     # Hourly price slots 19:00 → 06:00 next day so every overnight hour gets a reserve.
     slots = [PriceSlot(SUMMER_NOW + timedelta(hours=i), 0.20) for i in range(12)]
-    return ctrl._build_reserve_by_hour(SUMMER_NOW, slots, intervals_reserve, cfg)
+    return ctrl._build_reserve_by_hour(SUMMER_NOW, slots, intervals_reserve, cfg, is_cheap={})
 
 
 def test_reserve_soc_continuous_no_collapse_at_22():
@@ -189,10 +189,9 @@ def test_dp_export_floor_uses_continuous_overnight_reserve():
     assert sum(res_rsv["export_schedule"]) <= 8.0 - min(reserve_list) + 1e-6
 
 
-def test_trough_anchor_lowers_reserve_vs_legacy_when_cheap_ahead():
-    # cheap morning slot ahead → trough anchor bridges to it; legacy holds the full night.
-    cfg_t = _cfg(reserve_cheap_band=0.20)  # default anchor=trough
-    cfg_l = _cfg(reserve_anchor="legacy")
+def test_trough_reserve_bridges_to_cheap_hour_ahead():
+    # cheap slot ahead → the reserve bridges to it instead of holding the full night.
+    cfg_t = _cfg(reserve_cheap_band=0.20)
     prices = [0.30, 0.13, 0.30, 0.30]  # cheap at +1h
     slots = [PriceSlot(NOW + timedelta(hours=i), p) for i, p in enumerate(prices)]
     ivs = [ForecastInterval(NOW + timedelta(hours=i), 0.0, 500.0, 1.0) for i in range(3)] + [
@@ -200,6 +199,4 @@ def test_trough_anchor_lowers_reserve_vs_legacy_when_cheap_ahead():
     ]
     ic = ctrl._build_is_cheap_by_hour(slots, cfg_t)
     r_trough = ctrl._build_reserve_by_hour(NOW, slots, ivs, cfg_t, is_cheap=ic)[NOW]
-    r_legacy = ctrl._build_reserve_by_hour(NOW, slots, ivs, cfg_l)[NOW]
-    assert r_trough < r_legacy
     assert r_trough == pytest.approx(2.5, abs=1e-6)  # floor(2.0)+1 deficit hr×0.5, break at +1h cheap

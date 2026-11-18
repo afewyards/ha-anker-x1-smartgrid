@@ -715,39 +715,6 @@ def test_compute_decision_threads_per_hour_temp_to_predictor():
     assert len(non_fallback) > 1, f"Expected multiple distinct per-hour temps, but saw: {sorted(non_fallback)}"
 
 
-# ===========================================================================
-# Ride-to-trough (rev-2) — price-prior GATE respects reserve_anchor
-# ===========================================================================
-
-
-def test_price_prior_gate_respects_reserve_anchor(monkeypatch):
-    """Gate (compute_decision L790-800): _apply_price_prior runs ONLY under the legacy
-    anchor.  Spy the module global + drive the REAL compute_decision via _call for
-    IDENTICAL inputs — NOT called for trough, CALLED for legacy."""
-    # Task C2: _apply_price_prior now lives in decision.py; compute_decision's
-    # internal call resolves against decision.py's own globals, so the spy
-    # must patch it there (patching the controller.py re-export would be a
-    # silent no-op on the moved function's call site).
-    import custom_components.anker_x1_smartgrid.decision as decision_mod
-
-    calls = {"n": 0}
-    real_prior = decision_mod._apply_price_prior
-
-    def _spy(*a, **k):
-        calls["n"] += 1
-        return real_prior(*a, **k)
-
-    monkeypatch.setattr(decision_mod, "_apply_price_prior", _spy)
-
-    calls["n"] = 0
-    _call(_cfg(reserve_anchor="trough"), soc=20.0)
-    assert calls["n"] == 0, "trough anchor must GATE OFF _apply_price_prior"
-
-    calls["n"] = 0
-    _call(_cfg(reserve_anchor="legacy"), soc=20.0)
-    assert calls["n"] >= 1, "legacy anchor must still CALL _apply_price_prior"
-
-
 def test_compute_decision_refills_on_flat_prices():
     out: dict = {}
     _call_compute_decision(_cfg(backup_reserve_soc=30.0), soc=12.0, prices=[0.25] * 9, out=out)

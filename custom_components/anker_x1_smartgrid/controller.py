@@ -71,7 +71,6 @@ from .recorder import DataRecorder
 # etc.) keep working unchanged after the move to decision.py.
 from .decision import (
     _DP_EPSILON_SCHEDULE_KWH,
-    _apply_price_prior,
     _build_is_cheap_by_hour,
     _build_reserve_by_hour,
     _dp_select_slots,
@@ -1896,7 +1895,7 @@ class Controller:
         # {"dp_selected": [...], "intervals": [...]}.  Left empty on DP failure
         # — used below to publish / clear fictive_plan.
         _dp_out: dict = {}
-        # Plan B: compute the blended tomorrow price estimate for the reserve prior.
+        # Plan B: compute the blended tomorrow price estimate for the overnight estimated tail.
         # Passed ONLY to the live compute_decision call; shadow + recompute keep None
         # so parity/telemetry paths are byte-identical.
         _estimated_tomorrow = None

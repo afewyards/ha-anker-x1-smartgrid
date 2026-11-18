@@ -85,13 +85,8 @@ class TestRideOutReserveKwh:
     def test_floor_stacked_on_rideout(self):
         # 4 h of 500 W deficit then recovery. ride = 2.0 kWh; reserve = floor(1.0)+2.0.
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
+        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
         assert r == pytest.approx(3.0, abs=1e-6)  # NOT max(floor, ride)=2.0 (old bug)
-
-    def test_is_cheap_none_equals_legacy(self):
-        ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
-        cfg = self._cfg()
-        assert energy.ride_out_reserve_kwh(T0, ivs, cfg, is_cheap=None) == energy.ride_out_reserve_kwh(T0, ivs, cfg)
 
     def test_is_cheap_early_break_bridges_to_cheap_hour(self):
         # 4h of 500W deficit; hour h+2 flagged cheap → walk stops there.
@@ -99,14 +94,14 @@ class TestRideOutReserveKwh:
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cheap = {T0 + timedelta(hours=2): True}
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap=cheap)
-        assert r == pytest.approx(2.0, abs=1e-6)  # vs 3.0 legacy (test_floor_stacked_on_rideout)
+        assert r == pytest.approx(2.0, abs=1e-6)  # vs 3.0 with no cheap hour (test_floor_stacked_on_rideout)
 
     def test_is_cheap_never_breaks_at_now_hour(self):
         # Current hour flagged cheap must NOT truncate the ride-out (we ride FROM now).
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cheap = {T0: True}
         r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap=cheap)
-        assert r == pytest.approx(3.0, abs=1e-6)  # unchanged from legacy
+        assert r == pytest.approx(3.0, abs=1e-6)  # same as with no cheap hour
 
     def test_double_dip_survives_is_cheap_when_blip_not_cheap(self):
         # dawn PV blip then bigger breakfast deficit; no cheap hour → double-dip intact.
@@ -117,21 +112,21 @@ class TestRideOutReserveKwh:
     def test_monotone_glide(self):
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg = self._cfg()
-        r0 = energy.ride_out_reserve_kwh(T0, ivs, cfg)
-        r1 = energy.ride_out_reserve_kwh(T0 + timedelta(hours=1), ivs, cfg)
+        r0 = energy.ride_out_reserve_kwh(T0, ivs, cfg, is_cheap={})
+        r1 = energy.ride_out_reserve_kwh(T0 + timedelta(hours=1), ivs, cfg, is_cheap={})
         assert r0 - r1 == pytest.approx(0.5, abs=1e-6)  # one hour of load drops out
 
     def test_lands_at_floor_at_recovery(self):
         # Starting AT the recovery hour: no forward drawdown → just the floor.
         ivs = self._ivs([(3000.0, 300.0), (3000.0, 300.0)])
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
+        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
         assert r == pytest.approx(1.0, abs=1e-6)  # floor only
 
     def test_double_dip_includes_later_deficit(self):
         # deficit, brief PV blip (surplus), bigger deficit, real recovery.
         # Trough is AFTER the blip → reserve covers both deficits, not just the first.
         ivs = self._ivs([(0.0, 500.0), (800.0, 500.0), (300.0, 1500.0), (3000.0, 300.0)])
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
+        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
         # debit = 0.5 (h0) + 1.2 (h2); blip h1 contributes 0. reserve = floor + 1.7.
         assert r == pytest.approx(1.0 + 1.7, abs=1e-6)
 
@@ -139,12 +134,12 @@ class TestRideOutReserveKwh:
         # round_trip_eff 0.85, eta_charge 1.0 → eta_d 0.85; draw = load / 0.85.
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg = self._cfg(round_trip_eff=0.85)
-        r = energy.ride_out_reserve_kwh(T0, ivs, cfg)
+        r = energy.ride_out_reserve_kwh(T0, ivs, cfg, is_cheap={})
         assert r == pytest.approx(1.0 + 2.0 / 0.85, abs=1e-6)
 
     def test_capped_at_capacity(self):
         ivs = self._ivs([(0.0, 2000.0)] * 12 + [(6000.0, 0.0)])  # 24 kWh drawdown
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
+        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
         assert r == pytest.approx(10.0, abs=1e-6)  # min(floor + 24, cap=10)
 
     def test_no_pv_banking_below_trough(self):
@@ -152,7 +147,7 @@ class TestRideOutReserveKwh:
         # debit-only/trough never banks the surplus to ZERO out the reserve, and
         # never sums the post-refill deficit that the battery is full enough to cover.
         ivs = self._ivs([(0.0, 500.0), (6000.0, 0.0), (0.0, 500.0), (3000.0, 300.0)])
-        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg())
+        r = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(), is_cheap={})
         assert r == pytest.approx(1.0 + 0.5, abs=1e-6)  # floor + first-hour dip only
 
     def test_idle_drain_raises_reserve(self):
@@ -160,8 +155,8 @@ class TestRideOutReserveKwh:
         # top of the AC-deficit drawdown for every deficit hour in the walk.
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         deficit_hours = 4
-        r0 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=0.0))
-        r130 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=130.0))
+        r0 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=0.0), is_cheap={})
+        r130 = energy.ride_out_reserve_kwh(T0, ivs, self._cfg(idle_drain_w=130.0), is_cheap={})
         expected_delta = 0.130 * deficit_hours
         assert (r130 - r0) == pytest.approx(expected_delta, abs=1e-6)
 
@@ -170,8 +165,8 @@ class TestRideOutReserveKwh:
         ivs = self._ivs([(0.0, 500.0)] * 4 + [(3000.0, 300.0)])
         cfg_default = self._cfg()
         cfg_explicit_zero = self._cfg(idle_drain_w=0.0)
-        assert energy.ride_out_reserve_kwh(T0, ivs, cfg_default) == energy.ride_out_reserve_kwh(
-            T0, ivs, cfg_explicit_zero
+        assert energy.ride_out_reserve_kwh(T0, ivs, cfg_default, is_cheap={}) == energy.ride_out_reserve_kwh(
+            T0, ivs, cfg_explicit_zero, is_cheap={}
         )
 
 
@@ -257,7 +252,9 @@ def test_reserve_none_is_byte_identical():
     cfg = Config(eta_charge=0.92, round_trip_eff=0.85, capacity_kwh=10.0)
     now = datetime(2026, 7, 1, 22, 0, 0)
     ivs = [ForecastInterval(datetime(2026, 7, 1, 22 + i % 2, 0, 0), 0.0, 800.0, 1.0) for i in range(6)]
-    assert ride_out_reserve_kwh(now, ivs, cfg) == ride_out_reserve_kwh(now, ivs, cfg, eta_curve=None)
+    assert ride_out_reserve_kwh(now, ivs, cfg, is_cheap={}) == ride_out_reserve_kwh(
+        now, ivs, cfg, eta_curve=None, is_cheap={}
+    )
 
 
 def test_reserve_curve_raises_for_lower_low_power_eta():
@@ -273,7 +270,9 @@ def test_reserve_curve_raises_for_lower_low_power_eta():
     curve = EfficiencyCurve(list(base._charge), disch, base._fc, base._fd)
     now = datetime(2026, 7, 1, 22, 0, 0)
     ivs = [ForecastInterval(datetime(2026, 7, 1, 22, 0, 0), 0.0, 600.0, 4.0)]
-    assert ride_out_reserve_kwh(now, ivs, cfg, eta_curve=curve) > ride_out_reserve_kwh(now, ivs, cfg)
+    assert ride_out_reserve_kwh(now, ivs, cfg, eta_curve=curve, is_cheap={}) > ride_out_reserve_kwh(
+        now, ivs, cfg, is_cheap={}
+    )
 
 
 def test_grid_charge_request_leaves_room_for_house_draw():

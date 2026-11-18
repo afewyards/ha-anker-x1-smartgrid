@@ -14,7 +14,6 @@ def _cfg(**kw):
         eta_charge=1.0,
         round_trip_eff=1.0,
         reserve_cheap_band=0.20,
-        reserve_anchor="trough",
     )
     d.update(kw)
     return Config(**d)
@@ -61,7 +60,8 @@ def test_reserve_monotone_non_increasing_across_overnight():
     hrs = sorted(rsv)
     vals = [rsv[h] for h in hrs]
     assert all(a + 1e-9 >= b for a, b in itertools.pairwise(vals)), f"not monotone: {vals}"
-    assert rsv[NOW] < ctrl._build_reserve_by_hour(NOW, slots, ivs, _cfg())[NOW]  # trough < legacy
+    # 1.0 kWh floor + six 0.5 kWh deficit hours; the walk stops at the cheap +6h (0.13).
+    assert rsv[NOW] == pytest.approx(4.0)
 
 
 def test_horizon_tail_no_price_does_not_collapse():
@@ -71,6 +71,6 @@ def test_horizon_tail_no_price_does_not_collapse():
         ForecastInterval(NOW + timedelta(hours=8), 3000.0, 200.0, 1.0)
     ]
     ic = ctrl._build_is_cheap_by_hour(slots, _cfg())
-    trough = ctrl._build_reserve_by_hour(NOW, slots, ivs, _cfg(), is_cheap=ic)
-    legacy = ctrl._build_reserve_by_hour(NOW, slots, ivs, _cfg())
-    assert trough[NOW] == pytest.approx(legacy[NOW], abs=1e-9)  # no cheap hour → no early-break
+    rsv = ctrl._build_reserve_by_hour(NOW, slots, ivs, _cfg(), is_cheap=ic)
+    # No priced hour after NOW → no early-break: 1.0 kWh floor + all eight 0.5 kWh deficit hours.
+    assert rsv[NOW] == pytest.approx(5.0)

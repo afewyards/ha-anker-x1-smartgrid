@@ -186,7 +186,6 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_BATTERY_EXPORT_LIMIT_W,
         const.CONF_EXPORT_FEE_EUR_PER_KWH,
         const.CONF_CYCLE_COST_EUR_PER_KWH,
-        const.CONF_RESERVE_ANCHOR,
         const.CONF_RESERVE_CHEAP_BAND,
         const.CONF_EXPORT_DWELL_MIN,
         const.CONF_EXPORT_EPS_LO_KWH,
@@ -204,8 +203,6 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_STATIC_PRICE_EXPORT,
         const.CONF_PRICE_HISTORY_DAYS,
         const.CONF_PRICE_BLEND_WEIGHT_TODAY,
-        const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT,
-        const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH,
     ),
     SECTION_LOAD_ML: (
         const.CONF_MIN_TRAIN_SAMPLES,
@@ -353,16 +350,6 @@ _TUNABLES: list[tuple[str, object, object]] = [
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
     ),
     (
-        const.CONF_ANTICIPATION_CONFIDENCE_HAIRCUT,
-        const.DEFAULT_ANTICIPATION_CONFIDENCE_HAIRCUT,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
-        const.CONF_ANTICIPATION_MARGIN_EUR_PER_KWH,
-        const.DEFAULT_ANTICIPATION_MARGIN_EUR_PER_KWH,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.5)),
-    ),
-    (
         const.CONF_SOC_HEDGE_FRACTION,
         const.DEFAULT_SOC_HEDGE_FRACTION,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
@@ -453,14 +440,6 @@ _SELECT_GROUPS: dict[str, tuple[str, object, list[SelectOptionDict]]] = {
             SelectOptionDict(value="15", label="15 minutes"),
             SelectOptionDict(value="30", label="30 minutes"),
             SelectOptionDict(value="60", label="60 minutes"),
-        ],
-    ),
-    "reserve_anchor": (
-        const.CONF_RESERVE_ANCHOR,
-        const.DEFAULT_RESERVE_ANCHOR,
-        [
-            SelectOptionDict(value=const.RESERVE_ANCHOR_TROUGH, label="ride-to-trough (self-scaling)"),
-            SelectOptionDict(value=const.RESERVE_ANCHOR_LEGACY, label="legacy (debit-to-trough + price-prior)"),
         ],
     ),
     "restore_workmode": (
