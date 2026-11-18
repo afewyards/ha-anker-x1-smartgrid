@@ -2492,7 +2492,7 @@ class Controller:
                 if not self._live_failed:
                     _LOGGER.warning("power card live: build failed", exc_info=True)
                 self._live_failed = True
-                card["live"] = {"pv": [], "meter": None, "price": None, "next": None}
+                card["live"] = {"pv": [], "meter": None, "battery": None, "price": None, "next": None}
                 with contextlib.suppress(Exception):
                     card["live"] |= self._live_sensors()
             else:
@@ -2506,7 +2506,8 @@ class Controller:
 
     def _live_sensors(self) -> dict:
         meter = self._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER])
-        return {"pv": const.resolve_pv_power_entities(self._data), "meter": meter}
+        battery = self._data[const.CONF_ENT_BATTERY_POWER]
+        return {"pv": const.resolve_pv_power_entities(self._data), "meter": meter, "battery": battery}
 
     def _live_line(self, now) -> dict:
         slots = self._card_slots

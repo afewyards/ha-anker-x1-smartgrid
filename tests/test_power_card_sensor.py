@@ -412,6 +412,11 @@ async def test_live_names_the_configured_pv_and_meter_sensors():
     assert live["meter"] == "sensor.meter_power"
 
 
+async def test_live_names_the_battery_power_sensor():
+    live = await _live(_slots(), overrides={"ent_battery_power": "sensor.my_battery"})
+    assert live["battery"] == "sensor.my_battery"
+
+
 async def test_live_price_is_the_current_slot_and_the_next():
     live = await _live(_slots(), now=NOW + timedelta(minutes=20))
     assert live["price"] == 0.11
@@ -437,7 +442,13 @@ async def test_a_failing_live_line_still_names_the_sensors(monkeypatch):
 
     monkeypatch.setattr(resolution, "price_at", _boom)
     live = await _live(_slots(), overrides={"ent_pv_power": ["sensor.a"]})
-    assert live == {"pv": ["sensor.a"], "meter": "sensor.meter_power", "price": None, "next": None}
+    assert live == {
+        "pv": ["sensor.a"],
+        "meter": "sensor.meter_power",
+        "battery": "sensor.battery_power",
+        "price": None,
+        "next": None,
+    }
 
 
 async def test_a_failing_live_line_leaves_battery_days_and_hours(monkeypatch, caplog):
