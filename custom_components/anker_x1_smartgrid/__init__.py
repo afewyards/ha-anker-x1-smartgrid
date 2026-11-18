@@ -21,7 +21,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
-from . import executor
+from . import const, executor
 from .actuator import Actuator
 from .anker_resolver import apply_anker_resolution
 from .const import (
@@ -94,24 +94,24 @@ def migrate_options(options: dict) -> dict:
 
 REMOVED_OPTION_KEYS = frozenset(
     {
-        "export_dwell_min",
-        "export_eps_lo_kwh",
-        "export_eps_hi_kwh",
-        "export_min_block_kwh",
-        "export_peak_lookback_h",
-        "export_load_comp_factor",
-        "charge_trough_lookback_h",
-        "reserve_cheap_band",
-        "price_history_days",
-        "price_blend_weight_today",
-        "load_adapt_fade_h",
-        "occ_persistence_h",
-        "min_train_samples",
-        "addon_timeout",
-        "soc_drift_deadband_kwh",
-        "soc_drift_decay_halflife_h",
-        "calibration_top_soc",
-        "calibration_dwell_h",
+        const.CONF_EXPORT_DWELL_MIN,
+        const.CONF_EXPORT_EPS_LO_KWH,
+        const.CONF_EXPORT_EPS_HI_KWH,
+        const.CONF_EXPORT_MIN_BLOCK_KWH,
+        const.CONF_EXPORT_PEAK_LOOKBACK_H,
+        const.CONF_EXPORT_LOAD_COMP_FACTOR,
+        const.CONF_CHARGE_TROUGH_LOOKBACK_H,
+        const.CONF_RESERVE_CHEAP_BAND,
+        const.CONF_PRICE_HISTORY_DAYS,
+        const.CONF_PRICE_BLEND_WEIGHT_TODAY,
+        const.CONF_LOAD_ADAPT_FADE_H,
+        const.CONF_OCC_PERSISTENCE_H,
+        const.CONF_MIN_TRAIN_SAMPLES,
+        const.CONF_ADDON_TIMEOUT,
+        const.CONF_SOC_DRIFT_DEADBAND_KWH,
+        const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
+        const.CONF_CALIBRATION_TOP_SOC,
+        const.CONF_CALIBRATION_DWELL_H,
         "anticipation_confidence_haircut",
         "anticipation_margin_eur_per_kwh",
         "grid_export_limit_w",

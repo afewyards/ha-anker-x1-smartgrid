@@ -914,7 +914,7 @@ class Controller:
             )
 
         # ------------------------------------------------------------------
-        # Tier 0: Remote ML add-on (when add-on is enabled + map available)
+        # Tier 0: Remote ML add-on (when an add-on address is set + map available)
         # ------------------------------------------------------------------
         if remote_map:
             # secondary=None on a local-tier failure: self.predictor is then the
@@ -1128,8 +1128,7 @@ class Controller:
         failure, so a stale prior-successful reading is never reported as
         current — see
         tests/test_controller_remote.py::test_health_poll_failure_reports_unreachable_not_stale.
-        Timeout is capped at 5s (independent of the UI-tunable
-        ``addon_timeout``, up to 60s) since ``/health`` is trivial and this
+        Timeout is capped at 5s since ``/health`` is trivial and this
         must stay cheap enough to retry (RACE 2 — see the ``elif`` branch in
         ``_tick_impl``).
         """

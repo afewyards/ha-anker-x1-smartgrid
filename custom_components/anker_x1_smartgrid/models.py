@@ -104,7 +104,7 @@ class Config:
     static_price_offpeak: float = const.DEFAULT_STATIC_PRICE_OFFPEAK
     static_offpeak_hours: str = const.DEFAULT_STATIC_OFFPEAK_HOURS
     static_price_export: float = const.DEFAULT_STATIC_PRICE_EXPORT
-    # Periodic full-charge calibration (spec 2026-08-03). Ships OFF.
+    # Periodic full-charge calibration (spec 2026-08-03). On by default.
     calibration_enabled: bool = const.DEFAULT_CALIBRATION_ENABLED
     calibration_interval_days: int = const.DEFAULT_CALIBRATION_INTERVAL_DAYS
     calibration_top_soc: float = const.DEFAULT_CALIBRATION_TOP_SOC
