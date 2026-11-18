@@ -398,7 +398,7 @@ const HELD = '<svg width="10" height="9"><rect width="10" height="9" fill="url(#
 const LEGEND = `<div class="lg lgg dm">
 <b>price line</b><span><span>${swatch('sw charge')}charge</span><span>${swatch('sw house')}to house</span><span>${swatch('sw export')}export</span><span>${swatch('sw idle', 1.5)}idle, hold</span><span>${HELD}held</span></span>
 <b>bars on it</b><span><span>${swatch('gc', 9)}up: bought from grid</span><span>${swatch('go', 9)}down: sold</span></span>
-<b>house</b><span><span>${swatch('gh', 9)}from grid</span><span>${swatch('gb', 9)}from battery</span><span>${stroke('uo')}use</span><span>${stroke('so')}sun</span></span>
+<b>house</b><span><span>${swatch('gh', 9)}from grid</span><span>${swatch('gb', 9)}from battery</span><span>${stroke('uo')}use</span><span>${stroke('so')}solar</span></span>
 <span class="n">Faint is planned. Bars are compressed; the peak hour shows its kWh.</span>
 </div>`;
 function forecastLine(st, tz) {
@@ -427,10 +427,10 @@ function forecastLine(st, tz) {
   return `<div class="fc dm">${html}</div>`;
 }
 const DEBUG_FAIL = '<div class="dbg"><div class="empty">Hour detail unavailable</div></div>';
-const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'sun']];
+const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'solar']];
 const DEBUG_LEGEND = {
   use: `<span>first plan of the day${stroke('dl')}forecast${stroke('uo')}measured house use</span>`,
-  sun: `<span>first plan of the day${stroke('dl')}forecast${stroke('so')}measured sun</span>`,
+  sun: `<span>first plan of the day${stroke('dl')}forecast${stroke('so')}measured solar</span>`,
   cost: `<span>grid cost against the first plan of the day${swatch('dn', 9)}dearer${swatch('dp', 9)}cheaper<svg width="10" height="9"><rect width="10" height="9" fill="url(#sgh)"/></svg>unknown</span>`,
 };
 
@@ -500,7 +500,7 @@ function buildups(w, t, tz) {
 
 // What stored solar earned over exporting it; left out while it rounds to zero.
 function sun(v, cur = '') {
-  return num(v) === null || Math.abs(v) < 0.005 ? '' : `sun ${signed(v, cur)}`;
+  return num(v) === null || Math.abs(v) < 0.005 ? '' : `solar ${signed(v, cur)}`;
 }
 
 function saved(v, prefix = '') {
@@ -565,7 +565,7 @@ function until(v, tz, today) {
 const INTERNALS = new Map([
   ['prices_until', ['prices to', until, (v, tz, today) => !(Date.parse(v) >= localTime(addDays(today, 2), 0, tz))]],
   ['tomorrow_estimated', ['tomorrow', (v) => (v === true ? 'estimated' : null), (v) => v === true]],
-  ['pv_forecast_age_s', ['sun forecast', (v) => `${num(v) === null ? DASH : ago(v)} old`, (v) => v > 5400]],
+  ['pv_forecast_age_s', ['solar forecast', (v) => `${num(v) === null ? DASH : ago(v)} old`, (v) => v > 5400]],
   ['battery_sample_age_s', ['battery reading', (v) => `${num(v) === null ? DASH : ago(v)} ago`, (v) => v > 300]],
   ['built_at', ['plan built', (v, tz) => (Number.isFinite(Date.parse(v)) ? clock(Date.parse(v), tz) : esc(v))]],
   ['forecast_source', ['forecast', (v) => esc(v)]],
@@ -905,7 +905,7 @@ class SmartgridPowerCard extends HTMLElement {
     const line = [
       grid !== null && `${grid.toFixed(2)} grid`,
       batt !== null && `${batt.toFixed(2)} battery`,
-      sun !== null && `${sun.toFixed(2)} sun`,
+      sun !== null && `${sun.toFixed(2)} solar`,
       s1 !== null && `battery ${s0 === null ? '' : `${s0.toFixed(0)}→`}${s1.toFixed(0)}%`,
     ].filter(Boolean);
     const seg = [[grid, 'g'], [batt, 'b'], [sun, 's']].filter(([v]) => v > 0);
@@ -1348,11 +1348,11 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
       sum = [
         [money(total), total === null || Math.abs(total) < 0.005 ? 'against plan today' : `${total > 0 ? 'dearer' : 'cheaper'} than planned today`],
         [money(use), 'from house use'],
-        [money(sun), 'from sun'],
+        [money(sun), 'from solar'],
         [money(total === null ? null : total - use - sun), 'from battery and timing'],
       ];
     } else {
-      const [key, fkey, cls, label] = view === 'use' ? ['use_kwh', 'load_kwh', 'uo', 'use'] : ['solar_kwh', 'pv_kwh', 'so', 'sun'];
+      const [key, fkey, cls, label] = view === 'use' ? ['use_kwh', 'load_kwh', 'uo', 'use'] : ['solar_kwh', 'pv_kwh', 'so', 'solar'];
       const mx = Math.max(0.2, ...cov.map((r) => num(r[fkey]) ?? 0), ...past.map((r) => num(r[key]) ?? 0));
       const k = (base - top) / mx;
       v += scale(top, `${fx(mx, 1)} kWh`);
@@ -1405,7 +1405,7 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
           `${cell(num(x.use_kwh), num(f.load_kwh), 2, 0.05)}${cell(num(x.solar_kwh), num(f.pv_kwh), 2, 0.05)}${cell(num(x.soc), num(f.soc), 0, 5)}</tr>`
         );
       });
-    const head = ['time', 'price', 'action', 'setpoint', 'battery', 'use kWh', 'sun kWh', 'level %'].map((h) => `<th>${h}</th>`).join('');
+    const head = ['time', 'price', 'action', 'setpoint', 'battery', 'use kWh', 'solar kWh', 'level %'].map((h) => `<th>${h}</th>`).join('');
     const table = trs.length ? `<div class="dtw"><table><tr>${head}</tr>${trs.join('')}</table></div>` : '<div class="dwhy">No data for this hour</div>';
     // The last reason each hour had before it ran, keyed by hour start; planned hours fall back on the card's own.
     const stored = new Map(Object.entries(reasons && typeof reasons === 'object' ? reasons : {}).map(([k, x]) => [Date.parse(k), x]));
