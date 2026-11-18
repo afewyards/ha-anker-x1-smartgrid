@@ -518,7 +518,7 @@ function target(w, t, tz) {
   if (f.kind === 'next_day') return 'the next day';
   if (!Number.isFinite(a)) return 'later';
   const at = stamp(a, t, tz);
-  return { export: `the sale at ${at}`, house: `house use at ${at}`, refill: `the refill at ${at}${w.kept_estimated ? ' (estimated)' : ''}` }[f.kind] || 'later';
+  return { export: `the sale at ${at}`, house: `house use at ${at}`, refill: `buying it back at ${at}${w.kept_estimated ? ' (estimated)' : ''}` }[f.kind] || 'later';
 }
 // One plain line: what the hour does and the two values it weighed.
 function verdict(w, t, tz) {
@@ -526,6 +526,7 @@ function verdict(w, t, tz) {
   const tgt = target(w, t, tz);
   const keep = `${eur(w.keep_eur, 3)}/kWh`;
   const use = `${eur(w.use_eur, 3)}/kWh`;
+  if (w.kind === 'hold' && (w.kept_for || {}).kind === 'refill') return `Holding: buying it back would cost ${keep} (cheapest ${tgt.replace('buying it back ', '').replace(' (estimated)', ', estimated')}), using it now saves only ${use}.`;
   if (w.kind === 'hold') return `Holding: ${tgt} is worth ${keep}, using it now only ${use}.`;
   if (w.kind === 'charge') return `Charging: it costs ${use} and is worth ${keep} for ${tgt}.`;
   return `${w.kind === 'export' ? 'Selling now' : 'Using it now'}: ${use} beats ${keep} for ${tgt}.`;
@@ -563,7 +564,7 @@ function buildups(w, t, tz) {
       `<div class="dbu"><div class="dq">${TITLE[b.q]}</div><div class="dld">` +
       `<span>${b.q === 'sell' ? 'Export' : 'Import'} price</span>${bar(0, b.price)}<span class="v">${eur(b.price, 3)}</span>${rows.join('')}` +
       row(charge ? 'Costs once stored' : 'Worth now', 0, b.now_eur, eur(b.now_eur, 3), 't') +
-      row(`Kept for ${target(w, t, tz)}`, 0, keep, eur(keep, 3), 't') +
+      row(`${(w.kept_for || {}).kind === 'refill' ? 'Cost of' : 'Kept for'} ${target(w, t, tz)}`, 0, keep, eur(keep, 3), 't') +
       `</div><div class="dans">${end}</div></div>`
     );
   };
@@ -604,7 +605,7 @@ function decision(w, tz) {
   const kind = w.kind;
   const f = w.kept_for || {};
   const kept = kind === 'hold' || kind === 'charge';
-  const later = [kind === 'charge' ? 'Worth later' : !kept && f.kind === 'refill' ? 'Refill later' : 'Keep for later', w.keep_eur];
+  const later = [kind === 'charge' ? 'Worth later' : f.kind === 'refill' ? 'Buy back later' : 'Keep for later', w.keep_eur];
   const now = [{ export: 'Sell now', charge: 'Costs now' }[kind] || 'Use for the house now', w.use_eur];
   const a = Date.parse(f.start);
   const b = Date.parse(f.end);
@@ -612,7 +613,7 @@ function decision(w, tz) {
   const when_ = Number.isFinite(a) && Number.isFinite(b) ? when(a, b, tz) : '';
   const target = f.kind === 'next_day' ? 'the next day' : what && Number.isFinite(a) && Number.isFinite(b) ? `${when_} ${what}` : '';
   let note = '';
-  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Refilled'} ${when_}.`;
+  if (f.kind === 'refill' && when_) note = `${kept ? 'Using it now means buying it back' : 'Bought back'} ${when_}.`;
   else if (target) note = `${kept ? 'Kept for' : 'Better than keeping it for'} ${target}.`;
   return { win: kept ? later : now, lose: kept ? now : later, note };
 }
