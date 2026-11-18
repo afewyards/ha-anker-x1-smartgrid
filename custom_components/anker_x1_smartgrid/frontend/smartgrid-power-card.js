@@ -2,6 +2,7 @@ const TAG = 'smartgrid-power-card';
 const H = 3600e3;
 const DASH = '–';
 const PAD = 6;
+const LIVE_NARROW = 440;
 const STATE_TEXT = {
   charge_grid: 'charging', charge_solar: 'charging', house: 'to house', export: 'exporting', hold: 'holding', idle: 'idle', disabled: 'disabled',
 };
@@ -178,6 +179,7 @@ svg { display: block; }
 .ph { padding: 0 ${PAD}px; border-left: 1px solid var(--sg-rule); color: var(--sg-dim); line-height: 1.35; min-width: 0; }
 .ph:first-child { border-left-color: transparent; }
 .ph > div { display: flex; justify-content: space-between; align-items: baseline; column-gap: 4px; white-space: nowrap; }
+div[hidden] { display: none !important; }
 .cheap, .bl { min-height: 1.35em; overflow: hidden; text-overflow: ellipsis; }
 .ph .cost { color: var(--sg-ink); font-size: 18px; font-weight: 700; line-height: 1.2; }
 .ph.on .cost { font-size: 22px; line-height: 1.1; }
@@ -943,7 +945,11 @@ class SmartgridPowerCard extends HTMLElement {
       if (m30 && clipped()) m30.remove();
       // The cheap slot goes before it clips the price.
       const lc = card.querySelector('.lc');
-      if (lc && lc.parentNode.scrollWidth > lc.parentNode.clientWidth) lc.remove();
+      if (lc && lc.parentNode.scrollWidth > lc.parentNode.clientWidth) {
+        lc.remove();
+        const spare = card.querySelector('.cheap[hidden]');
+        if (spare) spare.hidden = false;
+      }
       // Today's name line gives up the average price before it clips the sun figure.
       const info = card.querySelector('.ph.on .info');
       const avg = info && info.querySelector('.avg');
@@ -1019,14 +1025,14 @@ class SmartgridPowerCard extends HTMLElement {
       }
     }
 
-    const liveRow = this._liveRow(a, days, today, tz, width < 400);
+    const liveRow = this._liveRow(a, days, today, tz, width < LIVE_NARROW);
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
       this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
       liveRow +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
-      this._headers(days, fr, geo, a.battery, !liveRow || width < 400) +
+      this._headers(days, fr, geo, a.battery, !liveRow || width < LIVE_NARROW || 'hide') +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
@@ -1131,9 +1137,9 @@ class SmartgridPowerCard extends HTMLElement {
     return `cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}`;
   }
 
-  _cheap(c, tz) {
+  _cheap(c, tz, hidden = false) {
     const t = this._cheapText(c, tz);
-    return t ? `<div class="cheap pos">${t}</div>` : '<div class="cheap"></div>';
+    return t ? `<div class="cheap pos"${hidden ? ' hidden' : ''}>${t}</div>` : '<div class="cheap"></div>';
   }
 
   _headers(days, fr, { dates, today, cw, tz }, b, cheapHere) {
@@ -1153,7 +1159,7 @@ class SmartgridPowerCard extends HTMLElement {
 <div><span class="name">Today</span>${info}</div>
 <div class="cost">${cost}${saved(d.saved_eur, 'saved ')}</div>
 <div class="bl">${line}</div>
-<div class="l3">${use.join(' · ')}</div>${cheapHere ? this._cheap(d.cheap, tz) : ''}
+<div class="l3">${use.join(' · ')}</div>${cheapHere ? this._cheap(d.cheap, tz, cheapHere === 'hide') : ''}
 </div>`;
       }
       const [cost, line] = bill(d);
