@@ -173,6 +173,8 @@ def _dp_select_slots(
     dict[datetime, float],
     float,
     dict[datetime, float],
+    frozenset[datetime] | None,
+    frozenset[datetime] | None,
 ]:
     """Run the DP optimizer and return charge-slot datetimes for this tick.
 
@@ -620,6 +622,9 @@ def _dp_select_slots(
         if _hold_sched
         else None
     )
+    # Slots the chosen trajectory stops at the backup reserve, unsmoothed: the display replays the DP.
+    _wall_sched = result.get("wall_schedule")
+    walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
     if _out is not None:
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
@@ -631,7 +636,16 @@ def _dp_select_slots(
                 else (kind, None if i is None else now_h + i * stride)
                 for h, (kind, i) in enumerate(_kept_src)
             }
-    return selected, grid_request, infeasible, export_request, export_revenue_eur, ceiling_by_hour, held_slots
+    return (
+        selected,
+        grid_request,
+        infeasible,
+        export_request,
+        export_revenue_eur,
+        ceiling_by_hour,
+        held_slots,
+        walled_slots,
+    )
 
 
 def _build_is_cheap_by_hour(
@@ -1142,6 +1156,7 @@ def compute_decision(
     live_export_request: dict[datetime, float] | None = None
     live_ceiling_by_hour: dict[datetime, float] | None = None
     live_held_slots: frozenset[datetime] | None = None
+    live_walled_slots: frozenset[datetime] | None = None
     try:
         (
             _dp_selected,
@@ -1151,6 +1166,7 @@ def compute_decision(
             _dp_export_rev,
             _dp_ceiling,
             _dp_held,
+            _dp_walled,
         ) = _dp_select_slots(
             inputs=inputs,
             slots=slots,
@@ -1179,6 +1195,7 @@ def compute_decision(
         live_export_request = _dp_export_request
         live_ceiling_by_hour = _dp_ceiling
         live_held_slots = _dp_held
+        live_walled_slots = _dp_walled
         # Expose DP artefacts for fictive-plan publication (T0.6a).
         if _out is not None:
             _out["dp_selected"] = _dp_selected
@@ -1329,6 +1346,7 @@ def compute_decision(
             est_slots=_est_slot_list,
             terminal_need_kwh=need_kwh,
             held_slots=live_held_slots,
+            walled_slots=live_walled_slots,
         )
     else:
         horizon = plan_mod.build_plan_horizon(
@@ -1348,5 +1366,6 @@ def compute_decision(
             eta_curve=eta_curve,
             now=inputs.now,
             held_slots=live_held_slots,
+            walled_slots=live_walled_slots,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve

@@ -465,6 +465,7 @@ def run_daily_regret(
                     realized_export_by_hour=_dp_export,
                     export_price=eff_export,
                     dt_h=_dt_h,
+                    wall_by_hour=_dp_result.get("wall_schedule"),
                 )
                 _dp_score = regret_mod.score_regret(_dp_realized, optimal)
                 dp_regret_eur = _dp_score["regret_eur"]

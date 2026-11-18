@@ -1835,13 +1835,20 @@ def _deficit_plan(cfg, soc, hours=6, **kw):
     return plan.build_plan_horizon(_slots(hours), ivs, [], soc, BASE + timedelta(hours=hours), cfg, **kw)
 
 
-def test_plan_soc_flattens_at_backup_reserve():
-    assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 80.0)) == 30.0
+def _walled(hours=6):
+    return frozenset(BASE + timedelta(hours=i) for i in range(hours))
+
+
+def test_plan_soc_flattens_at_backup_reserve_in_walled_slots():
+    cfg = _reserve_cfg(backup_reserve_soc=30.0)
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, walled_slots=_walled())) == 30.0
+    # Slots the DP did not wall discharge under the reserve, down to the firmware floor.
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0)) == 5.0
     assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(), 80.0)) == 5.0
 
 
 def test_plan_start_under_reserve_not_lifted():
-    out = _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 12.0)
+    out = _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 12.0, walled_slots=_walled())
     assert [e["soc"] for e in out] == [12.0] * 6
 
 
@@ -1878,7 +1885,9 @@ def test_plan_parks_at_the_snapped_reserve_on_a_20_kwh_pack():
     cfg = _reserve_cfg(capacity_kwh=20.48, backup_reserve_soc=25.0)
     snapped = cfg.kwh_to_pct(reserve_wall_kwh(cfg))
     assert snapped > 25.0
-    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12)) == pytest.approx(snapped, abs=0.05)
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12, walled_slots=_walled(12))) == pytest.approx(
+        snapped, abs=0.05
+    )
 
 
 def test_grid_import_limit_w_leaves_room_for_house_draw():

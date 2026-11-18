@@ -94,23 +94,14 @@ def wall_import_kwh(soc_kwh: float, wall_kwh: float, firmware_floor_kwh: float, 
     return max(0.0, firmware_floor_kwh - soc_kwh) + max(0.0, wall_kwh - max(soc_kwh, firmware_floor_kwh)) * ac_per_dc
 
 
-def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float, reserve_kwh: float) -> float:
-    """Start SoC for the DP: a start at a real floor (firmware or reserve) must not bin below the snapped one.
-
-    A start up to one point under the reserve starts at it too: the executor holds the pack there,
-    so a small sag while held is not a shortfall to buy back.
-    """
-    if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh:
-        return firmware_floor_kwh
-    if cfg.backup_reserve_kwh - cfg.pct_to_kwh(1.0) <= soc0 < reserve_kwh:
-        return reserve_kwh
-    return soc0
+def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float) -> float:
+    """Start SoC for the DP: a start at the real firmware floor must not bin below the snapped one."""
+    return firmware_floor_kwh if cfg.firmware_floor_kwh <= soc0 < firmware_floor_kwh else soc0
 
 
-def published_spread(prices: list[float], estimated: list[bool] | None) -> float:
-    """Max minus min of the real (non-estimated) prices, floored at ``BACKUP_RESERVE_MIN_SPREAD``."""
-    real = [p for i, p in enumerate(prices) if not (estimated and estimated[i])]
-    spread = max(real) - min(real) if real else 0.0
+def published_spread(prices: list[float]) -> float:
+    """Max minus min of the window's prices, floored at ``BACKUP_RESERVE_MIN_SPREAD``."""
+    spread = max(prices) - min(prices) if prices else 0.0
     return max(spread, const.BACKUP_RESERVE_MIN_SPREAD)
 
 
@@ -155,6 +146,7 @@ def select_end_state(
     terminal_segments: list[tuple[float, float]] | None = None,
     band_top_kwh: float = 0.0,
     reserve_kwh: float = 0.0,
+    reserve_deadband_kwh: float = 0.0,
 ) -> tuple[int, float, bool]:
     """Select the DP terminal end state: ``(best_end_b, best_cost, infeasible)``.
 
@@ -193,8 +185,9 @@ def select_end_state(
     the first energy the walk credits, so end states above it all shift by
     the same amount. ``0.0`` disables this.
 
-    An end state under ``reserve_kwh`` (the backup reserve) scores
-    ``const.BACKUP_SHORTFALL_EUR_PER_KWH`` per kWh short, so the plan refills it;
+    An end state more than ``reserve_deadband_kwh`` under ``reserve_kwh`` (the
+    backup reserve) scores ``const.BACKUP_SHORTFALL_EUR_PER_KWH`` per kWh beyond
+    it, so the plan refills it but a reading a point under is not topped up;
     the penalty is selection-only and is never in the returned cost.
 
     ``terminal_mode="reserve"`` (default): select the minimum-cost end state
@@ -232,10 +225,11 @@ def select_end_state(
         # penalty -- unless water_value_hi shifts the anchor (see _credit).
         floor_b = to_bin(firmware_floor_kwh)
         target_b = to_bin(target_kwh)
+        short_from = reserve_kwh - reserve_deadband_kwh
 
         def _pick(hi: int) -> int:
             scores = {
-                b: dp[b] - _credit(b) + max(0.0, reserve_kwh - from_bin(b)) * const.BACKUP_SHORTFALL_EUR_PER_KWH
+                b: dp[b] - _credit(b) + max(0.0, short_from - from_bin(b)) * const.BACKUP_SHORTFALL_EUR_PER_KWH
                 for b in range(floor_b, hi)
                 if dp[b] != INF
             }

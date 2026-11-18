@@ -384,7 +384,7 @@ def hindsight_optimal_grid(
     urgency = reserve_urgency_by_bin(
         reserve_kwh,
         firmware_floor_kwh,
-        published_spread(list(day.price), None),
+        published_spread(list(day.price)),
         cfg.backup_reserve_refill_h,
         n_states,
         from_bin,
@@ -393,20 +393,23 @@ def hindsight_optimal_grid(
 
     # dp[b] = minimum cost to reach SoC bin b at current hour boundary.
     dp: list[float] = [INF] * n_states
-    init_b = to_bin(start_soc_kwh(cfg.pct_to_kwh(day.soc_start), cfg, firmware_floor_kwh, reserve_kwh))
+    init_b = to_bin(start_soc_kwh(cfg.pct_to_kwh(day.soc_start), cfg, firmware_floor_kwh))
     dp[init_b] = 0.0
 
-    # parent[h][b] = (prev_bin, grid_ac_kwh, export_dc_kwh) for path reconstruction.
-    # export_dc_kwh is 0.0 for all grid-charge / idle transitions (no export).
-    parent: list[list[tuple[int, float, float] | None]] = []
+    # parent[h][b] = (prev_bin, grid_ac_kwh, export_dc_kwh, stop_kwh) for path reconstruction.
+    # export_dc_kwh is 0.0 for all grid-charge / idle transitions (no export); stop_kwh is
+    # where the pack stopped: the firmware floor, or the backup reserve wall.
+    parent: list[list[tuple[int, float, float, float] | None]] = []
 
     for h in range(n):
         dp_next: list[float] = [INF] * n_states
-        par_h: list[tuple[int, float, float] | None] = [None] * n_states
+        par_h: list[tuple[int, float, float, float] | None] = [None] * n_states
         price_h = day.price[h]
         net = day.pv_kwh[h] - day.load_kwh[h]
         eta_load = _load_eta_d(net, cfg, dt_h, eta_curve)
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
+        # A deficit slot may stop at the reserve instead of discharging under it — MUST mirror optimize.optimize_grid.
+        wall_holds = reserve_kwh > 0.0 and net <= 0.0
 
         for b in range(n_states):
             if dp[b] == INF:
@@ -417,10 +420,13 @@ def hindsight_optimal_grid(
             # Solar/load contribution — shared conventions via _apply_solar_load.
             # eta_curve=None (default) is the byte-identical parity path.
             soc_after = _apply_solar_load(soc, net, cfg, dt_h, eta_curve=eta_curve)
-            # The pack stops at the backup reserve, or where it starts under it — MUST mirror optimize.optimize_grid.
-            wall = discharge_wall_kwh(soc, firmware_floor_kwh, reserve_kwh)
             # Wear on the battery->house leg — MUST mirror optimize.optimize_grid.
-            house_wear = max(0.0, soc - max(soc_after, wall)) * cfg.cycle_cost_eur_per_kwh
+            house_wear = max(0.0, soc - max(soc_after, firmware_floor_kwh)) * cfg.cycle_cost_eur_per_kwh
+            wall = discharge_wall_kwh(soc, firmware_floor_kwh, reserve_kwh)
+            # The wall candidate goes first so a tie keeps the higher SoC — MUST mirror optimize.optimize_grid.
+            stops: tuple[tuple[float, float], ...] = ((firmware_floor_kwh, house_wear),)
+            if wall_holds and soc_after < wall:
+                stops = ((wall, max(0.0, soc - max(soc_after, wall)) * cfg.cycle_cost_eur_per_kwh), *stops)
 
             # Solar spill (AC kWh) that cannot be stored — mirror of
             # optimize.optimize_grid:603-608.  Used by the export leg's
@@ -455,36 +461,42 @@ def hindsight_optimal_grid(
             # Bottom-band shortfall of the load leg, bought from the meter, measured to the binned
             # state; the charge leaves it alone.  MUST mirror optimize.optimize_grid.
             soc_after_b = from_bin(to_bin(soc_after))
-            band_kwh = band_shortfall_dc(soc, soc_after_b, wall, band_top) * eta_load
+            band_kwh = band_shortfall_dc(soc, soc_after_b, firmware_floor_kwh, band_top) * eta_load
 
-            for step in range(n_steps + 1):
-                g_dc = step * bin_kwh
-                if g_dc > max_grid_dc + 1e-9:
-                    break  # g_dc is monotonically increasing; safe to stop
+            for stop_kwh, wear in stops:
+                band_stop_kwh = band_shortfall_dc(soc, soc_after_b, stop_kwh, band_top) * eta_load
+                for step in range(n_steps + 1):
+                    g_dc = step * bin_kwh
+                    if g_dc > max_grid_dc + 1e-9:
+                        break  # g_dc is monotonically increasing; safe to stop
 
-                new_soc_pre = soc_after + g_dc
-                # Floor import on the POST-charge SoC: the charge offsets the
-                # below-firmware-floor deficit first; only the remainder is a
-                # priced grid->load import.  Booked only where it physically
-                # occurs — below the wall (const.FIRMWARE_SOC_FLOOR, or the
-                # backup reserve) — not below the soft cfg.soc_floor margin.
-                # Zero whenever new_soc_pre >= wall.  MUST mirror
-                # optimize.optimize_grid byte-for-byte (parity-critical pair).
-                floor_import_cost = (
-                    (wall_import_kwh(new_soc_pre, wall, firmware_floor_kwh, wall_eta) if new_soc_pre < wall else 0.0)
-                    + band_kwh
-                ) * price_h
-                new_soc = max(new_soc_pre, wall)
-                new_b = to_bin(new_soc)
-                eta_g = eta if eta_curve is None else eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
-                g_ac = g_dc / eta_g
-                new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh + house_wear
-                if urgency is not None:
-                    new_cost += urgency[new_b]
+                    new_soc_pre = soc_after + g_dc
+                    # Floor import on the POST-charge SoC: the charge offsets the
+                    # below-stop deficit first; only the remainder is a priced
+                    # grid->load import.  Booked only where it physically occurs —
+                    # below the stop (const.FIRMWARE_SOC_FLOOR, or the backup
+                    # reserve wall) — not below the soft cfg.soc_floor margin.
+                    # Zero whenever new_soc_pre >= stop_kwh.  MUST mirror
+                    # optimize.optimize_grid byte-for-byte (parity-critical pair).
+                    floor_import_cost = (
+                        (
+                            wall_import_kwh(new_soc_pre, stop_kwh, firmware_floor_kwh, wall_eta)
+                            if new_soc_pre < stop_kwh
+                            else 0.0
+                        )
+                        + band_stop_kwh
+                    ) * price_h
+                    new_soc = max(new_soc_pre, stop_kwh)
+                    new_b = to_bin(new_soc)
+                    eta_g = eta if eta_curve is None else eta_charge_at(g_dc / dt_h * 1000.0, cfg, eta_curve)
+                    g_ac = g_dc / eta_g
+                    new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh + wear
+                    if urgency is not None:
+                        new_cost += urgency[new_b]
 
-                if new_cost < dp_next[new_b]:
-                    dp_next[new_b] = new_cost
-                    par_h[new_b] = (b, g_ac, 0.0)  # export_dc=0 for charge/idle
+                    if new_cost < dp_next[new_b]:
+                        dp_next[new_b] = new_cost
+                        par_h[new_b] = (b, g_ac, 0.0, stop_kwh)  # export_dc=0 for charge/idle
 
             # ----------------------------------------------------------------
             # Action class B: export discharge (e_dc > 0) — F1 addition.
@@ -539,13 +551,15 @@ def hindsight_optimal_grid(
                         # Bottom band: the load leg's shortfall is bought, the export leg's is not sold.
                         band_eur = (
                             band_kwh * price_h
-                            + band_shortfall_dc(soc_after_b, from_bin(new_b), wall, band_top) * eta_d_step * ep_h
+                            + band_shortfall_dc(soc_after_b, from_bin(new_b), firmware_floor_kwh, band_top)
+                            * eta_d_step
+                            * ep_h
                         )
                         new_cost = cost - (export_revenue - degradation) + floor_import_export + band_eur + house_wear
 
                         if new_cost < dp_next[new_b]:
                             dp_next[new_b] = new_cost
-                            par_h[new_b] = (b, 0.0, e_dc)  # g_ac=0, export_dc=e_dc
+                            par_h[new_b] = (b, 0.0, e_dc, firmware_floor_kwh)  # g_ac=0, export_dc=e_dc
 
         parent.append(par_h)
         dp = dp_next
@@ -566,6 +580,7 @@ def hindsight_optimal_grid(
         terminal_segments=terminal_segments,
         band_top_kwh=band_top,
         reserve_kwh=reserve_kwh,
+        reserve_deadband_kwh=cfg.pct_to_kwh(1.0),
     )
 
     if best_end_b == -1:
@@ -581,7 +596,7 @@ def hindsight_optimal_grid(
         }
 
     # Reconstruct per-hour schedules by backtracking parent pointers.
-    # parent tuple: (prev_bin, grid_ac_kwh, export_dc_kwh)
+    # parent tuple: (prev_bin, grid_ac_kwh, export_dc_kwh, stop_kwh)
     schedule_ac: list[float] = [0.0] * n
     export_dc_sched: list[float] = [0.0] * n
     floor_import_eur = 0.0
@@ -597,7 +612,7 @@ def hindsight_optimal_grid(
         info = parent[h][cur_b]
         if info is None:
             break  # should not occur for a properly reachable end state
-        prev_b, g_ac, e_dc = info
+        prev_b, g_ac, e_dc, stop_h = info
         schedule_ac[h] = g_ac
         export_dc_sched[h] = e_dc
         # Below-floor direct-import cost — recompute on the POST-charge SoC
@@ -615,21 +630,22 @@ def hindsight_optimal_grid(
             eta_curve=eta_curve,
         )
         new_soc_pre_h = soc_after_h + g_ac * eta
-        # Mirrors the forward-pass wall (parity-critical pair with
+        # Mirrors the forward-pass stop (parity-critical pair with
         # optimize.optimize_grid's stored fi_kwh in the parent tuple).
         soc_after_hb = from_bin(to_bin(soc_after_h))
-        wall_h = discharge_wall_kwh(from_bin(prev_b), firmware_floor_kwh, reserve_kwh)
         eta_load_h = _load_eta_d(net_h, cfg, dt_h, eta_curve)
         wall_eta_h = wall_ac_per_dc(net_h, eta_load_h, cfg.idle_drain_w * dt_h / 1000.0)
         floor_import_step = (
-            wall_import_kwh(new_soc_pre_h, wall_h, firmware_floor_kwh, wall_eta_h) if new_soc_pre_h < wall_h else 0.0
-        ) + band_shortfall_dc(from_bin(prev_b), soc_after_hb, wall_h, band_top) * eta_load_h
+            wall_import_kwh(new_soc_pre_h, stop_h, firmware_floor_kwh, wall_eta_h) if new_soc_pre_h < stop_h else 0.0
+        ) + band_shortfall_dc(from_bin(prev_b), soc_after_hb, stop_h, band_top) * eta_load_h
         floor_import_eur += floor_import_step * day.price[h]
         floor_import_kwh += floor_import_step
         if e_dc > 0.0:
             eta_d_h = eta_d if eta_curve is None else eta_discharge_at(e_dc / dt_h * 1000.0, cfg, eta_curve)
             floor_import_eur += (
-                band_shortfall_dc(soc_after_hb, from_bin(cur_b), wall_h, band_top) * eta_d_h * export_price[h]  # type: ignore[index]
+                band_shortfall_dc(soc_after_hb, from_bin(cur_b), firmware_floor_kwh, band_top)
+                * eta_d_h
+                * export_price[h]  # type: ignore[index]
             )
         cur_b = prev_b
 
@@ -688,6 +704,7 @@ def realized_grid_cost(
     export_price: list[float] | tuple[float, ...] | None = None,
     dt_h: float = 1.0,
     eta_curve=None,
+    wall_by_hour: list[bool] | None = None,
 ) -> dict:
     """Simulate realized charging + forced floor-hit imports for a completed day.
 
@@ -719,6 +736,9 @@ def realized_grid_cost(
         mirrors the oracle's accounting sign.
     export_price : optional per-slot list or tuple — per-slot feed-in tariff
         (€/AC kWh).  Ignored when *realized_export_by_hour* is None.
+    wall_by_hour : optional per-slot flags — slots where the pack stops at the
+        backup reserve (``optimize_grid``'s ``wall_schedule``), so a replayed DP
+        plan stops where the DP did.  ``None`` discharges to the firmware floor.
 
     Returns
     -------
@@ -746,9 +766,9 @@ def realized_grid_cost(
          g_dc = min(g_ac × eta, rate_kwh_h × eta, headroom)
          Full AC cost paid regardless (excess = waste).  Rate cap mirrors DP.
     3. Forced floor-hit import — grid serves unmet load DIRECTLY (grid→load):
-         The wall is the backup reserve, or the slot's start SoC when already
-         under it, never below the firmware floor (const.FIRMWARE_SOC_FLOOR).
-         If SoC < wall after steps 1–2.5:
+         The wall is the firmware floor (const.FIRMWARE_SOC_FLOOR); in a
+         *wall_by_hour* slot it is the backup reserve, or the slot's start SoC
+         when already under it.  If SoC < wall after steps 1–2.5:
            forced_import_ac[h] = (firmware floor − soc, 1:1; NOT divided by eta)
                + (wall − max(soc, firmware floor)) × AC per DC (dp_common.wall_ac_per_dc).
            SoC clamps to the wall.
@@ -782,6 +802,8 @@ def realized_grid_cost(
     _validate_day_len(realized_charge_by_hour, "realized_charge_by_hour", _expected)
     if realized_export_by_hour is not None:
         _validate_day_len(realized_export_by_hour, "realized_export_by_hour", _expected)
+    if wall_by_hour is not None:
+        _validate_day_len(wall_by_hour, "wall_by_hour", _expected)
 
     firmware_floor_kwh = cfg.firmware_floor_kwh
     reserve_kwh = reserve_wall_kwh(cfg)
@@ -811,8 +833,12 @@ def realized_grid_cost(
         net = day.pv_kwh[h] - day.load_kwh[h]
 
         soc_before = soc
-        # As in the DPs, the pack stops at the backup reserve, or where it starts under it.
-        wall = discharge_wall_kwh(soc_before, firmware_floor_kwh, reserve_kwh)
+        # As in the DPs, a walled slot stops at the backup reserve, or where it starts under it.
+        wall = (
+            discharge_wall_kwh(soc_before, firmware_floor_kwh, reserve_kwh)
+            if wall_by_hour is not None and wall_by_hour[h]
+            else firmware_floor_kwh
+        )
         eta_load = _load_eta_d(net, cfg, dt_h, eta_curve)
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # Step 1: Solar/load — shared physics with hindsight_optimal_grid.
@@ -842,7 +868,7 @@ def realized_grid_cost(
 
         # Step 3: Forced floor-hit import — grid→load direct, 1:1 (no eta loss)
         # below the firmware hard floor (const.FIRMWARE_SOC_FLOOR, 5%), at the
-        # slot's AC per DC between it and the backup reserve — mirrors the DPs.
+        # slot's AC per DC between it and a walled slot's reserve — mirrors the DPs.
         if soc < wall - 1e-9:
             forced_imports[h] += wall_import_kwh(soc, wall, firmware_floor_kwh, wall_eta)
             soc = wall

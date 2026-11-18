@@ -1,4 +1,4 @@
-"""Backup reserve in both DP cores: the pack is not spent below it, and a pack under it refills."""
+"""Backup reserve in both DP cores: the pack stops at it unless dipping under it pays, and refills."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from custom_components.anker_x1_smartgrid.optimize import optimize_grid
 from custom_components.anker_x1_smartgrid.regret import (
     _BIN_KWH,
     DayData,
+    _apply_solar_load,
     hindsight_optimal_grid,
     realized_grid_cost,
 )
@@ -97,13 +98,14 @@ def test_refill_in_cheapest_slot():
     price = [0.30] * 3 + [0.10] + [0.30] * 8
     res = _opt([0.0] * 12, price, 12.0)
     assert _charged_slots(res) == [3]
-    assert _dc(res) == pytest.approx(1.8, abs=1e-9)
+    # Up to the 1 % dead band under the 3 kWh reserve.
+    assert _dc(res) == pytest.approx(3.0 - 0.1 - 1.2, abs=1e-9)
 
 
 def test_refill_flat_price_first_slot():
     res = _opt([0.0] * 12, [0.25] * 12, 12.0)
     assert _charged_slots(res) == [0]
-    assert _dc(res) == pytest.approx(1.8, abs=1e-9)
+    assert _dc(res) == pytest.approx(3.0 - 0.1 - 1.2, abs=1e-9)
 
 
 def test_refill_waits_only_if_saving_beats_rent():
@@ -136,9 +138,8 @@ def test_urgency_off_and_convex():
 
 
 def test_published_spread():
-    assert dp_common.published_spread([0.10, 0.30, 0.20], None) == pytest.approx(0.20)
-    assert dp_common.published_spread([0.10, 0.30, 0.90], [False, False, True]) == pytest.approx(0.20)
-    assert dp_common.published_spread([0.2, 0.2], None) == 0.02
+    assert dp_common.published_spread([0.10, 0.30, 0.20]) == pytest.approx(0.20)
+    assert dp_common.published_spread([0.2, 0.2]) == 0.02
 
 
 def test_refill_h_config():
@@ -162,9 +163,10 @@ def test_no_topup_loop_at_reserve():
     cfg = Config(capacity_kwh=10.0, backup_reserve_soc=30.0, idle_drain_w=100.0)
     res = _opt([0.0] * 12, [0.25] * 12, 30.0, cfg=cfg)
     assert res["schedule"] == [0.0] * 12
-    # The standby is bought at the reserve rather than drawn from the pack and bought back.
-    assert res["eur"] == pytest.approx(0.1 * 0.25 * 12, abs=1e-9)
-    assert res["hold_schedule"] == [True] * 12
+    # The standby is bought at the reserve rather than drawn from the pack and bought back;
+    # only the last slot's comes from the pack, into the 1 % dead band.
+    assert res["eur"] == pytest.approx(0.1 * 0.25 * 11, abs=1e-9)
+    assert res["hold_schedule"] == [True] * 11 + [False]
 
 
 def test_start_at_off_grid_reserve_does_not_top_up():
@@ -176,7 +178,7 @@ def test_start_at_off_grid_reserve_does_not_top_up():
 
 @pytest.mark.parametrize("cap", [10.0, 20.48])
 def test_start_a_fraction_under_reserve_does_not_top_up(cap):
-    # The executor holds anywhere under reserve + 1, so a pack that sagged a little while held is not refilled.
+    # A sag inside the 1 % dead band is not bought back.
     cfg = Config(capacity_kwh=cap, backup_reserve_soc=30.0, idle_drain_w=100.0)
     load, price = [0.5] * 12, [0.25] * 12
     kw: dict = dict(water_value=0.12, chargeable=[False] * 12, refill_ok=[True] * 12)
@@ -266,10 +268,12 @@ def test_wall_import_with_eta_curve(idle_w):
     bought = sum((d + idle_w / 1000.0) * p for d, p in zip(load, price))
     passive = _opt(load, price, 30.0, cfg=cfg, chargeable=[False] * n, eta_curve=_Curve())
     held = _opt(load, price, 30.0, cfg=cfg, chargeable=[False] * n, eta_curve=_Curve(), hold=[True] * n)
+    assert passive["wall_schedule"] == [True] * n
     assert passive["eur"] == pytest.approx(held["eur"], abs=1e-6)
     assert passive["eur"] == pytest.approx(bought, abs=1e-6)
     day = DayData(pv_kwh=(0.0,) * n, load_kwh=tuple(load), price=tuple(price), soc_start=30.0)
-    assert realized_grid_cost(day, [0.0] * n, cfg, eta_curve=_Curve())["eur"] == pytest.approx(bought, abs=1e-9)
+    walled = realized_grid_cost(day, [0.0] * n, cfg, eta_curve=_Curve(), wall_by_hour=passive["wall_schedule"])
+    assert walled["eur"] == pytest.approx(bought, abs=1e-9)
 
 
 _PV = [0.0] * 8 + [0.5, 1.5, 2.5, 3.0, 3.0, 2.5, 1.5, 0.5] + [0.0] * 8
@@ -314,10 +318,145 @@ def test_parity_with_reserve_quarter_hourly(soc_start):
     assert opt["eur"] == pytest.approx(hind["eur"], abs=1e-9)
 
 
-def test_realized_cost_respects_reserve():
+def test_realized_cost_stops_at_reserve_only_in_walled_slots():
     load = (0.5, 0.8, 0.3, 1.0, 0.6, 0.4)
     price = (0.30, 0.25, 0.10, 0.40, 0.35, 0.20)
     day = DayData(pv_kwh=(0.0,) * 6, load_kwh=load, price=price, soc_start=30.0)
-    res = realized_grid_cost(day, [0.0] * 6, CFG)
+    res = realized_grid_cost(day, [0.0] * 6, CFG, wall_by_hour=[True] * 6)
     assert sum(res["forced_import_kwh"]) == pytest.approx(sum(load), abs=1e-9)
     assert res["eur"] == pytest.approx(sum(d * p for d, p in zip(load, price)), abs=1e-9)
+    # Unwalled, the pack serves the house down to the firmware floor.
+    assert sum(realized_grid_cost(day, [0.0] * 6, CFG)["forced_import_kwh"]) < sum(load) - 2.0
+
+
+def test_realized_cost_replays_the_plan():
+    load = [0.5, 0.8, 0.3, 1.0, 0.6, 0.4]
+    price = [0.30, 0.25, 0.10, 0.40, 0.35, 0.20]
+    res = _opt(load, price, 30.0)
+    assert any(res["wall_schedule"]) and not all(res["wall_schedule"])
+    day = DayData(pv_kwh=(0.0,) * 6, load_kwh=tuple(load), price=tuple(price), soc_start=30.0)
+    replay = realized_grid_cost(day, res["schedule"], CFG, wall_by_hour=res["wall_schedule"])
+    assert replay["eur"] == pytest.approx(res["eur"], abs=1e-9)
+
+
+def _q(xs, dt_h):
+    return [x for x in xs for _ in range(round(1 / dt_h))]
+
+
+def _soc_path(res, load, soc_start, cfg, dt_h):
+    """SoC % at each slot end, replaying the plan's charges, exports and walls (static eta, no PV)."""
+    _, to_bin, from_bin = dp_common.soc_bins(cfg.capacity_kwh)
+    floor = dp_common.grid_floor_kwh(cfg.firmware_floor_kwh)
+    reserve = dp_common.reserve_wall_kwh(cfg)
+    n = len(load)
+    walled = res.get("wall_schedule") or [False] * n
+    export = res.get("export_schedule") or [0.0] * n
+    soc = from_bin(to_bin(dp_common.start_soc_kwh(cfg.pct_to_kwh(soc_start), cfg, floor)))
+    path = []
+    for h in range(n):
+        stop = dp_common.discharge_wall_kwh(soc, floor, reserve) if walled[h] else floor
+        after = _apply_solar_load(soc, -load[h], cfg, dt_h)
+        soc = from_bin(to_bin(max(after + res["schedule"][h] * ETA - export[h] / cfg.eta_discharge_static(), stop)))
+        path.append(cfg.kwh_to_pct(soc))
+    return path
+
+
+def _both(load, price, soc_start, dt_h, cfg=CFG, **kw):
+    """DP plan and its SoC path, after checking the oracle chose the same plan."""
+    n = len(load)
+    kw = dict(terminal_mode="water_value", water_value=0.10, dt_h=dt_h, **kw)
+    res = optimize_grid(
+        [0.0] * n,
+        list(load),
+        list(price),
+        soc_start,
+        cfg,
+        window_start_h=0,
+        window_len=n,
+        slots_per_day=round(24 / dt_h),
+        **kw,
+    )
+    hind = hindsight_optimal_grid(DayData((0.0,) * n, tuple(load), tuple(price), soc_start), cfg, **kw)
+    assert res["schedule"] == pytest.approx(hind["schedule"], abs=1e-9)
+    assert res["kwh"] == pytest.approx(hind["kwh"], abs=1e-9)
+    assert res["eur"] == pytest.approx(hind["eur"], abs=1e-9)
+    if "export_price" in kw:
+        assert res["export_schedule"] == pytest.approx(hind["export_schedule"], abs=1e-9)
+    return res, _soc_path(res, load, soc_start, cfg, dt_h)
+
+
+_HOURS = pytest.mark.parametrize("dt_h", [1.0, 0.25])
+# The house draws only in a 2 h peak, so a dip there waits under the reserve until the refill.
+_PEAK_LOAD = [1.0, 1.0] + [0.0] * 22
+
+
+@_HOURS
+def test_dips_under_reserve_when_refill_is_near(dt_h):
+    res, path = _both(_q([1.0 * dt_h] * 8, dt_h), _q([0.20, 0.20] + [0.00] * 6, dt_h), 30.0, dt_h)
+    assert min(path) <= 10.0 + 1e-9
+    assert path[-1] >= 30.0
+    _, peak_only = _both(_q([x * dt_h for x in _PEAK_LOAD], dt_h), _q([0.20] * 2 + [0.00] * 22, dt_h), 30.0, dt_h)
+    assert min(peak_only) <= 10.0 + 1e-9
+
+
+@_HOURS
+def test_far_refill_dips_only_as_deep_as_the_rent_allows(dt_h):
+    load = _q([x * dt_h for x in _PEAK_LOAD], dt_h)
+    _, near = _both(load, _q([0.20] * 2 + [0.00] * 22, dt_h), 30.0, dt_h)
+    _, far = _both(load, _q([0.20] * 20 + [0.00] * 4, dt_h), 30.0, dt_h)
+    band = CFG.pct_to_kwh(30.0 - 5.0)
+    depth = CFG.pct_to_kwh(30.0 - min(far)) / band
+    # The rent's marginal kWh breaks even at depth gain/spread × refill_h/T, the hold being the alternative.
+    gain, spread, wait_h = 0.20 - CFG.cycle_cost_eur_per_kwh, 0.20, 20 - 2
+    optimum = gain / spread * CFG.backup_reserve_refill_h / wait_h
+    # A slot either dips its whole deficit or stops at the wall, so the plan lands within half a slot of it.
+    assert depth <= optimum + max(_BIN_KWH, 1.0 * dt_h / 2) / band + 1e-9
+    assert depth > 0.0
+    assert min(far) > min(near)
+
+
+@_HOURS
+def test_far_refill_with_house_load_waits_at_reserve_until_refill_is_near(dt_h):
+    _, path = _both(_q([1.0 * dt_h] * 24, dt_h), _q([0.20] * 20 + [0.00] * 4, dt_h), 30.0, dt_h)
+    waiting = path[: round(18 / dt_h)]
+    assert min(waiting) == pytest.approx(30.0)
+    assert min(path) < 30.0
+
+
+@_HOURS
+@pytest.mark.parametrize(("soc_start", "load_kw"), [(30.0, 1.0), (60.0, 0.4)])
+def test_flat_price_never_dips_under_reserve(dt_h, soc_start, load_kw):
+    n = round(12 / dt_h)
+    _, path = _both([load_kw * dt_h] * n, [0.25] * n, soc_start, dt_h)
+    assert min(path) >= 30.0 - 1.0 - 1e-9
+
+
+@_HOURS
+def test_flat_price_start_under_reserve_refills(dt_h):
+    n = round(12 / dt_h)
+    _, path = _both([0.4 * dt_h] * n, [0.25] * n, 12.0, dt_h)
+    assert path[-1] >= 30.0 - 1.0 - 1e-9
+
+
+@pytest.mark.parametrize(
+    ("cap", "reserve", "soc_start", "dt_h"),
+    [(10.0, 30.0, 29.0, 1.0), (10.0, 30.0, 29.0, 0.25), (20.48, 25.0, 25.0, 0.25)],
+)
+def test_one_point_under_reserve_is_not_topped_up(cap, reserve, soc_start, dt_h):
+    # 25 % of 20.48 kWh bins to 5.10, under the 5.15 snapped reserve.
+    cfg = Config(capacity_kwh=cap, backup_reserve_soc=reserve, idle_drain_w=100.0)
+    n = round(12 / dt_h)
+    for load in ([0.0] * n, [0.4 * dt_h] * n):
+        res, _ = _both(load, [0.25] * n, soc_start, dt_h, cfg=cfg)
+        assert res["schedule"][0] == 0.0
+
+
+@_HOURS
+def test_export_stops_at_reserve_while_house_goes_under(dt_h):
+    price = _q([0.20, 0.20, 0.45, 0.45, 0.20, 0.05, 0.05, 0.20, 0.20, 0.20, 0.20, 0.20], dt_h)
+    export_price = [p - 0.02 for p in price]
+    res, path = _both(_q([0.5 * dt_h] * 12, dt_h), price, 60.0, dt_h, export_price=export_price)
+    exported = [h for h, e in enumerate(res["export_schedule"]) if e > 0.0]
+    assert exported
+    assert min(path[h] for h in exported) >= 30.0 - 1e-9
+    assert min(path) < 30.0

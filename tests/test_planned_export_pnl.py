@@ -57,8 +57,9 @@ def test_dp_select_slots_returns_export_revenue():
         export_price_matches_import=False,
         intervals=ivs,
     )
-    assert len(out) == 7
+    assert len(out) == 8
     assert isinstance(out[4], float)
     assert out[4] >= 0.0
     assert isinstance(out[5], dict)  # ceiling_by_hour (SoC% per hour)
     assert out[6] is None or isinstance(out[6], frozenset)  # held_slots (hold off here)
+    assert out[7] is None  # walled_slots (no backup reserve here)
