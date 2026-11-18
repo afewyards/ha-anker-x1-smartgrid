@@ -478,11 +478,14 @@ async def test_a_failing_live_line_leaves_battery_days_and_hours(monkeypatch, ca
 
 
 async def test_a_tick_publishes_the_current_slot_price(monkeypatch):
+    from tests.test_controller_export_executor import BASE
+
     ctrl, _act, _ = _tick_setup(monkeypatch)
     await ctrl.tick()
     live = ctrl.power_card["live"]
     assert live["price"] == 0.30
     assert live["next"]["price"] == 0.30
+    assert live["next"]["at"] == (BASE + timedelta(hours=1)).isoformat()
 
 
 async def test_a_disabled_tick_publishes_the_current_slot_price(monkeypatch):
@@ -499,4 +502,6 @@ async def test_a_static_tariff_tick_prices_the_live_line_from_the_synthesized_sl
     ctrl._data[const.CONF_PRICE_MODE] = const.PRICE_MODE_STATIC
     await ctrl.tick()
     price = ctrl.power_card["live"]["price"]
-    assert price is not None and price != 0.30
+    # The fixture leaves the static tariff at its default: flat import price.
+    assert price == const.DEFAULT_STATIC_PRICE_IMPORT
+    assert ctrl.power_card["live"]["next"]["price"] == const.DEFAULT_STATIC_PRICE_IMPORT
