@@ -393,7 +393,7 @@ def hindsight_optimal_grid(
 
     # dp[b] = minimum cost to reach SoC bin b at current hour boundary.
     dp: list[float] = [INF] * n_states
-    init_b = to_bin(start_soc_kwh(cfg.pct_to_kwh(day.soc_start), cfg, firmware_floor_kwh))
+    init_b = to_bin(start_soc_kwh(cfg.pct_to_kwh(day.soc_start), cfg, firmware_floor_kwh, reserve_kwh))
     dp[init_b] = 0.0
 
     # parent[h][b] = (prev_bin, grid_ac_kwh, export_dc_kwh, stop_kwh) for path reconstruction.
@@ -580,7 +580,6 @@ def hindsight_optimal_grid(
         terminal_segments=terminal_segments,
         band_top_kwh=band_top,
         reserve_kwh=reserve_kwh,
-        reserve_deadband_kwh=cfg.pct_to_kwh(1.0),
     )
 
     if best_end_b == -1:

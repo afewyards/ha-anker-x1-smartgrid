@@ -664,7 +664,7 @@ class TestBackupReserve:
         assert ctrl.plan.state is ControllerState.FORCING
         assert [c[0] for c in act.calls] == ["engage_and_charge"]
 
-        # Refilled into the reserve's dead band, past the trough: the plan stops there again.
+        # A point under the reserve after the trough: the plan stops there again.
         await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=4), "29.0", window(4))
         assert ctrl.hold_state.engaged
         assert walled[-1] is True
