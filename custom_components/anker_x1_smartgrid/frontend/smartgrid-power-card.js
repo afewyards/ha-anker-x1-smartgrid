@@ -96,6 +96,27 @@ function when(a, b, tz) {
   return `${weekday(a, tz)} ${start}${DASH}${endOfDay(end)}`;
 }
 
+function powerW(s) {
+  const v = s && typeof s.state === 'string' && s.state.trim() !== '' ? Number(s.state) : NaN;
+  if (!Number.isFinite(v)) return null;
+  const unit = s.attributes && s.attributes.unit_of_measurement;
+  return typeof unit === 'string' && unit.toLowerCase() === 'kw' ? v * 1000 : v;
+}
+// Grid: positive imports; within 50 W of zero reads as idle.
+function liveFmt(key, v) {
+  if (key === 'price') return { n: eur(v), u: num(v) === null ? '' : '/kWh', dir: '', cls: '' };
+  if (v === null) return { n: DASH, u: '', dir: '', cls: key === 'grid' ? 'qz' : '' };
+  const kw = Math.abs(v) >= 1000;
+  const f = (x) => (kw ? (x / 1000).toFixed(2) : String(Math.round(x)));
+  const u = kw ? 'kW' : 'W';
+  if (key !== 'grid') return { n: f(v), u, dir: '', cls: '' };
+  const [dir, cls] = v > 50 ? ['import', ''] : v < -50 ? ['export', 'ex'] : ['', 'qz'];
+  return { n: f(Math.abs(v)), u, dir, cls };
+}
+function liveCell(key, label, v, extra = '') {
+  const f = liveFmt(key, v);
+  return `<div data-live="${key}" class="${f.cls}"><div class="k">${label}${extra}</div><div class="v"><span class="n">${f.n}</span><span class="u">${f.u}</span>${key === 'grid' ? `<span class="dir">${f.dir}</span>` : ''}</div></div>`;
+}
 
 const STYLE = `<style>
 :host {
@@ -119,6 +140,22 @@ ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size
 .bat .se { color: var(--sg-export); }
 .bat .sc { color: var(--sg-charge); }
 .bat .sd { color: var(--sg-dim); }
+.live { display: grid; grid-template-columns: .85fr .85fr 1.2fr 2.1fr; margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
+.live > div { padding: 0 8px; border-left: 1px solid var(--sg-rule); min-width: 0; }
+.live > div:first-child { border-left: 0; padding-left: 0; }
+.live .k { display: flex; align-items: center; gap: 5px; color: var(--sg-dim); white-space: nowrap; overflow: hidden; }
+.live .k::before { content: ""; flex: none; width: 9px; height: 2px; border-radius: 1px; background: var(--m); }
+.live [data-live=price] .k::before { display: none; }
+.live [data-live=house] { --m: var(--sg-ink); }
+.live [data-live=solar] { --m: var(--sg-sun); }
+.live [data-live=grid] { --m: var(--sg-dim); }
+.live .ex { --m: var(--sg-export); }
+.live .v { font-size: 16px; font-weight: 700; line-height: 1.25; white-space: nowrap; }
+.live .u, .live .dir { font-size: 10.5px; font-weight: 400; color: var(--sg-dim); margin-left: 2px; }
+.live .dir { margin-left: 4px; }
+.live .ex .n, .live .ex .dir { color: var(--sg-export); }
+.live .qz .n { color: var(--sg-dim); font-weight: 400; }
+.live .lc { margin-left: auto; color: var(--sg-pos); }
 .bar { position: relative; height: 6px; border-radius: 3px; background: var(--sg-rule); margin: 5px 0 2px; }
 .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--sg-charge); }
 .bar i.ex::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 4px; border-radius: 0 3px 3px 0; background: var(--sg-export); }
@@ -646,7 +683,8 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', model: 'sensor.smartgrid_active_load_model', debug: false, ...config };
+    this._cfg = { entity: 'sensor.smartgrid_power_card', switch: 'switch.smartgrid_enabled', model: 'sensor.smartgrid_active_load_model', debug: false, house: 'sensor.smartgrid_house_load', ...config };
+    this._lv = [];
     this._state = this._hass ? this._hass.states[this._cfg.entity] : null;
     this._sw = this._hass ? this._hass.states[this._cfg.switch] : null;
     this._model = this._hass ? this._hass.states[this._cfg.model] : null;
@@ -697,7 +735,14 @@ class SmartgridPowerCard extends HTMLElement {
     const s = hass.states[this._cfg.entity];
     const sw = hass.states[this._cfg.switch];
     const m = hass.states[this._cfg.model];
-    if (s === this._state && sw === this._sw && m === this._model) return;
+    const lv = this._liveIds(s).map((id) => hass.states[id]);
+    const main = s === this._state && sw === this._sw && m === this._model;
+    if (main && lv.length === this._lv.length && lv.every((x, i) => x === this._lv[i])) return;
+    this._lv = lv;
+    if (main) {
+      this._patchLive();
+      return;
+    }
     if (sw !== this._sw) {
       this._pending = null;
       clearTimeout(this._pendingTimer);
@@ -707,6 +752,50 @@ class SmartgridPowerCard extends HTMLElement {
     this._model = m;
     if (this._open) this._fetch();
     this._render();
+  }
+
+  _liveIds(s) {
+    const l = s && s.attributes && s.attributes.live;
+    if (!l || typeof l !== 'object') return [];
+    return [this._cfg.house, ...(Array.isArray(l.pv) ? l.pv : []), l.meter].filter((id) => typeof id === 'string');
+  }
+
+  _liveValues() {
+    const s = this._state;
+    const l = s && s.attributes && s.attributes.live;
+    if (!l || typeof l !== 'object' || !this._hass) return null;
+    const st = this._hass.states;
+    const pv = (Array.isArray(l.pv) ? l.pv : []).map((id) => powerW(st[id])).filter((v) => v !== null);
+    const nx = l.next && typeof l.next === 'object' ? l.next : null;
+    const due = nx && Date.now() >= Date.parse(nx.at);
+    return {
+      house: powerW(st[this._cfg.house]),
+      solar: pv.length ? pv.reduce((t, v) => t + v, 0) : null,
+      grid: powerW(st[l.meter]),
+      price: num(due ? nx.price : l.price),
+    };
+  }
+
+  // Text only, so focus, tooltip and the rest of the card stay put.
+  _patchLive() {
+    const v = this._liveValues();
+    if (!v) return;
+    for (const el of this.shadowRoot.querySelectorAll('[data-live]')) {
+      const key = el.dataset.live;
+      const f = liveFmt(key, v[key]);
+      for (const k of ['n', 'u', 'dir']) {
+        const e = el.querySelector(`.${k}`);
+        if (e && e.textContent !== f[k]) e.textContent = f[k];
+      }
+      if (el.className !== f.cls) el.className = f.cls;
+    }
+  }
+
+  _liveRow(a, days, today, tz) {
+    const v = a.live ? this._liveValues() : null;
+    if (!v) return '';
+    const c = this._cheapText((days.find((d) => d && d.date === today) || {}).cheap, tz);
+    return `<div class="live">${liveCell('house', 'House', v.house)}${liveCell('solar', 'Solar', v.solar)}${liveCell('grid', 'Grid', v.grid)}${liveCell('price', 'Price now', v.price, c ? `<span class="lc">${c}</span>` : '')}</div>`;
   }
 
   connectedCallback() {
@@ -824,9 +913,9 @@ class SmartgridPowerCard extends HTMLElement {
     return `${s}<div class="hu"><span class="k">House ${use.toFixed(2)} kWh</span>${bar}${line.length ? `<span class="k">${line.join(' · ')}</span>` : ''}</div>`;
   }
 
-  // In rows of 50 px: about 400 px, or about 1000 px with the hour detail open.
+  // In rows of 50 px: about 440 px, or about 1040 px with the hour detail open.
   getCardSize() {
-    return this._open ? 20 : 8;
+    return this._open ? 21 : 9;
   }
 
   static getStubConfig() {
@@ -851,6 +940,9 @@ class SmartgridPowerCard extends HTMLElement {
       if (sunp && clipped()) sunp.remove();
       const m30 = card.querySelector('.m30');
       if (m30 && clipped()) m30.remove();
+      // The cheap slot goes before it clips the price.
+      const lc = card.querySelector('.lc');
+      if (lc && lc.parentNode.scrollWidth > lc.parentNode.clientWidth) lc.remove();
       // Today's name line gives up the average price before it clips the sun figure.
       const info = card.querySelector('.ph.on .info');
       const avg = info && info.querySelector('.avg');
@@ -930,6 +1022,7 @@ class SmartgridPowerCard extends HTMLElement {
       `<div class="${off ? 'off' : ''}">` +
       title +
       this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
+      this._liveRow(a, days, today, tz) +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
       this._headers(days, fr, geo, a.battery) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
@@ -1030,10 +1123,15 @@ class SmartgridPowerCard extends HTMLElement {
     return s + `<rect class="gd" data-k="x" y="0" width="0" height="${LEVEL_H}"/></svg>`;
   }
 
-  _cheap(c, tz) {
+  _cheapText(c, tz) {
     const hh = (iso) => parts(Date.parse(iso), tz).hour;
-    if (!c || !Number.isFinite(Date.parse(c.start)) || !Number.isFinite(Date.parse(c.end)) || num(c.price) === null) return '<div class="cheap"></div>';
-    return `<div class="cheap pos">cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}</div>`;
+    if (!c || !Number.isFinite(Date.parse(c.start)) || !Number.isFinite(Date.parse(c.end)) || num(c.price) === null) return '';
+    return `cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}`;
+  }
+
+  _cheap(c, tz) {
+    const t = this._cheapText(c, tz);
+    return t ? `<div class="cheap pos">${t}</div>` : '<div class="cheap"></div>';
   }
 
   _headers(days, fr, { dates, today, cw, tz }, b) {
@@ -1054,7 +1152,6 @@ class SmartgridPowerCard extends HTMLElement {
 <div class="cost">${cost}${saved(d.saved_eur, 'saved ')}</div>
 <div class="bl">${line}</div>
 <div class="l3">${use.join(' · ')}</div>
-${this._cheap(d.cheap, tz)}
 </div>`;
       }
       const [cost, line] = bill(d);
