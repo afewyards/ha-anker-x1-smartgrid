@@ -13,6 +13,9 @@
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
     &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
     &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
+  ?live=import|export|zero|nopv|none  the live row's fixture (default import): the meter reads 1840, -3200 or 20 W; nopv makes the first solar sensor unavailable; none leaves the live attribute off the card sensor, so no row and today's cheap slot in the Today column
+  ?push=1  after mount, gives the house sensor a new state of 950 W in a new hass and checks that the House cell reads 950 W without the card re-rendering
+  ?price=next  puts the next quarter's price in the past and checks that the Price cell shows it
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
 <style>
@@ -34,7 +37,7 @@
   window.STATUS = { size: '', error: 'no errors', rerender: '' };
   window.showStatus = () => {
     const el = document.getElementById('status');
-    if (el) el.textContent = `${STATUS.size} · ${STATUS.error} · ${STATUS.rerender}${STATUS.ws ? ` · ${STATUS.ws}` : ''}`;
+    if (el) el.textContent = `${STATUS.size} · ${STATUS.error} · ${STATUS.rerender}${STATUS.ws ? ` · ${STATUS.ws}` : ''}${STATUS.live ? ` · ${STATUS.live}` : ''}`;
   };
   const logError = console.error;
   console.error = (...args) => {
@@ -366,10 +369,21 @@
   }
 
   const states = {};
+  const LIVE = q.get('live') || 'import';
+  const power = (window.power = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } }));
+  if (LIVE !== 'none') {
+    // The next quarter hour after the fixed now; with price=next it already began.
+    const at = q.get('price') === 'next' ? NOW - 60e3 : NOW - (NOW % 900e3) + 900e3;
+    window.LIVE_EXTRA = { live: { pv: ['sensor.pv_a', 'sensor.pv_b'], meter: 'sensor.meter', price: 0.27, next: { price: 0.31, at: iso(at) } } };
+    states['sensor.smartgrid_house_load'] = power(2020, 'W');
+    states['sensor.pv_a'] = LIVE === 'nopv' ? { state: 'unavailable', attributes: {} } : power(0.15, 'kW');
+    states['sensor.pv_b'] = power(26, 'W');
+    states['sensor.meter'] = power({ import: 1840, export: -3200, zero: 20, nopv: 1840 }[LIVE] ?? 1840, 'W');
+  }
   if (CASE === 'noattrs') {
     states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { battery: null, days: null, hours: null } };
   } else if (CASE !== 'missing') {
-    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: build() };
+    states['sensor.smartgrid_power_card'] = { state: iso(NOW), attributes: { ...build(), ...window.LIVE_EXTRA } };
   }
   if (CASE !== 'missing' && CASE !== 'noswitch') {
     states['switch.smartgrid_enabled'] = { state: CASE === 'disabled' ? 'off' : 'on', attributes: { friendly_name: 'SmartGrid enabled' } };
@@ -407,6 +421,8 @@
   window.HOVER = { at: q.get('hover'), py: Number(q.get('py') || 200), touch: !!q.get('touch'), rerender: !!q.get('rerender'), slide: q.get('slide'), drag: q.get('drag') };
   window.PICK = q.get('pick');
   window.VIEW = q.get('view');
+  window.PRICE_NEXT = q.get('price') === 'next';
+  window.PUSH = !!q.get('push');
 
   customElements.define('ha-card', class extends HTMLElement {
     connectedCallback() {
@@ -444,12 +460,31 @@
       const fc = card.shadowRoot.querySelector('.fc');
       const want = { active: 'learned model', unreachable: 'unreachable', waiting: 'not picked up', gate: ['held back', '18% worse'], 'gate-thin': 'not ahead yet', off: 'hour averages' }[MODEL];
       if (!card.shadowRoot.querySelector('.chart')) {} else if (MODEL === 'missing' ? fc : !fc || ![].concat(want).every((w) => fc.textContent.includes(w))) console.error(`forecast line wrong for model=${MODEL}: ${fc ? fc.textContent : 'absent'}`);
+      if (window.PRICE_NEXT || window.PUSH) drawn(card, () => {
+        if (window.PRICE_NEXT) STATUS.live = card.shadowRoot.querySelector('[data-live=price] .n').textContent === '€0.31' ? 'price: next' : 'price: NOT NEXT';
+        if (window.PUSH) push(card, inner);
+        showStatus();
+      });
       STATUS.ws = window.DEBUG ? `callWS ${WS.length}` : WS.length ? 'callWS CALLED WITH DEBUG OFF' : '';
       showStatus();
       if (HOVER.at) point(card);
       if (window.DEBUG && VIEW) view(card, () => PICK && pick(card));
       else if (window.DEBUG && PICK) pick(card);
     }));
+  }
+  // The card draws on its first resize callback, which can land after the first frames.
+  function drawn(card, then, tries = 0) {
+    if (card.shadowRoot.querySelector('[data-live]') || tries > 120) return then();
+    requestAnimationFrame(() => drawn(card, then, tries + 1));
+  }
+  function push(card, inner) {
+    const before = inner();
+    const cell = () => card.shadowRoot.querySelector('[data-live=house] .v')?.textContent;
+    const was = cell();
+    const st = window.HASS.states;
+    card.hass = { ...window.HASS, states: { ...st, 'sensor.smartgrid_house_load': window.power(950, 'W') } };
+    const now = cell();
+    STATUS.live = `${now === '950W' && was !== now && inner() === before ? 'live: patched' : `live: NOT PATCHED (${was} -> ${now}${inner() === before ? '' : ', re-rendered'})`}${STATUS.live ? ` · ${STATUS.live}` : ''}`;
   }
   function view(card, then) {
     const root = card.shadowRoot;
