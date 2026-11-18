@@ -100,14 +100,14 @@ function powerW(s) {
   const v = s && typeof s.state === 'string' && s.state.trim() !== '' ? Number(s.state) : NaN;
   if (!Number.isFinite(v)) return null;
   const unit = s.attributes && s.attributes.unit_of_measurement;
-  return typeof unit === 'string' && unit.toLowerCase() === 'kw' ? v * 1000 : v;
+  return typeof unit === 'string' && unit.trim().toLowerCase() === 'kw' ? v * 1000 : v;
 }
 // Grid: positive imports; within 50 W of zero reads as idle.
 function liveFmt(key, v) {
   if (key === 'price') return { n: eur(v), u: num(v) === null ? '' : '/kWh', dir: '', cls: '' };
   if (v === null) return { n: DASH, u: '', dir: '', cls: key === 'grid' ? 'qz' : '' };
   const kw = Math.round(Math.abs(v)) >= 1000;
-  const f = (x) => (kw ? (x / 1000).toFixed(2) : String(Math.round(x)));
+  const f = (x) => (kw ? (x / 1000).toFixed(Math.abs(Math.round(x / 10)) >= 1000 ? 1 : 2) : String(Math.round(x)));
   const u = kw ? 'kW' : 'W';
   if (key !== 'grid') return { n: f(v), u, dir: '', cls: '' };
   const [dir, cls] = v > 50 ? ['import', ''] : v < -50 ? ['export', 'ex'] : ['', 'qz'];
@@ -771,7 +771,7 @@ class SmartgridPowerCard extends HTMLElement {
     const due = nx && Date.now() >= Date.parse(nx.at);
     return {
       house: powerW(st[this._cfg.house]),
-      solar: pv.length ? pv.reduce((t, v) => t + v, 0) : null,
+      solar: pv.length ? Math.max(0, pv.reduce((t, v) => t + v, 0)) : null,
       grid: powerW(st[l.meter]),
       price: num(due ? nx.price : l.price),
     };
@@ -795,7 +795,7 @@ class SmartgridPowerCard extends HTMLElement {
   _liveRow(a, days, today, tz, narrow) {
     const v = a.live ? this._liveValues() : null;
     if (!v) return '';
-    const c = this._cheapText((days.find((d) => d && d.date === today) || {}).cheap, tz);
+    const c = narrow ? '' : this._cheapText((days.find((d) => d && d.date === today) || {}).cheap, tz);
     return `<div class="live${narrow ? ' nr' : ''}">${liveCell('house', 'House', v.house)}${liveCell('solar', 'Solar', v.solar)}${liveCell('grid', 'Grid', v.grid)}${liveCell('price', 'Price now', v.price, c ? `<span class="lc">${c}</span>` : '')}</div>`;
   }
 
@@ -1026,7 +1026,7 @@ class SmartgridPowerCard extends HTMLElement {
       this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
       liveRow +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
-      this._headers(days, fr, geo, a.battery, !liveRow) +
+      this._headers(days, fr, geo, a.battery, !liveRow || width < 400) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
