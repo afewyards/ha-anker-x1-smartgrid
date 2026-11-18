@@ -445,7 +445,7 @@ def _dp_select_slots(
             chargeable=chargeable,
             stored_src=_stored_src,
         )
-        if cfg.low_power_hold and water_value is not None
+        if water_value is not None
         else (None, None)
     )
 

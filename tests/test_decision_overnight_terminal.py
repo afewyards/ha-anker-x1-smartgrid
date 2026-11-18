@@ -268,10 +268,12 @@ def test_est_hour_above_hurdle_held():
     """
     cfg = _cfg(charge_margin_eur_per_kwh=0.02)  # refilling costs more than the cheap segments pay
     hurdle = _hold_hurdle(cfg, _PRICES)
-    # Only the first two gap hours are priced rich (well above the hurdle); the
+    # Only the first three gap hours are priced rich (well above the hurdle); the
     # rest stay cheap.  The refill margin makes the cheap segments worth less
     # than refilling, so the "sold" run strictly liquidates (no tie to break).
-    est_held = _estimate([hurdle + 0.40, hurdle + 0.40, 0.05, 0.05, 0.05])
+    # Three, because the "sold" run holds what the export reserve leaves after the
+    # peak through the cheap tail (~1.9 kWh): a smaller slice fits inside that.
+    est_held = _estimate([hurdle + 0.40] * 3 + [0.05, 0.05])
     est_sold = _estimate([0.05] * 5)
 
     end_held, out_held = _end_state_kwh(cfg, soc=90.0, prices=_PRICES, estimated_tomorrow=est_held)

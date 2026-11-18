@@ -265,12 +265,12 @@ def overnight_terminal_segments(
       (``η_d`` from ``eta_curve.eta_discharge(load_w)`` when a curve is
       given, else the static ``cfg.eta_discharge_static()``; missing
       hour-of-day load falls back to ``const.DEFAULT_FALLBACK_LOAD_W``).
-      The segment's raw value is the avoided-import value per DC kWh less the
-      wear the discharge pays, ``raw_v_h = (load_w·dt_h/1000 · p_h) / dc_h −
-      cycle_cost`` — idle drain dilutes this naturally (it draws DC energy but
-      serves no load). The DP charges the same wear on its in-horizon
-      battery→house leg, so a kWh is worth the same net of wear either side of
-      the horizon edge.
+      The segment's raw value is ``raw_v_h = discharge_value(p_h, load_w)``:
+      the avoided-import value per DC kWh less the wear the discharge pays,
+      with the standby on both sides, since the alternative is holding and a
+      held pack buys its standby from the meter. The DP charges the same wear
+      on its in-horizon battery→house leg, so a kWh is worth the same net of
+      wear either side of the horizon edge.
     * ``seg_v = max(v_lo, min(raw_v_h, refill_h))`` — a per-segment floor at the
       horizon-min refill anchor, never a global clamp, and a cap at
       ``refill_h``: the cheapest estimated price earlier in the gap divided by
@@ -321,14 +321,7 @@ def overnight_terminal_segments(
             eta_d = eta_d_static if eta_curve is None else eta_curve.eta_discharge(load_w)
             dc_h = load_w / eta_d * dt_h / 1000.0 + cfg.idle_drain_w * dt_h / 1000.0
             if dc_h > 0.0:
-                # With the hold available, the alternative to spending this kWh is
-                # holding — which buys the standby from the meter — so the segment
-                # must be valued by the same helper the hold decision uses.
-                raw_v_h = (
-                    discharge_value(p_h, load_w, cfg, eta_curve)
-                    if cfg.low_power_hold
-                    else (load_w * dt_h / 1000.0 * p_h) / dc_h - cfg.cycle_cost_eur_per_kwh
-                )
+                raw_v_h = discharge_value(p_h, load_w, cfg, eta_curve)
                 seg_v = max(v_lo, min(raw_v_h, refill))
                 raw_segments.append([dc_h, seg_v, raw_v_h])
             # shortcut: ignores how much this hour can recharge; budget by max_charge_w·dt_h if it over-caps.

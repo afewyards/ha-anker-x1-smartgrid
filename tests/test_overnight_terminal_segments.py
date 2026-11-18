@@ -78,9 +78,9 @@ def test_no_priced_hours_returns_empty_segments_and_v_lo():
 # ---------------------------------------------------------------------------
 
 
-def test_idle_drain_dilutes_raw_value_below_price_times_eta():
-    # With idle_drain_w>0, dc_h grows (extra DC drawn for standby) while the
-    # load-serving numerator is unchanged → raw_v_h < price * eta_d.
+def test_idle_drain_sits_on_both_sides_of_the_raw_value():
+    # Discharging draws the standby from the pack; holding buys it from the meter,
+    # so it adds to both the DC spent and the import avoided.
     pickup = T0 + timedelta(hours=1)
     prices = _hours(T0, [0.30])
     load = {T0.hour: 800.0}
@@ -88,8 +88,9 @@ def test_idle_drain_dilutes_raw_value_below_price_times_eta():
     cfg_idle = _cfg(idle_drain_w=200.0)
     segs_idle, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.0, cfg=cfg_idle)
     assert len(segs_idle) == 1
-    _, v_idle = segs_idle[0]
-    assert v_idle < 0.30 * ETA_D
+    dc_idle, v_idle = segs_idle[0]
+    assert dc_idle == pytest.approx(800.0 / ETA_D / 1000.0 + 0.2)
+    assert v_idle == pytest.approx(0.30 * 1000.0 / (800.0 / ETA_D + 200.0))
 
     cfg_no_idle = _cfg(idle_drain_w=0.0)
     segs_no_idle, _, _ = overnight_terminal_segments(T0, pickup, prices, load, v_lo=0.0, cfg=cfg_no_idle)

@@ -79,7 +79,7 @@ def test_rule_nets_the_wear_of_discharging():
 
 
 def test_live_rule_and_dp_read_the_same_value():
-    cfg = Config(low_power_hold=True, soc_floor=5.0, idle_drain_w=100.0, cycle_cost_eur_per_kwh=0.0)
+    cfg = Config(soc_floor=5.0, idle_drain_w=100.0, cycle_cost_eur_per_kwh=0.0)
     boundary = optimize.discharge_value(0.35, 250.0, cfg, _Curve())
     assert boundary == pytest.approx(0.35 * 350.0 / (250.0 / 0.6 + 100.0))
     assert _values(_gate_ctrl(cfg=cfg), dp_out={"water_value": boundary, "held_slots": frozenset({T})})[
@@ -106,7 +106,7 @@ def test_live_rule_cannot_hold_a_slot_the_dp_declined():
 
 
 def test_no_dp_hold_trajectory_blocks():
-    # DP published no hold schedule at all (feature off / no water value): the
+    # DP published no hold schedule at all (no water value): the
     # live rule must not invent one.
     assert _values(dp_out={"water_value": 0.25})[0] is None
 
@@ -160,7 +160,7 @@ _SLOTS = [PriceSlot(T, 0.35)]
 
 def _gate_ctrl(**over):
     c = SimpleNamespace(
-        cfg=Config(low_power_hold=True, soc_floor=5.0, cycle_cost_eur_per_kwh=0.0),
+        cfg=Config(soc_floor=5.0, cycle_cost_eur_per_kwh=0.0),
         export_state=ExportState(engaged=False, state_since=T - timedelta(hours=1)),
         _hold_deficit_w=[(T - timedelta(minutes=2), 250.0), (T, 250.0)],
         _planner_curve=lambda: _Curve(),
@@ -201,7 +201,6 @@ def test_rolling_mean_ignores_spikes_and_stale_samples():
 @pytest.mark.parametrize(
     "ctrl_over, kw",
     [
-        ({"cfg": Config(low_power_hold=False)}, {}),
         ({}, {"plan_state": ControllerState.FORCING}),
         ({"export_state": ExportState(engaged=True, state_since=T)}, {}),
         ({}, {"dp_out": {"water_value": 0.25, "export_request": {T: 800.0}}}),
@@ -243,7 +242,6 @@ def test_no_water_value_blocks():
 def _exec_ctrl(act=None, **cfg_over):
     ctrl, act = make_controller(StubHass(), actuator=act)
     ctrl.cfg = Config(
-        low_power_hold=True,
         soc_floor=5.0,
         export_dwell_min=0,
         enable_export=False,
@@ -390,15 +388,6 @@ async def test_hold_engage_failure_releases():
     ctrl, act = _exec_ctrl(StubActuator(fail_on={"engage_hold"}))
     await _run(ctrl)
     assert act.calls == [("engage_hold_attempt",), ("release_to_self",)]
-    assert not ctrl.hold_state.engaged
-
-
-async def test_feature_off_is_untouched_passive():
-    ctrl, act = _exec_ctrl()
-    ctrl.cfg = replace(ctrl.cfg, low_power_hold=False)
-    out = await _run(ctrl)
-    assert act.calls == []
-    assert out == (0.0, False, None, None, None, None)
     assert not ctrl.hold_state.engaged
 
 
@@ -575,7 +564,7 @@ def test_dp_select_slots_smooths_a_noisy_night_at_15min(monkeypatch):
         slots=[PriceSlot(now + timedelta(minutes=15 * i), 0.26) for i in range(n)],
         deadline=now + timedelta(minutes=15 * n),
         ceiling=0.30,
-        cfg=Config(low_power_hold=True, soc_floor=5.0, capacity_kwh=20.0),
+        cfg=Config(soc_floor=5.0, capacity_kwh=20.0),
         intervals=[ForecastInterval(now + timedelta(minutes=15 * i), 0.0, 320.0, 0.25) for i in range(n)],
         export_price=None,
         slot_minutes=15,
@@ -827,7 +816,7 @@ def _tick_ctrl(monkeypatch, **cfg_over):
 
     monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda: BASE)
     hass = StubHass()
-    ctrl, act, _ = _make_controller(hass, cfg_overrides={"low_power_hold": True, "enable_export": False, **cfg_over})
+    ctrl, act, _ = _make_controller(hass, cfg_overrides={"enable_export": False, **cfg_over})
     ctrl.hold_state = ExportState(engaged=False, state_since=BASE - timedelta(hours=1))
     _seed_passive_inputs(hass)  # pv 2000 W + 300 W import → 300 W deficit at €0.30, static eta_d 1.0
     stub = _patched_compute_decision(export_request={})
@@ -885,14 +874,6 @@ async def test_executor_keys_on_the_dp_slot_at_15min_resolution(monkeypatch):
     assert act.calls == [("engage_hold",)] and ctrl.hold_state.engaged
 
 
-async def test_tick_feature_off_records_passive(monkeypatch):
-    ctrl, act = _tick_ctrl(monkeypatch, low_power_hold=False)
-    await ctrl.tick()
-    assert act.calls == []
-    assert ctrl._recorder.rows[-1]["state"] == "passive"
-    assert ctrl.last_status["low_power_hold_active"] is False
-
-
 async def test_restart_while_holding_and_disabled_releases(monkeypatch):
     ctrl, act = _tick_ctrl(monkeypatch)
     ctrl.hold_state = ExportState(engaged=True, state_since=T)  # restored from the store
@@ -902,8 +883,7 @@ async def test_restart_while_holding_and_disabled_releases(monkeypatch):
     assert not ctrl.hold_state.engaged
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch, enabled):
+def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch):
     captured = {}
     real = ctrl_mod.optimize_mod.optimize_grid
 
@@ -915,7 +895,7 @@ def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch, e
     slots = [PriceSlot(T + timedelta(hours=i), p) for i, p in enumerate([0.35, 0.60, 0.35])]
     loads = [250.0, 250.0, 2000.0]
     ivs = [ForecastInterval(s.start, 0.0, w, 1.0) for s, w in zip(slots, loads, strict=True)]
-    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, low_power_hold=enabled, cycle_cost_eur_per_kwh=0.0)
+    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, cycle_cost_eur_per_kwh=0.0)
     ctrl_mod._dp_select_slots(
         inputs=PlantInputs(soc=50.0, meter_w=0.0, now=T),
         slots=slots,
@@ -927,7 +907,7 @@ def test_dp_select_slots_builds_the_mask_from_slot_price_and_load(monkeypatch, e
         intervals=ivs,
     )
     # static eta_d is 0.6 at every power: €0.35 slots hold (0.21 < 0.25), €0.60 does not (0.36)
-    assert captured["hold"] == ([True, False, True] if enabled else None)
+    assert captured["hold"] == [True, False, True]
 
 
 def test_hold_weighs_the_kept_kwh_at_its_terminal_credit(monkeypatch):
@@ -944,7 +924,7 @@ def test_hold_weighs_the_kept_kwh_at_its_terminal_credit(monkeypatch):
     monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _spy)
     slots = [PriceSlot(T + timedelta(hours=i), p) for i, p in enumerate([0.35, 0.60, 0.70])]
     ivs = [ForecastInterval(s.start, 0.0, 250.0, 1.0) for s in slots]
-    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, low_power_hold=True, cycle_cost_eur_per_kwh=0.0)
+    cfg = make_config(soc_floor=5.0, round_trip_eff=0.6, cycle_cost_eur_per_kwh=0.0)
     segs = [(5.0, 0.40), (1.0, 0.30)]
     ctrl_mod._dp_select_slots(
         inputs=PlantInputs(soc=50.0, meter_w=0.0, now=T),

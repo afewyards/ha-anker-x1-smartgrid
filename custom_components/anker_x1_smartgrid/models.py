@@ -106,8 +106,6 @@ class Config:
     reserve_cheap_band: float = const.DEFAULT_RESERVE_CHEAP_BAND
     # Price-slot resolution override; "auto" -> detect per refresh from slot spacing.
     slot_resolution: str = const.DEFAULT_SLOT_RESOLUTION
-    # Measured efficiency curve: False keeps static eta_charge/round_trip_eff (byte-identical).
-    low_power_hold: bool = const.DEFAULT_LOW_POWER_HOLD
     # Static tariff mode (price source). price_mode="static" synthesizes slots
     # from these values (see tariff.py); "sensor" keeps the dynamic-sensor path.
     price_mode: str = const.DEFAULT_PRICE_MODE

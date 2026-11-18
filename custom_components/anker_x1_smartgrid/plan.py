@@ -224,7 +224,7 @@ def build_plan_horizon(
     do all rows once ``now`` has passed their end or not yet reached their start.
 
     ``held_slots`` is the set of slot starts the DP's chosen trajectory holds
-    (``None`` = low-power hold off, or the DP did not run): a held deficit slot
+    (``None`` = no water value, or the DP did not run): a held deficit slot
     draws nothing from the battery and loses no standby drain, as the live
     executor and the DP do — instead the meter buys the standby, reported per
     row as ``hold_import_kwh``.

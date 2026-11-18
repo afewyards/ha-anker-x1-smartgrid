@@ -43,7 +43,6 @@ def _cfg(**over) -> Config:
             "max_charge_w": 6000.0,
             "cycle_cost_eur_per_kwh": 0.03,
             "idle_drain_w": 100.0,
-            "low_power_hold": True,
             "soc_floor": 5.0,
             "min_dwell_min": 0,
             "export_min_block_kwh": 0.0,
@@ -128,7 +127,7 @@ def test_energy_is_kept_for_a_published_tomorrow_peak():
 @pytest.mark.parametrize(("margin", "exports"), [(0.0, True), (0.06, False)])
 def test_sell_today_and_refill_tonight_only_when_it_clears_wear_and_margin(margin, exports):
     # 25 kWh: enough left after the house's day to have something to sell.
-    cfg = _cfg(charge_margin_eur_per_kwh=margin, enable_export=True, low_power_hold=False, capacity_kwh=25.0)
+    cfg = _cfg(charge_margin_eur_per_kwh=margin, enable_export=True, capacity_kwh=25.0)
     out = _run(cfg, TODAY, soc=90.0, export=True)
     assert any(t in (out.get("export_request") or {}) for t in PEAK) is exports
 

@@ -25,7 +25,6 @@ CFG = Config.from_dict(
         "capacity_kwh": 20.0,
         "soc_target": 100.0,
         "max_charge_w": 12000.0,
-        "low_power_hold": True,
         "idle_drain_w": 100.0,
         "cycle_cost_eur_per_kwh": 0.03,
         "min_dwell_min": 0,

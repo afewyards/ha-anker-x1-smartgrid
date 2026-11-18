@@ -365,8 +365,7 @@ def hold_values(
     _slot = _dp_out.get("dp_slot_start") or resolution.floor_to_slot(now, _slot_minutes)
     _ceiling = (_dp_out.get("ceiling_by_hour") or {}).get(_slot)
     if (
-        not cfg.low_power_hold
-        or new_plan.state is ControllerState.FORCING
+        new_plan.state is ControllerState.FORCING
         or controller.export_state.engaged
         or _slot in (_dp_out.get("export_request") or {})
         or not deficits

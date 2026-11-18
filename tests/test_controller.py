@@ -2134,7 +2134,7 @@ def test_resolve_slot_minutes_day_rollover_resets_latch(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# T16 — measured efficiency curve: build + cache + planner gate
+# T16 — measured efficiency curve: build + cache + planner
 # ---------------------------------------------------------------------------
 
 

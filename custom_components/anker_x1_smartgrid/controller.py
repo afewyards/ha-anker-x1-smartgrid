@@ -442,7 +442,7 @@ class Controller:
         # Intervals are built inside compute_decision, so we cache the result to use next tick.
         # Not persisted — rebuilt from DP output every successful tick.
         self._soc_drift_last_intervals: list | None = None
-        # ── Measured efficiency curve ────
+        # ── Measured efficiency curve ─────────────────────────────────────────────────
         # Built from the static fallback until the first successful recorder read;
         # refreshed at most once per EFFICIENCY_CACHE_SECONDS (see _refresh_efficiency_curve).
         self._eta_curve: EfficiencyCurve = EfficiencyCurve.static(self.cfg)
