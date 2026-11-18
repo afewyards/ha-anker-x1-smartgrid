@@ -160,9 +160,10 @@ function liveBars(v, r) {
   const top = Math.max(...mag);
   const w = {};
   ['house', 'solar', 'battery', 'grid'].forEach((k, i) => (w[k] = top > 0 ? barPct(mag[i] / top) : '0%'));
-  const span = r ? r.hi - r.lo : 0;
+  const g = v.range || r;
+  const span = g ? g.hi - g.lo : 0;
   if (v.price !== null && span > 0) {
-    w.price = { tick: barPct((v.price - r.lo) / span), band: r.cheap === null ? '0%' : barPct((r.cheap - r.lo) / span) };
+    w.price = { tick: barPct((v.price - g.lo) / span), band: !r || r.cheap === null ? '0%' : barPct((r.cheap - g.lo) / span) };
   }
   return w;
 }
@@ -197,15 +198,15 @@ ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size
 .bat .se { color: var(--sg-export); }
 .bat .sc { color: var(--sg-charge); }
 .bat .sd { color: var(--sg-dim); }
-.live { display: grid; grid-template-columns: .8fr .8fr 1.15fr 1.25fr 1.25fr; margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
+.live { display: grid; grid-template-columns: minmax(min-content, .8fr) minmax(min-content, .8fr) minmax(min-content, 1.15fr) minmax(min-content, 1.25fr) minmax(min-content, 1.25fr); margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
 .live.nr { grid-template-columns: repeat(5, minmax(min-content, 1fr)); }
-.live.nr > div { padding: 0 5px; }
+.live.nr > div { padding: 0 5px 2px; }
 .live.nr .k { gap: 0; }
 .live.nr .k::before { display: none; }
 .live.nr .dir { margin-left: 1px; }
 .live.nr .v { font-size: 14px; }
 .live.nr .u { font-size: 9.5px; margin-left: 1px; }
-.live > div { padding: 0 8px; border-left: 1px solid var(--sg-rule); min-width: 0; overflow: hidden; }
+.live > div { padding: 0 8px 2px; border-left: 1px solid var(--sg-rule); min-width: 0; overflow: hidden; }
 .live > div:first-child { border-left: 0; padding-left: 0; }
 .live .k { display: flex; align-items: center; gap: 5px; color: var(--sg-dim); white-space: nowrap; overflow: hidden; }
 .live .k::before { content: ""; flex: none; width: 9px; height: 2px; border-radius: 1px; background: var(--m); }
@@ -845,6 +846,7 @@ class SmartgridPowerCard extends HTMLElement {
       battery: powerW(st[l.battery]),
       grid: powerW(st[l.meter]),
       price: num(due ? nx.price : l.price),
+      range: l.range && num(l.range.lo) !== null && num(l.range.hi) !== null ? { lo: l.range.lo, hi: l.range.hi } : null,
     };
   }
 
@@ -1103,7 +1105,7 @@ class SmartgridPowerCard extends HTMLElement {
     const ti = dates.indexOf(today);
     const prices = rows.filter((r) => r.t >= starts[ti] && r.t < ends[ti] && num(r.price) !== null).map((r) => r.price);
     const cheap = (days.find((d) => d && d.date === today) || {}).cheap;
-    this._pr = prices.length ? { lo: Math.min(...prices), hi: Math.max(...prices), cheap: cheap ? num(cheap.price) : null } : null;
+    this._pr = { lo: Math.min(...prices), hi: Math.max(...prices), cheap: cheap ? num(cheap.price) : null };
     const liveRow = this._liveRow(a, width < LIVE_NARROW);
     return (
       `<div class="${off ? 'off' : ''}">` +
