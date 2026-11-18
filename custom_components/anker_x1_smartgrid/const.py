@@ -12,6 +12,7 @@ TICK_SECONDS = 60
 CONF_CAPACITY_KWH = "capacity_kwh"
 CONF_SOC_FLOOR = "soc_floor"
 CONF_BACKUP_RESERVE_SOC = "backup_reserve_soc"
+CONF_BACKUP_RESERVE_REFILL_H = "backup_reserve_refill_h"
 CONF_SOC_TARGET = "soc_target"
 CONF_MAX_CHARGE_W = "max_charge_w"
 CONF_ETA_CHARGE = "eta_charge"
@@ -82,7 +83,8 @@ PRICE_MODE_STATIC = "static"
 DEFAULT_CAPACITY_KWH = 10.0
 DEFAULT_SOC_FLOOR = 5.0
 DEFAULT_BACKUP_RESERVE_SOC = 0.0
-BACKUP_REFILL_URGENCY_EUR_PER_KWH_H = 0.01
+DEFAULT_BACKUP_RESERVE_REFILL_H = 8.0
+BACKUP_RESERVE_MIN_SPREAD = 0.02
 # Above any price/eta, so a pack short of the reserve refills inside the plan.
 BACKUP_SHORTFALL_EUR_PER_KWH = 1.0
 DEFAULT_SOC_TARGET = 97.0

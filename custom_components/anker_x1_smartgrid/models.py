@@ -20,6 +20,7 @@ class Config:
     capacity_kwh: float = const.DEFAULT_CAPACITY_KWH
     soc_floor: float = const.DEFAULT_SOC_FLOOR
     backup_reserve_soc: float = const.DEFAULT_BACKUP_RESERVE_SOC
+    backup_reserve_refill_h: float = const.DEFAULT_BACKUP_RESERVE_REFILL_H
     soc_target: float = const.DEFAULT_SOC_TARGET
     max_charge_w: float = const.DEFAULT_MAX_CHARGE_W
     eta_charge: float = const.DEFAULT_ETA_CHARGE

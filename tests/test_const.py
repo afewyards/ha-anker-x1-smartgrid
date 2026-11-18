@@ -197,5 +197,7 @@ def test_backup_reserve_consts():
 
     assert const.CONF_BACKUP_RESERVE_SOC == "backup_reserve_soc"
     assert const.DEFAULT_BACKUP_RESERVE_SOC == 0.0
-    assert const.BACKUP_REFILL_URGENCY_EUR_PER_KWH_H == 0.01
+    assert const.CONF_BACKUP_RESERVE_REFILL_H == "backup_reserve_refill_h"
+    assert const.DEFAULT_BACKUP_RESERVE_REFILL_H == 8.0
+    assert const.BACKUP_RESERVE_MIN_SPREAD == 0.02
     assert const.BACKUP_SHORTFALL_EUR_PER_KWH == 1.0

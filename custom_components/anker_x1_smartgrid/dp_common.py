@@ -107,14 +107,31 @@ def start_soc_kwh(soc0: float, cfg: Config, firmware_floor_kwh: float, reserve_k
     return soc0
 
 
+def published_spread(prices: list[float], estimated: list[bool] | None) -> float:
+    """Max minus min of the real (non-estimated) prices, floored at ``BACKUP_RESERVE_MIN_SPREAD``."""
+    real = [p for i, p in enumerate(prices) if not (estimated and estimated[i])]
+    spread = max(real) - min(real) if real else 0.0
+    return max(spread, const.BACKUP_RESERVE_MIN_SPREAD)
+
+
 def reserve_urgency_by_bin(
-    reserve_kwh: float, n_states: int, from_bin: Callable[[int], float], dt_h: float
+    reserve_kwh: float,
+    floor_kwh: float,
+    spread: float,
+    refill_h: float,
+    n_states: int,
+    from_bin: Callable[[int], float],
+    dt_h: float,
 ) -> list[float] | None:
-    """Objective-only cost of ending a slot in each SoC bin, per kWh short of the reserve; ``None`` when off."""
+    """Objective-only rent for ending a slot under the reserve, quadratic in the shortfall; ``None`` when off.
+
+    The marginal kWh at depth fraction d costs ``spread * d / refill_h`` per hour, so the top of the band is
+    nearly free and the last kWh only pays for itself if the refill takes under ``refill_h`` hours.
+    """
     if reserve_kwh <= 0.0:
         return None
-    rate = const.BACKUP_REFILL_URGENCY_EUR_PER_KWH_H * dt_h
-    return [max(0.0, reserve_kwh - from_bin(b)) * rate for b in range(n_states)]
+    k = spread * dt_h / refill_h / (2.0 * max(reserve_kwh - floor_kwh, 1e-9))
+    return [max(0.0, reserve_kwh - from_bin(b)) ** 2 * k for b in range(n_states)]
 
 
 # Equal-value end states must not be picked by float rounding: ties go to the higher SoC.

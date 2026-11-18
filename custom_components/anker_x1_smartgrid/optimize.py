@@ -68,6 +68,7 @@ from .dp_common import (
     eta_charge_at,
     eta_discharge_at,
     export_leg_precompute,
+    published_spread,
     reserve_urgency_by_bin,
     reserve_wall_kwh,
     select_end_state,
@@ -939,7 +940,15 @@ def optimize_grid(
     n_states, to_bin, from_bin = soc_bins(cap_kwh)
 
     INF = float("inf")
-    urgency = reserve_urgency_by_bin(reserve_kwh, n_states, from_bin, dt_h)
+    urgency = reserve_urgency_by_bin(
+        reserve_kwh,
+        firmware_floor_kwh,
+        published_spread(price, None),
+        cfg.backup_reserve_refill_h,
+        n_states,
+        from_bin,
+        dt_h,
+    )
 
     # ------------------------------------------------------------------
     # DP initialisation

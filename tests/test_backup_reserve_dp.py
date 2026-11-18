@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from itertools import pairwise
 
 import pytest
 
@@ -105,10 +106,44 @@ def test_refill_flat_price_first_slot():
     assert _dc(res) == pytest.approx(1.8, abs=1e-9)
 
 
-def test_refill_waits_only_if_saving_beats_urgency():
-    # Waiting one slot saves 1.8 / 0.92 × 0.005 ≈ €0.0098 but costs 1.8 × 0.01 = €0.018 of urgency.
-    res = _opt([0.0] * 12, [0.30, 0.295] + [0.30] * 10, 12.0)
-    assert _charged_slots(res) == [0]
+def test_refill_waits_only_if_saving_beats_rent():
+    # Waiting one slot saves 1.8 / 0.92 × 0.005 ≈ €0.0098. Rent for the slot is spread × 1.8² / (16 × 2.5):
+    # €0.0016 at the 0.02 floor (wait), €0.04 once a 0.80 peak widens the spread (refill now).
+    flat = _opt([0.0] * 12, [0.30, 0.295] + [0.30] * 10, 12.0)
+    assert _charged_slots(flat) == [1]
+    wide = _opt([0.0] * 12, [0.30, 0.295] + [0.30] * 9 + [0.80], 12.0)
+    assert 0 in _charged_slots(wide)
+
+
+def _bins():
+    return 40, (lambda b: b * 0.25)
+
+
+@pytest.mark.parametrize("refill_h", [8.0, 4.0])
+def test_urgency_at_floor_bin(refill_h):
+    n, from_bin = _bins()
+    u = dp_common.reserve_urgency_by_bin(3.0, 0.5, 0.10, refill_h, n, from_bin, 1.0)
+    assert u[2] == pytest.approx(0.10 / refill_h * (3.0 - 0.5) / 2)
+    assert u[12] == 0.0 and u[30] == 0.0
+
+
+def test_urgency_off_and_convex():
+    n, from_bin = _bins()
+    assert dp_common.reserve_urgency_by_bin(0.0, 0.5, 0.10, 8.0, n, from_bin, 1.0) is None
+    u = dp_common.reserve_urgency_by_bin(3.0, 0.5, 0.10, 8.0, n, from_bin, 1.0)
+    steps = [u[b] - u[b + 1] for b in range(2, 12)]
+    assert all(a > b for a, b in pairwise(steps))
+
+
+def test_published_spread():
+    assert dp_common.published_spread([0.10, 0.30, 0.20], None) == pytest.approx(0.20)
+    assert dp_common.published_spread([0.10, 0.30, 0.90], [False, False, True]) == pytest.approx(0.20)
+    assert dp_common.published_spread([0.2, 0.2], None) == 0.02
+
+
+def test_refill_h_config():
+    assert Config().backup_reserve_refill_h == 8.0
+    assert Config.from_dict({"backup_reserve_refill_h": 4.0}).backup_reserve_refill_h == 4.0
 
 
 def test_refill_through_closed_mask():
