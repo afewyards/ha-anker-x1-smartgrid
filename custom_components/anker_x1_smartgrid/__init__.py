@@ -163,7 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cancel = async_track_time_interval(hass, _tick, timedelta(seconds=TICK_SECONDS))
 
         async def _on_meter(_event) -> None:
-            await executor.cut_to_connection_limit(controller)
+            await executor.trim_to_meter(controller)
 
         meter_entity = data.get(CONF_ENT_METER_POWER, DEFAULT_ENTITIES[CONF_ENT_METER_POWER])
         entry.async_on_unload(async_track_state_change_event(hass, [meter_entity], _on_meter))

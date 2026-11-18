@@ -56,6 +56,7 @@ class _StubActuator:
     def __init__(self):
         self.calls: list[tuple] = []
         self.last_setpoint_w: float = 0.0
+        self.engaged = False
 
     async def engage_and_charge(self, setpoint_w: float) -> None:
         self.calls.append(("engage_and_charge", setpoint_w))

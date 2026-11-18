@@ -210,6 +210,8 @@ class PlantInputs:
     # negative = exporting to grid.  Not import-only.
     meter_w: float
     now: datetime
+    # The setpoint that had just landed when these were read: battery_power still showed the one before.
+    batt_stand_in_w: float | None = None
 
 
 @dataclass

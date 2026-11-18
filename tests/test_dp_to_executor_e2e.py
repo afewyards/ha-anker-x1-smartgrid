@@ -238,6 +238,7 @@ class TestCheapHourGridCharge:
         ctrl, act = self._hvac_controller(monkeypatch, hass)
         hass.set_state("sensor.meter_power", "1300.0")  # pv 0, battery 0 -> house load 1300 W
         await ctrl.tick()
+        act.last_write_at -= const.TICK_SECONDS  # the next tick comes a minute on
         hass.set_state("sensor.meter_power", "5300.0")
         await ctrl.tick()
 
@@ -258,7 +259,7 @@ class TestCheapHourGridCharge:
         hass.set_state("sensor.battery_power", "-10700.0")
         hass.set_state("sensor.meter_power", "16000.0")
         act.last_write_at = float("-inf")
-        await executor.cut_to_connection_limit(ctrl)
+        await executor.trim_to_meter(ctrl)
         assert act.last_setpoint_w == -6700.0
         hass.set_state("sensor.battery_power", "-6700.0")
         hass.set_state("sensor.meter_power", "12000.0")
@@ -280,7 +281,7 @@ class TestCheapHourGridCharge:
         hass.set_state("sensor.battery_power", "-4000.0")
         hass.set_state("sensor.meter_power", "13300.0")
         act.last_write_at = float("-inf")
-        await executor.cut_to_connection_limit(ctrl)
+        await executor.trim_to_meter(ctrl)
         # Load gone: the tick raises again, but only to the battery limit.
         hass.set_state("sensor.battery_power", "-2700.0")
         hass.set_state("sensor.meter_power", "4000.0")
@@ -334,6 +335,7 @@ class TestCheapHourGridCharge:
         ctrl.cfg = replace(ctrl.cfg, grid_import_limit_w=10000.0)
         hass.set_state("sensor.meter_power", "1300.0")
         await ctrl.tick()
+        act.last_write_at -= const.TICK_SECONDS  # the next tick comes a minute on
         hass.set_state("sensor.battery_power", "-2000.0")
         hass.set_state("sensor.meter_power", "7300.0")  # house jumped to 5300 W
         await ctrl.tick()

@@ -242,6 +242,7 @@ class Controller:
         # Re-entrancy guard (review 1.2): serializes tick() so a slow tick (e.g. an
         # ML retrain) cannot overlap the next timer fire and race the actuator.
         self._tick_lock = asyncio.Lock()
+        self._ticking = False
         self._price_history_day: str | None = None
         self.cfg = Config.from_dict(data)
         if self.cfg.soc_floor > const.FIRMWARE_SOC_FLOOR + 1e-9:
@@ -334,6 +335,9 @@ class Controller:
             maxlen=const.LOW_POWER_HOLD_LOAD_WINDOW_MIN * 60 // const.TICK_SECONDS
         )
         self._last_pv_w: float = 0.0
+        # What the last tick aimed for, and the meter fast path's readings since the last write.
+        self._meter_trim: executor.MeterTrim | None = None
+        self._meter_errors: deque[tuple[float, float]] = deque(maxlen=3)
         # (discharge_value, stored_value) €/DC-kWh the executor compared this tick.
         self.last_hold_values: tuple[float | None, float | None] = (None, None)
         # E3 — realized-arbitrage PnL ledger.
@@ -1152,21 +1156,31 @@ class Controller:
     async def tick(self) -> dict:
         # Re-entrancy guard (review 1.2): the 60s timer fires regardless of the
         # previous tick; a slow retrain tick must not overlap and race the actuator.
-        if self._tick_lock.locked():
+        if self._ticking:
             _LOGGER.warning("tick overlap: previous tick still running; skipping")
             return self.last_status
-        async with self._tick_lock:
-            try:
-                return await self._tick_impl()
-            except Exception:
-                _LOGGER.exception("tick failed; releasing to self-consumption")
-                now = dt_util.utcnow()
-                await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
-                self.plan = PlanState(ControllerState.PASSIVE, now, ())
-                await self._publish_power_card(now, None, "failsafe", False)
-                status = self._status(now, 0.0, None, "failsafe")
-                status["state"] = "failsafe"
-                return status
+        try:
+            # Anyone else (a fast-path write) holds it for about a second: a skipped slot-boundary tick would run
+            # the old slot's charge or export a minute into the new one.
+            await asyncio.wait_for(self._tick_lock.acquire(), const.TICK_LOCK_WAIT_S)
+        except TimeoutError:
+            _LOGGER.warning("tick overlap: lock still held after %.0f s; skipping", const.TICK_LOCK_WAIT_S)
+            return self.last_status
+        self._ticking = True
+        try:
+            return await self._tick_impl()
+        except Exception:
+            _LOGGER.exception("tick failed; releasing to self-consumption")
+            now = dt_util.utcnow()
+            await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
+            self.plan = PlanState(ControllerState.PASSIVE, now, ())
+            await self._publish_power_card(now, None, "failsafe", False)
+            status = self._status(now, 0.0, None, "failsafe")
+            status["state"] = "failsafe"
+            return status
+        finally:
+            self._ticking = False
+            self._tick_lock.release()
 
     def _apply_drift_hedge(self, now, inputs, slots, sunset) -> dict | None:
         # ── SoC drift-hedge (LIVE/enabled path; whole block gated OFF unless fraction>0) ──
@@ -1425,6 +1439,8 @@ class Controller:
         inputs = coordinator.read_plant_inputs(self._hass, self._data)
         if inputs is None:
             return None
+        # Decided now, with the meter: a write later in this tick must not stand in for the battery it read.
+        inputs = dataclasses.replace(inputs, batt_stand_in_w=executor.battery_stand_in_w(self))
         batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
         age_s = (inputs.now - self._last_soc_at).total_seconds() if self._last_soc_at is not None else math.inf
         if soc_glitch(inputs.soc, batt_w, self._last_soc, age_s, self._soc_glitch):
@@ -3244,17 +3260,10 @@ class Controller:
         export gross-setpoint compensation — can tell the two apart.
         """
         pv_w = coordinator.read_pv_power_w(self._hass, self._data)
-        batt_w = coordinator.read_float(self._hass, self._data[const.CONF_ENT_BATTERY_POWER])
+        batt_w, loss_w = coordinator.read_battery_and_loss_w(self._hass, self._data, inputs)
         if pv_w is None or batt_w is None:
             self._house_load_fresh = False
             return self._last_house_load_w
-        loss_w = coordinator.read_float(
-            self._hass,
-            self._data.get(
-                const.CONF_ENT_INVERTER_LOSS,
-                const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS],
-            ),
-        )
         house_load_w = max(0.0, pv_w + inputs.meter_w + batt_w - (loss_w if loss_w is not None else 0.0))
         if self.hold_state.engaged or self.standby:
             # Held: batt_w is ~0 and the meter carries the inverter standby, so the

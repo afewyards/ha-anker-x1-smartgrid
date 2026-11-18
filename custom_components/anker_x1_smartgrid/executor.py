@@ -20,8 +20,10 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timedelta
-from statistics import fmean
-from typing import TYPE_CHECKING
+from statistics import fmean, median
+from typing import TYPE_CHECKING, NamedTuple
+
+from homeassistant.util import dt as dt_util
 
 from . import const, coordinator, energy, guard, optimize as optimize_mod, resolution, scheduler
 from .decision import _build_is_cheap_by_hour
@@ -124,15 +126,11 @@ def grid_charge_request_w(controller: Controller, inputs: PlantInputs) -> float:
     battery reading the setpoint stands in, but only while the pack is engaged to
     charge or hold; a free or exporting pack may be feeding the house, so request 0 W.
     """
-    batt_w = coordinator.read_float(controller._hass, controller._data[const.CONF_ENT_BATTERY_POWER])
+    batt_w, loss_w = coordinator.read_battery_and_loss_w(controller._hass, controller._data, inputs)
     if batt_w is None:
         if not controller._actuator.engaged or controller._actuator.last_setpoint_w > 0.0:
             return 0.0
         batt_w = controller._actuator.last_setpoint_w
-    loss_w = coordinator.read_float(
-        controller._hass,
-        controller._data.get(const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]),
-    )
     commanded_w = controller._actuator.last_setpoint_w
     if controller._actuator.engaged and commanded_w < 0.0 and commanded_w > batt_w:
         # Measured power of an overdrawing pack settles above the limit; a tapering pack's smaller reading wins.
@@ -141,12 +139,59 @@ def grid_charge_request_w(controller: Controller, inputs: PlantInputs) -> float:
     return energy.grid_charge_request_w(controller.cfg, net_house_draw_w)
 
 
-async def cut_to_connection_limit(controller: Controller) -> None:
-    """Cut a charge or export we command by the live meter's excess over the grid connection limit.
+class MeterTrim(NamedTuple):
+    """What the last tick aimed for, which the meter fast path steers toward until the next tick."""
 
-    Runs on every meter update between ticks. Only ever reduces, on the setpoint
-    step and never past 0 W; raising back is the next tick's job. Skipped while a
-    tick runs, and for ``const.METER_CUT_MIN_GAP_S`` after any setpoint write.
+    slot: datetime
+    slot_minutes: int
+    # Signed: the tick's charge at zero house draw (< 0), or the most export gross it may command (> 0).
+    cap_w: float
+    # Export only: the meter export the tick's gross aims for, PV aside, and the PV it saw.
+    aim_w: float
+    pv_w: float
+    # Valid only while no one else has written since (act.last_write_at).
+    written_at: float
+    # The last write raised (or was the tick's): the first settled window checks the pack followed it.
+    verify_raise: bool = True
+    # When the fast path last raised (act.last_write_at); -inf if it hasn't since the tick.
+    raised_at: float = float("-inf")
+
+
+def record_meter_trim(
+    controller: Controller, now: datetime, slot_minutes: int, cap_w: float, aim_w: float = 0.0, pv_w: float = 0.0
+) -> None:
+    controller._meter_trim = MeterTrim(
+        resolution.floor_to_slot(now, slot_minutes),
+        slot_minutes,
+        cap_w,
+        aim_w,
+        pv_w,
+        controller._actuator.last_write_at,
+    )
+    controller._meter_errors.clear()
+
+
+def battery_stand_in_w(controller: Controller) -> float | None:
+    """The setpoint that just landed, while battery_power still shows the one before it."""
+    act = controller._actuator
+    if act.engaged and act.last_write_ok and time.monotonic() - act.last_write_at < const.BATTERY_POWER_LAG_S:
+        return act.last_setpoint_w
+    return None
+
+
+async def trim_to_meter(controller: Controller) -> None:
+    """Steer a charge or export we command toward what the last tick wanted, on every meter update.
+
+    A single reading over the grid connection limit cuts at once, on the setpoint
+    step and never past 0 W, at most once per ``const.METER_CUT_MIN_GAP_S`` unless
+    the last write was a fast raise. A cut after a fast raise holds until the next
+    tick. Other moves (a charge raised back toward the tick's cap, an export trimmed
+    so the meter holds the tick's aim) act on the median of the latest three
+    readings, all ``const.METER_SETTLE_S`` or more after any write and none older
+    than ``const.METER_WINDOW_S``, beyond the guard deadband, and only while the
+    tick that set the aim is current. Meter only: the battery power register lags
+    writes by seconds. Never flips sign, engages or releases. Skipped while a tick
+    runs.
     """
     if controller._tick_lock.locked():
         return
@@ -154,29 +199,96 @@ async def cut_to_connection_limit(controller: Controller) -> None:
     async with controller._tick_lock:
         act = controller._actuator
         sp = act.last_setpoint_w
+        errors = controller._meter_errors
         meter_w = coordinator.read_float(
             controller._hass,
             controller._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER]),
         )
-        if meter_w is None or not act.engaged or sp == 0.0:
+        trim = controller._meter_trim
+        if (
+            trim is None
+            or not controller.enabled
+            or trim.written_at != act.last_write_at
+            or resolution.floor_to_slot(dt_util.utcnow(), trim.slot_minutes) != trim.slot
+            or (sp != 0.0 and (sp < 0.0) != (trim.cap_w < 0.0))
+        ):
+            trim = None
+        if meter_w is None or not act.engaged or (sp == 0.0 and trim is None):
+            errors.clear()
             return
+        charging = sp < 0.0 if sp != 0.0 else trim is not None and trim.cap_w < 0.0
+        limit_w = controller.cfg.grid_import_limit_w
+        now_s = time.monotonic()
+        since_write_s = now_s - act.last_write_at
         # Meter + = import: our charge pushes it up, our export pushes it down.
-        excess_w = (meter_w if sp < 0.0 else -meter_w) - controller.cfg.grid_import_limit_w
-        if excess_w < const.SETPOINT_STEP_W or time.monotonic() - act.last_write_at < const.METER_CUT_MIN_GAP_S:
+        excess_w = (meter_w if charging else -meter_w) - limit_w
+        if sp != 0.0 and excess_w >= const.SETPOINT_STEP_W:
+            # Right after our own raise a reading can only understate the excess: no double cut to wait out.
+            if since_write_s >= const.METER_CUT_MIN_GAP_S or (trim is not None and trim.raised_at == trim.written_at):
+                mag = max(0.0, abs(sp) - excess_w) // const.SETPOINT_STEP_W * const.SETPOINT_STEP_W
+                if trim is not None and trim.raised_at > float("-inf"):
+                    # A toggling load would cycle cut and raise: once a raise is cut, the cut holds until the next tick.
+                    trim = trim._replace(cap_w=-mag if charging else mag) if mag else None
+                await _write_trim(controller, trim, mag, charging)
             return
-        mag = max(0.0, abs(sp) - excess_w) // const.SETPOINT_STEP_W * const.SETPOINT_STEP_W
-        try:
-            if mag == 0.0:
-                # Stay engaged at 0 W, as the tick does at zero headroom; releasing an export would only flap.
-                await act.engage_hold()
-            elif sp < 0.0:
-                await act.engage_and_charge(-mag)
-            else:
-                await act.engage_export(mag)
-        except Exception:
-            _LOGGER.error("Meter fast path: setpoint cut failed; leaving it to the next tick", exc_info=True)
+        if trim is None:
+            errors.clear()
             return
-    controller.last_status["setpoint_w" if sp < 0.0 else "export_setpoint_w"] = act.last_setpoint_w
+        if since_write_s < const.METER_SETTLE_S:
+            return
+        if charging:
+            errors.append((now_s, -excess_w))
+        else:
+            pv_w = coordinator.read_pv_power_w(controller._hass, controller._data)
+            if pv_w is None:
+                return
+            # Lost PV spill lowers the aim so the pack never covers it; PV above what the tick saw never raises it.
+            errors.append((now_s, min(limit_w, trim.aim_w + min(pv_w, trim.pv_w)) + meter_w))
+        while now_s - errors[0][0] > const.METER_WINDOW_S:
+            errors.popleft()
+        if len(errors) != errors.maxlen:
+            return
+        err_w, newest_w = median(e for _, e in errors), errors[-1][1]
+        # The newest reading may shrink or veto a move, never grow it: a load step it shows isn't outvoted.
+        err_w = min(err_w, newest_w, key=abs) if err_w * newest_w > 0.0 else 0.0
+        if trim.verify_raise:
+            # Room left once a raise settles means the pack isn't taking it (taper, derate): don't wind it up
+            # to the cap for the tick to pull back; raising waits for the next tick.
+            trim = controller._meter_trim = trim._replace(
+                verify_raise=False, cap_w=sp if err_w >= controller.cfg.deadband_w else trim.cap_w
+            )
+        if err_w >= controller.cfg.deadband_w:
+            mag = min(abs(trim.cap_w), abs(sp) + err_w)
+        elif err_w <= -controller.cfg.deadband_w and not charging:
+            mag = max(0.0, sp + err_w)
+        else:
+            return
+        mag = mag // const.SETPOINT_STEP_W * const.SETPOINT_STEP_W
+        mag = abs(act._clamp_to_live_limits(-mag if charging else mag, quiet=True))
+        if (mag > abs(sp)) if err_w > 0.0 else (mag < sp):
+            await _write_trim(controller, trim, mag, charging)
+
+
+async def _write_trim(controller: Controller, trim: MeterTrim | None, mag: float, charging: bool) -> None:
+    act = controller._actuator
+    raised = mag > abs(act.last_setpoint_w)
+    try:
+        if mag == 0.0:
+            # Stay engaged at 0 W, as the tick does at zero headroom; releasing an export would only flap.
+            await act.engage_hold()
+        elif charging:
+            await act.engage_and_charge(-mag)
+        else:
+            await act.engage_export(mag)
+    except Exception:
+        _LOGGER.error("Meter fast path: setpoint write failed; leaving it to the next tick", exc_info=True)
+        return
+    controller._meter_errors.clear()
+    if trim is not None:
+        controller._meter_trim = trim._replace(
+            written_at=act.last_write_at, verify_raise=raised, raised_at=act.last_write_at if raised else trim.raised_at
+        )
+    controller.last_status["setpoint_w" if charging else "export_setpoint_w"] = act.last_setpoint_w
 
 
 async def run_floor_rescue(controller: Controller, now: datetime, inputs: PlantInputs) -> float | None:
@@ -381,6 +493,9 @@ async def run_forcing_and_export(
             # ACTUALLY WRITTEN to hardware, not the pre-clamp request, so
             # _record_sample / the published status stay truthful.
             setpoint = controller._actuator.last_setpoint_w
+            if setpoint < 0.0:
+                _cap_w = guard.quantize_setpoint(energy.grid_charge_request_w(controller.cfg, 0.0), controller.cfg)
+                record_meter_trim(controller, now, _slot_minutes, _cap_w)
         # Mutual exclusion: export executor is skipped entirely while force-charging.
         # Release export state so we transition cleanly after force-charge ends.
         await safe_release(controller, now, release=False)
@@ -537,6 +652,23 @@ async def run_forcing_and_export(
                     try:
                         await controller._actuator.engage_export(_export_sp)
                         _export_setpoint_w = _export_sp
+                        if controller._house_load_fresh and controller.cfg.export_load_comp_factor == 1.0:
+                            # The gross covers the house, so the meter shows net + PV − loss; PV is tracked live.
+                            # Partial compensation would aim the meter at a share of house load: left to the tick.
+                            _loss_w = coordinator.read_float(
+                                controller._hass,
+                                controller._data.get(
+                                    const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS]
+                                ),
+                            )
+                            record_meter_trim(
+                                controller,
+                                now,
+                                _slot_minutes,
+                                const.SETPOINT_MAX_W,
+                                aim_w=_net_target_w - (_loss_w or 0.0),
+                                pv_w=controller._last_pv_w,
+                            )
                         # R1: MEASURED export, not the commanded setpoint.
                         # _metered_export_w is the battery-sourced portion of
                         # the live grid export — min(meter export, battery

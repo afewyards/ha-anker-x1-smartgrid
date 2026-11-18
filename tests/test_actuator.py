@@ -457,6 +457,9 @@ async def test_failed_workmode_restore_still_books_the_zero_setpoint():
         await act.release_to_self()
     assert act.last_setpoint_w == 0.0
     assert act.engaged is True
+    # Engaged at 0 W after a release the tick wanted: the fast path must not take it for its own cut.
+    assert act.last_write_at > float("-inf")
+    assert act.last_write_ok is False
 
 
 async def test_every_engage_stamps_the_write_time(hass_stub):
@@ -488,3 +491,4 @@ async def test_the_write_time_is_stamped_when_a_slow_write_ends(hass_stub, monke
     else:
         await act.engage_and_charge(-3000.0)
     assert act.last_write_at == 108.0
+    assert act.last_write_ok is not fails

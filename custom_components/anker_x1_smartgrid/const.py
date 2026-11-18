@@ -365,9 +365,18 @@ EFFICIENCY_HYSTERESIS_W = 150.0
 EFFICIENCY_CACHE_SECONDS = 3600
 
 SETPOINT_STEP_W = 100.0
-# Minimum gap after any setpoint write before the meter fast path may cut again:
-# the meter and pack need a moment to show the last write.
-METER_CUT_MIN_GAP_S = 5.0
+# Measured on the X1: after a setpoint write the meter starts moving at 0.2-1.0 s and is 90% settled by
+# 0.6-1.3 s; the HA write itself takes ~0.45 s (once 1.2 s); battery_power stays stale ~5.5 s, then jumps.
+# So the fast path reads the meter only. Minimum gap after any write before it may cut again:
+METER_CUT_MIN_GAP_S = 2.0
+# Meter readings this soon after a write don't count toward a raise or an export trim.
+METER_SETTLE_S = 2.0
+# Readings older than this drop out of that window: HA sends no event while the meter value holds still.
+METER_WINDOW_S = 3.0
+# A tick waits this long for a fast-path write to finish instead of skipping (and running the old slot on).
+TICK_LOCK_WAIT_S = 2.0
+# battery_power shows the old setpoint for ~5.5 s after a write: a tick this soon after one uses the setpoint.
+BATTERY_POWER_LAG_S = 6.0
 DEFAULT_FALLBACK_LOAD_W = 400.0
 # Conservative synthetic solar pickup hour (UTC) used as a ride-out endpoint when the
 # sun entity is unavailable and find_next_solar_pickup returns None.  The reserve is

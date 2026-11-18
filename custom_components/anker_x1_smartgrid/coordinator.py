@@ -89,6 +89,15 @@ def read_plant_inputs(hass: HomeAssistant, data: dict) -> PlantInputs | None:
     return PlantInputs(soc, meter_w, dt_util.utcnow())
 
 
+def read_battery_and_loss_w(hass: HomeAssistant, data: dict, inputs: PlantInputs) -> tuple[float | None, float | None]:
+    """``(battery_power, inverter_loss)`` for the tick's house balance; a setpoint stand-in is AC side, so no loss."""
+    if inputs.batt_stand_in_w is not None:
+        return inputs.batt_stand_in_w, 0.0
+    return read_float(hass, data[const.CONF_ENT_BATTERY_POWER]), read_float(
+        hass, data.get(const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS])
+    )
+
+
 def read_pv_power_w(hass: HomeAssistant, data: dict) -> float | None:
     """Sum live PV-power entities (W).
 

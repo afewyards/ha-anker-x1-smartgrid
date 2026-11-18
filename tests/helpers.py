@@ -67,38 +67,43 @@ class StubActuator:
         self.last_setpoint_w: float = 0.0
         self.engaged: bool = False
         self.last_write_at: float = float("-inf")
+        self.last_write_ok: bool = False
         self.fail_on = fail_on or set()
 
     async def engage_and_charge(self, setpoint_w: float) -> None:
-        self.last_write_at = time.monotonic()
+        self.last_write_at, self.last_write_ok = time.monotonic(), False
         if "engage_and_charge" in self.fail_on:
             self.calls.append(("engage_and_charge", setpoint_w))
             raise RuntimeError("modbus busy")
         self.calls.append(("engage_and_charge", setpoint_w))
         self.last_setpoint_w = setpoint_w
-        self.engaged = True
+        self.engaged = self.last_write_ok = True
 
     async def engage_export(self, setpoint_w: float) -> None:
         if setpoint_w <= 0:
             raise ValueError(f"export-only: setpoint must be > 0, got {setpoint_w}")
-        self.last_write_at = time.monotonic()
+        self.last_write_at, self.last_write_ok = time.monotonic(), False
         if "engage_export" in self.fail_on:
             self.calls.append(("engage_export_attempt", setpoint_w))
             raise RuntimeError("set_value failed mid-engage")
         self.calls.append(("engage_export", setpoint_w))
         self.last_setpoint_w = setpoint_w
-        self.engaged = True
+        self.engaged = self.last_write_ok = True
 
     async def engage_hold(self) -> None:
-        self.last_write_at = time.monotonic()
+        self.last_write_at, self.last_write_ok = time.monotonic(), False
         if "engage_hold" in self.fail_on:
             self.calls.append(("engage_hold_attempt",))
             raise RuntimeError("modbus busy")
         self.calls.append(("engage_hold",))
         self.last_setpoint_w = 0.0
-        self.engaged = True
+        self.engaged = self.last_write_ok = True
+
+    def _clamp_to_live_limits(self, setpoint_w: float, *, quiet: bool = False) -> float:
+        return setpoint_w
 
     async def release_to_self(self) -> None:
+        self.last_write_at, self.last_write_ok = time.monotonic(), False
         if "release_to_self" in self.fail_on:
             self.calls.append(("release_to_self_attempt",))
             raise RuntimeError("release failed")

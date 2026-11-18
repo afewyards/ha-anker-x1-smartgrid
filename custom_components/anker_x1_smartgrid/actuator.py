@@ -30,8 +30,10 @@ class Actuator:
         self.engaged: bool = False
         # Monotonic time the last setpoint write attempt finished (gates the meter fast path).
         self.last_write_at: float = float("-inf")
+        # The last write was an engage that landed its setpoint (never a release).
+        self.last_write_ok: bool = False
 
-    def _clamp_to_live_limits(self, setpoint_w: float) -> float:
+    def _clamp_to_live_limits(self, setpoint_w: float, *, quiet: bool = False) -> float:
         """Clamp *setpoint_w* into the setpoint entity's LIVE min/max attributes.
 
         The inverter BMS min/max (exposed as the ``number.*`` entity's `min`/
@@ -79,7 +81,7 @@ class Actuator:
         stepped_mag = (mag // const.SETPOINT_STEP_W) * const.SETPOINT_STEP_W
         stepped = -stepped_mag if clamped < 0.0 else stepped_mag
 
-        if stepped != setpoint_w:
+        if stepped != setpoint_w and not quiet:
             _LOGGER.warning(
                 "Setpoint clamped to live inverter limits: requested=%.1f clamped=%.1f (live min=%s max=%s)",
                 setpoint_w,
@@ -96,6 +98,7 @@ class Actuator:
         The only difference between charge and export is setpoint sign; the
         VPP/modbus engage sequence is identical (A1: no separate export workmode).
         """
+        self.last_write_ok = False
         try:
             await self._hass.services.async_call(
                 "switch",
@@ -119,6 +122,7 @@ class Actuator:
             # last_setpoint_w keeps its previous value — we didn't actually command
             # the new one, even though engaged is already True (N1).
             self.last_setpoint_w = setpoint_w
+            self.last_write_ok = True
         finally:
             # The fast path's gap runs from when a write lands (or fails), not from when a slow one started.
             self.last_write_at = time.monotonic()
@@ -163,33 +167,38 @@ class Actuator:
         in VPP at setpoint 0 freezes the battery and puts the whole house on
         the grid, which is worse than landing in App-managed.
         """
-        await self._hass.services.async_call(
-            "number",
-            "set_value",
-            {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": 0.0},
-            blocking=True,
-        )
-        # The pack is at 0 W from here even if the workmode restore fails, so nothing reads a stale charge/export.
-        self.last_setpoint_w = 0.0
-        await self._hass.services.async_call(
-            "select",
-            "select_option",
-            {
-                "entity_id": self._data[const.CONF_ENT_WORKMODE],
-                "option": self._data.get(const.CONF_RESTORE_WORKMODE, const.DEFAULT_RESTORE_WORKMODE),
-            },
-            blocking=True,
-        )
-        engage_state = self._hass.states.get(self._data[const.CONF_ENT_ENGAGE])
-        if engage_state is None or engage_state.state != "off":
-            _LOGGER.debug(
-                "Engage switch still %s after workmode restore; issuing explicit turn_off",
-                "unreadable" if engage_state is None else engage_state.state,
-            )
+        self.last_write_ok = False
+        try:
             await self._hass.services.async_call(
-                "switch",
-                "turn_off",
-                {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+                "number",
+                "set_value",
+                {"entity_id": self._data[const.CONF_ENT_SETPOINT], "value": 0.0},
                 blocking=True,
             )
-        self.engaged = False
+            # The pack is at 0 W from here even if the workmode restore fails, so nothing reads a stale charge/export.
+            self.last_setpoint_w = 0.0
+            await self._hass.services.async_call(
+                "select",
+                "select_option",
+                {
+                    "entity_id": self._data[const.CONF_ENT_WORKMODE],
+                    "option": self._data.get(const.CONF_RESTORE_WORKMODE, const.DEFAULT_RESTORE_WORKMODE),
+                },
+                blocking=True,
+            )
+            engage_state = self._hass.states.get(self._data[const.CONF_ENT_ENGAGE])
+            if engage_state is None or engage_state.state != "off":
+                _LOGGER.debug(
+                    "Engage switch still %s after workmode restore; issuing explicit turn_off",
+                    "unreadable" if engage_state is None else engage_state.state,
+                )
+                await self._hass.services.async_call(
+                    "switch",
+                    "turn_off",
+                    {"entity_id": self._data[const.CONF_ENT_ENGAGE]},
+                    blocking=True,
+                )
+            self.engaged = False
+        finally:
+            # A release that fails half-way may leave us engaged at 0 W: the fast path must not raise out of it.
+            self.last_write_at = time.monotonic()
