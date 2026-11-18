@@ -626,6 +626,8 @@ def _dp_select_slots(
     _wall_sched = result.get("wall_schedule")
     walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
     if _out is not None:
+        # Slots the plan runs the pack under the backup reserve; the executor's reserve hold stands aside there.
+        _out["dip_slots"] = frozenset(now_h + h * stride for h, d in enumerate(result.get("dip_schedule") or ()) if d)
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
         if _kept:
@@ -1209,7 +1211,6 @@ def compute_decision(
             _out["water_value"] = water_value
             _out["ceiling_by_hour"] = _dp_ceiling
             _out["held_slots"] = _dp_held
-            _out["walled_slots"] = _dp_walled
             # The slot the DP keyed its maps on: the executor reads `now` later in
             # the tick and must not re-floor it, or a tick landing on a boundary
             # looks up the next slot and misses its own.

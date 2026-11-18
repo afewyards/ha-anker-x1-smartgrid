@@ -398,6 +398,33 @@ def test_dips_under_reserve_when_refill_is_near(dt_h):
 
 
 @_HOURS
+def test_dip_schedule_marks_the_slots_the_plan_runs_under_the_reserve(dt_h):
+    res, path = _both(_q([1.0 * dt_h] * 8, dt_h), _q([0.20, 0.20] + [0.00] * 6, dt_h), 30.0, dt_h)
+    expected = [not res["schedule"][h] and not res["wall_schedule"][h] and p < 30.0 for h, p in enumerate(path)]
+    assert any(res["dip_schedule"])
+    assert res["dip_schedule"] == expected
+
+
+@_HOURS
+@pytest.mark.parametrize("load_kw", [0.4, 1.0])
+def test_flat_price_at_reserve_plans_no_dip(dt_h, load_kw):
+    n = round(12 / dt_h)
+    res, _ = _both([load_kw * dt_h] * n, [0.25] * n, 30.0, dt_h)
+    assert res["dip_schedule"] == [False] * n
+
+
+def test_pv_surplus_under_reserve_is_not_a_dip():
+    # A forecast surplus under the reserve charges the pack, so the executor still holds if the house draws.
+    res = _opt([0.4] * 4, [0.40, 0.40, 0.05, 0.05], 20.0, pv=[1.0, 0.0, 0.0, 0.0], water_value=0.10)
+    assert res["schedule"][0] == 0.0
+    assert res["dip_schedule"][:2] == [False, True]
+
+
+def test_no_dip_schedule_without_a_reserve():
+    assert "dip_schedule" not in _opt([1.0] * 4, [0.30] * 4, 50.0, cfg=Config(capacity_kwh=10.0))
+
+
+@_HOURS
 def test_far_refill_dips_only_as_deep_as_the_rent_allows(dt_h):
     load = _q([x * dt_h for x in _PEAK_LOAD], dt_h)
     _, near = _both(load, _q([0.20] * 2 + [0.00] * 22, dt_h), 30.0, dt_h)

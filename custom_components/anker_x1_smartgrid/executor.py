@@ -441,19 +441,18 @@ async def run_forcing_and_export(
         _surplus = bool(_recent) and fmean(_recent) < 0.0
         _after_charge = controller.plan.state is ControllerState.FORCING
         _band = scheduler.backup_reserve_band(controller.cfg)[1]
-        # The plan chooses per slot between stopping at the reserve and dipping under it; without a plan, stop.
-        _walled_slots = _dp_out.get("walled_slots")
-        _walled = _walled_slots is None or _dp_slot in _walled_slots
+        # Only a slot the plan itself runs under the reserve frees the pack; without a plan, it holds.
+        _dips = _dp_slot in (_dp_out.get("dip_slots") or ())
         _reserve_hold = scheduler.backup_reserve_hold(
             ExportState(engaged=True, state_since=now)
-            if _after_charge and _walled and not _surplus and inputs.soc < _band
+            if _after_charge and not _dips and not _surplus and inputs.soc < _band
             else _prev_hold,
             soc=inputs.soc,
             pv_surplus=_surplus,
             now=now,
             cfg=controller.cfg,
             slot_minutes=_slot_minutes,
-            walled=_walled,
+            dips=_dips,
         )
         if _reserve_hold is not None and _reserve_hold.engaged:
             controller.hold_state = _reserve_hold

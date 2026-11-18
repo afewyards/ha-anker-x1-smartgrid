@@ -589,12 +589,12 @@ class TestBackupReserve:
         await ctrl.tick()
 
     @staticmethod
-    def _spy_walled(monkeypatch) -> list:
-        """Record, per tick, whether the plan walled the slot the reserve hold was asked about."""
+    def _spy_dips(monkeypatch) -> list:
+        """Record, per tick, whether the plan runs the pack under the reserve in the slot the hold was asked about."""
         seen: list = []
         real = scheduler.backup_reserve_hold
         monkeypatch.setattr(
-            scheduler, "backup_reserve_hold", lambda *a, **kw: seen.append(kw["walled"]) or real(*a, **kw)
+            scheduler, "backup_reserve_hold", lambda *a, **kw: seen.append(kw["dips"]) or real(*a, **kw)
         )
         return seen
 
@@ -607,7 +607,7 @@ class TestBackupReserve:
         )
         ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
         ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
-        walled = self._spy_walled(monkeypatch)
+        dips = self._spy_dips(monkeypatch)
         prices = [0.30, 0.30, 0.30, 0.02] + [0.30] * 8
 
         def window(h):
@@ -617,7 +617,7 @@ class TestBackupReserve:
             await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=h), "12.0", window(h))
             assert ctrl.plan.state is not ControllerState.FORCING
         assert [c[0] for c in act.calls] == ["engage_hold"] * 3
-        assert walled == [True] * 3  # the plan stops the pack where it starts, under the reserve
+        assert dips == [False] * 3  # the plan stops the pack where it starts, under the reserve
 
         at = self.BASE + timedelta(hours=3)
         await self._tick(monkeypatch, ctrl, hass, at, "12.0", window(3))
@@ -629,7 +629,7 @@ class TestBackupReserve:
         await self._tick(monkeypatch, ctrl, hass, at, "30.5", window(4))
         assert [c[0] for c in act.calls].count("release_to_self") == 0
         assert ctrl.hold_state.engaged
-        assert walled[-1] is True
+        assert dips[-1] is False
         await self._tick(monkeypatch, ctrl, hass, at + timedelta(minutes=20), "32.0", window(4))
         names = [c[0] for c in act.calls]
         assert names.count("release_to_self") == 1
@@ -647,7 +647,7 @@ class TestBackupReserve:
         )
         ctrl.hold_state = ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
         ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
-        walled = self._spy_walled(monkeypatch)
+        dips = self._spy_dips(monkeypatch)
         prices = [0.40, 0.40, 0.02, 0.02] + [0.30] * 8
 
         def window(h):
@@ -658,7 +658,7 @@ class TestBackupReserve:
             assert ctrl.plan.state is ControllerState.PASSIVE
             assert not ctrl.hold_state.engaged
         assert act.calls == []
-        assert walled == [False, False]
+        assert dips == [True, True]
 
         await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=2), "20.0", window(2))
         assert ctrl.plan.state is ControllerState.FORCING
@@ -667,7 +667,7 @@ class TestBackupReserve:
         # A point under the reserve after the trough: the plan stops there again.
         await self._tick(monkeypatch, ctrl, hass, self.BASE + timedelta(hours=4), "29.0", window(4))
         assert ctrl.hold_state.engaged
-        assert walled[-1] is True
+        assert dips[-1] is False
         assert [c[0] for c in act.calls] == ["engage_and_charge", "engage_hold"]
 
     @pytest.mark.e2e

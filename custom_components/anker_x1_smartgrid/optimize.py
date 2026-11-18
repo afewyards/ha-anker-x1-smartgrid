@@ -838,6 +838,10 @@ def optimize_grid(
     ``wall_schedule``
         ``list[bool]`` — slots whose pack stops at the backup reserve instead of
         discharging under it. Present **only** when the backup reserve is set.
+    ``dip_schedule``
+        ``list[bool]`` — deficit slots whose pack ends under the backup reserve
+        because the plan let it discharge there. Present **only** when the
+        backup reserve is set.
     ``infeasible``
         ``bool`` — present (and ``True``) only when the end-reserve constraint
         could not be met even at maximum charge rate.  The best achievable
@@ -1313,6 +1317,8 @@ def optimize_grid(
     floor_import_kwh = 0.0
     held_sched = [False] * window_len
     wall_sched = [False] * window_len
+    dip_sched = [False] * window_len
+    reserve_b = to_bin(reserve_kwh)
     cur_b = best_end_b
     for h in range(window_len - 1, -1, -1):
         info = parent[h][cur_b]
@@ -1327,6 +1333,10 @@ def optimize_grid(
         # A slot that grid-charges is a charge, whatever else it does with the
         # house: the actuator can only be in one work mode.
         held_sched[h] = held_kwh > 0.0 and g_ac <= 0.0
+        # The pack chose to run under the reserve: a deficit slot that neither stopped, held nor charged.
+        dip_sched[h] = (
+            window_pv[h] <= window_load[h] and not (wall_sched[h] or held_kwh or g_ac > 0.0) and cur_b < reserve_b
+        )
         cur_b = prev_b
 
     total_kwh = sum(schedule_ac) + floor_import_kwh
@@ -1359,6 +1369,7 @@ def optimize_grid(
     if reserve_kwh > 0.0:
         # Which slots stop at the reserve, so a replay of the plan can stop there too.
         result["wall_schedule"] = wall_sched
+        result["dip_schedule"] = dip_sched
     if feed_in is not None:
         result["export_credit_eur"] = export_credit
     if _do_export:
