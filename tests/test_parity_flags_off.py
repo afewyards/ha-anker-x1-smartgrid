@@ -51,7 +51,6 @@ def test_default_config_fields_are_off():
     assert f["occ_adapt_fraction"].default == 0.0
     assert f["occ_persistence_h"].default == 4
     assert f["current_hour_blend"].default is False
-    assert f["load_adapt_partial_hour"].default is False
     # Acknowledged exception: terminal_overnight_credit is the first default-ON
     # flag (two-segment terminal water value corrects DP behavior; there is no
     # byte-identical "off" state to default to). See const.DEFAULT_TERMINAL_OVERNIGHT_CREDIT.

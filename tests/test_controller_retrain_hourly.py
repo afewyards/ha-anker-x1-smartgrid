@@ -36,7 +36,6 @@ class _HourlyRec:
 def _make_ctl(rec, **cfg_overrides) -> Controller:
     """Bare controller via __new__ (mirrors _make_retrain_ctl in test_controller_phase2.py)."""
     data = {
-        "use_learned_model": True,
         "train_days": 14,
         "backtest_test_days": 3,
         **cfg_overrides,

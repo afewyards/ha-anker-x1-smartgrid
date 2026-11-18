@@ -31,7 +31,6 @@ class Config:
     lookback_days: int = const.DEFAULT_LOOKBACK_DAYS
     retention_days: int = const.DEFAULT_RETENTION_DAYS
     history_days: int = const.DEFAULT_HISTORY_DAYS
-    use_learned_model: bool = const.DEFAULT_USE_LEARNED_MODEL
     retrain_hours: int = const.DEFAULT_RETRAIN_HOURS
     min_train_samples: int = const.DEFAULT_MIN_TRAIN_SAMPLES
     train_days: int = const.DEFAULT_TRAIN_DAYS
@@ -100,7 +99,6 @@ class Config:
     occ_persistence_h: int = const.PERSONS_PERSISTENCE_H
     # Current-hour blend + load-adapt partial-hour (live-only, default off).
     current_hour_blend: bool = const.DEFAULT_CURRENT_HOUR_BLEND
-    load_adapt_partial_hour: bool = const.DEFAULT_LOAD_ADAPT_PARTIAL_HOUR
     # Ride-to-trough reserve (rev-2): anchor selector + cheap-relief band.
     reserve_anchor: str = const.DEFAULT_RESERVE_ANCHOR
     reserve_cheap_band: float = const.DEFAULT_RESERVE_CHEAP_BAND

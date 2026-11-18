@@ -17,7 +17,6 @@ CONF_MAX_CHARGE_W = "max_charge_w"
 CONF_ETA_CHARGE = "eta_charge"
 CONF_RETENTION_DAYS = "retention_days"
 CONF_HISTORY_DAYS = "history_days"
-CONF_USE_LEARNED_MODEL = "use_learned_model"
 CONF_RETRAIN_HOURS = "retrain_hours"
 CONF_MIN_TRAIN_SAMPLES = "min_train_samples"
 CONF_TRAIN_DAYS = "train_days"
@@ -111,7 +110,6 @@ DEFAULT_DEADBAND_W = 300.0
 DEFAULT_LOOKBACK_DAYS = 14
 DEFAULT_RETENTION_DAYS = 90
 DEFAULT_HISTORY_DAYS = 2
-DEFAULT_USE_LEARNED_MODEL = True
 DEFAULT_RETRAIN_HOURS = 24
 DEFAULT_MIN_TRAIN_SAMPLES = 2000
 # Bucketed tier now trains on samples_hourly energy rollups (one FeatureRow per
@@ -309,11 +307,9 @@ DEFAULT_OCC_ADAPT_FRACTION = 0.0
 # Shared presence-persistence horizon: local corrector AND the addon payload
 # projection (remote_forecast.project_persons_home) must always agree.
 PERSONS_PERSISTENCE_H = 4
-# Current-hour blend + load-adapt partial-hour config keys (both live-only, default off).
+# Current-hour blend config key (live-only, default off).
 CONF_CURRENT_HOUR_BLEND = "current_hour_blend"
-CONF_LOAD_ADAPT_PARTIAL_HOUR = "load_adapt_partial_hour"
 DEFAULT_CURRENT_HOUR_BLEND = False
-DEFAULT_LOAD_ADAPT_PARTIAL_HOUR = False
 
 # Low-power hold: idle the battery (VPP, setpoint 0) while price × eta_discharge
 # at the live deficit is worth less than a stored kWh.

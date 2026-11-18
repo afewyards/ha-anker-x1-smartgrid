@@ -113,18 +113,17 @@ async def gather(controller: Controller, now: datetime) -> TickInputs:
         controller._last_wal_checkpoint_hour = now.hour
         await controller._hass.async_add_executor_job(controller._recorder.wal_checkpoint)
 
-    # A4: DEFAULT_USE_LEARNED_MODEL is True, but sklearn is NOT an integration
+    # A4: the learned model is always on, but sklearn is NOT an integration
     # requirement (musl is why the addon exists) and the addon defaults off — a
     # stock install then silently falls back to the bucketed model forever.
     if (
         not controller._learned_model_warned
-        and controller.cfg.use_learned_model
         and not controller.cfg.addon_enabled
         and importlib.util.find_spec("sklearn") is None
     ):
         controller._learned_model_warned = True
         _LOGGER.warning(
-            "use_learned_model is on but scikit-learn is unavailable in the "
+            "The learned load model needs scikit-learn, which is unavailable in the "
             "integration and the forecast add-on is disabled — falling back to "
             "the bucketed load model. Enable the Anker X1 Forecast add-on to "
             "use the learned model."

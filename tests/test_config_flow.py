@@ -68,7 +68,7 @@ def test_sections_cover_all_option_fields():
     # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
     # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
     # +2 battery_charge_limit_w / battery_export_limit_w, +2 tracked-device pickers
-    assert len(section_keys) == 71
+    assert len(section_keys) == 69
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -884,7 +884,6 @@ def test_options_schema_includes_editable_tunables():
     for key in (
         const.CONF_SOC_TARGET,
         const.CONF_ETA_CHARGE,
-        const.CONF_USE_LEARNED_MODEL,
         const.CONF_MIN_TRAIN_SAMPLES,
         const.CONF_RETENTION_DAYS,
         const.CONF_RETENTION_HOURLY_DAYS,
@@ -1803,7 +1802,7 @@ def test_idle_drain_w_option_rejects_above_range():
 
 # ---------------------------------------------------------------------------
 # Occupancy-wave flags — occ_adapt_fraction, occ_persistence_h,
-# current_hour_blend, load_adapt_partial_hour exposed in the options-UI
+# current_hour_blend exposed in the options-UI
 # schema. These existed as models.Config fields only, so HA silently
 # dropped them from the config entry's options on every UI options save
 # (live incident). Purely additive: defaults here MUST equal the current
@@ -1819,7 +1818,6 @@ def test_options_schema_includes_occupancy_wave_flags():
         const.CONF_OCC_ADAPT_FRACTION,
         const.CONF_OCC_PERSISTENCE_H,
         const.CONF_CURRENT_HOUR_BLEND,
-        const.CONF_LOAD_ADAPT_PARTIAL_HOUR,
     ):
         assert key in keys
 
@@ -1835,7 +1833,6 @@ def test_options_schema_occupancy_wave_flags_default_matches_config():
     assert schema_keys[const.CONF_OCC_ADAPT_FRACTION].default() == cfg.occ_adapt_fraction
     assert schema_keys[const.CONF_OCC_PERSISTENCE_H].default() == cfg.occ_persistence_h
     assert schema_keys[const.CONF_CURRENT_HOUR_BLEND].default() == cfg.current_hour_blend
-    assert schema_keys[const.CONF_LOAD_ADAPT_PARTIAL_HOUR].default() == cfg.load_adapt_partial_hour
 
 
 def test_options_schema_occupancy_wave_flags_in_load_ml_section():
@@ -1845,7 +1842,6 @@ def test_options_schema_occupancy_wave_flags_in_load_ml_section():
         const.CONF_OCC_ADAPT_FRACTION,
         const.CONF_OCC_PERSISTENCE_H,
         const.CONF_CURRENT_HOUR_BLEND,
-        const.CONF_LOAD_ADAPT_PARTIAL_HOUR,
     ):
         assert key in OPTIONS_SECTIONS[SECTION_LOAD_ML]
 
@@ -1860,13 +1856,11 @@ def test_options_schema_occupancy_wave_flags_roundtrip():
             const.CONF_OCC_ADAPT_FRACTION: 0.5,
             const.CONF_OCC_PERSISTENCE_H: 6,
             const.CONF_CURRENT_HOUR_BLEND: True,
-            const.CONF_LOAD_ADAPT_PARTIAL_HOUR: True,
         },
     )
     assert result[const.CONF_OCC_ADAPT_FRACTION] == 0.5
     assert result[const.CONF_OCC_PERSISTENCE_H] == 6
     assert result[const.CONF_CURRENT_HOUR_BLEND] is True
-    assert result[const.CONF_LOAD_ADAPT_PARTIAL_HOUR] is True
 
 
 async def test_options_flow_saves_occupancy_wave_flags(hass):
@@ -1882,7 +1876,6 @@ async def test_options_flow_saves_occupancy_wave_flags(hass):
     assert entry.options[const.CONF_OCC_ADAPT_FRACTION] == 0.3
     assert const.CONF_OCC_PERSISTENCE_H in entry.options
     assert const.CONF_CURRENT_HOUR_BLEND in entry.options
-    assert const.CONF_LOAD_ADAPT_PARTIAL_HOUR in entry.options
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

@@ -244,7 +244,7 @@ def _cold_warm_hourly_rows(days=20):
 async def test_retrain_switches_to_model_with_enough_data():
     from custom_components.anker_x1_smartgrid.controller import Controller
 
-    data = {"use_learned_model": True, "min_train_samples": 100, "train_days": 14, "backtest_test_days": 3}
+    data = {"min_train_samples": 100, "train_days": 14, "backtest_test_days": 3}
     ctl = Controller.__new__(Controller)
     # minimal manual init for the unit under test
     ctl._hass = None
@@ -450,12 +450,11 @@ class _HGBRRec:
         return 0
 
 
-def _make_retrain_ctl(rec, *, use_learned_model=True, min_train_samples=100):
+def _make_retrain_ctl(rec, *, min_train_samples=100):
     """Build a minimal Controller wired only for _retrain_sync tests."""
     from custom_components.anker_x1_smartgrid.controller import Controller
 
     data = {
-        "use_learned_model": use_learned_model,
         "min_train_samples": min_train_samples,
         "train_days": 14,
         "backtest_test_days": 3,
@@ -578,26 +577,6 @@ def test_retrain_hgbr_not_ready_falls_to_bucketed(monkeypatch):
     ctl._retrain_sync("2025-01-01T00:00:00+00:00")
 
     assert ctl.active_model_name == "bucketed"
-
-
-def test_retrain_use_learned_model_false_goes_to_profile(monkeypatch):
-    """use_learned_model=False → profile fallback; HGBR is_ready is never consulted."""
-    from custom_components.anker_x1_smartgrid import hgbr as hgbr_mod
-
-    is_ready_calls: list = []
-
-    def _spy_is_ready(self, rows, **kw):
-        is_ready_calls.append(1)
-        return False
-
-    monkeypatch.setattr(hgbr_mod.HGBRQuantileModel, "is_ready", _spy_is_ready)
-
-    rec = _HGBRRec(feature_rows=_cold_warm_rows(), hourly_rows=[])
-    ctl = _make_retrain_ctl(rec, use_learned_model=False)
-    ctl._retrain_sync("2025-01-01T00:00:00+00:00")
-
-    assert ctl.active_model_name == "profile"
-    assert not is_ready_calls, "is_ready must not be called when use_learned_model=False"
 
 
 def test_retrain_empty_recorder_no_crash():

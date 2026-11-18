@@ -772,7 +772,7 @@ class Controller:
             pass
         try:
             _partial = None
-            if self.cfg.load_adapt_partial_hour and self._hour_acc.hour == now_h and self._hour_acc.covered_s > 0.0:
+            if self._hour_acc.hour == now_h and self._hour_acc.covered_s > 0.0:
                 _rate_w = self._hour_acc.kwh * 3_600_000.0 / self._hour_acc.covered_s
                 _partial = (_rate_w, self._hour_acc.covered_s / 3600.0)
             ratio, matched, ratio_raw = load_adapt.compute_ratio(
@@ -932,56 +932,55 @@ class Controller:
         ``_retrain_sync``)."""
         hourly_rows = self._recorder.read_hourly_rows(since_iso=since_iso)
         clean_h = clean_hourly_rows(hourly_rows)
-        if self.cfg.use_learned_model:
-            # ------------------------------------------------------------------
-            # Tier 1: HistGBR (coverage + quality gated)
-            # ------------------------------------------------------------------
-            try:
-                hourly = self._recorder.read_hourly_rows()
-                hgbr = HGBRQuantileModel()
-                if hgbr.is_ready(hourly):
-                    metrics = bt.walk_forward_hgbr(
-                        hourly,
-                        train_days=self.cfg.train_days,
-                        test_days=self.cfg.backtest_test_days,
-                        fallback_w=const.DEFAULT_FALLBACK_LOAD_W,
-                        # This tier is served through LoadPredictor, one hour per
-                        # call, so it cannot chain a horizon the way the add-on
-                        # does — grade it the way it runs (see the `chained`
-                        # parameter).  Lifting this needs predict_series threaded
-                        # through the predictor wrapper stack first.
-                        chained=False,
-                    )
-                    if bt.should_promote(metrics):
-                        # Live control consumes only P50 (review: P80 scaffolding);
-                        # fitting the second quantile doubled retrain cost for no reader.
-                        hgbr.fit(hourly, quantiles=(0.5,))
-                        if hgbr._fitted:
-                            self.predictor = LoadPredictor.from_model(hgbr)
-                            self.active_model_name = "hgbr"
-                            self.backtest_result = metrics
-                            return
-            except Exception:
-                _LOGGER.warning(
-                    "HGBR retrain path failed; falling through to bucketed",
-                    exc_info=True,
-                )
-            # ------------------------------------------------------------------
-            # Tier 2: BucketedLoadModel — trained on hourly energy rollups
-            # (samples_hourly), one FeatureRow per hour; gated on
-            # DEFAULT_MIN_TRAIN_HOURS rather than the old per-tick sample count.
-            # ------------------------------------------------------------------
-            if len(clean_h) >= const.DEFAULT_MIN_TRAIN_HOURS:
-                model = BucketedLoadModel.fit(clean_h)
-                self.backtest_result = bt.walk_forward(
-                    clean_h,
+        # ------------------------------------------------------------------
+        # Tier 1: HistGBR (coverage + quality gated)
+        # ------------------------------------------------------------------
+        try:
+            hourly = self._recorder.read_hourly_rows()
+            hgbr = HGBRQuantileModel()
+            if hgbr.is_ready(hourly):
+                metrics = bt.walk_forward_hgbr(
+                    hourly,
                     train_days=self.cfg.train_days,
                     test_days=self.cfg.backtest_test_days,
                     fallback_w=const.DEFAULT_FALLBACK_LOAD_W,
+                    # This tier is served through LoadPredictor, one hour per
+                    # call, so it cannot chain a horizon the way the add-on
+                    # does — grade it the way it runs (see the `chained`
+                    # parameter).  Lifting this needs predict_series threaded
+                    # through the predictor wrapper stack first.
+                    chained=False,
                 )
-                self.predictor = LoadPredictor.from_model(model)
-                self.active_model_name = "bucketed"
-                return
+                if bt.should_promote(metrics):
+                    # Live control consumes only P50 (review: P80 scaffolding);
+                    # fitting the second quantile doubled retrain cost for no reader.
+                    hgbr.fit(hourly, quantiles=(0.5,))
+                    if hgbr._fitted:
+                        self.predictor = LoadPredictor.from_model(hgbr)
+                        self.active_model_name = "hgbr"
+                        self.backtest_result = metrics
+                        return
+        except Exception:
+            _LOGGER.warning(
+                "HGBR retrain path failed; falling through to bucketed",
+                exc_info=True,
+            )
+        # ------------------------------------------------------------------
+        # Tier 2: BucketedLoadModel — trained on hourly energy rollups
+        # (samples_hourly), one FeatureRow per hour; gated on
+        # DEFAULT_MIN_TRAIN_HOURS rather than the old per-tick sample count.
+        # ------------------------------------------------------------------
+        if len(clean_h) >= const.DEFAULT_MIN_TRAIN_HOURS:
+            model = BucketedLoadModel.fit(clean_h)
+            self.backtest_result = bt.walk_forward(
+                clean_h,
+                train_days=self.cfg.train_days,
+                test_days=self.cfg.backtest_test_days,
+                fallback_w=const.DEFAULT_FALLBACK_LOAD_W,
+            )
+            self.predictor = LoadPredictor.from_model(model)
+            self.active_model_name = "bucketed"
+            return
         # ------------------------------------------------------------------
         # Tier 3: rolling profile fallback (unchanged behaviour)
         # ------------------------------------------------------------------
@@ -992,7 +991,7 @@ class Controller:
         """Fit or refresh the load predictor from recorded feature rows.
 
         Runs a walk-forward backtest and upgrades to the learned model when
-        ``use_learned_model`` is enabled and enough samples are available.
+        enough samples are available.
         Never raises — any error keeps the previous predictor.
         """
         try:

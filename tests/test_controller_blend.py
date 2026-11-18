@@ -72,19 +72,11 @@ def test_blend_flag_wraps_outermost():
     assert ctl._load_adapt_log.get(NOW_H) == base_w
 
 
-def test_partial_hour_flag_feeds_ratio():
+def test_partial_hour_feeds_ratio():
     # 3 completed matched hours at ratio 1.0; running hour hot at 2× → ratio rises
-    ctl = _make_ctl({"load_adapt_fraction": 0.7, "load_adapt_partial_hour": True})
+    ctl = _make_ctl({"load_adapt_fraction": 0.7})
     _prime_acc(ctl, minutes=30, load_w=2 * _BASE_P50_W)
     _seed_matched_hours(ctl, NOW_H, ratio=1.0, hours=3)
     ctl._update_load_adapt(NOW, 20.0, _seeded_actuals(ctl))
     assert ctl._load_adapt_ratio is not None and ctl._load_adapt_ratio > 1.0
     assert ctl._load_adapt_matched == 4
-
-
-def test_partial_hour_flag_off_ignores_running_hour():
-    ctl = _make_ctl({"load_adapt_fraction": 0.7})
-    _prime_acc(ctl, minutes=30, load_w=2 * _BASE_P50_W)
-    _seed_matched_hours(ctl, NOW_H, ratio=1.0, hours=3)
-    ctl._update_load_adapt(NOW, 20.0, _seeded_actuals(ctl))
-    assert ctl._load_adapt_matched == 3

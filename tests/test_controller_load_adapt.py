@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone, UTC
 import pytest
 
 from custom_components.anker_x1_smartgrid.controller import Controller
+from custom_components.anker_x1_smartgrid.intra_hour import HourAccumulator
 from custom_components.anker_x1_smartgrid.load_adapt import AdaptivePredictor, PredictionLog
 from custom_components.anker_x1_smartgrid.models import Config
 
@@ -30,6 +31,7 @@ def _make_ctl(**cfg_overrides) -> Controller:
     ctl._load_adapt_log = PredictionLog()
     ctl._load_adapt_ratio = None
     ctl._load_adapt_matched = 0
+    ctl._hour_acc = HourAccumulator()
     return ctl
 
 

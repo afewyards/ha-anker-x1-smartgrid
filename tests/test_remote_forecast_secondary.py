@@ -179,7 +179,6 @@ def _make_ctl(rec, *, addon_enabled: bool = True):
     from custom_components.anker_x1_smartgrid.controller import Controller
 
     data = {
-        "use_learned_model": True,
         "train_days": 14,
         "backtest_test_days": 3,
         "addon_enabled": addon_enabled,
