@@ -133,20 +133,46 @@ function powerW(s) {
   const unit = s.attributes && s.attributes.unit_of_measurement;
   return typeof unit === 'string' && unit.trim().toLowerCase() === 'kw' ? v * 1000 : v;
 }
-// Grid: positive imports; within 50 W of zero reads as idle.
+// Grid: positive imports; battery: positive discharges; within 50 W of zero reads as idle.
 function liveFmt(key, v) {
   if (key === 'price') return { n: eur(v), u: num(v) === null ? '' : '/kWh', dir: '', cls: '' };
-  if (v === null) return { n: DASH, u: '', dir: '', cls: key === 'grid' ? 'qz' : '' };
+  if (v === null) return { n: DASH, u: '', dir: '', cls: key === 'grid' || key === 'battery' ? 'qz' : '' };
   const kw = Math.round(Math.abs(v)) >= 1000;
   const f = (x) => (kw ? (x / 1000).toFixed(Math.abs(Math.round(x / 10)) >= 1000 ? 1 : 2) : String(Math.round(x)));
   const u = kw ? 'kW' : 'W';
-  if (key !== 'grid') return { n: f(v), u, dir: '', cls: '' };
-  const [dir, cls] = v > 50 ? ['import', ''] : v < -50 ? ['export', 'ex'] : ['', 'qz'];
+  if (key !== 'grid' && key !== 'battery') return { n: f(v), u, dir: '', cls: '' };
+  const [dir, cls] =
+    key === 'grid'
+      ? v > 50 ? ['import', ''] : v < -50 ? ['export', 'ex'] : ['', 'qz']
+      : v < -50 ? ['charging', 'ch'] : v > 50 ? ['discharging', ''] : ['', 'qz'];
   return { n: f(Math.abs(v)), u, dir, cls };
 }
-function liveCell(key, label, v, extra = '') {
+const ARROW_UP = 'M5 9V1.5M1.8 4.6 5 1.4l3.2 3.2';
+const ARROW_DOWN = 'M5 1v7.5M1.8 5.4 5 8.6l3.2-3.2';
+function arrow(dir) {
+  if (!dir) return '';
+  return `<svg viewBox="0 0 10 10" role="img" aria-label="${dir}"><path d="${dir === 'export' || dir === 'charging' ? ARROW_UP : ARROW_DOWN}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+const barPct = (x) => `${Math.max(0, Math.min(100, x * 100)).toFixed(1)}%`;
+// Bars share one scale: the largest power shown. All zero leaves the tracks empty.
+function liveBars(v, r) {
+  const mag = ['house', 'solar', 'battery', 'grid'].map((k) => Math.abs(v[k] || 0));
+  const top = Math.max(...mag);
+  const w = {};
+  ['house', 'solar', 'battery', 'grid'].forEach((k, i) => (w[k] = top > 0 ? barPct(mag[i] / top) : '0%'));
+  const span = r ? r.hi - r.lo : 0;
+  if (v.price !== null && span > 0) {
+    w.price = { tick: barPct((v.price - r.lo) / span), band: r.cheap === null ? '0%' : barPct((r.cheap - r.lo) / span) };
+  }
+  return w;
+}
+function liveCell(key, label, v, w) {
   const f = liveFmt(key, v);
-  return `<div data-live="${key}" class="${f.cls}"><div class="k">${label}${extra}</div><div class="v"><span class="n">${f.n}</span><span class="u">${f.u}</span>${key === 'grid' ? `<span class="dir">${f.dir}</span>` : ''}</div></div>`;
+  const dir = `<span class="dir" data-d="${f.dir}">${arrow(f.dir)}</span>`;
+  const track = key === 'price'
+    ? `<div class="t"${w.price ? '' : ' style="visibility:hidden"'}><span class="z" style="width:${w.price ? w.price.band : '0%'}"></span><span class="m" style="left:${w.price ? w.price.tick : '0%'}"></span></div>`
+    : `<div class="t"><i style="width:${w[key]}"></i></div>`;
+  return `<div data-live="${key}" class="${f.cls}"><div class="k">${label}</div><div class="v"><span class="n">${f.n}</span><span class="u">${f.u}</span>${key === 'price' ? '' : dir}</div>${track}</div>`;
 }
 
 const STYLE = `<style>
@@ -171,8 +197,14 @@ ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size
 .bat .se { color: var(--sg-export); }
 .bat .sc { color: var(--sg-charge); }
 .bat .sd { color: var(--sg-dim); }
-.live { display: grid; grid-template-columns: .85fr .85fr 1.2fr 2.1fr; margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
-.live.nr { grid-template-columns: .8fr .75fr 1.3fr 1.2fr; }
+.live { display: grid; grid-template-columns: .8fr .8fr 1.15fr 1.25fr 1.25fr; margin: 4px 0; padding: 4px 0 3px; border-top: 1px solid var(--sg-rule); border-bottom: 1px solid var(--sg-rule); }
+.live.nr { grid-template-columns: repeat(5, minmax(min-content, 1fr)); }
+.live.nr > div { padding: 0 5px; }
+.live.nr .k { gap: 0; }
+.live.nr .k::before { display: none; }
+.live.nr .dir { margin-left: 1px; }
+.live.nr .v { font-size: 14px; }
+.live.nr .u { font-size: 9.5px; margin-left: 1px; }
 .live > div { padding: 0 8px; border-left: 1px solid var(--sg-rule); min-width: 0; overflow: hidden; }
 .live > div:first-child { border-left: 0; padding-left: 0; }
 .live .k { display: flex; align-items: center; gap: 5px; color: var(--sg-dim); white-space: nowrap; overflow: hidden; }
@@ -180,14 +212,21 @@ ha-card { position: relative; padding: 6px 10px; color: var(--sg-ink); font-size
 .live [data-live=price] .k::before { display: none; }
 .live [data-live=house] { --m: var(--sg-ink); }
 .live [data-live=solar] { --m: var(--sg-sun); }
+.live [data-live=battery] { --m: var(--sg-charge); }
 .live [data-live=grid] { --m: var(--sg-dim); }
 .live .ex { --m: var(--sg-export); }
 .live .v { font-size: 16px; font-weight: 700; line-height: 1.25; white-space: nowrap; }
-.live .u, .live .dir { font-size: 10.5px; font-weight: 400; color: var(--sg-dim); margin-left: 2px; }
-.live .dir { margin-left: 4px; }
+.live .u { font-size: 10.5px; font-weight: 400; color: var(--sg-dim); margin-left: 2px; }
+.live .dir { color: var(--sg-dim); margin-left: 3px; }
+.live .dir svg { display: inline-block; width: 10px; height: 10px; vertical-align: -1px; }
 .live .ex .n, .live .ex .dir { color: var(--sg-export); }
+.live .ch .n, .live .ch .dir { color: var(--sg-charge); }
 .live .qz .n { color: var(--sg-dim); font-weight: 400; }
-.live .lc { margin-left: auto; color: var(--sg-pos); }
+.live .t { position: relative; height: 3px; border-radius: 2px; background: var(--sg-rule); margin-top: 4px; }
+.live .t i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--m, var(--sg-ink)); transition: width .3s; }
+.live .t .z { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--sg-pos); opacity: .55; }
+.live .t .m { position: absolute; top: -2px; width: 2px; height: 7px; margin-left: -1px; border-radius: 1px; background: var(--sg-ink); }
+@media (prefers-reduced-motion: reduce) { .live .t i { transition: none; } }
 .bar { position: relative; height: 6px; border-radius: 3px; background: var(--sg-rule); margin: 5px 0 2px; }
 .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--sg-charge); }
 .bar i.ex::after { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 4px; border-radius: 0 3px 3px 0; background: var(--sg-export); }
@@ -209,7 +248,6 @@ svg { display: block; }
 .ph { padding: 0 ${PAD}px; border-left: 1px solid var(--sg-rule); color: var(--sg-dim); line-height: 1.35; min-width: 0; }
 .ph:first-child { border-left-color: transparent; }
 .ph > div { display: flex; justify-content: space-between; align-items: baseline; column-gap: 4px; white-space: nowrap; }
-div[hidden] { display: none !important; }
 .cheap, .bl { min-height: 1.35em; overflow: hidden; text-overflow: ellipsis; }
 .ph .cost { color: var(--sg-ink); font-size: 18px; font-weight: 700; line-height: 1.2; }
 .ph.on .cost { font-size: 22px; line-height: 1.1; }
@@ -790,7 +828,7 @@ class SmartgridPowerCard extends HTMLElement {
   _liveIds(s) {
     const l = s && s.attributes && s.attributes.live;
     if (!l || typeof l !== 'object') return [];
-    return [this._cfg.house, ...(Array.isArray(l.pv) ? l.pv : []), l.meter].filter((id) => typeof id === 'string');
+    return [this._cfg.house, ...(Array.isArray(l.pv) ? l.pv : []), l.meter, l.battery].filter((id) => typeof id === 'string');
   }
 
   _liveValues() {
@@ -804,31 +842,45 @@ class SmartgridPowerCard extends HTMLElement {
     return {
       house: powerW(st[this._cfg.house]),
       solar: pv.length ? Math.max(0, pv.reduce((t, v) => t + v, 0)) : null,
+      battery: powerW(st[l.battery]),
       grid: powerW(st[l.meter]),
       price: num(due ? nx.price : l.price),
     };
   }
 
-  // Text only, so focus, tooltip and the rest of the card stay put.
+  // In place, so focus, tooltip and the rest of the card stay put.
   _patchLive() {
     const v = this._liveValues();
     if (!v) return;
+    const w = liveBars(v, this._pr);
     for (const el of this.shadowRoot.querySelectorAll('[data-live]')) {
       const key = el.dataset.live;
       const f = liveFmt(key, v[key]);
-      for (const k of ['n', 'u', 'dir']) {
+      for (const k of ['n', 'u']) {
         const e = el.querySelector(`.${k}`);
         if (e && e.textContent !== f[k]) e.textContent = f[k];
       }
+      const d = el.querySelector('.dir');
+      if (d && d.dataset.d !== f.dir) {
+        d.dataset.d = f.dir;
+        d.innerHTML = arrow(f.dir);
+      }
       if (el.className !== f.cls) el.className = f.cls;
+      if (key === 'price') {
+        el.querySelector('.t').style.visibility = w.price ? '' : 'hidden';
+        el.querySelector('.z').style.width = w.price ? w.price.band : '0%';
+        el.querySelector('.m').style.left = w.price ? w.price.tick : '0%';
+      } else {
+        el.querySelector('.t i').style.width = w[key];
+      }
     }
   }
 
-  _liveRow(a, days, today, tz, narrow) {
+  _liveRow(a, narrow) {
     const v = a.live ? this._liveValues() : null;
     if (!v) return '';
-    const c = narrow ? '' : this._cheapText((days.find((d) => d && d.date === today) || {}).cheap, tz);
-    return `<div class="live${narrow ? ' nr' : ''}">${liveCell('house', 'House', v.house)}${liveCell('solar', 'Solar', v.solar)}${liveCell('grid', 'Grid', v.grid)}${liveCell('price', 'Price now', v.price, c ? `<span class="lc">${c}</span>` : '')}</div>`;
+    const w = liveBars(v, this._pr);
+    return `<div class="live${narrow ? ' nr' : ''}">${liveCell('house', 'House', v.house, w)}${liveCell('solar', 'Solar', v.solar, w)}${liveCell('battery', 'Battery', v.battery, w)}${liveCell('grid', 'Grid', v.grid, w)}${liveCell('price', 'Price now', v.price, w)}</div>`;
   }
 
   connectedCallback() {
@@ -973,13 +1025,6 @@ class SmartgridPowerCard extends HTMLElement {
       if (sunp && clipped()) sunp.remove();
       const m30 = card.querySelector('.m30');
       if (m30 && clipped()) m30.remove();
-      // The cheap slot goes before it clips the price.
-      const lc = card.querySelector('.lc');
-      if (lc && lc.parentNode.scrollWidth > lc.parentNode.clientWidth) {
-        lc.remove();
-        const spare = card.querySelector('.cheap[hidden]');
-        if (spare) spare.hidden = false;
-      }
       // Today's name line gives up the average price before it clips the sun figure.
       const info = card.querySelector('.ph.on .info');
       const avg = info && info.querySelector('.avg');
@@ -1055,14 +1100,18 @@ class SmartgridPowerCard extends HTMLElement {
       }
     }
 
-    const liveRow = this._liveRow(a, days, today, tz, width < LIVE_NARROW);
+    const ti = dates.indexOf(today);
+    const prices = rows.filter((r) => r.t >= starts[ti] && r.t < ends[ti] && num(r.price) !== null).map((r) => r.price);
+    const cheap = (days.find((d) => d && d.date === today) || {}).cheap;
+    this._pr = prices.length ? { lo: Math.min(...prices), hi: Math.max(...prices), cheap: cheap ? num(cheap.price) : null } : null;
+    const liveRow = this._liveRow(a, width < LIVE_NARROW);
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
       this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
       liveRow +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
-      this._headers(days, fr, geo, a.battery, !liveRow || width < LIVE_NARROW || 'hide') +
+      this._headers(days, fr, geo, a.battery) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
@@ -1167,12 +1216,12 @@ class SmartgridPowerCard extends HTMLElement {
     return `cheap ${pad2(hh(c.start))}${DASH}${pad2(hh(c.end) || 24)} · ${eur(c.price)}`;
   }
 
-  _cheap(c, tz, hidden = false) {
+  _cheap(c, tz) {
     const t = this._cheapText(c, tz);
-    return t ? `<div class="cheap pos"${hidden ? ' hidden' : ''}>${t}</div>` : '<div class="cheap"></div>';
+    return t ? `<div class="cheap pos">${t}</div>` : '<div class="cheap"></div>';
   }
 
-  _headers(days, fr, { dates, today, cw, tz }, b, cheapHere) {
+  _headers(days, fr, { dates, today, cw, tz }, b) {
     const cols = dates.map((date, i) => {
       const d = days.find((x) => x && x.date === date) || {};
       if (date === today) {
@@ -1189,7 +1238,7 @@ class SmartgridPowerCard extends HTMLElement {
 <div><span class="name">Today</span>${info}</div>
 <div class="cost">${cost}${saved(d.saved_eur, 'saved ')}</div>
 <div class="bl">${line}</div>
-<div class="l3">${use.join(' · ')}</div>${cheapHere ? this._cheap(d.cheap, tz, cheapHere === 'hide') : ''}
+<div class="l3">${use.join(' · ')}</div>${this._cheap(d.cheap, tz)}
 </div>`;
       }
       const [cost, line] = bill(d);
