@@ -175,8 +175,11 @@ svg { display: block; }
 .tip .hu { border-top: 1px solid var(--sg-rule); margin-top: 6px; padding-top: 4px; }
 .tip .split { display: flex; height: 7px; border-radius: 3px; overflow: hidden; background: var(--sg-rule); margin: 2px 0; }
 .tip .split .g { background: var(--sg-dim); } .tip .split .b { background: var(--sg-pos); } .tip .split .s { background: var(--sg-sun); }
-.dt { display: flex; align-items: center; gap: 8px; }
-.chip { font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 1.5; color: var(--sg-debug); border: 1px solid var(--sg-debug); border-radius: 9px; padding: 0 7px; }
+.more { display: flex; align-items: center; justify-content: center; gap: 6px; width: calc(100% + 20px); height: 30px; margin: 6px -10px -6px; padding: 0; font: inherit; font-size: 11px; color: var(--sg-dim); background: none; border: 0; border-top: 1px solid var(--sg-rule); cursor: pointer; }
+.more:hover { color: var(--sg-ink); }
+.more:focus-visible { outline: 2px solid var(--sg-charge); outline-offset: -2px; }
+.more i { width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); }
+.more[aria-expanded=true] i { transform: translateY(1px) rotate(-135deg); }
 .dbg { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--sg-rule); }
 .dl { fill: none; stroke: var(--sg-debug); stroke-width: 1.2; stroke-dasharray: 3 2; }
 .dsum { display: flex; flex-wrap: wrap; column-gap: 14px; margin-top: 5px; color: var(--sg-dim); line-height: 1.35; }
@@ -368,7 +371,7 @@ function forecastLine(st, tz) {
   } else html = avg;
   return `<div class="fc dm">${html}</div>`;
 }
-const DEBUG_FAIL = '<div class="dbg"><div class="empty">Debug data unavailable</div></div>';
+const DEBUG_FAIL = '<div class="dbg"><div class="empty">Hour detail unavailable</div></div>';
 const VIEWS = [['cost', 'cost'], ['use', 'house use'], ['sun', 'sun']];
 const DEBUG_LEGEND = {
   use: `<span>first plan of the day${stroke('dl')}forecast${stroke('uo')}measured house use</span>`,
@@ -557,7 +560,8 @@ class SmartgridPowerCard extends HTMLElement {
     root.addEventListener('click', (e) => {
       const b = e.target.closest('[data-act]');
       const v = e.target.closest('[data-view]');
-      if (b) this._act(b.dataset.act);
+      if (e.target.closest('[data-more]')) this._toggle();
+      else if (b) this._act(b.dataset.act);
       else if (v) {
         this._view = v.dataset.view;
         this._render();
@@ -629,7 +633,26 @@ class SmartgridPowerCard extends HTMLElement {
     this._sw = this._hass ? this._hass.states[this._cfg.switch] : null;
     this._model = this._hass ? this._hass.states[this._cfg.model] : null;
     this._dbg = { for: null, data: null, err: null };
-    if (this._cfg.debug) this._fetch();
+    let stored = null;
+    try {
+      stored = localStorage.getItem('smartgrid-power-card.detail');
+    } catch (e) {
+      console.debug(TAG, e);
+    }
+    this._open = stored === null ? !!this._cfg.debug : stored === '1';
+    if (this._open) this._fetch();
+    this._drawn = null;
+    this._render();
+  }
+
+  _toggle() {
+    this._open = !this._open;
+    try {
+      localStorage.setItem('smartgrid-power-card.detail', this._open ? '1' : '0');
+    } catch (e) {
+      console.debug(TAG, e);
+    }
+    if (this._open) this._fetch();
     this._drawn = null;
     this._render();
   }
@@ -664,7 +687,7 @@ class SmartgridPowerCard extends HTMLElement {
     this._state = s;
     this._sw = sw;
     this._model = m;
-    if (this._cfg.debug) this._fetch();
+    if (this._open) this._fetch();
     this._render();
   }
 
@@ -708,9 +731,9 @@ class SmartgridPowerCard extends HTMLElement {
     return g.rows.find((r) => r.i === i && u >= r.t && u < r.t + H) || null;
   }
 
-  // In debug mode the hour pointed at on either chart is also the one inspected; off the charts the last one stays.
+  // With the detail open the hour pointed at on either chart is also the one inspected; off the charts the last one stays.
   _hover(at) {
-    const r = this._cfg && this._cfg.debug && (this._hit(at) || this._hit(at, '.dsel'));
+    const r = this._open && (this._hit(at) || this._hit(at, '.dsel'));
     if (r && r.t !== this._sel) this._select(r);
     this._point(at);
   }
@@ -783,9 +806,9 @@ class SmartgridPowerCard extends HTMLElement {
     return `${s}<div class="hu"><span class="k">House ${use.toFixed(2)} kWh</span>${bar}${line.length ? `<span class="k">${line.join(' · ')}</span>` : ''}</div>`;
   }
 
-  // In rows of 50 px: about 340 px, or about 940 px with the debug panel and two build-ups.
+  // In rows of 50 px: about 340 px, or about 940 px with the detail panel and two build-ups.
   getCardSize() {
-    return this._cfg && this._cfg.debug ? 19 : 7;
+    return this._open ? 20 : 8;
   }
 
   static getStubConfig() {
@@ -796,11 +819,11 @@ class SmartgridPowerCard extends HTMLElement {
     const width = this.clientWidth;
     if (!this._cfg || !this._hass || !width) return;
     const d = this._drawn;
-    if (d && d.st === this._state && d.sw === this._sw && d.model === this._model && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel && d.view === this._view) return;
-    this._drawn = { st: this._state, sw: this._sw, model: this._model, pend: this._pending, width, dbg: this._dbg, sel: this._sel, view: this._view };
+    if (d && d.st === this._state && d.sw === this._sw && d.model === this._model && d.pend === this._pending && d.width === width && d.dbg === this._dbg && d.sel === this._sel && d.view === this._view && d.open === this._open) return;
+    this._drawn = { st: this._state, sw: this._sw, model: this._model, pend: this._pending, width, dbg: this._dbg, sel: this._sel, view: this._view, open: this._open };
     const card = this.shadowRoot.querySelector('ha-card');
     const ae = this.shadowRoot.activeElement;
-    const refocus = ae && (ae.dataset.view ? `[data-view="${ae.dataset.view}"]` : ['[role=switch]', '.dsel'].find((q) => ae.matches(q)));
+    const refocus = ae && (ae.dataset.view ? `[data-view="${ae.dataset.view}"]` : ['[role=switch]', '[data-more]', '.dsel'].find((q) => ae.matches(q)));
     try {
       card.innerHTML = this._body(width);
       // The 30-day line gives up its sun figure, then itself, before the battery text is clipped.
@@ -841,7 +864,7 @@ class SmartgridPowerCard extends HTMLElement {
     const days = Array.isArray(a.days) ? a.days : [];
     const hours = Array.isArray(a.hours) ? a.hours : [];
     const name = cfg.title ? esc(typeof cfg.title === 'string' ? cfg.title : 'Power') : '';
-    const title = cfg.debug ? `<div class="title dt">${name}<span class="chip">DEBUG</span></div>` : cfg.title ? `<div class="title">${name}</div>` : '';
+    const title = cfg.title ? `<div class="title">${name}</div>` : '';
     const sw = this._swState();
     const off = sw ? sw.state === 'off' : !!a.battery && a.battery.state === 'disabled';
     if (!days.length && !hours.length) {
@@ -876,7 +899,7 @@ class SmartgridPowerCard extends HTMLElement {
     const geo = { dates, today, cx, cw, W, tz, X };
     this._geo = { rows, cx, cw, starts, ends, tz };
     let dbg = '';
-    if (cfg.debug) {
+    if (this._open) {
       try {
         dbg = this._debug(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null);
       } catch (e) {
@@ -896,6 +919,7 @@ class SmartgridPowerCard extends HTMLElement {
       LEGEND +
       forecastLine(this._model, tz) +
       dbg +
+      `<button class="more" data-more aria-expanded="${this._open}"><span>${this._open ? 'Hide' : 'Show'} hour detail</span><i></i></button>` +
       '<div class="tip" hidden></div></div>'
     );
   }
