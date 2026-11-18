@@ -23,10 +23,3 @@ def test_price_prior_tunables_round_trip_through_from_dict():
     # CONF string identity == field name (the from_dict binding contract).
     assert const.CONF_PRICE_HISTORY_DAYS == "price_history_days"
     assert const.CONF_PRICE_BLEND_WEIGHT_TODAY == "price_blend_weight_today"
-
-
-def test_price_prior_tunables_in_options_schema():
-    schema = config_flow._options_schema({}, services={})
-    keys = {str(m.schema) for sec in schema.schema.values() for m in sec.schema.schema}
-    assert const.CONF_PRICE_HISTORY_DAYS in keys
-    assert const.CONF_PRICE_BLEND_WEIGHT_TODAY in keys

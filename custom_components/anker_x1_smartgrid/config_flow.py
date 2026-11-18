@@ -136,13 +136,13 @@ def _apply_forecast_pv_derivation(hass, user_input: dict, chosen: list[str], sto
 
 
 SECTION_DEVICES = "devices"
-SECTION_SOLAR = "solar_forecast"
-SECTION_BATTERY = "battery"
-SECTION_EXPORT = "export"
-SECTION_PRICE = "price_anticipation"
-SECTION_LOAD_ML = "load_ml"
 SECTION_TRACKED = "tracked_devices"
-SECTION_SYSTEM = "system"
+SECTION_SOLAR = "solar_forecast"
+SECTION_PRICES = "prices"
+SECTION_BATTERY_LIMITS = "battery_limits"
+SECTION_TRADING = "trading"
+SECTION_LOSSES = "losses_calibration"
+SECTION_FORECAST_STORAGE = "forecast_storage"
 
 # Section -> option keys.  Single source of truth for grouping: the sectioned
 # options schema, the submit-time flatten and the strings.json coverage test
@@ -150,11 +150,13 @@ SECTION_SYSTEM = "system"
 OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
     SECTION_DEVICES: (
         const.CONF_ANKER_DEVICE,
-        const.CONF_ENT_PRICE,
-        const.CONF_ENT_EXPORT_PRICE,
-        const.CONF_ENT_WEATHER_FORECAST,
         const.CONF_ENT_PV_POWER,
+        const.CONF_ENT_WEATHER_FORECAST,
         const.CONF_PERSON_ENTITIES,
+    ),
+    SECTION_TRACKED: (
+        const.CONF_DEVICE_POWER_ENTITIES,
+        const.CONF_DEVICE_STATE_ENTITIES,
     ),
     SECTION_SOLAR: (
         const.CONF_FORECAST_SERVICE,
@@ -163,70 +165,50 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
         const.CONF_ENT_PV_PEAK_TODAY,
         const.CONF_ENT_PV_PEAK_TOMORROW,
     ),
-    SECTION_BATTERY: (
-        const.CONF_SOC_FLOOR,
-        const.CONF_BACKUP_RESERVE_SOC,
-        const.CONF_SOC_TARGET,
-        const.CONF_ETA_CHARGE,
-        const.CONF_ROUND_TRIP_EFF,
-        const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
-        const.CONF_CHARGE_TROUGH_LOOKBACK_H,
-        const.CONF_IDLE_DRAIN_W,
-        const.CONF_GRID_IMPORT_LIMIT_W,
-        const.CONF_BATTERY_CHARGE_LIMIT_W,
-        const.CONF_CHARGE_WINDOW_PRICE_BAND,
-        const.CONF_RESTORE_WORKMODE,
-        const.CONF_CALIBRATION_ENABLED,
-        const.CONF_CALIBRATION_INTERVAL_DAYS,
-        const.CONF_CALIBRATION_TOP_SOC,
-        const.CONF_CALIBRATION_DWELL_H,
-    ),
-    SECTION_EXPORT: (
-        const.CONF_ENABLE_EXPORT,
-        const.CONF_BATTERY_EXPORT_LIMIT_W,
-        const.CONF_EXPORT_FEE_EUR_PER_KWH,
-        const.CONF_CYCLE_COST_EUR_PER_KWH,
-        const.CONF_RESERVE_CHEAP_BAND,
-        const.CONF_EXPORT_DWELL_MIN,
-        const.CONF_EXPORT_EPS_LO_KWH,
-        const.CONF_EXPORT_EPS_HI_KWH,
-        const.CONF_EXPORT_PEAK_BAND_FRAC,
-        const.CONF_EXPORT_PEAK_LOOKBACK_H,
-        const.CONF_EXPORT_MIN_BLOCK_KWH,
-        const.CONF_EXPORT_LOAD_COMP_FACTOR,
-    ),
-    SECTION_PRICE: (
+    SECTION_PRICES: (
         const.CONF_PRICE_MODE,
+        const.CONF_ENT_PRICE,
+        const.CONF_ENT_EXPORT_PRICE,
         const.CONF_STATIC_PRICE_IMPORT,
         const.CONF_STATIC_PRICE_OFFPEAK,
         const.CONF_STATIC_OFFPEAK_HOURS,
         const.CONF_STATIC_PRICE_EXPORT,
-        const.CONF_PRICE_HISTORY_DAYS,
-        const.CONF_PRICE_BLEND_WEIGHT_TODAY,
+        const.CONF_EXPORT_FEE_EUR_PER_KWH,
+        const.CONF_SLOT_RESOLUTION,
     ),
-    SECTION_LOAD_ML: (
-        const.CONF_MIN_TRAIN_SAMPLES,
+    SECTION_BATTERY_LIMITS: (
+        const.CONF_SOC_FLOOR,
+        const.CONF_BACKUP_RESERVE_SOC,
+        const.CONF_SOC_TARGET,
+        const.CONF_GRID_IMPORT_LIMIT_W,
+        const.CONF_BATTERY_CHARGE_LIMIT_W,
+        const.CONF_BATTERY_EXPORT_LIMIT_W,
+        const.CONF_RESTORE_WORKMODE,
+    ),
+    SECTION_TRADING: (
+        const.CONF_ENABLE_EXPORT,
+        const.CONF_CYCLE_COST_EUR_PER_KWH,
+        const.CONF_CHARGE_MARGIN_EUR_PER_KWH,
+        const.CONF_CHARGE_WINDOW_PRICE_BAND,
+        const.CONF_EXPORT_PEAK_BAND_FRAC,
+        const.CONF_SOC_HEDGE_FRACTION,
+    ),
+    SECTION_LOSSES: (
+        const.CONF_ETA_CHARGE,
+        const.CONF_ROUND_TRIP_EFF,
+        const.CONF_IDLE_DRAIN_W,
+        const.CONF_CALIBRATION_ENABLED,
+        const.CONF_CALIBRATION_INTERVAL_DAYS,
+    ),
+    SECTION_FORECAST_STORAGE: (
         const.CONF_LOAD_ADAPT_FRACTION,
         const.CONF_LOAD_ADAPT_WINDOW_H,
-        const.CONF_LOAD_ADAPT_FADE_H,
         const.CONF_OCC_ADAPT_FRACTION,
-        const.CONF_OCC_PERSISTENCE_H,
         const.CONF_CURRENT_HOUR_BLEND,
         const.CONF_ADDON_URL,
-        const.CONF_ADDON_TIMEOUT,
-    ),
-    SECTION_TRACKED: (
-        const.CONF_DEVICE_POWER_ENTITIES,
-        const.CONF_DEVICE_STATE_ENTITIES,
-    ),
-    SECTION_SYSTEM: (
-        const.CONF_SLOT_RESOLUTION,
         const.CONF_RETENTION_DAYS,
         const.CONF_RETENTION_HOURLY_DAYS,
         const.CONF_HISTORY_DAYS,
-        const.CONF_SOC_HEDGE_FRACTION,
-        const.CONF_SOC_DRIFT_DEADBAND_KWH,
-        const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
     ),
 }
 
@@ -256,11 +238,9 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.DEFAULT_BACKUP_RESERVE_SOC,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
     ),
-    (const.CONF_ADDON_TIMEOUT, const.DEFAULT_ADDON_TIMEOUT, vol.All(vol.Coerce(int), vol.Range(min=1, max=60))),
     (const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET, vol.All(vol.Coerce(float), vol.Range(min=10.0, max=100.0))),
     (const.CONF_ETA_CHARGE, const.DEFAULT_ETA_CHARGE, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
     (const.CONF_ROUND_TRIP_EFF, const.DEFAULT_ROUND_TRIP_EFF, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
-    (const.CONF_MIN_TRAIN_SAMPLES, const.DEFAULT_MIN_TRAIN_SAMPLES, cv.positive_int),
     (const.CONF_RETENTION_DAYS, const.DEFAULT_RETENTION_DAYS, cv.positive_int),
     (const.CONF_RETENTION_HOURLY_DAYS, const.DEFAULT_RETENTION_HOURLY_DAYS, cv.positive_int),
     (const.CONF_HISTORY_DAYS, const.DEFAULT_HISTORY_DAYS, cv.positive_int),
@@ -288,37 +268,9 @@ _TUNABLES: list[tuple[str, object, object]] = [
     (const.CONF_CHARGE_MARGIN_EUR_PER_KWH, const.DEFAULT_CHARGE_MARGIN_EUR_PER_KWH, cv.positive_float),
     (const.CONF_IDLE_DRAIN_W, const.DEFAULT_IDLE_DRAIN_W, vol.All(vol.Coerce(float), vol.Range(min=0.0, max=500.0))),
     (
-        const.CONF_RESERVE_CHEAP_BAND,
-        const.DEFAULT_RESERVE_CHEAP_BAND,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (const.CONF_EXPORT_DWELL_MIN, const.DEFAULT_EXPORT_DWELL_MIN, cv.positive_int),
-    (const.CONF_EXPORT_EPS_LO_KWH, const.DEFAULT_EXPORT_EPS_LO_KWH, cv.positive_float),
-    (const.CONF_EXPORT_EPS_HI_KWH, const.DEFAULT_EXPORT_EPS_HI_KWH, cv.positive_float),
-    (
         const.CONF_EXPORT_PEAK_BAND_FRAC,
         const.DEFAULT_EXPORT_PEAK_BAND_FRAC,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
-        const.CONF_EXPORT_PEAK_LOOKBACK_H,
-        const.DEFAULT_EXPORT_PEAK_LOOKBACK_H,
-        vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
-    ),
-    (
-        const.CONF_EXPORT_MIN_BLOCK_KWH,
-        const.DEFAULT_EXPORT_MIN_BLOCK_KWH,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0)),
-    ),
-    (
-        const.CONF_EXPORT_LOAD_COMP_FACTOR,
-        const.DEFAULT_EXPORT_LOAD_COMP_FACTOR,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
-        const.CONF_CHARGE_TROUGH_LOOKBACK_H,
-        const.DEFAULT_CHARGE_TROUGH_LOOKBACK_H,
-        vol.All(vol.Coerce(int), vol.Range(min=0, max=12)),
     ),
     (
         const.CONF_STATIC_PRICE_IMPORT,
@@ -337,29 +289,9 @@ _TUNABLES: list[tuple[str, object, object]] = [
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=2.0)),
     ),
     (
-        const.CONF_PRICE_HISTORY_DAYS,
-        const.DEFAULT_PRICE_HISTORY_DAYS,
-        vol.All(vol.Coerce(int), vol.Range(min=2, max=30)),
-    ),
-    (
-        const.CONF_PRICE_BLEND_WEIGHT_TODAY,
-        const.DEFAULT_PRICE_BLEND_WEIGHT_TODAY,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
         const.CONF_SOC_HEDGE_FRACTION,
         const.DEFAULT_SOC_HEDGE_FRACTION,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
-        const.CONF_SOC_DRIFT_DEADBAND_KWH,
-        const.DEFAULT_SOC_DRIFT_DEADBAND_KWH,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=5.0)),
-    ),
-    (
-        const.CONF_SOC_DRIFT_DECAY_HALFLIFE_H,
-        const.DEFAULT_SOC_DRIFT_DECAY_HALFLIFE_H,
-        vol.All(vol.Coerce(float), vol.Range(min=0.0, max=48.0)),
     ),
     (
         const.CONF_LOAD_ADAPT_FRACTION,
@@ -371,16 +303,10 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.DEFAULT_LOAD_ADAPT_WINDOW_H,
         vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
     ),
-    (const.CONF_LOAD_ADAPT_FADE_H, const.DEFAULT_LOAD_ADAPT_FADE_H, vol.All(vol.Coerce(int), vol.Range(min=1, max=24))),
     (
         const.CONF_OCC_ADAPT_FRACTION,
         const.DEFAULT_OCC_ADAPT_FRACTION,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-    ),
-    (
-        const.CONF_OCC_PERSISTENCE_H,
-        const.PERSONS_PERSISTENCE_H,
-        vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
     ),
     (const.CONF_CURRENT_HOUR_BLEND, const.DEFAULT_CURRENT_HOUR_BLEND, cv.boolean),
     (const.CONF_CALIBRATION_ENABLED, const.DEFAULT_CALIBRATION_ENABLED, cv.boolean),
@@ -388,17 +314,6 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.CONF_CALIBRATION_INTERVAL_DAYS,
         const.DEFAULT_CALIBRATION_INTERVAL_DAYS,
         vol.All(vol.Coerce(int), vol.Range(min=1, max=90)),
-    ),
-    (
-        const.CONF_CALIBRATION_TOP_SOC,
-        const.DEFAULT_CALIBRATION_TOP_SOC,
-        # Floor at 80: below that this stops being a top-of-range dwell.
-        vol.All(vol.Coerce(float), vol.Range(min=80.0, max=100.0)),
-    ),
-    (
-        const.CONF_CALIBRATION_DWELL_H,
-        const.DEFAULT_CALIBRATION_DWELL_H,
-        vol.All(vol.Coerce(float), vol.Range(min=0.25, max=const.CALIBRATION_MAX_DWELL_H)),
     ),
 ]
 
@@ -517,12 +432,7 @@ def _options_fields(defaults: dict, services=None) -> dict:
         )
     ] = EntitySelector(EntitySelectorConfig(multiple=True))
     for key, default, validator in _TUNABLES:
-        value = defaults.get(key, default)
-        if key == const.CONF_CALIBRATION_DWELL_H:
-            # The form validates its own pre-fill, so a stored dwell above the
-            # cap would otherwise reject every save, even an unchanged one.
-            value = min(float(value), const.CALIBRATION_MAX_DWELL_H)
-        fields[vol.Optional(key, default=value)] = validator
+        fields[vol.Optional(key, default=defaults.get(key, default))] = validator
     for key, domain in _ENTITY_LIST_PICKERS:
         fields[vol.Optional(key, description={"suggested_value": defaults.get(key, [])})] = EntitySelector(
             EntitySelectorConfig(domain=domain, multiple=True)
@@ -579,8 +489,8 @@ def _flatten_sections(user_input: dict) -> dict:
 
 class X1SmartGridConfigFlow(config_entries.ConfigFlow, domain=const.DOMAIN):
     VERSION = 1
-    # 2: the dropped grid export limit carried over as the battery export limit (see async_migrate_entry).
-    MINOR_VERSION = 2
+    # 2: the dropped grid export limit carried over as the battery export limit; 3: fixed numbers dropped from storage.
+    MINOR_VERSION = 3
 
     @staticmethod
     def async_get_options_flow(
@@ -611,7 +521,6 @@ class X1SmartGridConfigFlow(config_entries.ConfigFlow, domain=const.DOMAIN):
                         const.CONF_ETA_CHARGE: const.DEFAULT_ETA_CHARGE,
                         const.CONF_RETENTION_DAYS: const.DEFAULT_RETENTION_DAYS,
                         const.CONF_RETRAIN_HOURS: const.DEFAULT_RETRAIN_HOURS,
-                        const.CONF_MIN_TRAIN_SAMPLES: const.DEFAULT_MIN_TRAIN_SAMPLES,
                         const.CONF_TRAIN_DAYS: const.DEFAULT_TRAIN_DAYS,
                         const.CONF_BACKTEST_TEST_DAYS: const.DEFAULT_BACKTEST_TEST_DAYS,
                         const.CONF_RETENTION_HOURLY_DAYS: const.DEFAULT_RETENTION_HOURLY_DAYS,

@@ -79,7 +79,7 @@ async def refresh(controller: Controller, now: datetime, _wf_list: list[dict], _
         if controller._addon_health is not None:
             controller._remote_forecast_pending = True
 
-    if controller._addon_seen and controller._remote_forecast_pending and not _addon_hour_ran:
+    if _addon_on and controller._addon_seen and controller._remote_forecast_pending and not _addon_hour_ran:
         try:
             await controller._refresh_remote_forecast(now, _wf_list, _persons_home_now)
         except Exception:

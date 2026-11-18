@@ -124,7 +124,7 @@ async def test_an_entry_that_never_saved_the_old_export_limit_keeps_its_6000_w_d
     entry = _device_entry(hass, options={const.CONF_GRID_IMPORT_LIMIT_W: 11000.0})
     cfg = await _setup(hass, entry)
     assert entry.options[const.CONF_BATTERY_EXPORT_LIMIT_W] == 6000.0
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
     assert cfg.max_export_w == 6000.0
 
 

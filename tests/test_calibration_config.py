@@ -34,17 +34,10 @@ def test_from_dict_clamps_a_stored_dwell_above_the_max():
     assert Config.from_dict({"calibration_dwell_h": 0.25}).calibration_dwell_h == 0.25
 
 
-def test_top_soc_schema_admits_the_firmware_cap():
-    """The default is the 100% cap, so a validator that stopped short of it
-    would reject the shipped value on the first options save."""
-    validator = next(v for name, _d, v in _TUNABLES if name == const.CONF_CALIBRATION_TOP_SOC)
-    assert validator(100.0) == 100.0
-
-
-def test_all_four_options_are_tunable():
+def test_form_options_are_tunable():
     """Outside _TUNABLES an option is wiped by the next UI options save."""
     keys = {name for name, _default, _validator in _TUNABLES}
     assert const.CONF_CALIBRATION_ENABLED in keys
     assert const.CONF_CALIBRATION_INTERVAL_DAYS in keys
-    assert const.CONF_CALIBRATION_TOP_SOC in keys
-    assert const.CONF_CALIBRATION_DWELL_H in keys
+    assert const.CONF_CALIBRATION_TOP_SOC not in keys
+    assert const.CONF_CALIBRATION_DWELL_H not in keys

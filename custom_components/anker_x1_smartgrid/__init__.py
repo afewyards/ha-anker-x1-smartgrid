@@ -92,11 +92,50 @@ def migrate_options(options: dict) -> dict:
     return {CONF_BATTERY_EXPORT_LIMIT_W: options.get("grid_export_limit_w", 6000.0), **options}
 
 
+REMOVED_OPTION_KEYS = frozenset(
+    {
+        "export_dwell_min",
+        "export_eps_lo_kwh",
+        "export_eps_hi_kwh",
+        "export_min_block_kwh",
+        "export_peak_lookback_h",
+        "export_load_comp_factor",
+        "charge_trough_lookback_h",
+        "reserve_cheap_band",
+        "price_history_days",
+        "price_blend_weight_today",
+        "load_adapt_fade_h",
+        "occ_persistence_h",
+        "min_train_samples",
+        "addon_timeout",
+        "soc_drift_deadband_kwh",
+        "soc_drift_decay_halflife_h",
+        "calibration_top_soc",
+        "calibration_dwell_h",
+        "anticipation_confidence_haircut",
+        "anticipation_margin_eur_per_kwh",
+        "grid_export_limit_w",
+    }
+)
+
+
+def migrate_options_v3(options: dict) -> dict:
+    """Drop the numbers that are now fixed in code, so a stored value cannot override them."""
+    return {k: v for k, v in options.items() if k not in REMOVED_OPTION_KEYS}
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version > 1:
         return False
     if entry.minor_version < 2:
         hass.config_entries.async_update_entry(entry, options=migrate_options(dict(entry.options)), minor_version=2)
+    if entry.minor_version < 3:
+        hass.config_entries.async_update_entry(
+            entry,
+            data=migrate_options_v3(dict(entry.data)),
+            options=migrate_options_v3(dict(entry.options)),
+            minor_version=3,
+        )
     return True
 
 

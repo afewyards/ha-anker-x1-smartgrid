@@ -65,10 +65,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    # +1 backup_reserve_soc, +1 grid_import_limit_w, +1 charge_window_price_band,
-    # +1 restore_workmode, +4 calibration_*, +1 history_days, -1 grid_export_limit_w,
-    # +2 battery_charge_limit_w / battery_export_limit_w, +2 tracked-device pickers
-    assert len(section_keys) == 64
+    assert len(section_keys) == 46
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -261,14 +258,6 @@ def test_options_schema_includes_addon_url():
     assert const.CONF_ADDON_URL in keys
 
 
-def test_options_schema_includes_addon_timeout():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_ADDON_TIMEOUT in keys
-
-
 def test_addon_url_prefilled_default_on_fresh_entry():
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
@@ -308,50 +297,8 @@ async def test_addon_url_kept_when_submitted(hass):
     await _close(hass, entry)
 
 
-def test_options_schema_addon_timeout_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_ADDON_TIMEOUT].default() == 5
-
-
-def test_options_schema_addon_timeout_rejects_below_range():
-    """Schema must reject addon_timeout < 1."""
-    import pytest
-    import voluptuous as vol
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    with pytest.raises(vol.Invalid):
-        _validate_flat(
-            schema_obj,
-            {
-                const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
-                const.CONF_ADDON_TIMEOUT: 0,
-            },
-        )
-
-
-def test_options_schema_addon_timeout_rejects_above_range():
-    """Schema must reject addon_timeout > 60."""
-    import pytest
-    import voluptuous as vol
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    with pytest.raises(vol.Invalid):
-        _validate_flat(
-            schema_obj,
-            {
-                const.CONF_ADDON_URL: "http://local-anker_x1_forecast:8099",
-                const.CONF_ADDON_TIMEOUT: 61,
-            },
-        )
-
-
 def test_options_schema_addon_roundtrip():
-    """Both addon fields must round-trip through the options schema."""
+    """The add-on address must round-trip through the options schema."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
 
     schema_obj = _options_schema({})
@@ -359,11 +306,9 @@ def test_options_schema_addon_roundtrip():
         schema_obj,
         {
             const.CONF_ADDON_URL: "http://192.168.1.50:8099",
-            const.CONF_ADDON_TIMEOUT: 15,
         },
     )
     assert result[const.CONF_ADDON_URL] == "http://192.168.1.50:8099"
-    assert result[const.CONF_ADDON_TIMEOUT] == 15
 
 
 # ---------------------------------------------------------------------------
@@ -703,78 +648,6 @@ def test_options_schema_cycle_cost_eur_per_kwh_roundtrip():
     assert result[const.CONF_CYCLE_COST_EUR_PER_KWH] == 0.06
 
 
-def test_options_schema_includes_export_dwell_min():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_EXPORT_DWELL_MIN in keys
-
-
-def test_options_schema_export_dwell_min_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_EXPORT_DWELL_MIN].default() == const.DEFAULT_EXPORT_DWELL_MIN
-
-
-def test_options_schema_export_dwell_min_roundtrip():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {const.CONF_EXPORT_DWELL_MIN: 10})
-    assert result[const.CONF_EXPORT_DWELL_MIN] == 10
-
-
-def test_options_schema_includes_export_eps_lo_kwh():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_EXPORT_EPS_LO_KWH in keys
-
-
-def test_options_schema_export_eps_lo_kwh_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_EXPORT_EPS_LO_KWH].default() == const.DEFAULT_EXPORT_EPS_LO_KWH
-
-
-def test_options_schema_export_eps_lo_kwh_roundtrip():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {const.CONF_EXPORT_EPS_LO_KWH: 0.3})
-    assert result[const.CONF_EXPORT_EPS_LO_KWH] == 0.3
-
-
-def test_options_schema_includes_export_eps_hi_kwh():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    keys = _flat_keys(schema_obj)
-    assert const.CONF_EXPORT_EPS_HI_KWH in keys
-
-
-def test_options_schema_export_eps_hi_kwh_default():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    schema_keys = _flat_markers(schema_obj)
-    assert schema_keys[const.CONF_EXPORT_EPS_HI_KWH].default() == const.DEFAULT_EXPORT_EPS_HI_KWH
-
-
-def test_options_schema_export_eps_hi_kwh_roundtrip():
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({})
-    result = _validate_flat(schema_obj, {const.CONF_EXPORT_EPS_HI_KWH: 0.6})
-    assert result[const.CONF_EXPORT_EPS_HI_KWH] == 0.6
-
-
 def test_options_schema_export_all_roundtrip():
     """All export fields round-trip through _options_schema validation."""
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
@@ -785,16 +658,10 @@ def test_options_schema_export_all_roundtrip():
         {
             const.CONF_ENABLE_EXPORT: False,
             const.CONF_CYCLE_COST_EUR_PER_KWH: 0.05,
-            const.CONF_EXPORT_DWELL_MIN: 20,
-            const.CONF_EXPORT_EPS_LO_KWH: 0.25,
-            const.CONF_EXPORT_EPS_HI_KWH: 0.5,
         },
     )
     assert result[const.CONF_ENABLE_EXPORT] is False
     assert result[const.CONF_CYCLE_COST_EUR_PER_KWH] == 0.05
-    assert result[const.CONF_EXPORT_DWELL_MIN] == 20
-    assert result[const.CONF_EXPORT_EPS_LO_KWH] == 0.25
-    assert result[const.CONF_EXPORT_EPS_HI_KWH] == 0.5
 
 
 def test_config_reflects_export_defaults():
@@ -882,7 +749,6 @@ def test_options_schema_includes_editable_tunables():
     for key in (
         const.CONF_SOC_TARGET,
         const.CONF_ETA_CHARGE,
-        const.CONF_MIN_TRAIN_SAMPLES,
         const.CONF_RETENTION_DAYS,
         const.CONF_RETENTION_HOURLY_DAYS,
     ):
@@ -1392,7 +1258,7 @@ def test_options_schema_range_bounds_on_soc_floor_target_eta():
 
 
 def test_options_schema_range_bounds_on_calibration_fields():
-    """Calibration numeric validators reject just past their edge and accept the edge itself."""
+    """The calibration interval validator rejects just past its edge and accepts the edge itself."""
     import pytest
     import voluptuous as vol
     from custom_components.anker_x1_smartgrid.config_flow import _options_schema
@@ -1403,31 +1269,6 @@ def test_options_schema_range_bounds_on_calibration_fields():
         _validate_flat(schema_obj, {const.CONF_CALIBRATION_INTERVAL_DAYS: 91})
     ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_INTERVAL_DAYS: 90})
     assert ok[const.CONF_CALIBRATION_INTERVAL_DAYS] == 90
-
-    with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {const.CONF_CALIBRATION_TOP_SOC: 79.9})
-    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_TOP_SOC: 80.0})
-    assert ok[const.CONF_CALIBRATION_TOP_SOC] == 80.0
-
-    with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.24})
-    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.25})
-    assert ok[const.CONF_CALIBRATION_DWELL_H] == 0.25
-
-    with pytest.raises(vol.Invalid):
-        _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.51})
-    ok = _validate_flat(schema_obj, {const.CONF_CALIBRATION_DWELL_H: 0.5})
-    assert ok[const.CONF_CALIBRATION_DWELL_H] == 0.5
-
-
-def test_options_schema_clamps_a_stored_dwell_above_the_cap():
-    """The form validates its own pre-filled defaults, so a stored dwell above
-    CALIBRATION_MAX_DWELL_H would reject every save, even one that changes
-    nothing, unless the pre-fill is clamped to the cap."""
-    from custom_components.anker_x1_smartgrid.config_flow import _options_schema
-
-    schema_obj = _options_schema({const.CONF_CALIBRATION_DWELL_H: 2.0})
-    assert _validate_flat(schema_obj, {})[const.CONF_CALIBRATION_DWELL_H] == 0.5
 
 
 async def test_controller_warns_when_soc_floor_above_firmware_floor(hass, caplog):
@@ -1814,7 +1655,6 @@ def test_options_schema_includes_occupancy_wave_flags():
     keys = _flat_keys(_options_schema({}))
     for key in (
         const.CONF_OCC_ADAPT_FRACTION,
-        const.CONF_OCC_PERSISTENCE_H,
         const.CONF_CURRENT_HOUR_BLEND,
     ):
         assert key in keys
@@ -1829,19 +1669,17 @@ def test_options_schema_occupancy_wave_flags_default_matches_config():
     schema_keys = _flat_markers(schema_obj)
     cfg = Config()
     assert schema_keys[const.CONF_OCC_ADAPT_FRACTION].default() == cfg.occ_adapt_fraction
-    assert schema_keys[const.CONF_OCC_PERSISTENCE_H].default() == cfg.occ_persistence_h
     assert schema_keys[const.CONF_CURRENT_HOUR_BLEND].default() == cfg.current_hour_blend
 
 
-def test_options_schema_occupancy_wave_flags_in_load_ml_section():
-    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS, SECTION_LOAD_ML
+def test_options_schema_occupancy_wave_flags_in_forecast_storage_section():
+    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS, SECTION_FORECAST_STORAGE
 
     for key in (
         const.CONF_OCC_ADAPT_FRACTION,
-        const.CONF_OCC_PERSISTENCE_H,
         const.CONF_CURRENT_HOUR_BLEND,
     ):
-        assert key in OPTIONS_SECTIONS[SECTION_LOAD_ML]
+        assert key in OPTIONS_SECTIONS[SECTION_FORECAST_STORAGE]
 
 
 def test_options_schema_occupancy_wave_flags_roundtrip():
@@ -1852,12 +1690,10 @@ def test_options_schema_occupancy_wave_flags_roundtrip():
         schema_obj,
         {
             const.CONF_OCC_ADAPT_FRACTION: 0.5,
-            const.CONF_OCC_PERSISTENCE_H: 6,
             const.CONF_CURRENT_HOUR_BLEND: True,
         },
     )
     assert result[const.CONF_OCC_ADAPT_FRACTION] == 0.5
-    assert result[const.CONF_OCC_PERSISTENCE_H] == 6
     assert result[const.CONF_CURRENT_HOUR_BLEND] is True
 
 
@@ -1872,7 +1708,6 @@ async def test_options_flow_saves_occupancy_wave_flags(hass):
     )
     assert result2["type"] == "create_entry"
     assert entry.options[const.CONF_OCC_ADAPT_FRACTION] == 0.3
-    assert const.CONF_OCC_PERSISTENCE_H in entry.options
     assert const.CONF_CURRENT_HOUR_BLEND in entry.options
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
@@ -2042,3 +1877,172 @@ def test_strings_cover_device_watts_step():
     strings = json.loads(pathlib.Path("custom_components/anker_x1_smartgrid/strings.json").read_text())
     step = strings["options"]["step"]["device_watts"]
     assert step["title"] and "{devices}" in step["description"]
+
+
+# ---------------------------------------------------------------------------
+# Form trim and regroup, stored-settings migration
+# ---------------------------------------------------------------------------
+
+FIXED_NUMBERS = (
+    "export_dwell_min",
+    "export_eps_lo_kwh",
+    "export_eps_hi_kwh",
+    "export_min_block_kwh",
+    "export_peak_lookback_h",
+    "export_load_comp_factor",
+    "charge_trough_lookback_h",
+    "reserve_cheap_band",
+    "price_history_days",
+    "price_blend_weight_today",
+    "load_adapt_fade_h",
+    "occ_persistence_h",
+    "min_train_samples",
+    "addon_timeout",
+    "soc_drift_deadband_kwh",
+    "soc_drift_decay_halflife_h",
+    "calibration_top_soc",
+    "calibration_dwell_h",
+)
+
+SPEC_SECTIONS = {
+    "devices": ("anker_device", "ent_pv_power", "ent_weather_forecast", "person_entities"),
+    "tracked_devices": ("device_power_entities", "device_state_entities"),
+    "solar_forecast": (
+        "forecast_service",
+        "ent_pv_today",
+        "ent_pv_tomorrow",
+        "ent_pv_peak_today",
+        "ent_pv_peak_tomorrow",
+    ),
+    "prices": (
+        "price_mode",
+        "ent_price",
+        "ent_export_price",
+        "static_price_import",
+        "static_price_offpeak",
+        "static_offpeak_hours",
+        "static_price_export",
+        "export_fee_eur_per_kwh",
+        "slot_resolution",
+    ),
+    "battery_limits": (
+        "soc_floor",
+        "backup_reserve_soc",
+        "soc_target",
+        "grid_import_limit_w",
+        "battery_charge_limit_w",
+        "battery_export_limit_w",
+        "restore_workmode",
+    ),
+    "trading": (
+        "enable_export",
+        "cycle_cost_eur_per_kwh",
+        "charge_margin_eur_per_kwh",
+        "charge_window_price_band",
+        "export_peak_band_frac",
+        "soc_hedge_fraction",
+    ),
+    "losses_calibration": (
+        "eta_charge",
+        "round_trip_eff",
+        "idle_drain_w",
+        "calibration_enabled",
+        "calibration_interval_days",
+    ),
+    "forecast_storage": (
+        "load_adapt_fraction",
+        "load_adapt_window_h",
+        "occ_adapt_fraction",
+        "current_hour_blend",
+        "addon_url",
+        "retention_days",
+        "retention_hourly_days",
+        "history_days",
+    ),
+}
+
+
+def test_section_keys_total():
+    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS
+
+    assert sum(len(v) for v in OPTIONS_SECTIONS.values()) == 46
+    assert {name: tuple(keys) for name, keys in OPTIONS_SECTIONS.items()} == SPEC_SECTIONS
+    assert list(OPTIONS_SECTIONS) == list(SPEC_SECTIONS)
+
+
+def test_migrate_v3_pops_fixed_numbers():
+    from custom_components.anker_x1_smartgrid import migrate_options_v3
+
+    out = migrate_options_v3(
+        {
+            "export_dwell_min": 30,
+            "grid_export_limit_w": 6000,
+            "use_measured_eta": True,
+            "soc_floor": 10,
+            "device_state_watts": {"switch.x": 5.0},
+        }
+    )
+    assert out == {"use_measured_eta": True, "soc_floor": 10, "device_state_watts": {"switch.x": 5.0}}
+
+
+@pytest.mark.parametrize("minor", [1, 2])
+async def test_migrate_to_v3_cleans_options_and_data(hass, minor):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        minor_version=minor,
+        data={"export_dwell_min": 30, "soc_target": 90.0},
+        options={"grid_export_limit_w": 12000, "min_train_samples": 5, "soc_floor": 10},
+    )
+    entry.add_to_hass(hass)
+    from custom_components.anker_x1_smartgrid import async_migrate_entry
+
+    assert await async_migrate_entry(hass, entry)
+    assert entry.minor_version == 3
+    assert entry.data == {"soc_target": 90.0}
+    assert "grid_export_limit_w" not in entry.options and "min_train_samples" not in entry.options
+    assert entry.options["soc_floor"] == 10
+    if minor == 1:
+        assert entry.options[const.CONF_BATTERY_EXPORT_LIMIT_W] == 12000
+
+
+def test_old_lab_options_load():
+    import json
+    from pathlib import Path
+
+    from custom_components.anker_x1_smartgrid import migrate_options_v3
+
+    raw = json.loads((Path(__file__).parent / "fixtures" / "options-2026-08-01.json").read_text())
+    assert "export_dwell_min" in raw
+    cfg = Config.from_dict(migrate_options_v3(raw))
+    assert cfg.export_dwell_min == const.DEFAULT_EXPORT_DWELL_MIN
+
+
+async def test_fresh_install_stores_none_of_the_fixed_numbers(hass):
+    entry = await _create_entry(hass)
+    assert not set(FIXED_NUMBERS) & set(entry.data)
+    await _close(hass, entry)
+
+
+async def test_options_save_roundtrip(hass):
+    from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS, _options_schema
+
+    entry = await _create_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, const.CONF_DEVICE_STATE_WATTS: {"switch.x": 5.0}}
+    )
+    form_keys = {k for keys in OPTIONS_SECTIONS.values() for k in keys}
+    flat = {}
+    for key, marker in _flat_markers(_options_schema({**entry.data, **entry.options})).items():
+        if marker.default is not vol.UNDEFINED:
+            flat[key] = marker.default()
+        elif (marker.description or {}).get("suggested_value") is not None:
+            flat[key] = marker.description["suggested_value"]
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result2 = await hass.config_entries.options.async_configure(result["flow_id"], user_input=_nest(flat))
+    assert result2["type"] == "create_entry"
+    stored = set(entry.options)
+    assert stored <= form_keys | {const.CONF_DEVICE_STATE_WATTS}
+    assert not stored & set(FIXED_NUMBERS)
+    assert const.CONF_DEVICE_STATE_WATTS in stored
+    assert {k for k, m in _flat_markers(_options_schema({})).items() if m.default is not vol.UNDEFINED} <= stored
+    await _close(hass, entry)
