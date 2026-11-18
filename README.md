@@ -11,7 +11,7 @@ A Home Assistant custom integration that turns an [Anker SOLIX X1](https://www.a
 - **Solar-first accounting** — free solar fills the battery before paid grid energy is considered
 - **House-load forecasting** — tiered: profile averages → in-process gradient-boosted model → optional [add-on](#add-on) with full ML pipeline
 - **Intraday adaptation** — corrects the load forecast in real-time from the last few hours' residuals
-- **Measured efficiency curve** — optionally derives charge/discharge efficiency from recorded sessions instead of using static values
+- **Measured efficiency curve** — derives charge/discharge efficiency from recorded sessions instead of using static values
 - **Self-scaling overnight reserve** — rides out to the next cheap grid hour or solar pickup without draining below firmware floor
 - **Price anticipation** — blends recent price history to estimate tomorrow-morning prices before they're published
 - **15-minute tariff support** — native sub-hourly planning for providers like Zonneplan
@@ -61,13 +61,14 @@ All tunables are editable via the integration's options flow (**Configure** butt
 
 | Section | What it controls |
 |---|---|
-| **Devices & sensors** | X1 device, price/export-price/load/weather sensors, person entities for home-presence |
+| **Devices** | X1 device, PV power sensors, weather forecast entity, person entities for home-presence |
+| **Tracked devices** | Devices with a power sensor, and devices with only an on/off state (recorded per-device) |
 | **Solar forecast** | Forecast integrations and PV energy/peak-time sensor lists |
-| **Battery & charging** | SoC floor/target, efficiencies, charge margin hurdle, trough look-back |
-| **Export & arbitrage** | Enable/disable export, grid limit, fees, cycle cost, reserve sizing, peak band, dwell times |
-| **Price anticipation** | History depth, blend weight, confidence haircut, anticipation margin |
-| **Load model & ML** | Learned model toggle, intraday adaptation, add-on connection |
-| **System** | Slot resolution, data retention (incl. recorder history of the house-load sensor), SoC drift hedge |
+| **Prices** | Price source (sensor or static), import/export price sensors, static prices and off-peak hours, export fee, slot resolution |
+| **Battery limits** | SoC floor, backup reserve, SoC target, grid/charge/export power limits, work mode restore |
+| **Trading** | Enable export, cycle cost, charge margin, cheap-charge band, export peak band, SoC drift hedge |
+| **Losses and calibration** | Charge and round-trip efficiency, idle drain, periodic full-charge calibration |
+| **House-use forecast and storage** | Intraday and occupancy adaptation, current-hour blend, add-on URL, sample/hourly retention, house-load history |
 
 ## Entities
 
@@ -106,7 +107,7 @@ The `sensor.smartgrid_plan` entity exposes the full schedule as attributes:
 - **`deadline`** — when the plan horizon ends
 - **`arbitrage_pnl`** — estimated export revenue (EUR)
 - **`slot_minutes`** — planning slot length (60 or 15)
-- **`efficiency_curve`** — measured efficiency bin table (when enabled)
+- **`efficiency_curve`** — measured efficiency bin table
 
 ### Daily stats sensor attributes
 
@@ -167,7 +168,7 @@ Colours have built-in defaults; a theme can override `--smartgrid-power-charge-c
 
 **The integration works fine without it** — it falls back to in-process forecasting tiers (profile averages, then a locally trained model once ~2 days of hourly history accumulate).
 
-To enable: install the add-on and set the add-on address in **Add-on URL** in the integration's options under Load model & ML (the default already points at the add-on); leave it empty to disable.
+To enable: install the add-on and paste its address into **Add-on URL** in the integration's options under House-use forecast and storage. The address of a store install carries a repository-hash prefix (for example `http://2b933eb0-anker-x1-forecast:8099`); the add-on prints it in its startup log, see its README. Leave the field empty to turn the add-on off. Until the add-on answers, the integration shows it as not installed and falls back to its built-in forecast, so a wrong address looks like "not installed".
 
 See [`addon/anker_x1_forecast/README.md`](addon/anker_x1_forecast/README.md) for deployment instructions and API reference.
 
