@@ -823,7 +823,12 @@ class DataRecorder:
             # the bounded watermark read resumes (no perpetual full-scan). append()
             # has no clock reference, so a future RAW ts cannot be rejected there —
             # this is the correct home.
-            self._conn.execute("DELETE FROM samples_hourly WHERE hour_ts >= ?", (current_hour_iso,))
+            # Only hours the raw table can rebuild: a clock stepping backwards must not wipe older history.
+            self._conn.execute(
+                "DELETE FROM samples_hourly WHERE hour_ts >= ? "
+                "AND hour_ts >= (SELECT strftime('%Y-%m-%dT%H:00:00+00:00', MIN(ts)) FROM samples)",
+                (current_hour_iso,),
+            )
 
             # Hours already present in samples_hourly — used to skip work on re-run.
             existing_hours = {row[0] for row in self._conn.execute("SELECT hour_ts FROM samples_hourly")}

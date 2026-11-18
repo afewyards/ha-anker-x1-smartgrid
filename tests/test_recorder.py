@@ -1420,6 +1420,20 @@ def test_rollup_recovers_after_future_dated_watermark(tmp_path):
     rec.close()
 
 
+def test_rollup_keeps_hourly_rows_the_raw_table_cannot_rebuild_when_clock_runs_back(tmp_path):
+    rec = DataRecorder(str(tmp_path / "t.db"))
+    rec._conn.execute(
+        "INSERT INTO samples_hourly (hour_ts, house_load_mean) VALUES ('2026-01-01T00:00:00+00:00', 123.0)"
+    )
+    rec._conn.commit()
+    rec.rollup_hours("2025-12-01T10:30:00+00:00")
+    rec.rollup_hours("2026-06-20T10:30:00+00:00")
+    assert [(r["hour_ts"], r["house_load_mean"]) for r in rec.read_hourly_rows()] == [
+        ("2026-01-01T00:00:00+00:00", 123.0)
+    ]
+    rec.close()
+
+
 def test_purge_removes_null_ts_rows(tmp_path):
     rec = DataRecorder(str(tmp_path / "t.db"))
     rec.append({"ts": None, "p1_w": 1.0, "batt_w": 0.0, "pv_w": 0.0, "load_w": 1.0})
