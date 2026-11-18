@@ -106,7 +106,7 @@ function powerW(s) {
 function liveFmt(key, v) {
   if (key === 'price') return { n: eur(v), u: num(v) === null ? '' : '/kWh', dir: '', cls: '' };
   if (v === null) return { n: DASH, u: '', dir: '', cls: key === 'grid' ? 'qz' : '' };
-  const kw = Math.abs(v) >= 1000;
+  const kw = Math.round(Math.abs(v)) >= 1000;
   const f = (x) => (kw ? (x / 1000).toFixed(2) : String(Math.round(x)));
   const u = kw ? 'kW' : 'W';
   if (key !== 'grid') return { n: f(v), u, dir: '', cls: '' };
@@ -1018,13 +1018,14 @@ class SmartgridPowerCard extends HTMLElement {
       }
     }
 
+    const liveRow = this._liveRow(a, days, today, tz);
     return (
       `<div class="${off ? 'off' : ''}">` +
       title +
       this._battery(a.battery, sw, off, off ? null : planPeak(rows, now, ends[dates.indexOf(today)]), tz) +
-      this._liveRow(a, days, today, tz) +
+      liveRow +
       `<div class="chart"><div class="lv">${this._level(rows, geo, nowCol >= 0 ? X(nowCol, now, 0) : null)}${off ? '<span class="pill">SmartGrid disabled</span>' : ''}</div>` +
-      this._headers(days, fr, geo, a.battery) +
+      this._headers(days, fr, geo, a.battery, !liveRow) +
       this._panels(rows, geo, nowCol >= 0 ? X(nowCol, now, PAD) : null) +
       '</div>' +
       LEGEND +
@@ -1134,7 +1135,7 @@ class SmartgridPowerCard extends HTMLElement {
     return t ? `<div class="cheap pos">${t}</div>` : '<div class="cheap"></div>';
   }
 
-  _headers(days, fr, { dates, today, cw, tz }, b) {
+  _headers(days, fr, { dates, today, cw, tz }, b, cheapHere) {
     const cols = dates.map((date, i) => {
       const d = days.find((x) => x && x.date === date) || {};
       if (date === today) {
@@ -1151,7 +1152,7 @@ class SmartgridPowerCard extends HTMLElement {
 <div><span class="name">Today</span>${info}</div>
 <div class="cost">${cost}${saved(d.saved_eur, 'saved ')}</div>
 <div class="bl">${line}</div>
-<div class="l3">${use.join(' · ')}</div>
+<div class="l3">${use.join(' · ')}</div>${cheapHere ? this._cheap(d.cheap, tz) : ''}
 </div>`;
       }
       const [cost, line] = bill(d);
