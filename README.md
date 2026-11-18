@@ -148,8 +148,11 @@ type: custom:smartgrid-power-card
 entity: sensor.smartgrid_power_card  # optional, this is the default
 title: true                          # optional, shows "Power"; a string sets your own title
 switch: switch.smartgrid_enabled    # optional, this is the default; no such entity, no switch
+house: sensor.smartgrid_house_load  # optional, this is the default; the entity the live row reads for the house's power
 debug: true                          # optional, starts with the hour detail open; the button on the card opens and closes it per browser
 ```
+
+Under the battery level a row of four cells shows what the house uses now, what solar produces, what the grid meter reads (import or export, nothing within 50 W of zero) and the current price. The solar and meter sensors come from the integration's settings, and the numbers follow those sensors every second or so without waiting for the planner.
 
 House cost is what the house's use cost: grid power at the import price, plus battery power at what it cost to store, with solar charge counted as free. Saved is what grid-charged energy earned: its value when used, less what it cost to buy, so its conversion losses and standby drain land in saved. Solar is what stored solar earned over exporting it, shown only when it isn't zero. Battery, under each day's cost, is what the battery paid for grid charge that day less what its exports earned (solar charge and battery power the house uses do not count), a figure of its own that is not to be added to the day's cost. Balance, on Today, counts the same two flows from the live cash ledger since it was first shown, starting at zero, so it need not match the days to the cent: above zero the battery has bought more than it sold, below zero it has sold more.
 
@@ -157,7 +160,7 @@ Hover over an hour, or tap it on a touch screen, to see what the battery did or 
 
 The button at the bottom of the card opens a panel above it, under the charts, that holds the past hours against the day's first plan, in one graph you switch between cost (what the grid cost against that plan, split into house use, solar, and battery and timing), house use and solar (forecast against measured). Point at or click an hour to see its tariff slots, the commanded and measured battery power, and the price it has to beat before selling, charging or using the battery pays, built up from its parts; past hours keep the reason they had when they started. The chips under it give the planner's settings and how fresh its inputs are, in orange when prices end before tomorrow, tomorrow is estimated, the solar forecast is over 90 minutes old or the battery reading over 5 minutes. Nothing extra is fetched or drawn while it is closed. The comparison fills in from the first day after upgrading.
 
-Under Today and Tomorrow a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
+Under Tomorrow, and beside the current price for today, a green line gives the cheapest three consecutive hours still ahead and their mean price (`cheap 21–24 · €0.40`); the sensor's `days[].cheap` carries `start`, `end` and `price`, and is `None` with fewer than three priced hours left or prices not yet published.
 
 The switch at the top right turns the planner on and off. While it is off the battery is held idle (no charge, no discharge) and the card dims below the top line and shows "SmartGrid disabled" over the battery level.
 
