@@ -81,6 +81,9 @@ function planPeak(rows, now, endOfToday) {
   }
   return best;
 }
+function endOfDay(c) {
+  return c === '00:00' ? '24:00' : c;
+}
 function when(a, b, tz) {
   let start = clock(a, tz);
   let end = clock(b, tz);
@@ -90,7 +93,7 @@ function when(a, b, tz) {
     start += ` ${zone(a)}`;
     end += ` ${zone(b)}`;
   }
-  return `${weekday(a, tz)} ${start}${DASH}${end === '00:00' ? '24:00' : end}`;
+  return `${weekday(a, tz)} ${start}${DASH}${endOfDay(end)}`;
 }
 
 
@@ -963,7 +966,7 @@ class SmartgridPowerCard extends HTMLElement {
     const up = peak && soc !== null && Math.round(peak.soc) > Math.round(soc);
     const fill = soc === null ? 0 : Math.min(100, Math.max(0, soc));
     const cost = num(b.stored_cost_eur_per_kwh) !== null ? `stored at ${eur(b.stored_cost_eur_per_kwh)}/kWh` : '';
-    const pk = up ? `peak ${Math.round(peak.soc)}% at ${clock(peak.t, tz)}` : '';
+    const pk = up ? `peak ${Math.round(peak.soc)}% at ${endOfDay(clock(peak.t, tz))}` : '';
     const label = `Battery ${soc !== null ? `${soc.toFixed(0)}%` : 'level unknown'}${up ? `, plan peaks at ${Math.round(peak.soc)}%` : ''}`;
     return (
       `<div class="bat"><span class="b1">${items.join(' · ')}</span>${m}${this._control(sw)}</div>` +
