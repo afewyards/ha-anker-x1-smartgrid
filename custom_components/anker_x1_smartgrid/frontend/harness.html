@@ -14,8 +14,9 @@
     &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
     &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
   ?trim=1  gives the card sensor's hourly rows as the server publishes them: the values it omits left out (price, soc and the grid figures when null, use and solar when 0, plan when false), then packed (start as minutes m from pack.base with pack.tz offsets, grid figures as g, why.kept_for as why.kf into pack.kf); the debug answer still gets the full rows, and a trimmed run must draw the same as an untrimmed one
-  ?live=import|export|big|zero|nopv|none  the live row's fixture (default import): the meter reads 1840, -3200, 12000 (big: checks the Grid cell reads 12.0 kW import) or 20 W; nopv makes the first solar sensor unavailable; none leaves the live attribute off the card sensor, so no row and today's cheap slot in the Today column; every run checks the Price cell reads €0.27
-  ?push=1  after mount, gives the house sensor a new state of 950 W in a new hass and checks that the House cell reads 950 W without the card re-rendering
+  ?live=import|export|big|zero|nopv|none  the live row's fixture (default import): the meter reads 1840, -3200, 12000 (big: checks the Grid cell reads 12.0 kW with an import arrow) or 20 W; nopv makes the first solar sensor unavailable; none leaves the live attribute off the card sensor, so no row; every run checks the Price cell reads €0.27 and that each bar's width is its value over the largest of the four powers shown (a track of 0 when all are 0)
+  ?batt=charge|discharge|idle|none  the battery sensor (default discharge): -9200, 291 or 20 W (positive discharges); none leaves live.battery out
+  ?push=1  after mount, gives the house sensor a new state of 950 W in a new hass and checks that the House cell reads 950 W and its bar width changed, without the card re-rendering
   ?price=next  puts the next quarter's price in the past and checks that the Price cell shows it; with push=1 the quarter is still ahead at mount, then the clock moves past it with the house push and the check is that the Price cell shows it without a re-render
   Chrome (a window of 500 px or less renders the wall's 456 px card): --headless=new --force-device-scale-factor=1.5 --window-size=464,459 --screenshot=out.png "file://…/harness.html?case=normal&theme=dark"
 -->
@@ -371,14 +372,16 @@
 
   const states = {};
   const LIVE = q.get('live') || 'import';
+  const BATT = q.get('batt') || 'discharge';
   const power = (window.power = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } }));
   if (LIVE !== 'none') {
     // The next quarter hour after the fixed now; with price=next it already began.
     const at = q.get('price') === 'next' ? NOW + (q.get('push') ? 60e3 : -60e3) : NOW - (NOW % 900e3) + 900e3;
-    window.LIVE_EXTRA = { live: { pv: ['sensor.pv_a', 'sensor.pv_b'], meter: 'sensor.meter', price: 0.27, next: { price: 0.31, at: iso(at) } } };
+    window.LIVE_EXTRA = { live: { pv: ['sensor.pv_a', 'sensor.pv_b'], meter: 'sensor.meter', ...(BATT !== 'none' && { battery: 'sensor.batt' }), price: 0.27, next: { price: 0.31, at: iso(at) } } };
     states['sensor.smartgrid_house_load'] = power(2020, 'W');
     states['sensor.pv_a'] = LIVE === 'nopv' ? { state: 'unavailable', attributes: {} } : power(0.15, 'kW');
     states['sensor.pv_b'] = power(26, 'W');
+    if (BATT !== 'none') states['sensor.batt'] = power({ charge: -9200, discharge: 291, idle: 20 }[BATT] ?? 291, 'W');
     states['sensor.meter'] = power({ import: 1840, export: -3200, big: 12000, zero: 20, nopv: 1840 }[LIVE] ?? 1840, 'W');
   }
   if (CASE === 'noattrs') {
@@ -499,9 +502,12 @@
         if (window.PRICE_NEXT && !window.PUSH) STATUS.live = price() === '€0.31' ? 'price: next' : `price: NOT NEXT (${price()})`;
         else if (window.LIVE_EXTRA && card.shadowRoot.querySelector('.chart') && price() !== '€0.27') STATUS.live = `price: NOT 0.27 (${price()})`;
         if (window.LIVE === 'big') {
-          const g = card.shadowRoot.querySelector('[data-live=grid] .v')?.textContent;
+          const gv = card.shadowRoot.querySelector('[data-live=grid] .v');
+          const g = `${gv?.textContent}${gv?.querySelector('svg')?.getAttribute('aria-label')}`;
           STATUS.live = `${g === '12.0kWimport' ? 'grid: 12.0 kW import' : `grid: NOT BIG (${g})`}${STATUS.live ? ` · ${STATUS.live}` : ''}`;
         }
+        const bad = window.LIVE_EXTRA && card.shadowRoot.querySelector('.chart') ? barsWrong(card) : '';
+        if (bad) STATUS.live = `bars: WRONG (${bad})${STATUS.live ? ` · ${STATUS.live}` : ''}`;
         if (window.PUSH) push(card, inner);
         showStatus();
       });
@@ -517,8 +523,27 @@
     if (card.shadowRoot.querySelector('[data-live]') || tries > 120) return then();
     requestAnimationFrame(() => drawn(card, then, tries + 1));
   }
+  function barsWrong(card) {
+    const st = window.HASS.states;
+    const w = (id) => {
+      const x = st[id];
+      const v = x && x.state !== '' ? Number(x.state) : NaN;
+      return Number.isFinite(v) ? (x.attributes.unit_of_measurement === 'kW' ? v * 1000 : v) : 0;
+    };
+    const val = { house: w('sensor.smartgrid_house_load'), solar: Math.max(0, w('sensor.pv_a') + w('sensor.pv_b')), battery: w('sensor.batt'), grid: w('sensor.meter') };
+    const top = Math.max(...Object.values(val).map(Math.abs));
+    for (const [k, v] of Object.entries(val)) {
+      const t = card.shadowRoot.querySelector(`[data-live=${k}] .t`);
+      const got = t.querySelector('i').getBoundingClientRect().width;
+      const want = top > 0 ? (Math.abs(v) / top) * t.getBoundingClientRect().width : 0;
+      if (!(Math.abs(got - want) <= 1)) return `${k} ${got.toFixed(1)}px, want ${want.toFixed(1)}`;
+    }
+    return '';
+  }
   function push(card, inner) {
     const before = inner();
+    const bar = () => card.shadowRoot.querySelector('[data-live=house] .t i')?.style.width;
+    const barWas = bar();
     const cell = () => card.shadowRoot.querySelector('[data-live=house] .v')?.textContent;
     const was = cell();
     const st = window.HASS.states;
@@ -533,7 +558,7 @@
       const p = card.shadowRoot.querySelector('[data-live=price] .n')?.textContent;
       STATUS.live = p === '€0.31' && inner() === before ? 'price: next (patched)' : `price: NOT PATCHED (${p}${inner() === before ? '' : ', re-rendered'})`;
     }
-    STATUS.live = `${now === '950W' && was !== now && inner() === before ? 'live: patched' : `live: NOT PATCHED (${was} -> ${now}${inner() === before ? '' : ', re-rendered'})`}${STATUS.live ? ` · ${STATUS.live}` : ''}`;
+    STATUS.live = `${now === '950W' && was !== now && inner() === before && bar() !== barWas ? 'live: patched' : `live: NOT PATCHED (${was} -> ${now}, bar ${barWas} -> ${bar()}${inner() === before ? '' : ', re-rendered'})`}${STATUS.live ? ` · ${STATUS.live}` : ''}`;
   }
   function view(card, then) {
     const root = card.shadowRoot;
