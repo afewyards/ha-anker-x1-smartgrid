@@ -1096,6 +1096,9 @@ def optimize_grid(
             # path.  In the drain case (net<0) the clamp only RAISES soc_after,
             # which these raw-based quantities deliberately do not see.
             for (stop_kwh, wear, parked, walled), (held_kwh, soc_pass) in product(stops, hold_options):
+                # A held pack at or over the wall costs the same with either stop, and the wall goes first.
+                if held_kwh and not walled and len(stops) > 1 and soc_pass >= stops[0][0]:
+                    continue
                 # A held slot buys the house from the meter, so it shares the connection with the charge.
                 max_grid_dc = _max_grid_dc(soc, soc_pass, cfg, dt_h, eta_curve=eta_curve, house_import_kwh=held_kwh)
                 # Action mask: block grid charge when this hour is not chargeable.
