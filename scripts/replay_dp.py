@@ -358,7 +358,7 @@ def replay(
             export_revenue_eur,
             ceiling_by_hour,
             _held_slots,
-            _walled_slots,
+            _dipped_slots,
         ) = decision._dp_select_slots(
             inputs=inputs,
             slots=real_slots,

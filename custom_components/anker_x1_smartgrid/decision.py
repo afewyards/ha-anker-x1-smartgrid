@@ -623,14 +623,15 @@ def _dp_select_slots(
         if _hold_sched
         else None
     )
-    # Slots the chosen trajectory stops at the backup reserve, unsmoothed: the display replays the DP.
-    _wall_sched = result.get("wall_schedule")
-    walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
+    # Slots the chosen trajectory runs under the backup reserve, unsmoothed: the display replays the DP.
+    _dip_sched = result.get("dip_schedule")
+    dipped_slots = frozenset(now_h + h * stride for h, d in enumerate(_dip_sched) if d) if _dip_sched else None
     if _out is not None:
         # Slots the plan runs the pack under the backup reserve; the executor's reserve hold stands aside there.
         # An engaged hold rides out a dip no longer than its dwell, and a pack already in a planned dip rides out
         # a wall that short. Runs are measured in minutes, slot 0 by what is left of it, at any slot length.
-        _dips = result.get("dip_schedule") or []
+        _dips = _dip_sched or []
+        _wall_sched = result.get("wall_schedule")
         _walls = _wall_sched if _dips and _wall_sched else [False] * len(_dips)
         _left = math.ceil((now_h + stride - inputs.now).total_seconds() / 60.0)
         _rides = optimize_mod.smooth_hold_runs(
@@ -662,7 +663,7 @@ def _dp_select_slots(
         export_revenue_eur,
         ceiling_by_hour,
         held_slots,
-        walled_slots,
+        dipped_slots,
     )
 
 
@@ -1175,7 +1176,7 @@ def compute_decision(
     live_export_request: dict[datetime, float] | None = None
     live_ceiling_by_hour: dict[datetime, float] | None = None
     live_held_slots: frozenset[datetime] | None = None
-    live_walled_slots: frozenset[datetime] | None = None
+    live_dipped_slots: frozenset[datetime] | None = None
     try:
         (
             _dp_selected,
@@ -1185,7 +1186,7 @@ def compute_decision(
             _dp_export_rev,
             _dp_ceiling,
             _dp_held,
-            _dp_walled,
+            _dp_dipped,
         ) = _dp_select_slots(
             inputs=inputs,
             slots=slots,
@@ -1215,7 +1216,7 @@ def compute_decision(
         live_export_request = _dp_export_request
         live_ceiling_by_hour = _dp_ceiling
         live_held_slots = _dp_held
-        live_walled_slots = _dp_walled
+        live_dipped_slots = _dp_dipped
         # Expose DP artefacts for fictive-plan publication (T0.6a).
         if _out is not None:
             _out["dp_selected"] = _dp_selected
@@ -1229,7 +1230,7 @@ def compute_decision(
             _out["water_value"] = water_value
             _out["ceiling_by_hour"] = _dp_ceiling
             _out["held_slots"] = _dp_held
-            _out["walled_slots"] = _dp_walled
+            _out["dipped_slots"] = _dp_dipped
             # The slot the DP keyed its maps on: the executor reads `now` later in
             # the tick and must not re-floor it, or a tick landing on a boundary
             # looks up the next slot and misses its own.
@@ -1367,7 +1368,7 @@ def compute_decision(
             est_slots=_est_slot_list,
             terminal_need_kwh=need_kwh,
             held_slots=live_held_slots,
-            walled_slots=live_walled_slots,
+            dipped_slots=live_dipped_slots,
         )
     else:
         horizon = plan_mod.build_plan_horizon(
@@ -1387,6 +1388,6 @@ def compute_decision(
             eta_curve=eta_curve,
             now=inputs.now,
             held_slots=live_held_slots,
-            walled_slots=live_walled_slots,
+            dipped_slots=live_dipped_slots,
         )
     return new_plan, setpoint, horizon_edge, horizon, horizon_mode, intervals_reserve

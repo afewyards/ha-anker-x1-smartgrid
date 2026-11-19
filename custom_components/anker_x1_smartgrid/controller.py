@@ -1416,7 +1416,7 @@ class Controller:
             self.cfg,
             grid_request_by_hour=dp_out.get("grid_request"),
             eta_curve=self._planner_curve(),
-            walled_slots=dp_out.get("walled_slots"),
+            dipped_slots=dp_out.get("dipped_slots"),
         )
         # N2: sum(1 for ...) counts SLOTS, not hours — at 15-min that's a 4x
         # over-report under the "planned_grid_hours" name. Scale by the slot

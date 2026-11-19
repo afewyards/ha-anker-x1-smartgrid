@@ -137,7 +137,7 @@ def build_plan_horizon(
     terminal_need_kwh: float = 0.0,
     now: datetime | None = None,
     held_slots: frozenset[datetime] | None = None,
-    walled_slots: frozenset[datetime] | None = None,
+    dipped_slots: frozenset[datetime] | None = None,
 ) -> list[dict]:
     """Join price/PV/load/charge-plan into an hourly horizon for visualization.
 
@@ -230,9 +230,10 @@ def build_plan_horizon(
     executor and the DP do — instead the meter buys the standby, reported per
     row as ``hold_import_kwh``.
 
-    ``walled_slots`` is the set of slot starts whose pack the DP stops at the
-    backup reserve (``None`` = none): those slots discharge no further than
-    the reserve, every other one down to the firmware floor.
+    ``dipped_slots`` is the set of slot starts where the DP runs the pack under
+    the backup reserve (``None`` = none): only those discharge under it, down to
+    the firmware floor; every other slot stops at the reserve, or where it
+    starts under it, as the DP does.
 
     Each slot also carries ``pv_kwh``, ``load_kwh``, ``solar_charge_kwh``,
     ``grid_charge_kwh`` and ``grid_export_kwh`` — the per-slot ENERGY in the
@@ -370,12 +371,12 @@ def build_plan_horizon(
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
         is_grid = slot_key in selected_set
         is_est = hour in est_set
-        # The DP's walled slots stop at the backup reserve and its other slots may discharge to the firmware floor;
-        # a slot the DP did not plan (no walls known, estimated tail) has no plan, so it protects the reserve.
+        # Only the DP's own dips go under the backup reserve: this walk's physics is not the DP's, so a slot the DP
+        # kept above the reserve must still stop there.
         wall_pct = (
-            max(const.FIRMWARE_SOC_FLOOR, min(reserve_wall_pct, soc_sim))
-            if walled_slots is None or is_est or slot_key in walled_slots
-            else const.FIRMWARE_SOC_FLOOR
+            const.FIRMWARE_SOC_FLOOR
+            if slot_key in (dipped_slots or ())
+            else max(const.FIRMWARE_SOC_FLOOR, min(reserve_wall_pct, soc_sim))
         )
         # Duration the model may still act for. A slot that has already STARTED
         # is only modelled over the minutes it has left: the live ``soc`` this
@@ -582,7 +583,7 @@ def build_display_horizon(
     est_slots: list[PriceSlot] | None = None,
     terminal_need_kwh: float = 0.0,
     held_slots: frozenset[datetime] | None = None,
-    walled_slots: frozenset[datetime] | None = None,
+    dipped_slots: frozenset[datetime] | None = None,
 ) -> list[dict]:
     """Two-day self-consumption display horizon (PV + load + discharge-aware SoC).
 
@@ -625,7 +626,7 @@ def build_display_horizon(
         terminal_need_kwh: Forwarded straight through to ``build_plan_horizon``'s
             ``terminal_need_kwh`` (only meaningful together with ``est_slots``).
         held_slots: Slot starts the DP chose to hold, forwarded to ``build_plan_horizon``.
-        walled_slots: Slot starts the DP stops at the backup reserve, forwarded to ``build_plan_horizon``.
+        dipped_slots: Slot starts the DP runs under the backup reserve, forwarded to ``build_plan_horizon``.
         slot_minutes: The live/resolved slot width in minutes (15/30/60), passed
             straight through to ``build_display_intervals`` and
             ``build_plan_horizon``.  Without this, both callees fell back to
@@ -699,5 +700,5 @@ def build_display_horizon(
         terminal_need_kwh=terminal_need_kwh,
         now=now,
         held_slots=held_slots,
-        walled_slots=walled_slots,
+        dipped_slots=dipped_slots,
     )

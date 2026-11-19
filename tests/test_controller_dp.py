@@ -721,28 +721,28 @@ def test_compute_decision_refills_on_flat_prices():
     assert out["grid_request"].get(BASE, 0.0) > 0.0
 
 
-def test_walled_slots_reach_the_display_plan(monkeypatch):
+def test_dipped_slots_reach_the_display_plan(monkeypatch):
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 
     real = ctrl_mod.optimize_mod.optimize_grid
 
-    def _walls_slot_2(*args, **kwargs):
+    def _dips_slot_2(*args, **kwargs):
         res = real(*args, **kwargs)
-        return {**res, "wall_schedule": [h == 2 for h in range(len(res["schedule"]))]}
+        return {**res, "dip_schedule": [h == 2 for h in range(len(res["schedule"]))]}
 
-    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _walls_slot_2)
+    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _dips_slot_2)
     cfg = _cfg(backup_reserve_soc=30.0)
-    walled = frozenset({BASE + timedelta(hours=2)})
-    assert _call_dp_select_slots(cfg, soc=30.0, prices=[0.25] * 9)[7] == walled
+    dipped = frozenset({BASE + timedelta(hours=2)})
+    assert _call_dp_select_slots(cfg, soc=30.0, prices=[0.25] * 9)[7] == dipped
     seen = []
     real_plan = ctrl_mod.plan_mod.build_plan_horizon
     monkeypatch.setattr(
         ctrl_mod.plan_mod,
         "build_plan_horizon",
-        lambda *a, **k: seen.append(k.get("walled_slots")) or real_plan(*a, **k),
+        lambda *a, **k: seen.append(k.get("dipped_slots")) or real_plan(*a, **k),
     )
     _call_compute_decision(cfg, soc=30.0, prices=[0.25] * 9)
-    assert seen == [walled]
+    assert seen == [dipped]
 
 
 _D, _W, _N = "dip", "wall", "neither"  # per slot: the plan dips, stops at the reserve, or does neither

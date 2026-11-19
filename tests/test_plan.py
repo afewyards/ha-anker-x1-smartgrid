@@ -1835,23 +1835,82 @@ def _deficit_plan(cfg, soc, hours=6, **kw):
     return plan.build_plan_horizon(_slots(hours), ivs, [], soc, BASE + timedelta(hours=hours), cfg, **kw)
 
 
-def _walled(hours=6):
-    return frozenset(BASE + timedelta(hours=i) for i in range(hours))
-
-
-def test_plan_soc_flattens_at_backup_reserve_in_walled_slots():
+def test_plan_soc_goes_under_backup_reserve_only_in_dip_slots():
     cfg = _reserve_cfg(backup_reserve_soc=30.0)
-    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, walled_slots=_walled())) == 30.0
-    # Slots the DP planned and did not wall discharge under the reserve, down to the firmware floor.
-    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, walled_slots=frozenset())) == 5.0
-    # With no DP walls known there is no plan, so the reserve holds.
+    # Slots the DP runs under the reserve discharge down to the firmware floor.
+    dips = frozenset(BASE + timedelta(hours=i) for i in range(6))
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, dipped_slots=dips)) == 5.0
+    # Every other slot stops at the reserve, whether the DP planned it or not.
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, dipped_slots=frozenset())) == 30.0
     assert min(e["soc"] for e in _deficit_plan(cfg, 80.0)) == 30.0
     assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(), 80.0)) == 5.0
 
 
 def test_plan_start_under_reserve_not_lifted():
-    out = _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 12.0, walled_slots=_walled())
+    out = _deficit_plan(_reserve_cfg(backup_reserve_soc=30.0), 12.0, dipped_slots=frozenset())
     assert [e["soc"] for e in out] == [12.0] * 6
+
+
+def test_plan_stops_at_backup_reserve_where_the_dp_keeps_it():
+    """A real 34 h window the DP rides at or above the reserve: the display walk drains faster than the DP's
+    and used to slide to 11 % here; it must stop at the reserve like the DP."""
+    import json
+    from pathlib import Path
+
+    from custom_components.anker_x1_smartgrid import decision, optimize, scheduler
+    from custom_components.anker_x1_smartgrid.models import PlantInputs
+
+    fx = json.loads((Path(__file__).parent / "fixtures" / "backup-reserve-display-walk.json").read_text())
+    cfg = Config(
+        capacity_kwh=30.0,
+        soc_floor=5.0,
+        soc_target=100.0,
+        backup_reserve_soc=20.0,
+        max_charge_w=12000.0,
+        max_export_w=6000.0,
+        grid_import_limit_w=11000.0,
+        eta_charge=0.92,
+        round_trip_eff=0.85,
+        cycle_cost_eur_per_kwh=0.04,
+        charge_margin_eur_per_kwh=0.0,
+        idle_drain_w=0.0,
+    )
+    start, q = datetime(2026, 1, 5, 13, 0, tzinfo=UTC), timedelta(minutes=15)
+    slots = [PriceSlot(start + i * q, p) for i, p in enumerate(fx["price"])]
+    ivs = [
+        ForecastInterval(s.start, pv_w=fx["pv_w"][i // 4], load_w=fx["load_w"][i // 4], dt_h=0.25)
+        for i, s in enumerate(slots)
+    ]
+    edge = slots[-1].start + q
+    selected, grid, _, export, _, ceiling, held, dipped = decision._dp_select_slots(
+        inputs=PlantInputs(soc=fx["soc"], meter_w=0.0, now=start),
+        slots=slots,
+        deadline=edge,
+        ceiling=scheduler.charge_price_ceiling(max(fx["price"]), cfg),
+        cfg=cfg,
+        export_price=None,
+        terminal_mode="water_value",
+        water_value=optimize.compute_water_value(min(fx["price"]), cfg),
+        intervals=ivs,
+        slot_minutes=15,
+        dt_h=0.25,
+    )
+    assert dipped == frozenset()
+    out = plan.build_plan_horizon(
+        slots,
+        ivs,
+        selected,
+        fx["soc"],
+        edge,
+        cfg,
+        grid_request_by_hour=grid,
+        export_request_by_hour=export,
+        ceiling_by_hour=ceiling,
+        slot_minutes=15,
+        held_slots=held,
+        dipped_slots=dipped,
+    )
+    assert min(e["soc"] for e in out) == pytest.approx(20.0, abs=0.05)
 
 
 def test_plan_reserve_soc_at_least_backup_reserve():
@@ -1887,7 +1946,7 @@ def test_plan_parks_at_the_snapped_reserve_on_a_20_kwh_pack():
     cfg = _reserve_cfg(capacity_kwh=20.48, backup_reserve_soc=25.0)
     snapped = cfg.kwh_to_pct(reserve_wall_kwh(cfg))
     assert snapped > 25.0
-    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12, walled_slots=_walled(12))) == pytest.approx(
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, hours=12, dipped_slots=frozenset())) == pytest.approx(
         snapped, abs=0.05
     )
 
