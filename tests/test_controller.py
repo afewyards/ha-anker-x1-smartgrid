@@ -770,6 +770,22 @@ async def test_master_switch_clears_a_stale_planned_dip():
 
 
 @pytest.mark.asyncio
+async def test_failsafe_clears_a_stale_planned_dip(monkeypatch):
+    ctrl, _ = _make_controller(_StubHass())
+    ctrl._in_planned_dip = True
+    await ctrl.tick()  # no inputs: the failsafe path
+    assert not ctrl._in_planned_dip
+
+    async def boom():
+        raise RuntimeError("tick blew up")
+
+    monkeypatch.setattr(ctrl, "_tick_impl", boom)
+    ctrl._in_planned_dip = True
+    await ctrl.tick()  # exception: the tick failsafe
+    assert not ctrl._in_planned_dip
+
+
+@pytest.mark.asyncio
 async def test_set_enabled_true_releases_once_after_standby():
     ctrl, act = _make_controller(_StubHass())
     ctrl._store = _CapturingStore()

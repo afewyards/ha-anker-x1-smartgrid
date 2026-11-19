@@ -1168,6 +1168,7 @@ class Controller:
             _LOGGER.exception("tick failed; releasing to self-consumption")
             now = dt_util.utcnow()
             await executor.safe_release(self, now, "release_to_self failed in tick failsafe")
+            self._in_planned_dip = False
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
             await self._publish_power_card(now, None, "failsafe", False)
             status = self._status(now, 0.0, None, "failsafe")
@@ -1861,6 +1862,7 @@ class Controller:
                 await self._publish_power_card(now, inputs, "forcing", False)
                 return self._status(now, rescue_w, None, "failsafe")
             await executor.safe_release(self, now, "Actuator release_to_self failed (failsafe path)")
+            self._in_planned_dip = False
             self.plan = PlanState(ControllerState.PASSIVE, now, ())
             await self._publish_power_card(now, inputs, "failsafe", False)
             return self._status(now, 0.0, None, "failsafe")
