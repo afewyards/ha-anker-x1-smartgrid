@@ -1842,8 +1842,10 @@ def _walled(hours=6):
 def test_plan_soc_flattens_at_backup_reserve_in_walled_slots():
     cfg = _reserve_cfg(backup_reserve_soc=30.0)
     assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, walled_slots=_walled())) == 30.0
-    # Slots the DP did not wall discharge under the reserve, down to the firmware floor.
-    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0)) == 5.0
+    # Slots the DP planned and did not wall discharge under the reserve, down to the firmware floor.
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0, walled_slots=frozenset())) == 5.0
+    # With no DP walls known there is no plan, so the reserve holds.
+    assert min(e["soc"] for e in _deficit_plan(cfg, 80.0)) == 30.0
     assert min(e["soc"] for e in _deficit_plan(_reserve_cfg(), 80.0)) == 5.0
 
 

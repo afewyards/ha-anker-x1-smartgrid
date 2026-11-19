@@ -173,7 +173,14 @@ def test_an_empty_pack_has_nothing_to_keep():
 def test_a_pack_parked_at_the_backup_reserve_has_nothing_to_keep():
     night = [_row(0, 0.30, 30, mode="hold"), _row(1, 0.50, 30, house=0.5), _row(2, 0.40, 30, mode="hold")]
     assert _reasons(night, terminal=0.35, soc=30.0)
-    assert _reasons(night, terminal=0.35, soc=30.0, backup_reserve_soc=30.0) == {}
+    held = _reasons(night, terminal=0.35, soc=30.0, backup_reserve_soc=30.0)
+    assert {r["kind"] for r in held.values()} == {"reserve_hold"}
+
+
+def test_running_under_the_backup_reserve_names_the_refill():
+    horizon = [_row(0, 0.50, 25, house=0.5), _row(1, 0.20, 40, grid=2.0, mode="grid")]
+    why = _reasons(horizon, terminal=0.35, soc=30.0, backup_reserve_soc=30.0)
+    assert why[_at(0)] == {"kind": "reserve_use", "refill_at": _at(1)}
 
 
 def test_a_grid_charge_up_to_the_floor_keeps_its_reason():

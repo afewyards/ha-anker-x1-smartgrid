@@ -65,7 +65,7 @@ def test_sections_cover_all_option_fields():
     field_keys = {marker.schema for marker in fields}
     section_keys = {k for keys in config_flow.OPTIONS_SECTIONS.values() for k in keys}
     assert field_keys == section_keys
-    assert len(section_keys) == 46
+    assert len(section_keys) == 47
 
 
 def test_options_schema_is_sectioned_devices_expanded():
@@ -1739,6 +1739,12 @@ def test_backup_reserve_in_tunables_and_section():
     with pytest.raises(vol.Invalid):
         validator(-1)
     assert any(const.CONF_BACKUP_RESERVE_SOC in keys for keys in OPTIONS_SECTIONS.values())
+    refill = next(v for k, _d, v in _TUNABLES if k == const.CONF_BACKUP_RESERVE_REFILL_H)
+    assert (refill(1), refill(48)) == (1.0, 48.0)
+    for bad in (0, 49):
+        with pytest.raises(vol.Invalid):
+            refill(bad)
+    assert any(const.CONF_BACKUP_RESERVE_REFILL_H in keys for keys in OPTIONS_SECTIONS.values())
 
 
 async def test_options_flow_backup_reserve_boundary(hass):
@@ -1773,6 +1779,19 @@ async def test_options_flow_backup_reserve_saved_and_zero_accepted(hass):
         user_input=_nest({const.CONF_BACKUP_RESERVE_SOC: 0.0, const.CONF_SOC_TARGET: 10.0, const.CONF_SOC_FLOOR: 5.0}),
     )
     assert res["type"] == "create_entry"
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_options_flow_keeps_backup_reserve_refill_h(hass):
+    entry = await _create_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    res = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=_nest({const.CONF_BACKUP_RESERVE_REFILL_H: 12.0})
+    )
+    assert res["type"] == "create_entry"
+    assert entry.options[const.CONF_BACKUP_RESERVE_REFILL_H] == 12.0
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
@@ -1970,6 +1989,7 @@ SPEC_SECTIONS = {
     "battery_limits": (
         "soc_floor",
         "backup_reserve_soc",
+        "backup_reserve_refill_h",
         "soc_target",
         "grid_import_limit_w",
         "battery_charge_limit_w",
@@ -2007,7 +2027,7 @@ SPEC_SECTIONS = {
 def test_section_keys_total():
     from custom_components.anker_x1_smartgrid.config_flow import OPTIONS_SECTIONS
 
-    assert sum(len(v) for v in OPTIONS_SECTIONS.values()) == 46
+    assert sum(len(v) for v in OPTIONS_SECTIONS.values()) == 47
     assert {name: tuple(keys) for name, keys in OPTIONS_SECTIONS.items()} == SPEC_SECTIONS
     assert list(OPTIONS_SECTIONS) == list(SPEC_SECTIONS)
 

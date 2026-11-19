@@ -1229,6 +1229,7 @@ def compute_decision(
             _out["water_value"] = water_value
             _out["ceiling_by_hour"] = _dp_ceiling
             _out["held_slots"] = _dp_held
+            _out["walled_slots"] = _dp_walled
             # The slot the DP keyed its maps on: the executor reads `now` later in
             # the tick and must not re-floor it, or a tick landing on a boundary
             # looks up the next slot and misses its own.

@@ -522,6 +522,8 @@ function target(w, t, tz) {
 }
 // One plain line: what the hour does and the two values it weighed.
 function verdict(w, t, tz) {
+  if (w && w.kind === 'reserve_hold') return 'Keeping the backup reserve.';
+  if (w && w.kind === 'reserve_use') return `Using the backup reserve${Number.isFinite(Date.parse(w.refill_at)) ? `, refill planned ${stamp(Date.parse(w.refill_at), t, tz)}` : ''}.`;
   if (!w || !w.kind || num(w.keep_eur) === null || num(w.use_eur) === null) return '';
   const tgt = target(w, t, tz);
   const keep = `${eur(w.keep_eur, 3)}/kWh`;

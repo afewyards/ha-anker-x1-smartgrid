@@ -369,13 +369,14 @@ def build_plan_horizon(
         load_w = iv.load_w if iv is not None else None
         dt_h = iv.dt_h if iv is not None else slot_minutes / 60.0
         is_grid = slot_key in selected_set
-        # The DP's walled slots stop at the backup reserve; every other slot may discharge to the firmware floor.
+        is_est = hour in est_set
+        # The DP's walled slots stop at the backup reserve and its other slots may discharge to the firmware floor;
+        # a slot the DP did not plan (no walls known, estimated tail) has no plan, so it protects the reserve.
         wall_pct = (
             max(const.FIRMWARE_SOC_FLOOR, min(reserve_wall_pct, soc_sim))
-            if walled_slots is not None and slot_key in walled_slots
+            if walled_slots is None or is_est or slot_key in walled_slots
             else const.FIRMWARE_SOC_FLOOR
         )
-        is_est = hour in est_set
         # Duration the model may still act for. A slot that has already STARTED
         # is only modelled over the minutes it has left: the live ``soc`` this
         # walk begins from already contains the elapsed ones, so crediting the

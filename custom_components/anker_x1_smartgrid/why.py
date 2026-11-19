@@ -15,7 +15,22 @@ from .money import ahead, hour_key, slots
 from .usecost import MOVED_KWH, battery_kwh
 
 _H = timedelta(hours=1)
-_SUMS = ("h", "price", "deficit", "export", "eur", "house", "charge", "solar", "top", "sell_h", "sell_kwh", "under")
+_RESERVE_KINDS = ("reserve_hold", "reserve_use")
+_SUMS = (
+    "h",
+    "price",
+    "deficit",
+    "export",
+    "eur",
+    "house",
+    "charge",
+    "solar",
+    "top",
+    "sell_h",
+    "sell_kwh",
+    "under",
+    "low",
+)
 
 
 def hour_reasons(
@@ -49,8 +64,10 @@ def hour_reasons(
     ``charge_cost``, otherwise ``use_value`` at the hour's mean price and
     deficit (load less PV, W). The level starts at ``soc``, as in
     :func:`usecost.hourly_series`; an hour that stays at or below the firmware
-    floor or ``backup_reserve_soc`` holds nothing and gets no reason unless it
-    grid-charges.
+    floor holds nothing and gets no reason unless it grid-charges. With a
+    ``backup_reserve_soc``, an hour parked at it is ``reserve_hold`` and an hour that
+    runs the pack under it is ``reserve_use``, carrying ``refill_at``, the first later
+    hour that grid-charges, if any; neither compares values.
 
     A hold or charge keeps for the higher of the richest release (export, else
     house use) before the next grid-charge run, ``kept_for`` that release's run
@@ -83,7 +100,6 @@ def hour_reasons(
     if terminal_value is None:
         return {}
     hours: dict[datetime, dict] = {}
-    empty_soc = max(FIRMWARE_SOC_FLOOR, backup_reserve_soc)
     rows_at = {start: row for start, row, _h in slots(horizon)}
     level, edge = soc, None
     for start, row, h, left in ahead(horizon, now):
@@ -95,8 +111,11 @@ def hour_reasons(
         edge = start + timedelta(hours=h)
         if (price := row.get("price")) is None:
             continue
-        b = hours.setdefault(hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0) | {"src": None})
+        b = hours.setdefault(
+            hour_key(start, tz), dict.fromkeys((*_SUMS, "kept", "kept_h"), 0.0) | {"src": None, "low": math.inf}
+        )
         b["top"] = max(b["top"], *(math.inf if x is None else x for x in (before, level)))
+        b["low"] = min(b["low"], *(math.inf if x is None else x for x in (before, level)))
         raw = math.nan if (x := export_price(start, price)) is None else x
         reserve = row.get("reserve_soc")
         b["under"] = max(b["under"], float(reserve is not None and level is not None and level <= reserve))
@@ -133,7 +152,9 @@ def hour_reasons(
             kind, value = "house", house
         else:
             kind, value = None if moved["solar"] or deficit_w <= 0.0 else "hold", house
-        if value is None or math.isnan(value) or (b["top"] <= empty_soc and not moved["charge"]):
+        if reserve_kind := _reserve_kind(b, moved, deficit_w, backup_reserve_soc):
+            kind = reserve_kind
+        elif value is None or math.isnan(value) or (b["top"] <= FIRMWARE_SOC_FLOOR and not moved["charge"]):
             kind = None
         gives = value if moved["export"] else house if moved["house"] else None
         kinds.append(kind)
@@ -146,6 +167,10 @@ def hour_reasons(
     out = {}
     for i, key in enumerate(keys):
         if kinds[i] is None:
+            continue
+        if kinds[i] in _RESERVE_KINDS:
+            refill_at = next((keys[j] for j in range(i + 1, len(keys)) if hours[keys[j]]["charge"] > MOVED_KWH), None)
+            out[_iso(key, tz)] = {"kind": kinds[i], "refill_at": None if refill_at is None else _iso(refill_at, tz)}
             continue
         next_day = (terminal_value, {"start": _iso(edge, tz), "end": None, "kind": "next_day"})
         releasing = kinds[i] in ("export", "house")
@@ -233,6 +258,16 @@ def hour_reasons(
                 "beats": [x for x in beats if not math.isnan(x["price"])],
             } | extra
     return out
+
+
+def _reserve_kind(b: dict, moved: dict, deficit_w: float, reserve: float) -> str | None:
+    if reserve <= FIRMWARE_SOC_FLOOR or moved["charge"]:
+        return None
+    if b["low"] < reserve - 0.5 and (moved["house"] or moved["export"]) and b["top"] > FIRMWARE_SOC_FLOOR:
+        return "reserve_use"
+    if b["top"] <= reserve + 0.5 and b["low"] >= reserve - 0.5 and deficit_w > 0.0:
+        return "reserve_hold"
+    return None
 
 
 def _beat(q: str, price: float, beat: float, parts: dict[str, float | None]) -> dict:

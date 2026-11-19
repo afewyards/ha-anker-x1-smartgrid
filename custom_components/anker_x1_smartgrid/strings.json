@@ -104,6 +104,7 @@
             "data": {
               "soc_floor": "SoC floor (%)",
               "backup_reserve_soc": "Backup reserve (%)",
+              "backup_reserve_refill_h": "Reserve refill window (hours)",
               "soc_target": "SoC target (%)",
               "grid_import_limit_w": "Grid connection limit (W)",
               "battery_charge_limit_w": "Battery charge limit (W)",
@@ -112,7 +113,8 @@
             },
             "data_description": {
               "soc_floor": "Soft minimum state of charge the planner protects. The firmware enforces a hard 5% floor below this. Default 5.",
-              "backup_reserve_soc": "Keep this much of the battery back for power cuts. The planner will not spend it on the house or on export, and refills it in cheap slots. 0 disables. Use 30 or more, above the backup reserve set in the Anker app.",
+              "backup_reserve_soc": "Kept for power cuts. Used only when it clearly pays and a refill is near. 0 disables. Use 30 or more, above the backup reserve set in the Anker app.",
+              "backup_reserve_refill_h": "How far away a cheap refill may be before the last of the reserve is used. Larger uses the reserve more often.",
               "soc_target": "State of charge the planner aims for in cheap hours. Default 97.",
               "grid_import_limit_w": "The total power your grid connection allows at the meter in either direction, house included (fuse/contract limit — not a device property). Battery charging and export are reduced to stay within it; solar charging is unaffected. Default 17250.",
               "battery_charge_limit_w": "The most the battery may charge from the grid (W). Solar charging is left alone, except that while the planner grid-charges, solar counts inside this limit. It only lowers the inverter's own maximum, never raises it. Leave empty to use the inverter's maximum. The grid connection limit still applies on top.",

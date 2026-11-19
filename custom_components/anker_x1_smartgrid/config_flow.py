@@ -179,6 +179,7 @@ OPTIONS_SECTIONS: dict[str, tuple[str, ...]] = {
     SECTION_BATTERY_LIMITS: (
         const.CONF_SOC_FLOOR,
         const.CONF_BACKUP_RESERVE_SOC,
+        const.CONF_BACKUP_RESERVE_REFILL_H,
         const.CONF_SOC_TARGET,
         const.CONF_GRID_IMPORT_LIMIT_W,
         const.CONF_BATTERY_CHARGE_LIMIT_W,
@@ -237,6 +238,11 @@ _TUNABLES: list[tuple[str, object, object]] = [
         const.CONF_BACKUP_RESERVE_SOC,
         const.DEFAULT_BACKUP_RESERVE_SOC,
         vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
+    ),
+    (
+        const.CONF_BACKUP_RESERVE_REFILL_H,
+        const.DEFAULT_BACKUP_RESERVE_REFILL_H,
+        vol.All(vol.Coerce(float), vol.Range(min=1.0, max=48.0)),
     ),
     (const.CONF_SOC_TARGET, const.DEFAULT_SOC_TARGET, vol.All(vol.Coerce(float), vol.Range(min=10.0, max=100.0))),
     (const.CONF_ETA_CHARGE, const.DEFAULT_ETA_CHARGE, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0))),
