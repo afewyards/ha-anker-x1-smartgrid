@@ -627,7 +627,12 @@ def _dp_select_slots(
     walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
     if _out is not None:
         # Slots the plan runs the pack under the backup reserve; the executor's reserve hold stands aside there.
-        _out["dip_slots"] = frozenset(now_h + h * stride for h, d in enumerate(result.get("dip_schedule") or ()) if d)
+        # An engaged hold rides out a dip shorter than a hold run it could execute, as held_slots are smoothed.
+        _dips = result.get("dip_schedule") or []
+        _rides = optimize_mod.smooth_hold_runs([hold_engaged, *(not d for d in _dips)], _min_run)[1:]
+        _out["dip_slots"] = frozenset(
+            now_h + h * stride for h, (d, r) in enumerate(zip(_dips, _rides, strict=True)) if d and not r
+        )
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
         if _kept:

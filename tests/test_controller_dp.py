@@ -743,3 +743,40 @@ def test_walled_slots_reach_the_display_plan(monkeypatch):
     )
     _call_compute_decision(cfg, soc=30.0, prices=[0.25] * 9)
     assert seen == [walled]
+
+
+@pytest.mark.parametrize(
+    ("engaged", "dips", "freed"),
+    [
+        (True, [True, False, False, False], False),  # a one-slot dip gap: the hold rides it out
+        (True, [True, True, False, False], True),  # a dip as long as the min run frees the pack
+        (False, [True, False, False, False], True),  # nothing engaged to ride: the plan's dip stands
+    ],
+)
+def test_dip_slots_ride_out_a_one_slot_gap_only_while_held(monkeypatch, engaged, dips, freed):
+    from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+
+    real = ctrl_mod.optimize_mod.optimize_grid
+
+    def _dips(*args, **kwargs):
+        res = real(*args, **kwargs)
+        n = len(res["schedule"])
+        return {**res, "dip_schedule": [*dips, *[False] * (n - len(dips))]}
+
+    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _dips)
+    cfg = _cfg(backup_reserve_soc=30.0, export_dwell_min=15)
+    out: dict = {}
+    ctrl_mod._dp_select_slots(
+        inputs=PlantInputs(soc=30.0, meter_w=0.0, now=BASE),
+        slots=[PriceSlot(BASE + timedelta(minutes=15 * i), 0.25) for i in range(16)],
+        deadline=BASE + timedelta(hours=4),
+        ceiling=0.40,
+        cfg=cfg,
+        export_price=None,
+        intervals=[],
+        slot_minutes=15,
+        dt_h=0.25,
+        hold_engaged=engaged,
+        _out=out,
+    )
+    assert (BASE in out["dip_slots"]) is freed
