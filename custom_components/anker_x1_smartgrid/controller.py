@@ -332,6 +332,8 @@ class Controller:
         # Low-power hold dwell/hysteresis state (engaged = holding; persisted).
         self.hold_state: ExportState = ExportState.initial(dt_util.utcnow())
         self._reserve_hold_retry_at: datetime | None = None
+        # Last tick stood the reserve hold aside for a planned dip.
+        self._in_planned_dip = False
         # Master switch turned off: battery held idle (VPP at 0 W) rather than released.
         # Stays False on a fresh install so a never-toggled switch never actuates.
         self.standby = False
@@ -1384,6 +1386,7 @@ class Controller:
                 # Last tick's hold, as the smoother's slot -1: the live rule only
                 # reads slot 0, so without it every planned run loses its tail.
                 hold_engaged=self.hold_state.engaged,
+                in_dip=self._in_planned_dip,
                 **kwargs,
             )
         )

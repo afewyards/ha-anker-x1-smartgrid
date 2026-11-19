@@ -1033,6 +1033,7 @@ async def test_executor_planned_dip_releases_the_reserve_hold_once_after_its_dwe
     ctrl.hold_state = ExportState(engaged=True, state_since=T - timedelta(minutes=5))
     await _run_at(ctrl, 29.0, dips=frozenset({T}))
     assert act.calls == [("engage_hold",)]
+    assert ctrl._in_planned_dip
     later = T + timedelta(minutes=11)
     ctrl._hold_deficit_w.append((later, 250.0))
     await _run_at(ctrl, 29.0, dips=frozenset({T}), now=later)
@@ -1046,6 +1047,14 @@ async def test_executor_forced_refill_ending_in_a_planned_dip_releases():
     await _run_at(ctrl, 29.5, dips=frozenset({T}))
     assert [c[0] for c in act.calls] == ["release_to_self"]
     assert not ctrl.hold_state.engaged
+    assert ctrl._in_planned_dip
+
+
+async def test_executor_forcing_is_not_a_planned_dip():
+    ctrl, act = _reserve_ctrl()
+    ctrl._in_planned_dip = True
+    await _run_at(ctrl, 29.0, new_state=ControllerState.FORCING, dips=frozenset({T}))
+    assert not ctrl._in_planned_dip
 
 
 async def test_executor_no_hold_with_pv_surplus():

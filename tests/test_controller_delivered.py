@@ -209,6 +209,7 @@ async def test_run_compute_decision_forwards_delivered_on_the_live_path(monkeypa
     monkeypatch.setattr(ctrl, "compute_decision", _capture)
     c = ctrl.Controller.__new__(ctrl.Controller)
     c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
+    c._in_planned_dip = True
     c._hass = _Hass()
     c.cfg = Config()
     monkeypatch.setattr(type(c), "_planner_curve", lambda self: None, raising=False)
@@ -236,6 +237,7 @@ async def test_run_compute_decision_forwards_delivered_on_the_live_path(monkeypa
         delivered_by_hour=delivered,
     )
     assert seen["delivered_by_hour"] == delivered
+    assert seen["in_dip"] is True  # last tick's planned dip, for the dip ride-through
 
 
 @pytest.mark.asyncio
@@ -250,6 +252,7 @@ async def test_run_compute_decision_omits_delivered_on_the_shadow_path(monkeypat
     monkeypatch.setattr(ctrl, "compute_decision", _capture)
     c = ctrl.Controller.__new__(ctrl.Controller)
     c.hold_state = ExportState(engaged=False, state_since=datetime(2026, 11, 12, tzinfo=UTC))
+    c._in_planned_dip = False
     c._hass = _Hass()
     c.cfg = Config()
     monkeypatch.setattr(type(c), "_planner_curve", lambda self: None, raising=False)

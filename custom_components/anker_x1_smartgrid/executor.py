@@ -429,6 +429,7 @@ async def run_forcing_and_export(
         dp_holds=_dp_held is None or _dp_slot in _dp_held or _dp_slot in (_dp_out.get("grid_request") or {}),
         paused=new_plan.state is ControllerState.FORCING,
     )
+    _dips = False
     # Never while charging; the tick a forced charge ends under reserve + 1 hands straight to the hold.
     if (
         controller.cfg.backup_reserve_soc > 0.0
@@ -456,6 +457,7 @@ async def run_forcing_and_export(
         )
         if _reserve_hold is not None and _reserve_hold.engaged:
             controller.hold_state = _reserve_hold
+    controller._in_planned_dip = _dips
     _hold = controller.hold_state.engaged
     _hold_state = controller.hold_state
     controller.last_hold_values = (_discharge_v, _stored_v)

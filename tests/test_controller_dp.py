@@ -745,21 +745,31 @@ def test_walled_slots_reach_the_display_plan(monkeypatch):
     assert seen == [walled]
 
 
+_WALL_GAP = [False, True, True, True, True, True]  # the last minute of a dip slot walled at the peak price
+
+
 @pytest.mark.parametrize(
-    ("engaged", "dips", "freed"),
+    ("engaged", "in_dip", "dips", "freed"),
     [
-        (True, [True, False, False, False], False),  # a one-slot dip gap: the hold rides it out
-        (True, [True, True, False, False], True),  # a dip as long as the min run frees the pack
-        (False, [True, False, False, False], True),  # nothing engaged to ride: the plan's dip stands
+        (True, False, [True, False, False, False], False),  # a one-slot dip gap: the hold rides it out
+        (True, False, [True, True, False, False], True),  # a dip as long as the min run frees the pack
+        (False, False, [True, False, False, False], True),  # nothing engaged to ride: the plan's dip stands
+        (False, True, _WALL_GAP, True),  # a pack in a dip rides a one-slot wall gap
+        (False, True, [False, False, True, True], False),  # a wall as long as the min run holds
+        (False, False, _WALL_GAP, False),  # not in a dip: the wall holds, as on main
+        (True, True, _WALL_GAP, False),  # an engaged hold is not in a dip
+        (False, True, None, False),  # no plan: the hold stands
     ],
 )
-def test_dip_slots_ride_out_a_one_slot_gap_only_while_held(monkeypatch, engaged, dips, freed):
+def test_dip_slots_ride_out_a_one_slot_gap(monkeypatch, engaged, in_dip, dips, freed):
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 
     real = ctrl_mod.optimize_mod.optimize_grid
 
     def _dips(*args, **kwargs):
-        res = real(*args, **kwargs)
+        res = {k: v for k, v in real(*args, **kwargs).items() if k != "dip_schedule"}
+        if dips is None:
+            return res
         n = len(res["schedule"])
         return {**res, "dip_schedule": [*dips, *[False] * (n - len(dips))]}
 
@@ -777,6 +787,7 @@ def test_dip_slots_ride_out_a_one_slot_gap_only_while_held(monkeypatch, engaged,
         slot_minutes=15,
         dt_h=0.25,
         hold_engaged=engaged,
+        in_dip=in_dip,
         _out=out,
     )
     assert (BASE in out["dip_slots"]) is freed

@@ -165,6 +165,7 @@ def _dp_select_slots(
     terminal_segments: list[tuple[float, float]] | None = None,
     export_slots: list[PriceSlot] | None = None,
     hold_engaged: bool = False,
+    in_dip: bool = False,
     _out: dict | None = None,
 ) -> tuple[
     list[datetime],
@@ -627,11 +628,13 @@ def _dp_select_slots(
     walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
     if _out is not None:
         # Slots the plan runs the pack under the backup reserve; the executor's reserve hold stands aside there.
-        # An engaged hold rides out a dip shorter than a hold run it could execute, as held_slots are smoothed.
+        # An engaged hold rides out a dip shorter than a hold run it could execute, as held_slots are smoothed;
+        # a pack already in a planned dip rides out a wall run that short the same way.
         _dips = result.get("dip_schedule") or []
         _rides = optimize_mod.smooth_hold_runs([hold_engaged, *(not d for d in _dips)], _min_run)[1:]
+        _in_dip = in_dip and not hold_engaged
         _out["dip_slots"] = frozenset(
-            now_h + h * stride for h, (d, r) in enumerate(zip(_dips, _rides, strict=True)) if d and not r
+            now_h + h * stride for h, (d, r) in enumerate(zip(_dips, _rides, strict=True)) if (d or _in_dip) and not r
         )
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0
@@ -905,6 +908,7 @@ def compute_decision(
     eta_curve: EfficiencyCurve | None = None,
     export_slots: list[PriceSlot] | None = None,
     hold_engaged: bool = False,
+    in_dip: bool = False,
 ) -> tuple[PlanState, float, datetime, list, str, list]:
     """Pure wiring of energy + scheduler + guard.
 
@@ -1194,6 +1198,7 @@ def compute_decision(
             eta_curve=eta_curve,
             terminal_segments=terminal_segments,
             hold_engaged=hold_engaged,
+            in_dip=in_dip,
             _out=_out,
         )
         # Live path: DP replaces heuristic selected slots.
