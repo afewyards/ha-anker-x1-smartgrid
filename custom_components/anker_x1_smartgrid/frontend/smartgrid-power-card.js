@@ -975,6 +975,7 @@ class SmartgridPowerCard extends HTMLElement {
     if (imp !== null) s += row('Import', `${imp.toFixed(2)} kWh${cost(imp)}${gc > 0.05 ? ` (${gc.toFixed(2)} to battery)` : ''}`);
     if (out !== null) s += row('Export', `${out.toFixed(2)} kWh${cost(out)}`);
     const dc = decision(r.why, tz);
+    if (r.why && /^reserve_/.test(r.why.kind)) s += `<div class="note">${verdict(r.why, r.t, tz)}</div>`;
     if (dc) {
       const mx = Math.max(dc.win[1], dc.lose[1]) * 1.05;
       const opt = ([label, v], win) =>
@@ -1504,7 +1505,9 @@ ${date > today ? this._cheap(d.cheap, tz) : '<div class="cheap"></div>'}
     const ups = buildups(w, r.t, tz);
     const from = !r.plan && w && Date.parse(w.at);
     const dc = !ups && decision(w, tz);
-    const why = ups
+    const why = w && /^reserve_/.test(w.kind)
+      ? verdict(w, r.t, tz)
+      : ups
       ? `${Number.isFinite(from) ? `<div>Reason from <b>${stamp(from, r.t, tz)}</b></div>` : ''}<div class="dans">${verdict(w, r.t, tz)}</div>${ups}`
       : dc
         ? `<span class="pos">✓</span> <b>${dc.win[0]} ${eur(dc.win[1], 3)}</b> · ${dc.lose[0]} ${eur(dc.lose[1], 3)} per stored kWh.${dc.note && ` ${dc.note}`}`

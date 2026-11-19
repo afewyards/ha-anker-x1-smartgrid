@@ -175,6 +175,10 @@
       // A held hour just before that run: using it now means buying it back there.
       if (hours[rc - 1].state === 'idle') hours[rc - 1].why = { kind: 'hold', use_eur: 0.24, keep_eur: 0.31, kept_for: hours[rf].why.kept_for };
     }
+    // Hours at and under the backup reserve: no values compared, only a plain line.
+    const rh = hours.findIndex((h) => h.start.startsWith(`${dates[2]}T20`));
+    if (rh >= 0) hours[rh].why = { kind: 'reserve_hold', refill_at: null };
+    if (rh >= 0) hours[rh + 1].why = { kind: 'reserve_use', refill_at: hours[rh + 3].start };
     const days = dates.map((date, k) => {
       const rows = hours.filter((h) => h.start.startsWith(date));
       const sum = (...f) => Math.round(rows.reduce((a, h) => a + f.reduce((b, x) => b + h[x], 0), 0) * 100) / 100;
