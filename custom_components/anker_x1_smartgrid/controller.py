@@ -1456,6 +1456,7 @@ class Controller:
 
     async def _soc_glitch_tick(self, now: datetime, inputs: PlantInputs, slots, weather_entry, persons_home) -> dict:
         """Hold the battery at 0 W through a false SoC 0 and keep the meter side of the books."""
+        self._in_planned_dip = False
         try:
             await self._actuator.engage_hold()
         except Exception:
@@ -1633,6 +1634,7 @@ class Controller:
         await tick_remote.refresh(self, now, gathered.wf_list, gathered.persons_home_now)
 
         if not self.enabled:
+            self._in_planned_dip = False
             inputs = self._read_plant_inputs()
             # The hard-floor rescue outranks the master switch: below
             # const.FIRMWARE_SOC_FLOOR the pack is protected unconditionally.
@@ -2806,6 +2808,7 @@ class Controller:
                 self.standby = True
                 await executor.safe_release(self, now, release=False)
                 self.hold_state = ExportState(engaged=False, state_since=now)
+                self._in_planned_dip = False
                 self.plan = PlanState(ControllerState.PASSIVE, now, ())
                 try:
                     await self._actuator.engage_hold()

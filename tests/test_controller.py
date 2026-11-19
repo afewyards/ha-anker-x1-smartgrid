@@ -756,6 +756,20 @@ async def test_disabled_without_standby_never_touches_actuator():
 
 
 @pytest.mark.asyncio
+async def test_master_switch_clears_a_stale_planned_dip():
+    ctrl, _ = _make_controller(_StubHass())
+    ctrl._store = _CapturingStore()
+    ctrl._in_planned_dip = True
+    await ctrl.set_enabled(False)
+    assert not ctrl._in_planned_dip
+    ctrl._in_planned_dip = True  # a disabled tick clears it too
+    await ctrl.tick()
+    assert not ctrl._in_planned_dip
+    await ctrl.set_enabled(True)
+    assert not ctrl._in_planned_dip
+
+
+@pytest.mark.asyncio
 async def test_set_enabled_true_releases_once_after_standby():
     ctrl, act = _make_controller(_StubHass())
     ctrl._store = _CapturingStore()
