@@ -130,7 +130,7 @@ def reserve_urgency_by_bin(
     """
     if reserve_kwh <= 0.0:
         return None
-    k = spread * dt_h / refill_h / (2.0 * max(reserve_kwh - floor_kwh, 1e-9))
+    k = spread * dt_h / max(refill_h, 1.0) / (2.0 * max(reserve_kwh - floor_kwh, 1e-9))
     return [max(0.0, reserve_kwh - from_bin(b)) ** 2 * k for b in range(n_states)]
 
 

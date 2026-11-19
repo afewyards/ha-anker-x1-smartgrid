@@ -524,3 +524,11 @@ def test_export_stops_at_reserve_while_house_goes_under(dt_h):
     assert exported
     assert min(path[h] for h in exported) >= 30.0 - 1e-9
     assert min(path) < 30.0
+
+
+@pytest.mark.parametrize("refill_h", [0.0, -3.0])
+def test_refill_hours_below_one_plan_as_one(refill_h):
+    load, price = [1.0] * 6, [0.30, 0.30, 0.30, 0.05, 0.05, 0.05]
+    cfg = Config(capacity_kwh=10.0, backup_reserve_soc=30.0, backup_reserve_refill_h=refill_h)
+    one = Config(capacity_kwh=10.0, backup_reserve_soc=30.0, backup_reserve_refill_h=1.0)
+    assert _opt(load, price, 30.0, cfg=cfg)["schedule"] == _opt(load, price, 30.0, cfg=one)["schedule"]
