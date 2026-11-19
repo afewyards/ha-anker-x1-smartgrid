@@ -1852,8 +1852,8 @@ def test_plan_start_under_reserve_not_lifted():
 
 
 def test_plan_stops_at_backup_reserve_where_the_dp_keeps_it():
-    """A real 34 h window the DP rides at or above the reserve: the display walk drains faster than the DP's
-    and used to slide to 11 % here; it must stop at the reserve like the DP."""
+    """A real 34 h window the DP rides at or above the reserve: the display walk drains faster than the DP's;
+    it must stop at the reserve like the DP, not slide to 11 %."""
     import json
     from pathlib import Path
 

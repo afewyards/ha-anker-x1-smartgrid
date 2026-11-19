@@ -1019,7 +1019,7 @@ async def test_executor_holds_at_reserve():
 
 @pytest.mark.parametrize(("dips", "holds"), [(None, True), (frozenset(), True), (frozenset({T}), False)])
 async def test_executor_reserve_hold_follows_the_plan(dips, holds):
-    """No plan, or a slot the plan does not run under the reserve (a forecast surplus too), holds as before;
+    """No plan, or a slot the plan does not run under the reserve (a forecast surplus too), holds;
     a slot the plan runs under the reserve does not."""
     ctrl, act = _reserve_ctrl()
     ctrl.cfg = replace(ctrl.cfg, backup_reserve_soc=40.0)

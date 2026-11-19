@@ -494,8 +494,8 @@ def test_flat_price_start_under_reserve_refills(dt_h):
 
 
 # Standby alone drains exactly half a 0.05 kWh bin per 15 min; round-half-even parks the pack free on an even
-# bin above the reserve, so the DP charges up to one. origin/main plans the same charge.
-_HALF_BIN_PARK = pytest.mark.xfail(strict=True, reason="half-bin standby drain parks on an even bin")
+# bin above the reserve, so the DP charges up to one.
+_HALF_BIN_PARK = pytest.mark.xfail(strict=True, reason="a standby-only drain of half an SoC bin plans a slot-0 top-up")
 
 
 @pytest.mark.parametrize(

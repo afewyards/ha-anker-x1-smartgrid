@@ -757,7 +757,7 @@ _WALL_GAP = [_W, _D, _D, _D, _D, _D]  # the last minutes of a dip slot walled at
         (15, 15, False, False, [_D, _W, _W, _W], True),  # nothing engaged to ride: the plan's dip stands
         (15, 15, False, True, _WALL_GAP, True),  # a pack in a dip rides a one-slot wall gap
         (15, 15, False, True, [_W, _W, _D, _D], False),  # a wall longer than the dwell holds
-        (15, 15, False, False, _WALL_GAP, False),  # not in a dip: the wall holds, as on main
+        (15, 15, False, False, _WALL_GAP, False),  # not in a dip: the wall holds
         (15, 15, True, True, _WALL_GAP, False),  # an engaged hold is not in a dip
         (15, 15, False, True, None, False),  # no plan: the hold stands
         (15, 15, False, True, [_N, _D, _D, _D], False),  # only a wall is ridden, not a surplus slot
