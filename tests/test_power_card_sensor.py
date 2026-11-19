@@ -396,6 +396,23 @@ def _slots(n=4, start=NOW, minutes=15):
     return [PriceSlot(start + timedelta(minutes=minutes * i), 0.10 + 0.01 * i, float(minutes)) for i in range(n)]
 
 
+class _Registry:
+    def __init__(self, ids):
+        self._ids = ids
+
+    def async_get_entity_id(self, domain, platform, unique_id):
+        return self._ids.get(unique_id)
+
+
+@pytest.fixture(autouse=True)
+def registered(monkeypatch):
+    from custom_components.anker_x1_smartgrid import controller as ctrl_mod
+
+    ids = {}
+    monkeypatch.setattr(ctrl_mod.er, "async_get", lambda hass: _Registry(ids))
+    return ids
+
+
 async def _live(slots, *, now=NOW, overrides=None, inputs=True):
     from tests.helpers import make_controller
 
@@ -676,3 +693,13 @@ async def test_the_cards_unpack_reads_the_controllers_rows():
     got, trimmed = _node_unpack(hours)
     assert got == trimmed
     assert any("kept_for" in r.get("why", {}) for r in got)
+
+
+async def test_live_names_the_smoothed_sensors_when_registered(registered):
+    registered |= {
+        "anker_x1_smartgrid_solar_power_w": "sensor.my_solar",
+        "anker_x1_smartgrid_grid_power_w": "sensor.my_grid",
+        "anker_x1_smartgrid_battery_power_w": "sensor.my_batt",
+    }
+    live = await _live(_slots(), overrides={"ent_pv_power": ["sensor.a", "sensor.b"]})
+    assert (live["pv"], live["meter"], live["battery"]) == (["sensor.my_solar"], "sensor.my_grid", "sensor.my_batt")

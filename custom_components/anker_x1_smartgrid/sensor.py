@@ -226,102 +226,125 @@ class X1BatteryNetTotalSensor(X1StatusSensor):
         super().__init__(c, e, _SPECS_BY_KEY["battery_net_total_eur"])
 
 
-class X1HouseLoadSensor(_Base):
-    """Live house load (W) from its source entities, independent of the 60s
-    controller tick.
+class _Mean:
+    """Time-weighted mean of one source; time while it is unavailable does not count."""
 
-    Source state changes only update an instantaneous value; every
-    HOUSE_LOAD_WRITE_INTERVAL_S the state is written as the time-weighted mean
-    of the unclamped value over that interval (clamped to >= 0 after
-    averaging). Time with an unavailable source does not count towards the
-    mean. Formula mirrors the controller's tick-time ``_compute_house_load_w``
-    (kept tick-synchronous for actuation/recording — this sensor is
-    display-only and reads live HA state directly, never last_status):
-    pv + meter (+ = import) + batt (+ = discharge, - = charge) -
-    inverter_loss, clamped to >= 0.
+    def __init__(self) -> None:
+        self.cur: float | None = None
+        self._t = 0.0
+        self._sum = 0.0
+        self._s = 0.0
 
-    ``pv_entities`` accepts either a single legacy entity-id string or a list
-    of entity ids (mirroring const.normalize_pv_power_entities) — every PV
-    entity in the list is summed together and ALL of them are subscribed, so
-    a state change of any one alone updates the instantaneous value. pv sums to None
-    only when every PV entity is unavailable (matching
-    coordinator.read_pv_power_w semantics); meter/batt unavailable ->
-    native_value None (HA shows unknown). inverter_loss unavailable ->
-    treated as 0.0.
+    def set(self, value: float | None, now: float) -> None:
+        if self.cur is not None:
+            self._sum += self.cur * (now - self._t)
+            self._s += now - self._t
+        self._t = now
+        self.cur = value
+
+    def take(self, now: float) -> float | None:
+        cur = self.cur
+        self.set(cur, now)
+        mean = None if cur is None else self._sum / self._s if self._s > 0 else cur
+        self._sum = self._s = 0.0
+        return mean
+
+
+class _LiveFeed:
+    """Averages the live power sources and writes every attached sensor from one timer.
+
+    Source state changes only update the instantaneous readings; every
+    HOUSE_LOAD_WRITE_INTERVAL_S each source's time-weighted mean is published
+    to all sensors at once, so the shown values share one interval.
+
+    ``pv_entities`` is a list of entity ids (see const.normalize_pv_power_entities);
+    all are subscribed and summed, None only when every one is unavailable
+    (coordinator.read_pv_power_w semantics).
     """
 
-    _attr_native_unit_of_measurement = "W"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_should_poll = False
-
-    def __init__(self, c, e, pv_entities, meter_entity: str, batt_entity: str, loss_entity: str):
-        super().__init__(c, e, "house_load_w", "SmartGrid house load")
+    def __init__(self, pv_entities, meter_entity: str, batt_entity: str, loss_entity: str) -> None:
         self._pv_entities = const.normalize_pv_power_entities(pv_entities)
         self._meter_entity = meter_entity
         self._batt_entity = batt_entity
         self._loss_entity = loss_entity
+        self._means = {k: _Mean() for k in ("pv", "meter", "batt", "loss")}
+        self._sensors: list[X1LiveSensor] = []
+
+    def _read(self, hass: HomeAssistant) -> None:
+        now = monotonic()
+        values = {
+            "pv": coordinator.read_pv_power_w(hass, {const.CONF_ENT_PV_POWER: self._pv_entities}),
+            "meter": coordinator.read_float(hass, self._meter_entity),
+            "batt": coordinator.read_float(hass, self._batt_entity),
+            "loss": coordinator.read_float(hass, self._loss_entity),
+        }
+        for key, mean in self._means.items():
+            mean.set(values[key], now)
+
+    def attach(self, sensor: X1LiveSensor) -> None:
+        hass = sensor.hass
+        if not self._sensors:
+            self._read(hass)
+
+            @callback
+            def _write(now) -> None:
+                t = monotonic()
+                values = {k: m.take(t) for k, m in self._means.items()}
+                for s in self._sensors:
+                    s.show(values)
+                    s.async_write_ha_state()
+
+            sensor.async_on_remove(
+                async_track_state_change_event(
+                    hass,
+                    [*self._pv_entities, self._meter_entity, self._batt_entity, self._loss_entity],
+                    lambda event: self._read(hass),
+                )
+            )
+            sensor.async_on_remove(
+                async_track_time_interval(hass, _write, timedelta(seconds=HOUSE_LOAD_WRITE_INTERVAL_S))
+            )
+        self._sensors.append(sensor)
+        sensor.show({k: m.cur for k, m in self._means.items()})
+        sensor.async_on_remove(lambda: self._sensors.remove(sensor))
+
+
+def _house_load(v: dict) -> float | None:
+    if v["pv"] is None or v["meter"] is None or v["batt"] is None:
+        return None
+    return max(0.0, v["pv"] + v["meter"] + v["batt"] - (v["loss"] or 0.0))
+
+
+class X1LiveSensor(_Base):
+    """Display-only power read straight from the source entities, independent of the controller tick.
+
+    House load mirrors the controller's ``_compute_house_load_w``: pv + meter
+    (+ = import) + batt (+ = discharge) - inverter_loss, clamped to >= 0 after
+    averaging; missing inverter_loss counts as 0. The other sensors keep their
+    source's sign and are None when it is unavailable.
+    """
+
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_should_poll = False
+
+    def __init__(self, c, e, feed: _LiveFeed, key: str, name: str, value) -> None:
+        super().__init__(c, e, key, name)
+        self._feed = feed
+        self._value_of = value
         self._value: float | None = None
-        self._cur: float | None = None
-        self._cur_t = 0.0
-        self._acc_sum = 0.0
-        self._acc_s = 0.0
 
     @property
     def native_value(self):
         return self._value
 
-    def _instant(self) -> float | None:
-        pv = coordinator.read_pv_power_w(self.hass, {const.CONF_ENT_PV_POWER: self._pv_entities})
-        meter = coordinator.read_float(self.hass, self._meter_entity)
-        batt = coordinator.read_float(self.hass, self._batt_entity)
-        if pv is None or meter is None or batt is None:
-            return None
-        loss = coordinator.read_float(self.hass, self._loss_entity)
-        return pv + meter + batt - (loss if loss is not None else 0.0)
-
-    def _fold(self, now: float) -> None:
-        if self._cur is not None:
-            dt = now - self._cur_t
-            self._acc_sum += self._cur * dt
-            self._acc_s += dt
-        self._cur_t = now
-
-    def _recompute(self) -> None:
-        self._fold(monotonic())
-        self._cur = self._instant()
-        self._value = None if self._cur is None else max(0.0, self._cur)
+    def show(self, values: dict) -> None:
+        self._value = self._value_of(values)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._recompute()
-        self._acc_sum = self._acc_s = 0.0
-
-        @callback
-        def _handle_source_change(event) -> None:
-            self._fold(monotonic())
-            self._cur = self._instant()
-
-        @callback
-        def _write(now) -> None:
-            self._fold(monotonic())
-            if self._cur is None:
-                self._value = None
-            else:
-                mean = self._acc_sum / self._acc_s if self._acc_s > 0 else self._cur
-                self._value = max(0.0, mean)
-            self._acc_sum = self._acc_s = 0.0
-            self.async_write_ha_state()
-
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass,
-                [*self._pv_entities, self._meter_entity, self._batt_entity, self._loss_entity],
-                _handle_source_change,
-            )
-        )
-        self.async_on_remove(
-            async_track_time_interval(self.hass, _write, timedelta(seconds=HOUSE_LOAD_WRITE_INTERVAL_S))
-        )
+        self._feed.attach(self)
 
 
 class X1TrackedDevicesSensor(_Base):
@@ -510,6 +533,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     loss_entity = entry_data.get(const.CONF_ENT_INVERTER_LOSS, const.DEFAULT_ENTITIES[const.CONF_ENT_INVERTER_LOSS])
     # Keyed by spec.key so the entities list below can interleave spec-driven
     # sensors with the real (non-boilerplate) classes in their original order.
+    feed = _LiveFeed(pv_entities, meter_entity, batt_entity, loss_entity)
+    live_sensors = [
+        X1LiveSensor(controller, entry.entry_id, feed, key, name, value)
+        for key, name, value in (
+            ("house_load_w", "SmartGrid house load", _house_load),
+            ("grid_power_w", "SmartGrid grid power", lambda v: v["meter"]),
+            ("battery_power_w", "SmartGrid battery power", lambda v: v["batt"]),
+            ("solar_power_w", "SmartGrid solar power", lambda v: v["pv"]),
+        )
+    ]
     spec_sensors = {spec.key: X1StatusSensor(controller, entry.entry_id, spec) for spec in SENSOR_SPECS}
     async_add_entities(
         [
@@ -517,7 +550,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             spec_sensors["solar_charge_kwh"],
             spec_sensors["setpoint_w"],
             spec_sensors["export_setpoint_w"],
-            X1HouseLoadSensor(controller, entry.entry_id, pv_entities, meter_entity, batt_entity, loss_entity),
+            *live_sensors,
             spec_sensors["load_mae"],
             spec_sensors["horizon_energy_mae_24h"],
             spec_sensors["horizon_energy_mae_12h"],

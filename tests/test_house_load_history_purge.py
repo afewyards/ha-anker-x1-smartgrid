@@ -36,6 +36,16 @@ async def test_purges_resolved_entity_with_keep_days(hass):
     assert calls == [{"entity_id": ["sensor.renamed_load"], "keep_days": 3, "entity_globs": [], "domains": []}]
 
 
+async def test_purges_all_live_sensors(hass):
+    for key in ("house_load_w", "grid_power_w", "battery_power_w", "solar_power_w"):
+        er.async_get(hass).async_get_or_create("sensor", DOMAIN, f"anker_x1_smartgrid_{key}", suggested_object_id=key)
+    calls = _register_service(hass)
+    await _purge_house_load_history(hass, 3)
+    assert calls[0]["entity_id"] == [
+        f"sensor.{k}" for k in ("house_load_w", "grid_power_w", "battery_power_w", "solar_power_w")
+    ]
+
+
 async def test_skips_entity_of_other_platform(hass):
     _register_entity(hass, platform="other")
     calls = _register_service(hass)

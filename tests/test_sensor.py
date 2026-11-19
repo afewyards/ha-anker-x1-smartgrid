@@ -121,12 +121,29 @@ def _seed_house_load_states(hass, *, pv="1200.0", meter="100.0", batt="-500.0", 
     hass.set_state(_LOSS_ENT, loss)
 
 
-def _make_house_load_sensor(hass):
-    from custom_components.anker_x1_smartgrid.sensor import X1HouseLoadSensor
+def _make_live_sensors(hass, pv_entities=_PV_ENT):
+    from custom_components.anker_x1_smartgrid import sensor as sensor_mod
 
-    s = X1HouseLoadSensor(_StubController(), "e", _PV_ENT, _METER_ENT, _BATT_ENT, _LOSS_ENT)
-    s.hass = hass
-    return s
+    feed = sensor_mod._LiveFeed(pv_entities, _METER_ENT, _BATT_ENT, _LOSS_ENT)
+    out = {}
+    for key, name, value in (
+        ("house_load_w", "house", sensor_mod._house_load),
+        ("grid_power_w", "grid", lambda v: v["meter"]),
+        ("battery_power_w", "battery", lambda v: v["batt"]),
+        ("solar_power_w", "solar", lambda v: v["pv"]),
+    ):
+        out[key] = sensor_mod.X1LiveSensor(_StubController(), "e", feed, key, name, value)
+        out[key].hass = hass
+    return out
+
+
+def _make_house_load_sensor(hass, pv_entities=_PV_ENT):
+    return _make_live_sensors(hass, pv_entities)["house_load_w"]
+
+
+def _recompute(s):
+    s._feed._read(s.hass)
+    s.show({k: m.cur for k, m in s._feed._means.items()})
 
 
 def test_house_load_sensor_unique_id_and_attrs():
@@ -144,13 +161,13 @@ def test_house_load_sensor_recomputes_without_controller_tick():
     s = _make_house_load_sensor(hass)
     _seed_house_load_states(hass)
 
-    s._recompute()
+    _recompute(s)
     assert s.native_value == 1200.0 + 100.0 + (-500.0) - 30.0
 
     # A source entity changes -- mirrors what the state-change event handler
     # observes -- and the recomputed value reflects it immediately.
     hass.set_state(_PV_ENT, "1500.0")
-    s._recompute()
+    _recompute(s)
     assert s.native_value == 1500.0 + 100.0 + (-500.0) - 30.0
 
 
@@ -161,7 +178,7 @@ def test_house_load_sensor_any_of_pv_meter_batt_unavailable_is_none(entity):
     _seed_house_load_states(hass)
     hass.set_state(entity, "unavailable")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value is None
 
@@ -172,7 +189,7 @@ def test_house_load_sensor_loss_unavailable_treated_as_zero():
     _seed_house_load_states(hass)
     hass.set_state(_LOSS_ENT, "unavailable")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value == 1200.0 + 100.0 + (-500.0) - 0.0
 
@@ -182,7 +199,7 @@ def test_house_load_sensor_clamped_at_zero():
     s = _make_house_load_sensor(hass)
     _seed_house_load_states(hass, pv="0.0", meter="0.0", batt="-2000.0", loss="0.0")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value == 0.0
 
@@ -228,7 +245,9 @@ async def _started(monkeypatch, **states):
     from custom_components.anker_x1_smartgrid import sensor as sensor_mod
 
     hass = _StubHass()
-    s = _make_house_load_sensor(hass)
+    live = _make_live_sensors(hass)
+    s = live["house_load_w"]
+    s.live = live
     _seed_house_load_states(hass, **states)
     clock = [1000.0]
     cbs = {}
@@ -244,8 +263,14 @@ async def _started(monkeypatch, **states):
         lambda h, action, interval: cbs.setdefault("write", action) and (lambda: None),
     )
     written = []
-    monkeypatch.setattr(s, "async_write_ha_state", lambda: written.append(s.native_value))
-    await s.async_added_to_hass()
+    s.others = {}
+    for key, sensor in live.items():
+        sink = written if sensor is s else s.others.setdefault(key, [])
+        monkeypatch.setattr(
+            sensor, "async_write_ha_state", lambda sensor=sensor, sink=sink: sink.append(sensor.native_value)
+        )
+    for sensor in live.values():
+        await sensor.async_added_to_hass()
     return s, hass, clock, cbs["src"], cbs["write"], written
 
 
@@ -318,12 +343,7 @@ async def test_house_load_sensor_interval_without_valid_time_writes_current(monk
 _PV_ENT_2 = "sensor.pv_power_2"
 
 
-def _make_house_load_sensor_multi(hass, pv_entities):
-    from custom_components.anker_x1_smartgrid.sensor import X1HouseLoadSensor
-
-    s = X1HouseLoadSensor(_StubController(), "e", pv_entities, _METER_ENT, _BATT_ENT, _LOSS_ENT)
-    s.hass = hass
-    return s
+_make_house_load_sensor_multi = _make_house_load_sensor
 
 
 def test_house_load_sensor_sums_multiple_pv_entities():
@@ -335,7 +355,7 @@ def test_house_load_sensor_sums_multiple_pv_entities():
     hass.set_state(_BATT_ENT, "-500.0")
     hass.set_state(_LOSS_ENT, "30.0")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value == 800.0 + 400.0 + 100.0 + (-500.0) - 30.0
 
@@ -349,7 +369,7 @@ def test_house_load_sensor_multi_pv_one_unavailable_uses_the_other():
     hass.set_state(_BATT_ENT, "-50.0")
     hass.set_state(_LOSS_ENT, "30.0")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value == 400.0 + 100.0 + (-50.0) - 30.0
 
@@ -366,7 +386,7 @@ def test_house_load_sensor_pv_entity_in_kw_converted_before_summing():
     hass.set_state(_BATT_ENT, "-500.0")
     hass.set_state(_LOSS_ENT, "30.0")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value == 800.0 + 400.0 + 100.0 + (-500.0) - 30.0
 
@@ -380,7 +400,7 @@ def test_house_load_sensor_multi_pv_all_unavailable_is_none():
     hass.set_state(_BATT_ENT, "-500.0")
     hass.set_state(_LOSS_ENT, "30.0")
 
-    s._recompute()
+    _recompute(s)
 
     assert s.native_value is None
 
@@ -536,3 +556,53 @@ def test_active_model_sensor_exposes_ml_status_attrs():
     ]
     # every attr maps to the identical last_status key
     assert all(a == k for a, k in spec.attrs_keys)
+
+
+@pytest.mark.asyncio
+async def test_live_sensors_write_their_means_in_the_same_fire(monkeypatch):
+    s, hass, clock, src, write, written = await _started(
+        monkeypatch, pv="1000.0", meter="0.0", batt="-200.0", loss="0.0"
+    )
+    clock[0] += 2.0
+    hass.set_state(_METER_ENT, "100.0")
+    hass.set_state(_BATT_ENT, "-400.0")
+    hass.set_state(_PV_ENT, "1500.0")
+    src(None)
+    clock[0] += 3.0
+    assert written == [] and s.others == {k: [] for k in ("grid_power_w", "battery_power_w", "solar_power_w")}
+    write(None)
+    assert s.others["grid_power_w"] == [60.0]
+    assert s.others["battery_power_w"] == [-320.0]
+    assert s.others["solar_power_w"] == [1300.0]
+    assert written == [1300.0 + 60.0 - 320.0]
+
+
+@pytest.mark.asyncio
+async def test_house_load_is_solar_plus_grid_plus_battery_minus_loss(monkeypatch):
+    s, hass, clock, src, write, written = await _started(
+        monkeypatch, pv="800.0", meter="-300.0", batt="500.0", loss="40.0"
+    )
+    for pv, meter, batt, loss in (("900.0", "200.0", "-100.0", "40.0"), ("300.0", "50.0", "700.0", "20.0")):
+        clock[0] += 1.7
+        for ent, v in ((_PV_ENT, pv), (_METER_ENT, meter), (_BATT_ENT, batt), (_LOSS_ENT, loss)):
+            hass.set_state(ent, v)
+        src(None)
+    clock[0] += 1.3
+    write(None)
+    solar, grid, batt = (s.others[k][0] for k in ("solar_power_w", "grid_power_w", "battery_power_w"))
+    loss = (40.0 * 1.7 + 40.0 * 1.7 + 20.0 * 1.3) / 4.7
+    assert written[0] == pytest.approx(solar + grid + batt - loss)
+
+
+@pytest.mark.asyncio
+async def test_live_sensor_with_unavailable_source_writes_none_others_unaffected(monkeypatch):
+    s, hass, clock, src, write, written = await _started(monkeypatch)
+    clock[0] += 2.0
+    hass.set_state(_METER_ENT, "unavailable")
+    src(None)
+    clock[0] += 3.0
+    write(None)
+    assert s.others["grid_power_w"] == [None]
+    assert s.others["battery_power_w"] == [-500.0]
+    assert s.others["solar_power_w"] == [1200.0]
+    assert written == [None]

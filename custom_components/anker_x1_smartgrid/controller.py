@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
@@ -2515,9 +2516,18 @@ class Controller:
             self.power_card = None
 
     def _live_sensors(self) -> dict:
+        reg = er.async_get(self._hass)
+
+        def smoothed(key: str) -> str | None:
+            return reg.async_get_entity_id("sensor", const.DOMAIN, f"anker_x1_smartgrid_{key}")
+
         meter = self._data.get(const.CONF_ENT_METER_POWER, const.DEFAULT_ENTITIES[const.CONF_ENT_METER_POWER])
-        battery = self._data[const.CONF_ENT_BATTERY_POWER]
-        return {"pv": const.resolve_pv_power_entities(self._data), "meter": meter, "battery": battery}
+        solar = smoothed("solar_power_w")
+        return {
+            "pv": [solar] if solar else const.resolve_pv_power_entities(self._data),
+            "meter": smoothed("grid_power_w") or meter,
+            "battery": smoothed("battery_power_w") or self._data[const.CONF_ENT_BATTERY_POWER],
+        }
 
     def _live_line(self, now) -> dict:
         slots = self._card_slots

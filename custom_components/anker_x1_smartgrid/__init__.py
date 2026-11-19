@@ -75,12 +75,16 @@ async def _purge_house_load_history(hass: HomeAssistant, history_days: int) -> N
     try:
         if history_days <= 0 or not hass.services.has_service("recorder", "purge_entities"):
             return
-        entity_id = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, "anker_x1_smartgrid_house_load_w")
-        if entity_id:
+        reg = er.async_get(hass)
+        entity_ids = [
+            reg.async_get_entity_id("sensor", DOMAIN, f"anker_x1_smartgrid_{key}")
+            for key in ("house_load_w", "grid_power_w", "battery_power_w", "solar_power_w")
+        ]
+        if entity_ids := [e for e in entity_ids if e]:
             await hass.services.async_call(
                 "recorder",
                 "purge_entities",
-                {"entity_id": [entity_id], "keep_days": history_days},
+                {"entity_id": entity_ids, "keep_days": history_days},
                 blocking=True,
             )
     except Exception as err:
