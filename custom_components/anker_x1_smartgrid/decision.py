@@ -628,13 +628,21 @@ def _dp_select_slots(
     walled_slots = frozenset(now_h + h * stride for h, w in enumerate(_wall_sched) if w) if _wall_sched else None
     if _out is not None:
         # Slots the plan runs the pack under the backup reserve; the executor's reserve hold stands aside there.
-        # An engaged hold rides out a dip shorter than a hold run it could execute, as held_slots are smoothed;
-        # a pack already in a planned dip rides out a wall run that short the same way.
+        # An engaged hold rides out a dip no longer than its dwell, and a pack already in a planned dip rides out
+        # a wall that short. Runs are measured in minutes, slot 0 by what is left of it, at any slot length.
         _dips = result.get("dip_schedule") or []
-        _rides = optimize_mod.smooth_hold_runs([hold_engaged, *(not d for d in _dips)], _min_run)[1:]
+        _walls = _wall_sched if _dips and _wall_sched else [False] * len(_dips)
+        _left = math.ceil((now_h + stride - inputs.now).total_seconds() / 60.0)
+        _rides = optimize_mod.smooth_hold_runs(
+            [hold_engaged, *(not d for d in _dips)],
+            optimize_mod.hold_min_run_slots(cfg.export_dwell_min, 1),
+            weights=[slot_minutes, _left, *[slot_minutes] * (len(_dips) - 1)][: len(_dips) + 1],
+        )[1:]
         _in_dip = in_dip and not hold_engaged
         _out["dip_slots"] = frozenset(
-            now_h + h * stride for h, (d, r) in enumerate(zip(_dips, _rides, strict=True)) if (d or _in_dip) and not r
+            now_h + h * stride
+            for h, (d, w, r) in enumerate(zip(_dips, _walls, _rides, strict=True))
+            if (d or (_in_dip and w)) and not r
         )
         _out["export_curve_covered"] = _export_curve is not None
         _out["export_curve_slots"] = len(export_slots) if export_slots else 0

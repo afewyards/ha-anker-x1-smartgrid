@@ -745,47 +745,59 @@ def test_walled_slots_reach_the_display_plan(monkeypatch):
     assert seen == [walled]
 
 
-_WALL_GAP = [False, True, True, True, True, True]  # the last minute of a dip slot walled at the peak price
+_D, _W, _N = "dip", "wall", "neither"  # per slot: the plan dips, stops at the reserve, or does neither
+_WALL_GAP = [_W, _D, _D, _D, _D, _D]  # the last minutes of a dip slot walled at the peak price
 
 
 @pytest.mark.parametrize(
-    ("engaged", "in_dip", "dips", "freed"),
+    ("slot_minutes", "left", "engaged", "in_dip", "plan", "freed"),
     [
-        (True, False, [True, False, False, False], False),  # a one-slot dip gap: the hold rides it out
-        (True, False, [True, True, False, False], True),  # a dip as long as the min run frees the pack
-        (False, False, [True, False, False, False], True),  # nothing engaged to ride: the plan's dip stands
-        (False, True, _WALL_GAP, True),  # a pack in a dip rides a one-slot wall gap
-        (False, True, [False, False, True, True], False),  # a wall as long as the min run holds
-        (False, False, _WALL_GAP, False),  # not in a dip: the wall holds, as on main
-        (True, True, _WALL_GAP, False),  # an engaged hold is not in a dip
-        (False, True, None, False),  # no plan: the hold stands
+        (15, 15, True, False, [_D, _W, _W, _W], False),  # a one-slot dip gap: the engaged hold rides it out
+        (15, 15, True, False, [_D, _D, _W, _W], True),  # a dip longer than the dwell frees the pack
+        (15, 15, False, False, [_D, _W, _W, _W], True),  # nothing engaged to ride: the plan's dip stands
+        (15, 15, False, True, _WALL_GAP, True),  # a pack in a dip rides a one-slot wall gap
+        (15, 15, False, True, [_W, _W, _D, _D], False),  # a wall longer than the dwell holds
+        (15, 15, False, False, _WALL_GAP, False),  # not in a dip: the wall holds, as on main
+        (15, 15, True, True, _WALL_GAP, False),  # an engaged hold is not in a dip
+        (15, 15, False, True, None, False),  # no plan: the hold stands
+        (15, 15, False, True, [_N, _D, _D, _D], False),  # only a wall is ridden, not a surplus slot
+        (60, 2, False, True, [_W, _D, _D], True),  # 60 min: the last 2 minutes' wall is ridden
+        (60, 30, False, True, [_W, _D, _D], False),  # 30 minutes of wall is longer than the dwell
+        (60, 2, True, False, [_D, _W, _W], False),  # 60 min: an engaged hold rides the last 2 minutes' dip
+        (60, 30, True, False, [_D, _W, _W], True),
     ],
 )
-def test_dip_slots_ride_out_a_one_slot_gap(monkeypatch, engaged, in_dip, dips, freed):
+def test_dip_slots_ride_out_a_gap_no_longer_than_the_dwell(
+    monkeypatch, slot_minutes, left, engaged, in_dip, plan, freed
+):
     from custom_components.anker_x1_smartgrid import controller as ctrl_mod
 
     real = ctrl_mod.optimize_mod.optimize_grid
 
-    def _dips(*args, **kwargs):
-        res = {k: v for k, v in real(*args, **kwargs).items() if k != "dip_schedule"}
-        if dips is None:
+    def _plan(*args, **kwargs):
+        res = {k: v for k, v in real(*args, **kwargs).items() if k not in ("dip_schedule", "wall_schedule")}
+        if plan is None:
             return res
-        n = len(res["schedule"])
-        return {**res, "dip_schedule": [*dips, *[False] * (n - len(dips))]}
+        pad = [_N] * (len(res["schedule"]) - len(plan))
+        return {
+            **res,
+            "dip_schedule": [s == _D for s in [*plan, *pad]],
+            "wall_schedule": [s == _W for s in [*plan, *pad]],
+        }
 
-    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _dips)
+    monkeypatch.setattr(ctrl_mod.optimize_mod, "optimize_grid", _plan)
     cfg = _cfg(backup_reserve_soc=30.0, export_dwell_min=15)
     out: dict = {}
     ctrl_mod._dp_select_slots(
-        inputs=PlantInputs(soc=30.0, meter_w=0.0, now=BASE),
-        slots=[PriceSlot(BASE + timedelta(minutes=15 * i), 0.25) for i in range(16)],
-        deadline=BASE + timedelta(hours=4),
+        inputs=PlantInputs(soc=30.0, meter_w=0.0, now=BASE + timedelta(minutes=slot_minutes - left)),
+        slots=[PriceSlot(BASE + timedelta(minutes=slot_minutes * i), 0.25) for i in range(16)],
+        deadline=BASE + timedelta(minutes=slot_minutes * 8),
         ceiling=0.40,
         cfg=cfg,
         export_price=None,
         intervals=[],
-        slot_minutes=15,
-        dt_h=0.25,
+        slot_minutes=slot_minutes,
+        dt_h=slot_minutes / 60.0,
         hold_engaged=engaged,
         in_dip=in_dip,
         _out=out,

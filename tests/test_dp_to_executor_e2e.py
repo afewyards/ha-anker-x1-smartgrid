@@ -672,6 +672,54 @@ class TestBackupReserve:
 
     @pytest.mark.e2e
     @pytest.mark.asyncio
+    async def _hourly_ticks(self, monkeypatch, ctrl, hass, prices, ticks):
+        for minutes, soc in ticks:
+            at = self.BASE + timedelta(minutes=minutes)
+            hour = minutes // 60
+            monkeypatch.setattr(ctrl_mod.dt_util, "utcnow", lambda at=at: at)
+            _seed_common(hass, at, soc=soc, export_price="0.0")
+            _seed_price_forecast(hass, self.BASE + timedelta(hours=hour), prices[hour:] + [0.25] * hour)
+            await ctrl.tick()
+            assert ctrl.plan.state is ControllerState.PASSIVE
+
+    def _hourly_controller(self, hass, held):
+        ctrl, act = _make_controller(
+            hass,
+            cfg_overrides={
+                "backup_reserve_soc": 40.0,
+                "enable_export": False,
+                "export_dwell_min": 15,
+                "idle_drain_w": 0.0,
+            },
+        )
+        ctrl.export_state = ExportState(engaged=False, state_since=self.BASE - timedelta(hours=1))
+        ctrl.hold_state = ExportState(engaged=held, state_since=self.BASE - timedelta(hours=1))
+        ctrl.plan = PlanState(ControllerState.PASSIVE, self.BASE - timedelta(hours=1), ())
+        return ctrl, act
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_hourly_dip_makes_no_write_near_the_hour(self, monkeypatch):
+        """60-min slots, no standby: a tick 2 minutes before a dip hour ends neither holds nor releases."""
+        hass = StubHass()
+        ctrl, act = self._hourly_controller(hass, held=False)
+        dips = self._spy_dips(monkeypatch)
+        ticks = ((0, "40.0"), (30, "38.0"), (58, "36.0"), (60, "35.9"), (118, "32.0"), (120, "31.9"))
+        await self._hourly_ticks(monkeypatch, ctrl, hass, [0.40] * 3 + [0.02] * 2 + [0.25] * 19, ticks)
+        assert act.calls == []
+        assert dips == [True] * 6
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
+    async def test_hourly_hold_at_the_reserve_never_releases_near_the_hour(self, monkeypatch):
+        hass = StubHass()
+        ctrl, act = self._hourly_controller(hass, held=True)
+        await self._hourly_ticks(monkeypatch, ctrl, hass, [0.25] * 24, ((0, "40.0"), (58, "40.0"), (60, "40.0")))
+        assert {c[0] for c in act.calls} == {"engage_hold"}
+        assert ctrl.hold_state.engaged
+
+    @pytest.mark.e2e
+    @pytest.mark.asyncio
     async def test_refill_ticks_are_recorded_as_forcing_not_hold(self, monkeypatch):
         hass = StubHass()
         ctrl, act = _make_controller(

@@ -133,9 +133,10 @@ def discharge_value(price: float, deficit_w: float, cfg: Config, eta_curve=None)
     return price * (deficit_w + cfg.idle_drain_w) / dc_w - cfg.cycle_cost_eur_per_kwh
 
 
-def smooth_hold_runs(held: list[bool], min_run: int) -> list[bool]:
+def smooth_hold_runs(held: list[bool], min_run: int, weights: list[float] | None = None) -> list[bool]:
     """Drop hold runs shorter than ``min_run`` slots, and fill declined gaps that
-    short between two holds.
+    short between two holds. ``weights`` measures each slot in its own length
+    (minutes, say) instead of as one.
 
     Same trade the export path makes in :func:`export_filter.apply_min_export_block`:
     a run the actuator cannot execute is churn, not economics. Price noise of a
@@ -147,6 +148,7 @@ def smooth_hold_runs(held: list[bool], min_run: int) -> list[bool]:
     if min_run <= 1 or not held:
         return list(held)
     out = list(held)
+    size = weights or [1.0] * len(held)
     for value, keep_edges in ((False, True), (True, False)):
         i = 0
         while i < len(out):
@@ -157,7 +159,7 @@ def smooth_hold_runs(held: list[bool], min_run: int) -> list[bool]:
             while j < len(out) and out[j] is value:
                 j += 1
             interior = i > 0 and j < len(out)
-            if j - i < min_run and (interior or not keep_edges):
+            if sum(size[i:j]) < min_run and (interior or not keep_edges):
                 for k in range(i, j):
                     out[k] = not value
             i = j

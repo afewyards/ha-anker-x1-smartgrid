@@ -470,9 +470,13 @@ def test_steady_deficit_at_reserve_neither_dips_nor_charges(deficit_w):
     assert res["dip_schedule"] == [False] * n
 
 
-def test_last_minute_of_a_dip_slot_walls_at_the_peak_price():
-    # The allowance at the peak price outweighs the last minute's drain, so the plan walls the rest of the
-    # slot it is dipping through; the executor rides that gap (test_dip_slots_ride_out_a_one_slot_gap).
+def test_characterize_last_minute_wall_in_a_dip_slot():
+    """Characterization of a planner artefact the executor absorbs, not a requirement; a DP-side fix may change it.
+
+    Given only the last minute of a dip slot, the allowance at the peak price outweighs that minute's drain and
+    the plan walls it (test_dip_slots_ride_out_a_gap_no_longer_than_the_dwell rides it). The live decision path
+    feeds slot 0 a full slot of load, so it does not build this input.
+    """
     cfg = Config(capacity_kwh=10.0, backup_reserve_soc=40.0, idle_drain_w=100.0)
     n = 96
     load = [0.25] * n
