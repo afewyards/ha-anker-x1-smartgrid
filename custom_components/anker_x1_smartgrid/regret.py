@@ -379,6 +379,8 @@ def hindsight_optimal_grid(
 
     bin_kwh = _BIN_KWH
     n_states, to_bin, from_bin = soc_bins(cap_kwh)
+    # MUST mirror optimize.optimize_grid.
+    dip_allowance = bin_kwh / 2.0 * max(0.0, min(day.price, default=0.0))
 
     INF = float("inf")
     urgency = reserve_urgency_by_bin(
@@ -410,7 +412,6 @@ def hindsight_optimal_grid(
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # A deficit slot may stop at the reserve instead of discharging under it — MUST mirror optimize.optimize_grid.
         wall_holds = reserve_kwh > 0.0 and net <= 0.0
-        dip_allowance = bin_kwh / 2.0 * price_h
 
         for b in range(n_states):
             if dp[b] == INF:

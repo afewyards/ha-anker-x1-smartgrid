@@ -946,6 +946,9 @@ def optimize_grid(
 
     bin_kwh = _BIN_KWH
     n_states, to_bin, from_bin = soc_bins(cap_kwh)
+    # Objective-only: a dip under the reserve must beat the half bin the state rounding can gain it,
+    # valued at what the dipped kWh is bought back at.
+    dip_allowance = bin_kwh / 2.0 * max(0.0, min(price, default=0.0))
 
     INF = float("inf")
     urgency = reserve_urgency_by_bin(
@@ -990,8 +993,6 @@ def optimize_grid(
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # A deficit slot may stop at the reserve instead of discharging under it.
         wall_holds = reserve_kwh > 0.0 and net <= 0.0
-        # Objective-only: a dip under the reserve must beat the half bin the state rounding can gain it.
-        dip_allowance = bin_kwh / 2.0 * price_h
 
         # Hoist the feed_in lookup and discount product out of the per-state
         # loop — both are invariant within a given hour h.

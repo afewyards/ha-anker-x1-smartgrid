@@ -436,9 +436,7 @@ def test_far_refill_dips_only_as_deep_as_the_rent_allows(dt_h):
     optimum = gain / spread * CFG.backup_reserve_refill_h / wait_h
     # A slot either dips its whole deficit or stops at the wall, so the plan lands within half a slot of it.
     assert depth <= optimum + max(_BIN_KWH, 1.0 * dt_h / 2) / band + 1e-9
-    # At 60 min the only dip is a whole 1 kWh slot (depth 0.4): it and the hold straddle the 0.22 optimum
-    # within the dip allowance (under 0.005 EUR), so the hold may win there.
-    assert depth > 0.0 or dt_h == 1.0
+    assert depth > 0.0
     assert min(far) > min(near)
 
 
@@ -468,6 +466,18 @@ def test_steady_deficit_at_reserve_neither_dips_nor_charges(deficit_w):
     assert min(path) >= 40.0 - 1e-9
     assert res["schedule"] == [0.0] * n
     assert res["dip_schedule"] == [False] * n
+
+
+def test_last_minute_of_a_dip_slot_stays_a_dip():
+    # The kWh a dip loses to rounding is bought back in the trough, so the allowance is priced there:
+    # at the peak price it would outweigh the last minute's drain and wall the slot the plan is dipping through.
+    cfg = Config(capacity_kwh=10.0, backup_reserve_soc=40.0, idle_drain_w=100.0)
+    n = 96
+    load = [0.25] * n
+    load[0] = 1.0 / 60
+    res = _opt(load, [0.40] * 6 + [0.02] * 8 + [0.25] * 82, 31.3, cfg=cfg, water_value=0.12, dt_h=0.25)
+    assert res["dip_schedule"][:6] == [True] * 6
+    assert not res["wall_schedule"][0]
 
 
 @_HOURS
