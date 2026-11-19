@@ -299,6 +299,9 @@ def replay(
 
     export_price_matches_import = options_raw.get("ent_export_price") == options_raw.get("ent_price")
     export_price = next((s.price for s in real_slots if s.start == now_h), remaining_prices[0])
+    # As controller._resolve_export_price: a box with no export price entity never exports.
+    if not options_raw.get("ent_export_price"):
+        export_price = None
 
     # Piecewise per-hour terminal segments (spec rev-3, decision.py:1125-1158) —
     # replaces the retired scalar (water_value_hi, overnight_need_kwh) two-segment
