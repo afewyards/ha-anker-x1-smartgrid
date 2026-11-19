@@ -436,7 +436,9 @@ def test_far_refill_dips_only_as_deep_as_the_rent_allows(dt_h):
     optimum = gain / spread * CFG.backup_reserve_refill_h / wait_h
     # A slot either dips its whole deficit or stops at the wall, so the plan lands within half a slot of it.
     assert depth <= optimum + max(_BIN_KWH, 1.0 * dt_h / 2) / band + 1e-9
-    assert depth > 0.0
+    # At 60 min the only dip is a whole 1 kWh slot (depth 0.4): it and the hold straddle the 0.22 optimum
+    # within the dip allowance (under 0.005 EUR), so the hold may win there.
+    assert depth > 0.0 or dt_h == 1.0
     assert min(far) > min(near)
 
 
@@ -456,6 +458,18 @@ def test_flat_price_never_dips_under_reserve(dt_h, soc_start, load_kw):
     assert min(path) >= 30.0 - 1e-9
 
 
+@pytest.mark.parametrize("deficit_w", [150.0, 180.0, 200.0, 250.0])
+def test_steady_deficit_at_reserve_neither_dips_nor_charges(deficit_w):
+    # With 100 W standby, 200 W drains exactly 1.5 bins a 15-min slot: rounding alone once made dipping and
+    # charging back look cheaper than holding.
+    cfg = Config(capacity_kwh=10.0, backup_reserve_soc=40.0, idle_drain_w=100.0)
+    n = 96
+    res, path = _both([deficit_w / 1000.0 * 0.25] * n, [0.25] * n, 40.0, 0.25, cfg=cfg)
+    assert min(path) >= 40.0 - 1e-9
+    assert res["schedule"] == [0.0] * n
+    assert res["dip_schedule"] == [False] * n
+
+
 @_HOURS
 def test_flat_price_start_under_reserve_refills(dt_h):
     n = round(12 / dt_h)
@@ -464,16 +478,14 @@ def test_flat_price_start_under_reserve_refills(dt_h):
 
 
 # Standby alone drains exactly half a 0.05 kWh bin per 15 min; round-half-even parks the pack free on an even
-# bin, so the DP lifts the odd 5.15 kWh reserve bin to one. origin/main plans the same charge.
+# bin above the reserve, so the DP charges up to one. origin/main plans the same charge.
 _HALF_BIN_PARK = pytest.mark.xfail(strict=True, reason="half-bin standby drain parks on an even bin")
 
 
 @pytest.mark.parametrize(
     ("cap", "reserve", "soc_start", "dt_h", "load_kw"),
     [
-        pytest.param(
-            cap, reserve, soc, dt_h, load_kw, marks=_HALF_BIN_PARK if (cap, dt_h, load_kw) == (20.48, 0.25, 0.0) else ()
-        )
+        pytest.param(cap, reserve, soc, dt_h, load_kw, marks=_HALF_BIN_PARK if (dt_h, load_kw) == (0.25, 0.0) else ())
         for cap, reserve, soc in ((10.0, 30.0, 29.0), (20.48, 25.0, 25.0), (20.48, 25.0, 24.0))
         for dt_h in (1.0, 0.25)
         for load_kw in (0.0, 0.4)

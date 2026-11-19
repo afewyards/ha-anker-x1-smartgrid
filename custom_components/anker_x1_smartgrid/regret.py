@@ -410,6 +410,7 @@ def hindsight_optimal_grid(
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # A deficit slot may stop at the reserve instead of discharging under it — MUST mirror optimize.optimize_grid.
         wall_holds = reserve_kwh > 0.0 and net <= 0.0
+        dip_allowance = bin_kwh / 2.0 * price_h
 
         for b in range(n_states):
             if dp[b] == INF:
@@ -424,9 +425,9 @@ def hindsight_optimal_grid(
             house_wear = max(0.0, soc - max(soc_after, firmware_floor_kwh)) * cfg.cycle_cost_eur_per_kwh
             wall = discharge_wall_kwh(soc, firmware_floor_kwh, reserve_kwh)
             # The wall candidate goes first so a tie keeps the higher SoC — MUST mirror optimize.optimize_grid.
-            stops: tuple[tuple[float, float], ...] = ((firmware_floor_kwh, house_wear),)
+            stops: tuple[tuple[float, float, bool], ...] = ((firmware_floor_kwh, house_wear, False),)
             if wall_holds and soc_after < wall:
-                stops = ((wall, max(0.0, soc - max(soc_after, wall)) * cfg.cycle_cost_eur_per_kwh), *stops)
+                stops = ((wall, max(0.0, soc - max(soc_after, wall)) * cfg.cycle_cost_eur_per_kwh, True), *stops)
 
             # Solar spill (AC kWh) that cannot be stored — mirror of
             # optimize.optimize_grid:603-608.  Used by the export leg's
@@ -463,7 +464,7 @@ def hindsight_optimal_grid(
             soc_after_b = from_bin(to_bin(soc_after))
             band_kwh = band_shortfall_dc(soc, soc_after_b, firmware_floor_kwh, band_top) * eta_load
 
-            for stop_kwh, wear in stops:
+            for stop_kwh, wear, walled in stops:
                 band_stop_kwh = band_shortfall_dc(soc, soc_after_b, stop_kwh, band_top) * eta_load
                 for step in range(n_steps + 1):
                     g_dc = step * bin_kwh
@@ -493,6 +494,9 @@ def hindsight_optimal_grid(
                     new_cost = cost + g_ac * price_h + floor_import_cost + g_dc * cfg.charge_margin_eur_per_kwh + wear
                     if urgency is not None:
                         new_cost += urgency[new_b]
+                    # Objective-only allowance on a dip — MUST mirror optimize.optimize_grid.
+                    if not walled and len(stops) > 1 and new_soc < reserve_kwh:
+                        new_cost += dip_allowance
 
                     if new_cost < dp_next[new_b]:
                         dp_next[new_b] = new_cost

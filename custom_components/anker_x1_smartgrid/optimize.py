@@ -990,6 +990,8 @@ def optimize_grid(
         wall_eta = wall_ac_per_dc(net, eta_load, cfg.idle_drain_w * dt_h / 1000.0)
         # A deficit slot may stop at the reserve instead of discharging under it.
         wall_holds = reserve_kwh > 0.0 and net <= 0.0
+        # Objective-only: a dip under the reserve must beat the half bin the state rounding can gain it.
+        dip_allowance = bin_kwh / 2.0 * price_h
 
         # Hoist the feed_in lookup and discount product out of the per-state
         # loop — both are invariant within a given hour h.
@@ -1169,6 +1171,8 @@ def optimize_grid(
                     )
                     if urgency is not None:
                         new_cost += urgency[new_b]
+                    if not walled and len(stops) > 1 and new_soc < reserve_kwh:
+                        new_cost += dip_allowance
 
                     # Strict < mirrors hindsight tie-breaking — do not change to <=
                     # (the T0.1b parity gate depends on identical tie resolution).
