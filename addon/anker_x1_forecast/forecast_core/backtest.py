@@ -260,6 +260,10 @@ def walk_forward_hgbr(
     same pure helpers (``mae``, ``rmse``, ``pinball_loss``,
     ``_baseline_fit_hourly``) are reused throughout.
 
+    Origins step one day at a time.  Step metrics (MAE/RMSE/pinball) are taken
+    only from origins on the ``test_days`` grid; horizon energy (12h/24h) is
+    graded from every daily origin.
+
     Parameters
     ----------
     hourly_rows:
@@ -342,16 +346,17 @@ def walk_forward_hgbr(
         # HGBR always accepts a quantile kwarg — initialise all as empty lists.
         pinball_pairs: dict[float, list[tuple[float, float]]] = {q: [] for q in quantiles}
 
-        origin = start_ts + timedelta(days=train_days)
+        first_origin = start_ts + timedelta(days=train_days)
+        origin = first_origin
         while origin < end_ts:
+            on_grid = (origin - first_origin).days % test_days == 0
+            test_end = origin + timedelta(days=test_days if on_grid else 1)
             window_rows = [row for ts, row in parsed if origin - timedelta(days=train_days) <= ts < origin]
             train_rows = [row for ts, row in parsed if ts < origin] if half_life_days else window_rows
             # Only include test entries that have a real target (energy-derived
             # hourly load: house_load_kwh_sum×1000, house_load_mean fallback).
             test_entries = [
-                (ts, row)
-                for ts, row in parsed
-                if origin <= ts < origin + timedelta(days=test_days) and featureset.hourly_load_w(row) is not None
+                (ts, row) for ts, row in parsed if origin <= ts < test_end and featureset.hourly_load_w(row) is not None
             ]
 
             if train_rows and test_entries:
@@ -407,6 +412,8 @@ def walk_forward_hgbr(
                         ]
 
                     for (ts, row), preds in zip(test_entries, series, strict=True):
+                        if not on_grid:
+                            break
                         actual = featureset.hourly_load_w(row)
 
                         # Median prediction drives the primary error metrics.
@@ -437,7 +444,7 @@ def walk_forward_hgbr(
                             horizon_errs[h].append(abs(pred_kwh - act_kwh))
                             baseline_horizon_errs[h].append(abs(base_kwh - act_kwh))
 
-            origin += timedelta(days=test_days)
+            origin += timedelta(days=1)
 
         if not model_pairs:
             return empty

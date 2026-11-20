@@ -1,3 +1,5 @@
+import pytest
+
 from datetime import datetime, timezone, timedelta, UTC
 from custom_components.anker_x1_smartgrid.dataquality import FeatureRow
 from custom_components.anker_x1_smartgrid import backtest
@@ -654,6 +656,33 @@ def _shifted_rows(n_days: int, *, shift_before: datetime, shift_w: float) -> lis
         if datetime.fromisoformat(row["hour_ts"]) < shift_before:
             row["house_load_mean"] += shift_w
     return rows
+
+
+def _heavy_day_rows():
+    rows = _make_hourly_rows(24)
+    for r in rows:
+        if r["hour_ts"][:10] == "2025-01-25":  # day 17: inside a 3-day test window, not its first 24 h
+            r["house_load_mean"] += 3000.0
+    return rows
+
+
+def test_walk_forward_hgbr_grades_horizon_energy_from_every_daily_origin():
+    """Origins on days 10..23 each have 24 h of test rows: 14 horizon origins, not the
+    5 on the 3-day grid, and the heavy day between grid origins reaches the 24h error."""
+    res = backtest.walk_forward_hgbr(_heavy_day_rows(), train_days=10, test_days=3, fallback_w=500.0)
+
+    assert res["n_horizon_origins_24h"] == 14
+    assert res["horizon_energy_mae_24h"] == pytest.approx(11.687724522544839)
+
+
+def test_walk_forward_hgbr_step_metrics_stay_on_the_test_days_grid():
+    """Values computed before daily horizon origins were added."""
+    res = backtest.walk_forward_hgbr(_heavy_day_rows(), train_days=10, test_days=3, fallback_w=500.0)
+
+    assert res["n_test"] == 336
+    assert res["model_mae"] == pytest.approx(731.5332626594871)
+    assert res["baseline_mae"] == pytest.approx(218.75)
+    assert res["improvement_pct"] == pytest.approx(-234.4152057871941)
 
 
 def test_walk_forward_hgbr_score_from_places_origins_without_trimming_history():
