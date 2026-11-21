@@ -297,8 +297,22 @@ def card_inputs(soc):
 
 def stale_card():
     """A built power card, so a publish without a rebuild only refreshes its battery line."""
-    battery = {"soc": 10.0, "stored_kwh": 1.0, "stored_cost_eur_per_kwh": 0.2, "break_even_eur_per_kwh": 0.25, "state": "house", "margin_30d_eur": None}
-    return {"built_at": "x", "stored_cost_eur_per_kwh": 0.2, "break_even_eur_per_kwh": 0.25, "battery": battery, "days": [], "hours": []}
+    battery = {
+        "soc": 10.0,
+        "stored_kwh": 1.0,
+        "stored_cost_eur_per_kwh": 0.2,
+        "break_even_eur_per_kwh": 0.25,
+        "state": "house",
+        "margin_30d_eur": None,
+    }
+    return {
+        "built_at": "x",
+        "stored_cost_eur_per_kwh": 0.2,
+        "break_even_eur_per_kwh": 0.25,
+        "battery": battery,
+        "days": [],
+        "hours": [],
+    }
 
 
 def make_config(**overrides) -> Config:
