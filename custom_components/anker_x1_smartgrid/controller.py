@@ -2420,9 +2420,13 @@ class Controller:
                 h["why"] = {
                     k: v for k, v in reasons[h["start"]].items() if k not in ("beats", "kept_price", "kept_estimated")
                 }
+        stored = round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > money.EMPTY_KWH else None
         return {
             "built_at": now.isoformat(),
-            "stored_cost_eur_per_kwh": round(inv.c_free / inv.e_kwh, 4) if inv.e_kwh > money.EMPTY_KWH else None,
+            "stored_cost_eur_per_kwh": stored,
+            "break_even_eur_per_kwh": None
+            if stored is None or eta_d <= 0
+            else round((stored + cfg.cycle_cost_eur_per_kwh) / eta_d, 4),
             "days": days,
             "hours": hours,
         }
@@ -2485,6 +2489,7 @@ class Controller:
                 "soc": soc,
                 "stored_kwh": round(soc / 100.0 * self.cfg.capacity_kwh, 2) if soc is not None else None,
                 "stored_cost_eur_per_kwh": card["stored_cost_eur_per_kwh"],
+                "break_even_eur_per_kwh": card["break_even_eur_per_kwh"],
                 "state": None
                 if inputs is None
                 else usecost.live_state(

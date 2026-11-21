@@ -72,7 +72,7 @@ async def test_card_payload_unchanged(tmp_path):
     ctrl = await _ctrl(tmp_path)
     await _tick(ctrl, NOW)
     card = ctrl.power_card
-    assert set(card) == {"built_at", "battery", "live", "days", "hours", "stored_cost_eur_per_kwh"}
+    assert set(card) == {"built_at", "battery", "live", "days", "hours", "stored_cost_eur_per_kwh", "break_even_eur_per_kwh"}
     assert not {"setpoint_w", "batt_w"} & set(card["hours"][0])
 
 

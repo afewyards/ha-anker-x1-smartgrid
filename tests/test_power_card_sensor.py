@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from custom_components.anker_x1_smartgrid import optimize as optimize_mod
 from custom_components.anker_x1_smartgrid import usecost
 from custom_components.anker_x1_smartgrid.sensor import X1PowerCardSensor
 from tests.helpers import card_inputs, stale_card
@@ -110,6 +111,9 @@ async def test_controller_builds_the_card_from_one_sample_read():
     assert battery["soc"] == 48.0
     assert battery["stored_kwh"] == round(0.48 * ctrl.cfg.capacity_kwh, 2)
     assert battery["stored_cost_eur_per_kwh"] == 0.25
+    eta_d = optimize_mod.eta_discharge_at(ctrl.cfg.max_export_w, ctrl.cfg, ctrl._planner_curve())
+    assert battery["break_even_eur_per_kwh"] == round((0.25 + ctrl.cfg.cycle_cost_eur_per_kwh) / eta_d, 4)
+    assert card["break_even_eur_per_kwh"] == battery["break_even_eur_per_kwh"]
     assert battery["margin_30d_eur"] is None and battery["solar_gain_30d_eur"] is None
     assert [d["planned"] for d in card["days"]] == ["none", "partial", "full"]
     today = card["days"][1]
@@ -128,6 +132,17 @@ async def test_controller_builds_the_card_from_one_sample_read():
     assert ctrl.power_card["days"] is days
     assert ctrl.power_card["battery"]["state"] == "charge_grid"
     assert ctrl.power_card["battery"]["soc"] == 47.5
+
+
+async def test_break_even_is_none_on_an_empty_battery():
+    from tests.helpers import make_controller
+
+    ctrl, _act = make_controller()
+    ctrl._recorder.read_feature_rows = lambda since: []
+    await ctrl._refresh_battery_margin(NOW)
+    await ctrl._publish_power_card(NOW, card_inputs(48.0), "hold", False, _rebuild())
+    assert ctrl.power_card["battery"]["stored_cost_eur_per_kwh"] is None
+    assert ctrl.power_card["battery"]["break_even_eur_per_kwh"] is None
 
 
 def _charge_then_export(export=0.60):
