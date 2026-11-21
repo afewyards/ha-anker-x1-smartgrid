@@ -11,6 +11,7 @@
   ?view=cost|use|sun  with debug, presses that panel switch (cost is the default) and checks it reads pressed
   ?pick=<hour start prefix>  with debug, clicks that hour in the debug panel and checks the inspector's caption changed (today 14 and 15: selling blocked by the reserve, a rule; past hours: a stored reason)
   ?hover=<hour start prefix, e.g. 2026-11-14T08>&py=<px from the card top>  points at that hour; &touch=1 taps instead, &rerender=1 then pushes a new state
+    every hover run also checks that a planned hour's tooltip carries the Break-even row (the fixture's 0.26 against the price, above or below) and a measured hour's does not
     &touch=1&slide=<hour start prefix>  puts a finger down on the hover hour and slides it sideways to that hour, then lifts it; checks the tooltip followed (with debug: the caption changed)
     &touch=1&drag=<hour start prefix>  after the tap, drags a finger up on that hour until the browser would take the pan; checks the tooltip stayed (with debug: the caption too)
   ?trim=1  gives the card sensor's hourly rows as the server publishes them: the values it omits left out (price, soc and the grid figures when null, use and solar when 0, plan when false), then packed (start as minutes m from pack.base with pack.tz offsets, grid figures as g, why.kept_for as why.kf into pack.kf); the debug answer still gets the full rows, and a trimmed run must draw the same as an untrimmed one
@@ -217,7 +218,7 @@
     if (CASE === 'wide') Object.assign(days[1], { solar_gain_eur: -12.42, avg_price: -0.414 });
     const cur = hours.find((h) => Date.parse(h.start) === nowHour) || hours[hours.length - 1];
     return {
-      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, state: CASE === 'noswitch' ? 'disabled' : cur.state, margin_30d_eur: CASE === 'wide' ? -1234.56 : 28.4, solar_gain_30d_eur: CASE === 'wide' ? 456.78 : CASE === 'dst' ? 0 : 3.1, balance_eur: CASE === 'wide' ? 138.4 : -0.7 },
+      battery: { soc: cur.soc, stored_kwh: Math.round(cur.soc * 20.48) / 100, stored_cost_eur_per_kwh: 0.318, break_even_eur_per_kwh: 0.26, state: CASE === 'noswitch' ? 'disabled' : cur.state, margin_30d_eur: CASE === 'wide' ? -1234.56 : 28.4, solar_gain_30d_eur: CASE === 'wide' ? 456.78 : CASE === 'dst' ? 0 : 3.1, balance_eur: CASE === 'wide' ? 138.4 : -0.7 },
       days,
       hours,
     };
@@ -634,6 +635,17 @@
     const hour = (at) => card._geo.rows.find((h) => h.start.startsWith(at));
     const r = hour(HOVER.at);
     if (!r) return;
+    const eur3 = (v) => `€${v.toFixed(3)}`;
+    const tipOf = (h) => card._tip(h).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    const past = card._geo.rows.find((h) => !h.plan && h.price !== null);
+    const bad = [];
+    if (r.plan && r.price !== null) {
+      const want = `Break-even ${eur3(0.26)}/kWh · ${eur3(Math.abs(r.price - 0.26))} ${r.price >= 0.26 ? 'above' : 'below'}`;
+      if (!tipOf(r).includes(want)) bad.push(`planned tooltip lacks "${want}"`);
+    }
+    if (past && tipOf(past).includes('Break-even')) bad.push('measured tooltip has a break-even row');
+    STATUS.ws = `${STATUS.ws ? `${STATUS.ws} · ` : ''}${bad.length ? `break-even: ${bad.join('; ').toUpperCase()}` : 'break-even: row ok'}`;
+    showStatus();
     const y = card.getBoundingClientRect().top + HOVER.py;
     // The level graph spans the full column, the panels sit PAD inside it.
     const lv = y < root.querySelector('.lv').getBoundingClientRect().bottom;

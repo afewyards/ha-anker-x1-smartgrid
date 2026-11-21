@@ -959,7 +959,7 @@ class SmartgridPowerCard extends HTMLElement {
   }
 
   _tip(r) {
-    const { rows, tz } = this._geo;
+    const { rows, tz, be } = this._geo;
     const st = STATE_TEXT[r.state];
     const facts = [!r.plan ? 'measured' : num(r.price) === null && num(r.grid_in_house_kwh) === null && num(r.grid_in_charge_kwh) === null ? 'estimated' : 'planned'];
     let s = st ? `<div class="hd">${st[0].toUpperCase()}${st.slice(1)}</div>` : '';
@@ -972,6 +972,7 @@ class SmartgridPowerCard extends HTMLElement {
     const row = (label, text) => `<div><span class="k">${label}</span> ${text}</div>`;
     const cost = (kwh) => (p === null ? '' : ` · ${eur(kwh * p)}`);
     if (p !== null) s += row('Price', `${eur(p, 3)}/kWh`);
+    if (p !== null && be !== null && r.plan) s += row('Break-even', `${eur(be, 3)}/kWh <span class="${p >= be ? 'pos' : 'neg'}">· ${eur(Math.abs(p - be), 3)} ${p >= be ? 'above' : 'below'}</span>`);
     if (imp !== null) s += row('Import', `${imp.toFixed(2)} kWh${cost(imp)}${gc > 0.05 ? ` (${gc.toFixed(2)} to battery)` : ''}`);
     if (out !== null) s += row('Export', `${out.toFixed(2)} kWh${cost(out)}`);
     const dc = decision(r.why, tz);
@@ -1095,7 +1096,7 @@ class SmartgridPowerCard extends HTMLElement {
     }
     const nowCol = colOf(now);
     const geo = { dates, today, cx, cw, W, tz, X };
-    this._geo = { rows, cx, cw, starts, ends, tz };
+    this._geo = { rows, cx, cw, starts, ends, tz, be: num((a.battery || {}).break_even_eur_per_kwh) };
     let dbg = '';
     if (this._open) {
       try {
