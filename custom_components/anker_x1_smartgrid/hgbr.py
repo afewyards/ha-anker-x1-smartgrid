@@ -90,6 +90,14 @@ _RECENCY_CAP_HALF_LIVES: int = 10
 # same window the promotion gate's baseline hour-mean uses.
 _PRIOR_DAYS: int = const.DEFAULT_TRAIN_DAYS
 
+# A series whose measured load over the window before it sits outside this
+# band of the prior (a holiday, a house full of guests) is served by the model
+# alone: the prior then describes a regime the house is not in.
+_PRIOR_REGIME_WINDOW_H: int = 48
+_PRIOR_REGIME_MIN_HOURS: int = 24
+_PRIOR_REGIME_LOW: float = 0.5
+_PRIOR_REGIME_HIGH: float = 2.0
+
 # Days of history a row's lag features reach back (load_lag_168h dominates the
 # 24 h rolling mean and the previous-day total) plus a day of slack; rows older
 # than the training cap and this margin never influence a recency-weighted fit.
@@ -441,6 +449,9 @@ class HGBRQuantileModel:
         otherwise), and the other quantiles move by the same delta, upper ones
         never below the served median.  The served median — not the raw model
         output — is what feeds the chain, whichever quantiles were requested.
+        The whole series is served unblended when the measured load over the
+        ``_PRIOR_REGIME_WINDOW_H`` before its first hour runs below
+        ``_PRIOR_REGIME_LOW``× or above ``_PRIOR_REGIME_HIGH``× the prior.
 
         Returns
         -------
@@ -456,6 +467,9 @@ class HGBRQuantileModel:
         lookup = dict(self._utc_lookup)
         date_kwh = dict(self._local_date_kwh)
         blend = self._prior_weight > 0 and bool(self._prior) and 0.5 in self._models
+        if blend:
+            ratio = self._recent_prior_ratio(min(hour["when"] for hour in hours))
+            blend = ratio is None or _PRIOR_REGIME_LOW <= ratio <= _PRIOR_REGIME_HIGH
         pred_qs = list(dict.fromkeys((0.5, *qs))) if blend else qs
         chain_q = 0.5 if 0.5 in pred_qs else qs[0]
 
@@ -565,6 +579,23 @@ class HGBRQuantileModel:
 
         self._utc_lookup = utc_lookup
         self._local_date_kwh = local_date_kwh
+
+    def _recent_prior_ratio(self, first: datetime) -> float | None:
+        """Measured load over the prior across the window before *first*; None when too few hours to judge."""
+        measured = prior = 0.0
+        hours = 0
+        for back in range(1, _PRIOR_REGIME_WINDOW_H + 1):
+            when = first - timedelta(hours=back)
+            load = self._utc_lookup.get(when)
+            mean = self._prior.get(featureset.hour_mean_key(when))
+            if load is None or mean is None:
+                continue
+            measured += load
+            prior += mean
+            hours += 1
+        if hours < _PRIOR_REGIME_MIN_HOURS or prior <= 0:
+            return None
+        return measured / prior
 
     def _blend_prior(self, preds: dict[float, float], when: datetime) -> None:
         """Pull the median toward the hour-mean prior and move the other quantiles with it."""

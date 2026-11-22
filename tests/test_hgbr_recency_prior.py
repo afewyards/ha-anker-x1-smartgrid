@@ -331,3 +331,83 @@ def test_trimming_history_leaves_the_trained_matrix_unchanged(recorded_fits):
     assert len(X) == len(keep)
     for got, j in zip(X, keep):
         assert got == pytest.approx(full_X[j], nan_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Prior regime check: no blend while recent load is far off the prior
+# ---------------------------------------------------------------------------
+
+
+def _recent_at(factor: float, *, drop_oldest: int = 0, gap_h: int = 0):
+    """Rows whose last 48 h run at *factor*× the normal level, the horizon start right after
+    them (*gap_h* hours past the newest row), and a model fitted with the prior taken from
+    the days before those 48 h — so the measured window sits at ~factor× the prior."""
+    rows = _rows(30)
+    first = _ts(rows[-1]) + timedelta(hours=1)
+    window = first - timedelta(hours=48)
+    rows = [
+        {**r, "house_load_mean": r["house_load_mean"] * factor, "house_load_kwh_sum": r["house_load_kwh_sum"] * factor}
+        if _ts(r) >= window
+        else r
+        for r in rows
+    ]
+    rows = [r for r in rows if not window <= _ts(r) < window + timedelta(hours=drop_oldest)]
+    rows = rows[: len(rows) - gap_h] if gap_h else rows
+    blended = HGBRQuantileModel().fit(rows, quantiles=(0.5, 0.8), prior_weight=0.25, as_of=window)
+    plain = HGBRQuantileModel().fit(rows, quantiles=(0.5, 0.8))
+    return blended, plain, _hours(first, 24)
+
+
+def _serve(model, hours):
+    return model.predict_series(hours, _FALLBACK_W, quantiles=(0.5, 0.8))
+
+
+def _serve_without_regime_check(monkeypatch, model, hours):
+    with monkeypatch.context() as m:
+        m.setattr(HGBRQuantileModel, "_recent_prior_ratio", lambda self, first: None)
+        return _serve(model, hours)
+
+
+@pytest.mark.parametrize("factor", [0.7, 1.0, 1.6])
+def test_prior_blend_holds_while_recent_load_tracks_the_prior(monkeypatch, factor):
+    blended, plain, hours = _recent_at(factor)
+
+    served = _serve(blended, hours)
+    assert served == _serve_without_regime_check(monkeypatch, blended, hours)
+    assert served != _serve(plain, hours), "fixture must actually blend"
+
+
+@pytest.mark.parametrize("factor", [0.3, 2.5])
+def test_prior_blend_steps_aside_when_recent_load_leaves_the_prior(monkeypatch, factor):
+    blended, plain, hours = _recent_at(factor)
+
+    assert _serve_without_regime_check(monkeypatch, blended, hours) != _serve(plain, hours)
+    assert _serve(blended, hours) == _serve(plain, hours)
+
+
+@pytest.mark.parametrize(("measured", "blends"), [(23, True), (24, False)])
+def test_prior_regime_needs_a_day_of_measured_hours_to_judge(monkeypatch, measured, blends):
+    blended, plain, hours = _recent_at(0.3, drop_oldest=48 - measured)
+
+    served = _serve(blended, hours)
+    assert served == (_serve_without_regime_check(monkeypatch, blended, hours) if blends else _serve(plain, hours))
+
+
+def test_prior_regime_ignores_hours_the_chain_bridged_before_the_horizon(monkeypatch):
+    # 23 measured hours, then a 2 h hole the seam bridge fills: counting those would reach 25
+    # and switch the blend off.
+    blended, _, hours = _recent_at(0.3, drop_oldest=23, gap_h=2)
+
+    assert _serve(blended, hours) == _serve_without_regime_check(monkeypatch, blended, hours)
+
+
+@pytest.mark.parametrize(
+    ("ratio", "blends"),
+    [(0.5, True), (2.0, True), (math.nextafter(0.5, 0.0), False), (math.nextafter(2.0, math.inf), False)],
+)
+def test_prior_regime_band_edges_still_blend(monkeypatch, ratio, blends):
+    blended, plain, hours = _recent_at(1.0)
+    expected = _serve_without_regime_check(monkeypatch, blended, hours) if blends else _serve(plain, hours)
+
+    monkeypatch.setattr(HGBRQuantileModel, "_recent_prior_ratio", lambda self, first: ratio)
+    assert _serve(blended, hours) == expected
