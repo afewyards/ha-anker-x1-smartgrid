@@ -331,3 +331,35 @@ def test_min_matched_hours_gate_needs_three():
     pa[h3] = {"load_w": 120.0}
     ratio, matched, _ = compute_ratio(log, pa, now_h, window_h=5)
     assert matched == 3 and ratio is not None
+
+
+def test_away_helper():
+    zeros = [0.0] * 24
+    assert load_adapt.is_away(0, zeros)
+    assert not load_adapt.is_away(1, zeros)
+    assert not load_adapt.is_away(None, zeros)
+    assert not load_adapt.is_away(0, [0.0] * 23 + [1.0])
+    assert load_adapt.is_away(0, [0.0] * 20 + [None] * 4)
+    assert not load_adapt.is_away(0, [0.0] * 19 + [None] * 5)
+
+
+def test_compute_ratio_away_floor():
+    log = PredictionLog()
+    t0 = datetime(2026, 7, 4, 12, tzinfo=UTC)
+    for b in (1, 2, 3):
+        log.record(t0 - timedelta(hours=b), 1000.0)
+    act = lambda w: {t0 - timedelta(hours=b): {"load_w": w} for b in (1, 2, 3)}
+    assert load_adapt.compute_ratio(log, act(330.0), t0, 5, lower=load_adapt.AWAY_RATIO_MIN)[0] == pytest.approx(0.33)
+    assert load_adapt.compute_ratio(log, act(100.0), t0, 5, lower=load_adapt.AWAY_RATIO_MIN)[0] == 0.2
+    assert load_adapt.compute_ratio(log, act(330.0), t0, 5)[0] == load_adapt.RATIO_MIN
+
+
+def test_flat_predictor_ignores_fade_and_fraction():
+    class _B:
+        def predict(self, when, temp, fb, *, quantile=0.5):
+            return 1000.0
+
+    now = datetime(2026, 7, 4, 12, tzinfo=UTC)
+    p = AdaptivePredictor(_B(), 0.33, now, 6, 0.7, flat=True)
+    assert p.predict(now, None, 0.0) == pytest.approx(330.0)
+    assert p.predict(now + timedelta(hours=20), None, 0.0) == pytest.approx(330.0)

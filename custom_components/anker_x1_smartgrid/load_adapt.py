@@ -15,6 +15,9 @@ from datetime import datetime, timedelta
 
 RATIO_MIN = 0.7
 RATIO_MAX = 1.5
+AWAY_RATIO_MIN = 0.2
+AWAY_WINDOW_H = 24
+AWAY_MIN_HOURS = 20  # of the last 24 completed hours that must carry an occupancy value
 MIN_MATCHED_HOURS = 3
 LOG_MAX_ENTRIES = 48
 PARTIAL_MIN_FRAC = 0.25  # ≥15 observed minutes before the running hour counts
@@ -52,6 +55,7 @@ def compute_ratio(
     window_h: int,
     *,
     partial: tuple[float, float] | None = None,
+    lower: float = RATIO_MIN,
 ) -> tuple[float | None, int, float | None]:
     """Bounded actual/predicted energy ratio over the last ``window_h`` hours.
 
@@ -114,7 +118,15 @@ def compute_ratio(
     if matched < MIN_MATCHED_HOURS or pred_sum <= 0.0:
         return None, matched, None
     raw = act_sum / pred_sum
-    return min(RATIO_MAX, max(RATIO_MIN, raw)), matched, raw
+    return min(RATIO_MAX, max(lower, raw)), matched, raw
+
+
+def is_away(persons_home_now: int | None, hourly_max: list[float | None]) -> bool:
+    """Everyone away now and for the last 24 completed hours (``persons_home_max`` per hour)."""
+    if persons_home_now != 0:
+        return False
+    seen = [v for v in hourly_max if v is not None]
+    return len(seen) >= AWAY_MIN_HOURS and not any(seen)
 
 
 def update_pinned_since(pinned_since: datetime | None, ratio: float | None, now: datetime) -> datetime | None:
@@ -150,12 +162,15 @@ class AdaptivePredictor:
         now: datetime,
         fade_h: int,
         fraction: float,
+        *,
+        flat: bool = False,
     ) -> None:
         self._base = base
         self._ratio = float(ratio)
         self._now = now
         self._fade_h = float(fade_h)
         self._fraction = float(fraction)
+        self._flat = flat
 
     def predict(
         self,
@@ -166,6 +181,8 @@ class AdaptivePredictor:
         quantile: float = 0.5,
     ) -> float:
         base_w = self._base.predict(when, temp, fallback_w, quantile=quantile)
+        if self._flat:
+            return base_w * self._ratio
         if self._fade_h <= 0.0:
             return base_w
         lead_h = max(0.0, (when - self._now).total_seconds() / 3600.0)

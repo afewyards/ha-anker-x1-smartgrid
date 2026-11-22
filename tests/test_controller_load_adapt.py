@@ -87,3 +87,28 @@ def test_base_predict_exception_degrades_gracefully():
     ctl.predictor = _Boom()
     out = ctl._update_load_adapt(NOW, 20.0, {})
     assert out is ctl.predictor  # never raises, returns base
+
+
+def _away_ctl(persons_now, hourly_max):
+    ctl = _make_ctl()
+    ctl._persons_home_now = persons_now
+    ctl._occ_recent_max = hourly_max
+    for b in range(1, 25):
+        ctl._load_adapt_log.record(NOW_H - timedelta(hours=b), 400.0)
+    return ctl, _actuals({b: 132.0 for b in range(1, 25)})
+
+
+def test_away_mode_scales_far_horizon_by_full_ratio():
+    ctl, act = _away_ctl(0, [0.0] * 24)
+    out = ctl._update_load_adapt(NOW, 20.0, act)
+    assert ctl._load_adapt_away is True
+    assert ctl._load_adapt_ratio == pytest.approx(0.33)
+    assert out.predict(NOW + timedelta(hours=20), 20.0, 350.0) == pytest.approx(132.0)
+
+
+def test_person_home_ends_away_mode():
+    ctl, act = _away_ctl(1, [0.0] * 24)
+    out = ctl._update_load_adapt(NOW, 20.0, act)
+    assert ctl._load_adapt_away is False
+    assert ctl._load_adapt_ratio == pytest.approx(0.7)
+    assert out.predict(NOW + timedelta(hours=20), 20.0, 350.0) == pytest.approx(400.0)  # faded out

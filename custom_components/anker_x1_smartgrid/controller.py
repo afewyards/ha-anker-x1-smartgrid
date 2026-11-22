@@ -207,6 +207,21 @@ class TickDecision:
     ivs_reserve: list
 
 
+def _recent_persons_max(rows: list[dict], now_h: datetime) -> list[float | None]:
+    out: list[float | None] = []
+    start = now_h - timedelta(hours=load_adapt.AWAY_WINDOW_H)
+    for r in rows:
+        try:
+            ts = datetime.fromisoformat(str(r["hour_ts"]))
+        except (KeyError, ValueError):
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        if start <= ts < now_h:
+            out.append(r.get("persons_home_max"))
+    return out
+
+
 class Controller:
     # Class defaults only so the bare __new__ test stubs can read them.
     standby: bool = False
@@ -427,6 +442,8 @@ class Controller:
         self._load_adapt_ratio: float | None = None
         self._load_adapt_matched: int = 0
         self._load_adapt_ratio_raw: float | None = None
+        self._load_adapt_away = False
+        self._occ_recent_max: list[float | None] = []
         # RATIO_MAX saturation timer (diagnostic only, not persisted); see
         # load_adapt.update_pinned_since/pinned_hours.
         self._load_adapt_pinned_since: datetime | None = None
@@ -774,6 +791,10 @@ class Controller:
             self._load_adapt_log.record(now_h, base_p50)
         except Exception:
             pass
+        away = self.cfg.load_adapt_fraction > 0.0 and load_adapt.is_away(
+            getattr(self, "_persons_home_now", None), getattr(self, "_occ_recent_max", [])
+        )
+        self._load_adapt_away = away
         try:
             _partial = None
             if self._hour_acc.hour == now_h and self._hour_acc.covered_s > 0.0:
@@ -783,8 +804,9 @@ class Controller:
                 self._load_adapt_log,
                 past_actuals or {},
                 now_h,
-                self.cfg.load_adapt_window_h,
+                load_adapt.AWAY_WINDOW_H if away else self.cfg.load_adapt_window_h,
                 partial=_partial,
+                lower=load_adapt.AWAY_RATIO_MIN if away else load_adapt.RATIO_MIN,
             )
         except Exception:
             ratio, matched, ratio_raw = None, 0, None
@@ -805,6 +827,7 @@ class Controller:
                 now,
                 self.cfg.load_adapt_fade_h,
                 self.cfg.load_adapt_fraction,
+                flat=away,
             )
         if self.cfg.current_hour_blend:
             pred = intra_hour.CurrentHourBlendPredictor(pred, self._hour_acc, now_h)
@@ -836,6 +859,7 @@ class Controller:
             # currently requests only P50 (see the P80-scaffolding note in _retrain_sync).
             self._profile_predictor = LoadPredictor.from_profile_samples(samples, self.cfg.lookback_days, now)
             self._occ_table = occupancy.build_table(rows)
+            self._occ_recent_max = _recent_persons_max(rows, resolution.hour_floor(now))
             self._last_profile_refresh = now
         except Exception:
             _LOGGER.warning("refresh_profile failed; keeping existing profile", exc_info=True)
@@ -2276,6 +2300,7 @@ class Controller:
             load_adapt_ratio=self._load_adapt_ratio,
             load_adapt_matched=self._load_adapt_matched,
             load_adapt_ratio_raw=self._load_adapt_ratio_raw,
+            load_adapt_away=self._load_adapt_away,
             load_adapt_pinned_h=load_adapt.pinned_hours(self._load_adapt_pinned_since, now),
             occ_table=self._occ_table,
             persons_home_now=self._persons_home_now,
